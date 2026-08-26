@@ -14,9 +14,15 @@ hardware, not just code that compiles.
   out.
 - Structured logging throughout: VM lifecycle events carry timing, HTTP
   requests are traced, everything is correlatable and filterable.
-- Networking (tap + NAT + DNS) is proven to work but not yet wired into
-  the daemon per-sandbox — every VM the daemon boots today has no network.
-  That's the most important open gap.
+- Every sandbox gets real networking: its own tap device leased from a
+  pool, attached to a shared bridge, its own IP, NAT'd outbound access,
+  and DNS through a host-local proxy. Proven with two sandboxes running
+  and reaching the internet concurrently through the daemon's HTTP API.
+- A real JS/TS SDK (`sandkiln` on npm, not yet published) — `Sandbox.create()`,
+  `runCommand()`, `stop()`, `Sandbox.list()` — verified end to end against
+  the live daemon, not just typechecked in isolation.
+- `criterion` benchmarks for boot time and exec latency, and a concurrent
+  load-test script against the daemon's HTTP API.
 
 ## Engineering principles
 
@@ -37,26 +43,31 @@ KVM, a Linux toolchain, or real hardware (Rust builds, Firecracker,
 rootfs/kernel builds, actually booting a microVM) runs on the remote dev
 box over SSH.
 
-## Networking — next up
+## Networking — done
 
-Every sandbox the daemon boots needs its own tap device and IP, not the
-single shared static one from early testing. This blocks everything
-downstream that needs a sandbox to actually reach the network.
+Every sandbox leases a tap device from a pre-created pool
+(`scripts/create-tap-pool.sh`) and attaches it to a shared bridge with a
+statically assigned IP; the daemon runs unprivileged with `CAP_NET_ADMIN`
+raised into its ambient set (`scripts/grant-net-admin.sh`), not as root.
+Verified: two sandboxes running concurrently, each with a distinct IP,
+both resolving DNS and reaching the real internet through the daemon's
+HTTP API.
 
-- A per-sandbox tap device + IP allocator (a small subnet, one /30 or /29
-  per sandbox, or one shared bridge with per-VM DHCP-like static leases).
-- Wire the existing NAT/DNS-proxy setup to work with dynamically created
-  tap devices instead of one fixed one.
-- Concurrency: prove multiple sandboxes can run and reach the network
-  simultaneously without interfering with each other.
+Known limitation worth its own follow-up: no isolation *between* sandboxes
+on the shared bridge yet (any sandbox can currently reach another's IP) —
+that's covered under Security hardening below, not solved here.
 
 ## Client SDKs
 
-- **JS/TS (`sandkiln` npm package).** `Sandbox.create()`,
-  `sandbox.runCommand()`, `sandbox.readFile()` / `writeFiles()`, streamed
-  logs, `sandbox.stop()`. Ships ESM + CJS + full type definitions.
-- **Python (`sandkiln` PyPI package).** Mirrors the JS SDK's surface and
-  ergonomics.
+- **JS/TS (`sandkiln` npm package) — working.** `Sandbox.create()`,
+  `sandbox.runCommand()`, `sandbox.stop()`, `Sandbox.list()`. ESM + CJS +
+  full type definitions via `tsup`. Verified against the live daemon, not
+  just typechecked — that's how `stop()` returning a 200 instead of the
+  documented 204 got caught and fixed. Not published yet. Still open:
+  `readFile()`/`writeFiles()` and streamed logs, once the daemon exposes
+  them.
+- **Python (`sandkiln` PyPI package).** Not started. Mirrors the JS SDK's
+  surface and ergonomics once it exists.
 - Both talk to the daemon's HTTP API — no logic duplicated between them
   beyond what each language's idioms require.
 
@@ -189,6 +200,36 @@ benchmarks, not just log lines from one manual run:
     it can answer over vsock (kernel panic, agent crash) is invisible from
     the host. Worth capturing the serial console log per-VM regardless of
     whether vsock ever came up.
+
+## Multi-node and regions
+
+Everything so far assumes one daemon on one box. A single machine has a
+ceiling — on concurrent sandboxes, on blast radius if it goes down, on
+being close to wherever the caller actually is:
+
+- Multiple daemon instances, each owning its own bridge/tap pool/rootfs
+  storage, with something in front that knows which sandboxes live where
+  (a routing layer, not full clustering — a sandbox is tied to the node
+  it booted on, not migrated between them).
+- A place identifier ("region") a caller can request at creation time,
+  even if early on that just means "which physical box," not literal
+  geographic distribution.
+- This is deliberately last among the infrastructure work — it multiplies
+  the surface area of everything above it (networking, images, storage),
+  so it should land once those are individually solid on one node.
+
+## Ecosystem and integrations
+
+The primitive is only as useful as what's built on top of it:
+
+- Example integrations with agent frameworks and coding-agent tools —
+  showing a sandbox as the execution backend for agent-generated code,
+  not just a standalone API.
+- A minimal reference "code playground" and a reference "AI agent runner"
+  as real, runnable example projects (ties into Documentation below), not
+  just SDK snippets.
+- Consider what a plugin/adapter surface would look like once there's
+  more than one real integration to generalize from — not before.
 
 ## Documentation and examples
 
