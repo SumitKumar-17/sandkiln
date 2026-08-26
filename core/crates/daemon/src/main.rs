@@ -54,6 +54,8 @@ async fn async_main() {
         .route("/sandboxes", post(routes::create_sandbox).get(routes::list_sandboxes))
         .route("/sandboxes/:id", delete(routes::stop_sandbox))
         .route("/sandboxes/:id/exec", post(routes::exec))
+        .route("/sandboxes/:id/read-file", post(routes::read_file))
+        .route("/sandboxes/:id/write-file", post(routes::write_file))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
     let app = Router::new()
