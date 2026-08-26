@@ -1,9 +1,24 @@
 {
   "name": "sandkiln",
-  "version": "0.0.1",
-  "private": true,
-  "description": "Client SDK for sandkiln: hardware-isolated microVM sandboxes for running untrusted code.",
+  "version": "0.1.0",
+  "description": "Client SDK for sandkiln: hardware-isolated Firecracker microVM sandboxes for running untrusted code.",
   "license": "MIT",
+  "author": "Sumit Kumar",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SumitKumar-17/sandkiln.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://github.com/SumitKumar-17/sandkiln#readme",
+  "bugs": "https://github.com/SumitKumar-17/sandkiln/issues",
+  "keywords": [
+    "sandbox",
+    "firecracker",
+    "microvm",
+    "isolation",
+    "untrusted-code",
+    "vm"
+  ],
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust:
+    name: Rust workspace (build + clippy)
+    runs-on: ubuntu-latest
+    # KVM isn't available on standard GitHub-hosted runners, so this
+    # covers compilation and lints only — not booting a real microVM.
+    # See AGENTS.md for how VM-level changes actually get verified.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Build
+        run: cargo build --workspace --all-targets
+        working-directory: core
+      - name: Clippy (zero warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: core
+
+  sdk:
+    name: JS/TS SDK (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck -w sandkiln
+      - run: npm run build -w sandkiln

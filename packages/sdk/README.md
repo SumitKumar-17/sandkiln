@@ -1,0 +1,68 @@
+# sandkiln
+
+Client SDK for [sandkiln](https://github.com/SumitKumar-17/sandkiln) — a
+compute primitive for safely running untrusted or AI-generated code in
+hardware-isolated Firecracker microVMs. Each sandbox is a real microVM:
+its own kernel, its own filesystem, its own network.
+
+This package is the client. It talks to a `sandkilnd` daemon over HTTP —
+you need one running somewhere reachable (see the main repo for how to
+run one; there is no hosted service).
+
+## Install
+
+```
+npm install sandkiln
+```
+
+## Usage
+
+```ts
+import { Sandbox } from "sandkiln";
+
+const sandbox = await Sandbox.create({
+  tags: { env: "ci" },
+});
+
+const result = await sandbox.runCommand("python3", ["analyze.py"]);
+console.log(result.stdout, result.exitCode);
+
+await sandbox.writeFile("/tmp/config.json", JSON.stringify({ ok: true }));
+const bytes = await sandbox.readFile("/tmp/config.json");
+
+const running = await Sandbox.list({ tags: { env: "ci" } });
+
+await sandbox.stop();
+```
+
+## Configuration
+
+- **Daemon URL**: pass `baseUrl` to `Sandbox.create()`/`Sandbox.list()`,
+  or set `SANDKILN_DAEMON_URL`. Defaults to `http://127.0.0.1:7777`.
+- **Auth**: pass `authToken`, or set `SANDKILN_AUTH_TOKEN`, if the daemon
+  has `SANDKILN_AUTH_TOKEN` set. Omit entirely for an unauthenticated
+  local daemon.
+
+## API
+
+- `Sandbox.create(options?)` — boots a sandbox. `options.tags`,
+  `options.baseUrl`, `options.authToken`.
+- `Sandbox.list(options?)` — lists sandboxes. `options.tags` filters by
+  exact match on every given key.
+- `sandbox.runCommand(command, args?)` — runs a command, returns
+  `{ stdout, stderr, exitCode }`.
+- `sandbox.readFile(path)` — returns file contents as `Uint8Array`.
+- `sandbox.writeFile(path, content)` — `content` is a `string` or
+  `Uint8Array`.
+- `sandbox.stop()` — stops the sandbox and releases its resources.
+
+## Status
+
+Early. This SDK matches the daemon's current HTTP API exactly — no more,
+no less. Streamed command output, snapshots, drives, and a Python
+equivalent are planned; see the [roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md)
+in the main repository for what's next.
+
+## License
+
+MIT
