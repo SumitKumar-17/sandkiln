@@ -151,11 +151,16 @@ Numbers gathered so far, informally, from tracing spans on the dev box:
 boot ≈30ms, vsock round-trip ≈1ms. These need to become real, repeatable
 benchmarks, not just log lines from one manual run:
 
-- `criterion` benchmarks in `sandkiln-vmm` for boot time and exec latency,
-  run against the real Firecracker binary (not mocked).
-- A scripted load test: concurrent sandbox creation/exec through the
-  daemon's HTTP API, to find where throughput actually breaks down once
-  per-sandbox networking exists.
+- **Done:** `criterion` benchmarks in `sandkiln-vmm` for boot time and exec
+  latency, run against the real Firecracker binary (not mocked). Run with
+  `SANDKILN_BENCH_FIRECRACKER_BIN=<path> SANDKILN_BENCH_KERNEL_PATH=<path>
+  SANDKILN_BENCH_ROOTFS_PATH=<path> cargo bench -p sandkiln-vmm --bench
+  vm_lifecycle`.
+- **Done:** A scripted load test: concurrent sandbox creation/exec through
+  the daemon's HTTP API, to find where throughput actually breaks down
+  once per-sandbox networking exists. Run with `scripts/load-test.sh
+  [concurrency] [iterations] [base-url]` against a running `sandkilnd`
+  (defaults: 10 workers, 20 iterations each, `http://127.0.0.1:7777`).
 - Snapshot/resume timing once that exists — the whole point of persistence
   is that resume should be dramatically faster than a cold boot; that
   claim needs a number behind it.
