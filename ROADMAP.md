@@ -158,25 +158,36 @@ that's covered under Security hardening below, not solved here.
 
 ## Benchmarking
 
-Numbers gathered so far, informally, from tracing spans on the dev box:
-boot ≈30ms, vsock round-trip ≈1ms. These need to become real, repeatable
-benchmarks, not just log lines from one manual run:
-
 - **Done:** `criterion` benchmarks in `sandkiln-vmm` for boot time and exec
   latency, run against the real Firecracker binary (not mocked). Run with
   `SANDKILN_BENCH_FIRECRACKER_BIN=<path> SANDKILN_BENCH_KERNEL_PATH=<path>
   SANDKILN_BENCH_ROOTFS_PATH=<path> cargo bench -p sandkiln-vmm --bench
   vm_lifecycle`.
 - **Done:** A scripted load test: concurrent sandbox creation/exec through
-  the daemon's HTTP API, to find where throughput actually breaks down
-  once per-sandbox networking exists. Run with `scripts/load-test.sh
-  [concurrency] [iterations] [base-url]` against a running `sandkilnd`
-  (defaults: 10 workers, 20 iterations each, `http://127.0.0.1:7777`).
+  the daemon's HTTP API. Run with `scripts/load-test.sh [concurrency]
+  [iterations] [base-url]` against a running `sandkilnd` (defaults: 10
+  workers, 20 iterations each, `http://127.0.0.1:7777`).
+- **Real measured results** (dev box, single node, 8-tap pool):
+  - Cold boot (criterion): **32.3–33.1ms**.
+  - Exec round-trip on an already-open vsock connection (criterion):
+    **225–275µs**.
+  - Load test, 4 concurrent workers × 5 cycles, 0 errors, 5.59 cycles/sec:
+    `create` mean 369ms (p95 588ms), `exec` mean 202ms (p95 453ms —
+    inflated by cold execs hitting the agent-not-ready retry loop),
+    `delete` mean 107ms (p95 126ms).
+  - **Finding**: `create`'s ~369ms mean is far above the ~33ms cold-boot
+    number — the gap is the ~300MB rootfs file copy done synchronously
+    per sandbox (`std::fs::copy` in `routes.rs`), not VM boot itself. The
+    real optimization target for sandbox creation latency is avoiding
+    that copy (copy-on-write via `reflink`/overlayfs — ties into the
+    "Base and custom images" section), not the boot path, which is
+    already fast.
 - Snapshot/resume timing once that exists — the whole point of persistence
   is that resume should be dramatically faster than a cold boot; that
   claim needs a number behind it.
-- Published, checked-in results (not just claims) that get re-run and
-  updated as the system changes, so regressions are visible.
+- These numbers are from one manual run on one shared dev box, not
+  isolated hardware — treat them as directionally useful, not authoritative.
+  Automating re-runs so regressions are visible over time is still open.
 
 ## Observability
 
