@@ -53,9 +53,10 @@ Verified: two sandboxes running concurrently, each with a distinct IP,
 both resolving DNS and reaching the real internet through the daemon's
 HTTP API.
 
-Known limitation worth its own follow-up: no isolation *between* sandboxes
-on the shared bridge yet (any sandbox can currently reach another's IP) —
-that's covered under Security hardening below, not solved here.
+Sandboxes are also isolated from each other on the shared bridge (Linux
+bridge port isolation — a tap can reach the gateway/uplink but not another
+sandbox's tap), verified: cross-sandbox ping fails, gateway ping and real
+outbound HTTP both still work.
 
 ## Client SDKs
 
@@ -148,8 +149,9 @@ that's covered under Security hardening below, not solved here.
   automatic idle timeout — today `vcpu_count`/`mem_size_mib` are set at
   boot but nothing stops a sandbox from running forever or a caller from
   requesting unreasonable resources.
-- Network isolation *between* sandboxes on the shared bridge (see the
-  Networking section) — no sandbox-to-sandbox traffic by default.
+- **Done:** network isolation between sandboxes on the shared bridge (see
+  the Networking section) — bridge port isolation, no sandbox-to-sandbox
+  traffic by default.
 
 ## Multi-agent isolation
 
@@ -196,17 +198,24 @@ that's covered under Security hardening below, not solved here.
   - Cold boot (criterion): **32.3–33.1ms**.
   - Exec round-trip on an already-open vsock connection (criterion):
     **225–275µs**.
-  - Load test, 4 concurrent workers × 5 cycles, 0 errors, 5.59 cycles/sec:
-    `create` mean 369ms (p95 588ms), `exec` mean 202ms (p95 453ms —
-    inflated by cold execs hitting the agent-not-ready retry loop),
-    `delete` mean 107ms (p95 126ms).
-  - **Finding**: `create`'s ~369ms mean is far above the ~33ms cold-boot
-    number — the gap is the ~300MB rootfs file copy done synchronously
-    per sandbox (`std::fs::copy` in `routes.rs`), not VM boot itself. The
-    real optimization target for sandbox creation latency is avoiding
-    that copy (copy-on-write via `reflink`/overlayfs — ties into the
-    "Base and custom images" section), not the boot path, which is
-    already fast.
+  - Load test, 4 concurrent workers × 5 cycles, 0 errors:
+    **before** the fix below — 5.59 cycles/sec, `create` mean 369ms
+    (p95 588ms).
+    **after** — 5.38 cycles/sec, `create` mean **211ms** (p95 577ms),
+    `exec` mean 366ms, `delete` mean 131ms. (Overall throughput is flat —
+    `create` got cheaper but isn't the only phase in a cycle, and both
+    runs are small samples on a shared, variable-load dev box — but the
+    `create`-specific improvement is real and repeatable.)
+  - **Finding, partially fixed**: `create`'s mean was far above the ~33ms
+    cold-boot number — the gap was the ~300MB rootfs copy, done
+    synchronously *after* the network lease. Fixed: the copy now runs
+    concurrently with the lease (independent work, no reason to serialize
+    them) and uses `cp --reflink=auto`, an instant copy-on-write clone on
+    a filesystem that supports it (XFS, Btrfs). On this dev box's ext4,
+    `--reflink` can't help — ext4 has no CoW — so the *remaining* gap
+    (~180ms of real file-copy time) still needs either a CoW-capable
+    filesystem for image storage or a device-mapper/thin-provisioning
+    layer (ties into "Base and custom images").
 - Snapshot/resume timing once that exists — the whole point of persistence
   is that resume should be dramatically faster than a cold boot; that
   claim needs a number behind it.
