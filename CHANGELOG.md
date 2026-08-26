@@ -21,10 +21,14 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   through the HTTP API.
 - Structured observability: `tracing` spans from the VM lifecycle layer
   up through HTTP request/response logging.
-- JS/TS SDK (`sandkiln` package): `Sandbox.create()`, `runCommand()`,
-  `stop()`, `Sandbox.list()`. ESM + CJS + full types.
+- JS/TS SDK (`sandkiln` package): `Sandbox.create()` (tags, auth token),
+  `Sandbox.list()` (tag-filterable), `runCommand()`, `readFile()` /
+  `writeFile()`, `stop()`. ESM + CJS + full types — matches the daemon's
+  entire HTTP surface, verified live against an auth-enabled daemon.
 - `criterion` benchmarks (boot time, exec latency) and a scripted
   concurrent load-test script against the daemon's HTTP API.
+- `AGENTS.md`: onboarding doc covering the non-obvious gotchas hit and
+  fixed during development, so they don't get repeated.
 
 ### Fixed
 - Ambient `CAP_NET_ADMIN` not reaching Tokio's worker/blocking threads
@@ -45,6 +49,6 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 - No image system beyond a fetched CI test rootfs — no universal base
   image, no custom image support yet.
 - No isolation *between* sandboxes on the shared network bridge.
-- No CLI, no Python SDK.
+- No CLI, no Python SDK, no streamed exec output.
 - Sandbox creation latency is dominated by a synchronous ~300MB rootfs
   copy, not VM boot — copy-on-write cloning is the next optimization.

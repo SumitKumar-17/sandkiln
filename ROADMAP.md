@@ -59,13 +59,14 @@ that's covered under Security hardening below, not solved here.
 
 ## Client SDKs
 
-- **JS/TS (`sandkiln` npm package) — working.** `Sandbox.create()`,
-  `sandbox.runCommand()`, `sandbox.stop()`, `Sandbox.list()`. ESM + CJS +
-  full type definitions via `tsup`. Verified against the live daemon, not
-  just typechecked — that's how `stop()` returning a 200 instead of the
-  documented 204 got caught and fixed. Not published yet. Still open:
-  `readFile()`/`writeFiles()` and streamed logs, once the daemon exposes
-  them.
+- **JS/TS (`sandkiln` npm package) — working, matches the daemon's full
+  surface.** `Sandbox.create()` (with tags and an auth token),
+  `Sandbox.list()` (tag-filterable), `runCommand()`, `readFile()` /
+  `writeFile()`, `stop()`. ESM + CJS + full type definitions via `tsup`.
+  Verified against a live, auth-enabled daemon end to end — not just
+  typechecked, which is how `stop()` returning `200` instead of the
+  documented `204` got caught and fixed. Not published to npm yet. Still
+  open: streamed logs, once the daemon can stream them.
 - **Python (`sandkiln` PyPI package).** Not started. Mirrors the JS SDK's
   surface and ergonomics once it exists.
 - Both talk to the daemon's HTTP API — no logic duplicated between them
@@ -79,10 +80,12 @@ that's covered under Security hardening below, not solved here.
 
 ## Authentication and multi-tenancy
 
-- Token-based auth on the daemon's HTTP API — this is a self-hosted
-  project, not tied to any platform's identity system, so a straightforward
-  bearer-token scheme (issued and checked by the daemon itself) replaces
-  what a hosted platform would do with OIDC.
+- **Done:** a single bearer token (`SANDKILN_AUTH_TOKEN`) gates every
+  `/sandboxes*` route via daemon middleware; `/healthz` stays open. Off by
+  default for local dev, with a startup warning so that's never silent.
+  This is a self-hosted project, not tied to any platform's identity
+  system, so a plain shared-secret token stands in for what a hosted
+  platform would do with OIDC.
 - Per-token scoping (which sandboxes a token can see/act on) once more than
   one caller shares a daemon instance.
 
