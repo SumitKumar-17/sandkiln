@@ -2,6 +2,7 @@ use crate::error::AppError;
 use crate::sandbox::Sandbox;
 use crate::state::AppState;
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::Json;
 use sandkiln_protocol::{Request, Response as AgentResponse};
 use sandkiln_vmm::network::Lease;
@@ -79,7 +80,10 @@ pub async fn list_sandboxes(State(state): State<Arc<AppState>>) -> Json<ListSand
 }
 
 #[tracing::instrument(skip(state))]
-pub async fn stop_sandbox(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<(), AppError> {
+pub async fn stop_sandbox(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
 
     tokio::task::spawn_blocking(move || {
@@ -90,7 +94,7 @@ pub async fn stop_sandbox(State(state): State<Arc<AppState>>, Path(id): Path<Str
     .await
     .expect("stop task panicked");
 
-    Ok(())
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
