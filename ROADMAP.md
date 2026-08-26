@@ -1,10 +1,13 @@
 # Roadmap
 
-**Status: Phase 2 done, verified on real hardware.** A microVM boots with
-networking (Phase 1), and the guest agent runs inside it and answers exec /
-read-file / write-file / list-dir over vsock (Phase 2) — proven against a
-real Firecracker instance on the dev box, not just unit tests. Phase 3
-(the daemon and lifecycle API) is next.
+**Status: Phase 3 done, verified on real hardware.** A microVM boots with
+networking (Phase 1), the guest agent answers exec / read-file / write-file
+/ list-dir over vsock (Phase 2), and an HTTP daemon manages the full
+sandbox lifecycle end to end — create, exec, list, stop — with structured
+logs at both the HTTP and VM-lifecycle layers (Phase 3). All proven against
+a real Firecracker instance on the dev box, not just unit tests. Per-VM
+networking (each sandbox needs its own tap + IP, not the single shared one
+from Phase 1) is the next thing this needs before Phase 4.
 
 This is a working plan, not a spec. Phases will be reordered, merged, or
 rewritten as we learn things — nothing here is fixed. Each phase should end
@@ -47,12 +50,43 @@ builds, actually booting a microVM) runs on the remote dev box over SSH.
 - Host-side vsock client. End-to-end loop: boot → exec → get output →
   shut down.
 
-## Phase 3 — Daemon and lifecycle API
-- HTTP API server (axum) wrapping the VM lifecycle: create, exec (streamed),
-  read/write files, list, stop, delete.
-- Sandbox state tracking (in-memory first, then sqlite): id, status,
-  resources, timestamps, tags.
-- Per-sandbox resource limits (vCPU, memory), idle timeouts, orphan cleanup.
+## Phase 3 — Daemon and lifecycle API — done
+- HTTP API server (axum) wrapping the VM lifecycle: `POST /sandboxes`,
+  `GET /sandboxes`, `POST /sandboxes/:id/exec`, `DELETE /sandboxes/:id`.
+  VM lifecycle itself (boot/exec/stop) lives in `sandkiln-vmm` as real Rust
+  now, not shell scripts — the daemon just drives it.
+- In-memory sandbox state (id, VM handle, rootfs path, created-at). Sqlite
+  persistence, file read/write endpoints, streamed exec output, resource
+  limit configuration, and idle/orphan cleanup are still open — this phase
+  proved the shape works, not the full feature set.
+- **Known gap, deliberately deferred:** every sandbox currently boots with
+  no network (Phase 1's tap device is single-use, shared, static-IP — it
+  can't serve concurrent VMs). A per-sandbox tap + IP allocator is the next
+  piece of work before this is actually useful for real workloads.
+
+## Observability
+- **Structured logging — done.** `tracing` throughout, not just at the
+  daemon's edge: HTTP requests/responses (method, path, status, latency)
+  via `tower-http`'s `TraceLayer`, and VM lifecycle events (boot with
+  timing, vsock call latency, stop) emitted from `sandkiln-vmm` itself so
+  the library is useful standalone, not just under the daemon. Correlated
+  by `vm_id`. Filterable per-module via `RUST_LOG`.
+- **Still open:**
+  - Correlate an HTTP request all the way through to the VM operations it
+    triggers with a single request/trace ID (currently `vm_id` and the
+    axum request span are separate; tying them together needs a
+    `tracing::Span` passed through `Vm::boot`/`call`/`stop`, not just
+    independent spans).
+  - A `/metrics` endpoint (Prometheus text format): sandboxes created
+    (counter), sandboxes active (gauge), boot duration and exec latency
+    (histograms). No client library chosen yet.
+  - JSON log output for production (current output is pretty-printed for
+    a human terminal) — `tracing-subscriber`'s JSON formatter, switched by
+    an env var.
+  - Guest-side observability: today, output from a *failed-to-start*
+    process inside the guest (kernel panic, agent crash before it can
+    answer) is invisible from the host. Worth capturing the serial console
+    log per-VM even when nothing goes through vsock.
 
 ## Phase 4 — JS/TS SDK (`sandkiln`)
 - `Sandbox.create()`, `sandbox.runCommand()`, `sandbox.readFile()` /
@@ -87,7 +121,7 @@ builds, actually booting a microVM) runs on the remote dev box over SSH.
 - Attachable persistent storage that outlives a single sandbox and can be
   reattached to a new one.
 - Tags (key/value metadata) for filtering and listing sandboxes.
-- Structured logs and a `/metrics` endpoint.
+- Closes out whatever's still open in the Observability section above.
 
 ## Phase 10 — Python SDK and docs
 - `sandkiln` Python package mirroring the JS SDK.

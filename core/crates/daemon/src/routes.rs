@@ -15,6 +15,7 @@ pub struct CreateSandboxResponse {
     id: String,
 }
 
+#[tracing::instrument(skip(state))]
 pub async fn create_sandbox(State(state): State<Arc<AppState>>) -> Result<Json<CreateSandboxResponse>, AppError> {
     let id = Uuid::new_v4().to_string();
     let rootfs_path = std::env::temp_dir().join(format!("sandkiln-rootfs-{id}.ext4"));
@@ -68,6 +69,7 @@ pub async fn list_sandboxes(State(state): State<Arc<AppState>>) -> Json<ListSand
     Json(ListSandboxesResponse { sandboxes })
 }
 
+#[tracing::instrument(skip(state))]
 pub async fn stop_sandbox(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<(), AppError> {
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
 
@@ -95,6 +97,7 @@ pub struct ExecResponseBody {
     exit_code: i32,
 }
 
+#[tracing::instrument(skip(state, body), fields(command = %body.command))]
 pub async fn exec(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,

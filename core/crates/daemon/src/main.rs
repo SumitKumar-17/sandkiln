@@ -9,6 +9,7 @@ use axum::Router;
 use config::Config;
 use state::AppState;
 use std::sync::Arc;
+use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -26,6 +27,7 @@ async fn main() {
         .route("/sandboxes/:id", delete(routes::stop_sandbox))
         .route("/sandboxes/:id/exec", post(routes::exec))
         .route("/healthz", get(|| async { "ok" }))
+        .layer(TraceLayer::new_for_http())
         .with_state(state);
 
     tracing::info!(%listen_addr, "sandkiln daemon starting");

@@ -35,6 +35,7 @@ pub struct VmConfig {
 }
 
 pub struct Vm {
+    id: u64,
     child: Child,
     api_socket: PathBuf,
     vsock_socket: PathBuf,
@@ -42,6 +43,7 @@ pub struct Vm {
 
 impl Vm {
     pub fn boot(config: &VmConfig) -> io::Result<Self> {
+        let started = Instant::now();
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let api_socket = PathBuf::from(format!("/tmp/sandkiln-fc-{id}.sock"));
         let vsock_socket = PathBuf::from(format!("/tmp/sandkiln-vsock-{id}.sock"));
@@ -119,19 +121,27 @@ impl Vm {
 
         put_checked(&mut api, "/actions", &json!({"action_type": "InstanceStart"}))?;
 
-        Ok(Self { child, api_socket, vsock_socket })
+        tracing::info!(vm_id = id, pid = child.id(), boot_ms = started.elapsed().as_millis(), "vm booted");
+        Ok(Self { id, child, api_socket, vsock_socket })
     }
 
     /// Sends a request to the guest agent over vsock and waits for its
     /// response. The agent isn't guaranteed to be listening the instant
     /// InstanceStart returns — this retries briefly to absorb that.
     pub fn call(&self, request: &Request) -> io::Result<Response> {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(5);
         loop {
             match vsock_client::call(&self.vsock_socket, AGENT_PORT, request) {
-                Ok(response) => return Ok(response),
+                Ok(response) => {
+                    tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "vsock call ok");
+                    return Ok(response);
+                }
                 Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
-                Err(e) => return Err(e),
+                Err(e) => {
+                    tracing::warn!(vm_id = self.id, error = %e, "vsock call failed");
+                    return Err(e);
+                }
             }
         }
     }
@@ -141,6 +151,7 @@ impl Vm {
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.api_socket);
         let _ = std::fs::remove_file(&self.vsock_socket);
+        tracing::info!(vm_id = self.id, "vm stopped");
         Ok(())
     }
 }
