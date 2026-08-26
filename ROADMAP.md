@@ -100,11 +100,19 @@ that's covered under Security hardening below, not solved here.
 
 ## Persistence and snapshotting
 
+- **Sandbox vs. session**: a sandbox is a persistent identity (name,
+  config, filesystem state); a session is one running microVM instance of
+  it. A sandbox resumed daily for a week is one sandbox, seven sessions —
+  our current `Sandbox` type conflates the two (it dies with its VM) and
+  needs to split before persistence can work at all.
 - **Snapshot/resume**: save a running microVM's full state (memory + disk)
   and resume it later, skipping boot and dependency installation entirely.
 - **Persistent-by-default sandboxes**: auto-snapshot on stop, so "stop and
   come back later" is the default behavior, not something the caller has
   to manage.
+- **Named sandboxes**: create/resume by a caller-given name (unique per
+  daemon) instead of only an opaque id, so `get-or-create` is possible
+  without the caller tracking ids itself.
 - Explicit snapshot API for the SDK/CLI to trigger a save point on demand.
 
 ## Drives and remote storage
@@ -116,15 +124,29 @@ that's covered under Security hardening below, not solved here.
   into a sandbox via FUSE, so a sandbox can read/write remote files through
   its normal filesystem interface.
 
+## Firewall and egress policy
+
+- A per-sandbox network policy: default-open outbound (today's behavior)
+  moving to an explicit allow/deny rule set the caller can configure —
+  domains, IP ranges, ports.
+- The DNS proxy (`start-dns-proxy.sh`) is the natural enforcement point
+  for domain-level rules — it already sees every name a sandbox resolves,
+  before any connection is made.
+- Consider a per-sandbox CA + TLS-terminating proxy for HTTPS
+  inspection/transformation, mounted into the guest's trust store at
+  boot — meaningfully more complex than DNS-level filtering, so it's a
+  deliberate stretch goal, not a given.
+
 ## Security hardening
 
 - Firecracker's jailer: chroot, cgroups v2 resource limits, seccomp
   filters, dropped capabilities, an unprivileged uid per VM.
-- Network policy: isolated tap per sandbox (ties into the Networking
-  section above), egress allow-listing, no sandbox-to-sandbox traffic by
-  default.
-- The DNS proxy is a natural enforcement point for domain-level egress
-  policy — extend it rather than bolting policy on elsewhere.
+- Enforced per-sandbox resource ceilings (CPU, memory, disk) and an
+  automatic idle timeout — today `vcpu_count`/`mem_size_mib` are set at
+  boot but nothing stops a sandbox from running forever or a caller from
+  requesting unreasonable resources.
+- Network isolation *between* sandboxes on the shared bridge (see the
+  Networking section) — no sandbox-to-sandbox traffic by default.
 
 ## Multi-agent isolation
 
