@@ -14,6 +14,10 @@ pub struct Config {
     /// means "detect the default route interface at startup" — see
     /// `network::detect_uplink_iface`.
     pub uplink_iface: Option<String>,
+    /// Must match what `scripts/create-tap-pool.sh` was run with — this
+    /// is the daemon's max concurrent-sandbox-with-networking ceiling.
+    pub tap_pool_prefix: String,
+    pub tap_pool_size: u32,
 }
 
 impl Config {
@@ -30,6 +34,8 @@ impl Config {
                 .parse()
                 .expect("SANDKILN_BRIDGE_GATEWAY must be an IPv4 address"),
             uplink_iface: std::env::var("SANDKILN_UPLINK_IFACE").ok(),
+            tap_pool_prefix: env_or("SANDKILN_TAP_POOL_PREFIX", "sktap"),
+            tap_pool_size: env_or("SANDKILN_TAP_POOL_SIZE", "32").parse().expect("SANDKILN_TAP_POOL_SIZE must be a number"),
         }
     }
 }
