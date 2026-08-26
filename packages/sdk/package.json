@@ -1,0 +1,9 @@
+{
+  "name": "sandkiln",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Client SDK for sandkiln: hardware-isolated microVM sandboxes for running untrusted code.",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/index.ts"
+}

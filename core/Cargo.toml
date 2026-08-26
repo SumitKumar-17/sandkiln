@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vmm",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/SumitKumar-17/sandkiln"

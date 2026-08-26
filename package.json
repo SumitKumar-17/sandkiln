@@ -1,0 +1,7 @@
+{
+  "name": "sandkiln-workspace",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ]
+}
