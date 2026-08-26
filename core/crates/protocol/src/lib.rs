@@ -9,6 +9,10 @@ mod messages;
 pub use framing::{read_message, write_message};
 pub use messages::{Request, Response};
 
+/// The vsock port the guest agent listens on, and the host connects to.
+/// Lives here so the two sides can't drift out of sync on it.
+pub const AGENT_PORT: u32 = 5000;
+
 /// The wire encoding (JSON) is an implementation detail; this alias lets
 /// callers handle codec errors without depending on serde_json directly.
 pub type CodecError = serde_json::Error;

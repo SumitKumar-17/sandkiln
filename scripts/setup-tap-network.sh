@@ -29,14 +29,5 @@ iptables -C FORWARD -i "$TAP" -o "$UPLINK" -j ACCEPT 2>/dev/null || \
 iptables -C FORWARD -i "$UPLINK" -o "$TAP" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
   iptables -A FORWARD -i "$UPLINK" -o "$TAP" -m state --state RELATED,ESTABLISHED -j ACCEPT
 
-# DNS: redirect the guest's queries to the host's own local resolver
-# (systemd-resolved's stub at 127.0.0.53), instead of relying on the guest
-# reaching a public resolver directly — some networks block or intercept
-# outbound port 53 in ways that only work correctly from the host itself.
-sysctl -w "net.ipv4.conf.${TAP}.route_localnet=1" >/dev/null
-iptables -t nat -C PREROUTING -i "$TAP" -p udp --dport 53 -j DNAT --to-destination 127.0.0.53:53 2>/dev/null || \
-  iptables -t nat -A PREROUTING -i "$TAP" -p udp --dport 53 -j DNAT --to-destination 127.0.0.53:53
-iptables -t nat -C PREROUTING -i "$TAP" -p tcp --dport 53 -j DNAT --to-destination 127.0.0.53:53 2>/dev/null || \
-  iptables -t nat -A PREROUTING -i "$TAP" -p tcp --dport 53 -j DNAT --to-destination 127.0.0.53:53
-
-echo "tap device $TAP ready, host side $HOST_CIDR, NAT via $UPLINK, guest DNS -> host resolver"
+echo "tap device $TAP ready, host side $HOST_CIDR, NAT via $UPLINK"
+echo "for guest DNS, also run start-dns-proxy.sh"

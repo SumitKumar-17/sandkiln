@@ -1,5 +1,11 @@
 # Roadmap
 
+**Status: Phase 2 done, verified on real hardware.** A microVM boots with
+networking (Phase 1), and the guest agent runs inside it and answers exec /
+read-file / write-file / list-dir over vsock (Phase 2) — proven against a
+real Firecracker instance on the dev box, not just unit tests. Phase 3
+(the daemon and lifecycle API) is next.
+
 This is a working plan, not a spec. Phases will be reordered, merged, or
 rewritten as we learn things — nothing here is fixed. Each phase should end
 with something concretely runnable, not just code that compiles.

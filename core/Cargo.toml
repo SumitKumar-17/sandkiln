@@ -1,10 +1,23 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/protocol",
     "crates/vmm",
+    "crates/guest-agent",
+    "crates/daemon",
 ]
 
 [workspace.package]
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/SumitKumar-17/sandkiln"
+
+[profile.release]
+lto = true
+strip = true
+
+# The guest agent ships inside every rootfs image, so its binary size
+# directly affects image size and boot time — optimize it for size, not
+# host-side tooling.
+[profile.release.package.sandkiln-guest-agent]
+opt-level = "z"

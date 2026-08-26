@@ -1,12 +1,8 @@
 mod handler;
 
-use sandkiln_protocol::{decode_request, encode_response, read_message, write_message, Response};
+use sandkiln_protocol::{decode_request, encode_response, read_message, write_message, Response, AGENT_PORT};
 use std::io::{Read, Write};
 use vsock::{VsockListener, VMADDR_CID_ANY};
-
-/// Fixed vsock port the agent listens on. The host connects to this port
-/// through Firecracker's vsock UDS mediation (see core/crates/vmm).
-const AGENT_PORT: u32 = 5000;
 
 fn main() {
     let listener =
@@ -21,12 +17,7 @@ fn main() {
 }
 
 fn handle_connection(mut stream: impl Read + Write) {
-    loop {
-        let raw = match read_message(&mut stream) {
-            Ok(raw) => raw,
-            Err(_) => break, // peer closed or sent garbage — end this connection
-        };
-
+    while let Ok(raw) = read_message(&mut stream) {
         let response = match decode_request(&raw) {
             Ok(req) => handler::handle(req),
             Err(e) => Response::Error { message: format!("bad request: {e}") },

@@ -22,3 +22,6 @@ images/*.img
 # OS / editor
 .DS_Store
 *.log
+
+# Local tooling state
+.claude/

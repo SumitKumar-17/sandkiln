@@ -26,7 +26,7 @@ pub fn call(uds_path: &Path, guest_port: u32, request: &Request) -> io::Result<R
 }
 
 fn connect_handshake(stream: &mut UnixStream, guest_port: u32) -> io::Result<()> {
-    write!(stream, "CONNECT {guest_port}\n")?;
+    writeln!(stream, "CONNECT {guest_port}")?;
 
     // Firecracker replies with "OK <assigned-host-port>\n" on success.
     let mut reply = String::new();
