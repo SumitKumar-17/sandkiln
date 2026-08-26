@@ -8,5 +8,8 @@
 set -euo pipefail
 
 BIN="${1:?path to the sandkilnd binary required}"
-setcap cap_net_admin+ep "$BIN"
+# +i (inheritable) is required on top of +ep — the daemon raises this into
+# its ambient set at startup so `ip`/`iptables` child processes inherit it
+# too; a plain +ep grant doesn't propagate to children at all.
+setcap cap_net_admin+eip "$BIN"
 getcap "$BIN"

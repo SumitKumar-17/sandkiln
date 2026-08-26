@@ -1,18 +1,23 @@
-//! Per-sandbox networking: every VM gets its own tap device attached to a
-//! shared bridge, with a statically-assigned IP from a pool. One bridge
-//! means the NAT/DNS setup proven in `scripts/setup-tap-network.sh` and
-//! `scripts/start-dns-proxy.sh` needs no per-VM wildcarding — it already
-//! targets one interface and one gateway IP, which is exactly what the
-//! bridge is.
+//! Per-sandbox networking: every VM gets a tap device leased from a
+//! pre-created pool, attached to a shared bridge, with a statically
+//! assigned IP. One bridge means the NAT/DNS setup proven in
+//! `scripts/setup-tap-network.sh` and `scripts/start-dns-proxy.sh` needs
+//! no per-VM wildcarding — it already targets one interface and one
+//! gateway IP, which is exactly what the bridge is.
 //!
-//! Requires `CAP_NET_ADMIN` on the running process (see
-//! `scripts/grant-net-admin.sh`) — not root.
+//! The pool exists because creating a *new* tap device is a TUNSETIFF
+//! ioctl on `/dev/net/tun`, and — unlike the netlink operations here
+//! (bridge/link management) — that specific ioctl did not work under this
+//! process's ambient `CAP_NET_ADMIN` in practice, only under full root.
+//! Persistent tap devices sidestep it: `scripts/create-tap-pool.sh`
+//! creates them once (needs root), and this module only ever
+//! attaches/detaches existing devices, which is a plain netlink call and
+//! does work under ambient `CAP_NET_ADMIN` (see `scripts/grant-net-admin.sh`).
 
 use std::collections::VecDeque;
 use std::io;
 use std::net::Ipv4Addr;
 use std::process::Command;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use crate::vm::NetworkConfig;
@@ -23,7 +28,7 @@ pub struct NetworkManager {
     prefix_len: u8,
     uplink: String,
     free_hosts: Mutex<VecDeque<u8>>,
-    next_tap_id: AtomicU32,
+    free_taps: Mutex<VecDeque<String>>,
 }
 
 pub struct Lease {
@@ -33,20 +38,27 @@ pub struct Lease {
 
 impl NetworkManager {
     /// `gateway_ip`/24 defines the shared subnet; host octets 2..254 are
-    /// handed out to VMs (1 is the gateway itself).
-    pub fn new(bridge_name: impl Into<String>, gateway_ip: Ipv4Addr, uplink: impl Into<String>) -> Self {
+    /// handed out to VMs (1 is the gateway itself). `tap_pool` must match
+    /// what `create-tap-pool.sh` was run with.
+    pub fn new(
+        bridge_name: impl Into<String>,
+        gateway_ip: Ipv4Addr,
+        uplink: impl Into<String>,
+        tap_pool: impl IntoIterator<Item = String>,
+    ) -> Self {
         Self {
             bridge_name: bridge_name.into(),
             gateway_ip,
             prefix_len: 24,
             uplink: uplink.into(),
             free_hosts: Mutex::new((2..=254u8).collect()),
-            next_tap_id: AtomicU32::new(0),
+            free_taps: Mutex::new(tap_pool.into_iter().collect()),
         }
     }
 
     /// Idempotent: creates the bridge and NAT rules if they don't already
-    /// exist. Call once at daemon startup before leasing any tap devices.
+    /// exist, and verifies every pooled tap device is actually present.
+    /// Call once at daemon startup before leasing any tap devices.
     pub fn ensure_ready(&self) -> io::Result<()> {
         if !link_exists(&self.bridge_name)? {
             run("ip", &["link", "add", &self.bridge_name, "type", "bridge"])?;
@@ -61,47 +73,82 @@ impl NetworkManager {
             "-A", "FORWARD", "-i", &self.uplink, "-o", &self.bridge_name,
             "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT",
         ])?;
+
+        let missing: Vec<String> = {
+            let taps = self.free_taps.lock().unwrap();
+            let mut missing = Vec::new();
+            for tap in taps.iter() {
+                if !link_exists(tap)? {
+                    missing.push(tap.clone());
+                }
+            }
+            missing
+        };
+        if !missing.is_empty() {
+            return Err(io::Error::other(format!(
+                "tap devices missing: {missing:?} — run scripts/create-tap-pool.sh first"
+            )));
+        }
         Ok(())
     }
 
-    /// Creates a tap device attached to the bridge and assigns it a free
-    /// IP. The returned `Lease` must be released via `release()` once the
-    /// VM it was handed to stops, or the IP is leaked for the process
-    /// lifetime.
+    /// Leases a tap device and an IP for one VM. The returned `Lease`
+    /// must be released via `release()` once the VM stops, or both are
+    /// leaked for the daemon's lifetime.
     pub fn lease(&self) -> io::Result<Lease> {
         let host_octet = {
             let mut free = self.free_hosts.lock().unwrap();
             free.pop_front().ok_or_else(|| io::Error::other("no free IPs left in the sandbox subnet"))?
         };
+        let tap_device = {
+            let mut free = self.free_taps.lock().unwrap();
+            match free.pop_front() {
+                Some(tap) => tap,
+                None => {
+                    self.free_hosts.lock().unwrap().push_back(host_octet);
+                    return Err(io::Error::other("no free tap devices left in the pool"));
+                }
+            }
+        };
 
-        let tap_id = self.next_tap_id.fetch_add(1, Ordering::Relaxed);
-        let tap_device = format!("sktap{tap_id}");
-        let guest_ip = octets_with_last(self.gateway_ip, host_octet);
-        let guest_mac = format!("AA:FC:00:00:{:02X}:{:02X}", (tap_id >> 8) & 0xff, tap_id & 0xff);
-
-        if let Err(e) = self.create_tap(&tap_device) {
+        if let Err(e) = self.attach_tap(&tap_device) {
             self.free_hosts.lock().unwrap().push_back(host_octet);
+            self.free_taps.lock().unwrap().push_back(tap_device);
             return Err(e);
         }
 
-        Ok(Lease {
-            config: NetworkConfig { tap_device, guest_ip, gateway_ip: self.gateway_ip, guest_mac },
-            host_octet,
-        })
+        let guest_ip = octets_with_last(self.gateway_ip, host_octet);
+        let guest_mac = format!("AA:FC:00:00:{:02X}:{:02X}", host_octet, host_octet);
+
+        Ok(Lease { config: NetworkConfig { tap_device, guest_ip, gateway_ip: self.gateway_ip, guest_mac }, host_octet })
     }
 
     pub fn release(&self, lease: Lease) -> io::Result<()> {
-        let _ = run("ip", &["link", "del", &lease.config.tap_device]);
+        let _ = run("ip", &["link", "set", &lease.config.tap_device, "nomaster"]);
+        let _ = run("ip", &["link", "set", &lease.config.tap_device, "down"]);
         self.free_hosts.lock().unwrap().push_back(lease.host_octet);
+        self.free_taps.lock().unwrap().push_back(lease.config.tap_device);
         Ok(())
     }
 
-    fn create_tap(&self, tap_device: &str) -> io::Result<()> {
-        run("ip", &["tuntap", "add", tap_device, "mode", "tap"])?;
-        run("ip", &["link", "set", tap_device, "master", &self.bridge_name])?;
+    fn attach_tap(&self, tap_device: &str) -> io::Result<()> {
         run("ip", &["link", "set", tap_device, "up"])?;
+        run("ip", &["link", "set", tap_device, "master", &self.bridge_name])?;
         Ok(())
     }
+}
+
+/// Parses `ip route show default` to find the interface sandbox traffic
+/// should be NATed out through, for setups that don't pin it explicitly.
+pub fn detect_default_iface() -> io::Result<String> {
+    let output = Command::new("ip").args(["route", "show", "default"]).output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .split_whitespace()
+        .zip(stdout.split_whitespace().skip(1))
+        .find(|(word, _)| *word == "dev")
+        .map(|(_, iface)| iface.to_string())
+        .ok_or_else(|| io::Error::other("no default route found — pass SANDKILN_UPLINK_IFACE explicitly"))
 }
 
 fn octets_with_last(base: Ipv4Addr, last: u8) -> Ipv4Addr {
