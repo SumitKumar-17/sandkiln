@@ -73,9 +73,14 @@ outbound HTTP both still work.
 - Both talk to the daemon's HTTP API — no logic duplicated between them
   beyond what each language's idioms require.
 
-## CLI (`kiln`)
+## CLI (`kiln`) — working
 
-- `kiln sandbox create|exec|ls|rm|cp`, `kiln logs -f`.
+- **Done:** `kiln sandbox create|ls|rm|exec|read|write` — a thin
+  `commander`-based wrapper over the SDK, verified live end to end.
+  `cp` (a single unified copy command) was simplified to explicit
+  `read`/`write` subcommands instead — less magic than parsing a
+  `sandbox:path` prefix syntax for a first version.
+- Still open: `kiln logs -f`, once the daemon can stream output.
 - Built for manual testing, agentic workflows, and debugging — mirrors the
   SDK surface, usable standalone without writing code.
 

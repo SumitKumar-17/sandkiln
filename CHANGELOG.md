@@ -29,6 +29,14 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   concurrent load-test script against the daemon's HTTP API.
 - `AGENTS.md`: onboarding doc covering the non-obvious gotchas hit and
   fixed during development, so they don't get repeated.
+- `kiln` CLI: `sandbox create|ls|rm|exec|read|write`, a thin wrapper over
+  the SDK for manual/agentic use without writing code.
+- Cross-sandbox network isolation on the shared bridge (bridge port
+  isolation) — verified: sandboxes can't reach each other, gateway and
+  outbound internet still work.
+- Project website (`website/`), deployed via GitHub Pages on every push.
+- GitHub Actions: CI (build + clippy + SDK typecheck/build on every push)
+  and a manual/tag-triggered npm publish workflow.
 
 ### Fixed
 - Ambient `CAP_NET_ADMIN` not reaching Tokio's worker/blocking threads
@@ -43,12 +51,22 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   only, which do work under ambient capability.
 - A `pkill -f` pattern that could match its own invocation and kill the
   wrong process (including, once, the SSH session running it).
+- A duplicate-command crash in the CLI (`program.command()` already
+  registers a command; a trailing `addCommand()` re-added the same
+  instance) — caught on the very first live run.
+- Sandbox creation latency: rootfs clone now runs concurrently with the
+  network lease instead of after it, and uses `cp --reflink=auto` (free
+  copy-on-write where the filesystem supports it). Measured `create`
+  latency mean dropped 369ms → 211ms.
 
 ### Known gaps (tracked in `ROADMAP.md`)
 - No snapshot/resume or persistence — a stopped sandbox's state is gone.
 - No image system beyond a fetched CI test rootfs — no universal base
   image, no custom image support yet.
-- No isolation *between* sandboxes on the shared network bridge.
-- No CLI, no Python SDK, no streamed exec output.
-- Sandbox creation latency is dominated by a synchronous ~300MB rootfs
-  copy, not VM boot — copy-on-write cloning is the next optimization.
+- No Python SDK, no streamed exec output, no `kiln logs -f`.
+- On ext4 (no copy-on-write), sandbox creation still pays real rootfs
+  copy time — needs a CoW-capable filesystem or a device-mapper layer to
+  actually eliminate, not just overlap with other work.
+- npm publish is set up (workflow + package metadata) but not yet
+  successfully run — needs an npm token type that actually bypasses 2FA
+  for automated publishing.
