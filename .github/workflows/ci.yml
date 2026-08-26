@@ -28,8 +28,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
         working-directory: core
 
-  sdk:
-    name: JS/TS SDK (typecheck + build)
+  js:
+    name: JS/TS packages (typecheck + build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,5 +38,10 @@ jobs:
           node-version: "20"
           cache: npm
       - run: npm ci
+      # sandkiln has to typecheck+build before kiln, which imports it as a
+      # workspace dependency resolved through its built dist/ — verified
+      # locally that skipping this order breaks kiln's typecheck.
       - run: npm run typecheck -w sandkiln
       - run: npm run build -w sandkiln
+      - run: npm run typecheck -w kiln
+      - run: npm run build -w kiln
