@@ -4,6 +4,19 @@ This is a working plan, not a spec. Phases will be reordered, merged, or
 rewritten as we learn things — nothing here is fixed. Each phase should end
 with something concretely runnable, not just code that compiles.
 
+## Engineering principles
+
+- **Modular, not monolithic.** Each concern is its own crate/package with a
+  narrow public API (`vmm`, `guest-agent`, the daemon, etc. stay separable —
+  no crate reaches into another's internals). A daemon change should not
+  require touching the guest agent, and vice versa.
+- **Benchmark the hot paths.** Boot time, exec round-trip latency, and
+  snapshot/resume time are the metrics that actually matter for this
+  product — each gets a `criterion` (Rust) or scripted benchmark once the
+  path it measures exists, not bolted on at the end.
+- **Prove it, don't assume it.** Every phase ends with something actually
+  run on real hardware (the remote box), not just code that compiles.
+
 Execution model: development happens in this repo; anything that needs KVM,
 a Linux toolchain, or real hardware (Rust builds, Firecracker, rootfs/kernel
 builds, actually booting a microVM) runs on the remote dev box over SSH.

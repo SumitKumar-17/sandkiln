@@ -19,11 +19,9 @@ set -euo pipefail
 
 IMAGES="${1:-$HOME/sandkiln-tools/images}"
 TAP="${2:-}"
-ROOTFS_SRC="${3:-$IMAGES/ubuntu-22.04.ext4}"
 FC="${FIRECRACKER_BIN:-$HOME/sandkiln-tools/bin/firecracker}"
 SOCK="$(mktemp -u /tmp/sandkiln-fc-XXXXXX.sock)"
 ROOTFS="$(mktemp -u /tmp/sandkiln-rootfs-XXXXXX.ext4)"
-VSOCK="$(mktemp -u /tmp/sandkiln-vsock-XXXXXX.sock)"
 
 # Matches the host-side address configured by setup-tap-network.sh
 # (172.16.0.1/24) — guest takes .2 on the same /24.
@@ -31,10 +29,10 @@ GUEST_IP="172.16.0.2"
 HOST_IP="172.16.0.1"
 GUEST_MAC="AA:FC:00:00:00:01"
 
-cp "$ROOTFS_SRC" "$ROOTFS"
+cp "$IMAGES/ubuntu-22.04.ext4" "$ROOTFS"
 
 cleanup() {
-  rm -f "$SOCK" "$ROOTFS" "$VSOCK"
+  rm -f "$SOCK" "$ROOTFS"
 }
 trap cleanup EXIT
 
@@ -65,13 +63,9 @@ if [ -n "$TAP" ]; then
     -d "{\"iface_id\": \"eth0\", \"guest_mac\": \"$GUEST_MAC\", \"host_dev_name\": \"$TAP\"}"
 fi
 
-curl -s --unix-socket "$SOCK" -X PUT "http://localhost/vsock" \
-  -H "Content-Type: application/json" \
-  -d "{\"vsock_id\": \"vsock0\", \"guest_cid\": 3, \"uds_path\": \"$VSOCK\"}"
-
 curl -s --unix-socket "$SOCK" -X PUT "http://localhost/actions" \
   -H "Content-Type: application/json" \
   -d '{"action_type": "InstanceStart"}'
 
-echo "booted. firecracker pid: $FC_PID, api socket: $SOCK, vsock uds: $VSOCK, guest ip: ${TAP:+$GUEST_IP}" >&2
+echo "booted. firecracker pid: $FC_PID, api socket: $SOCK, guest ip: ${TAP:+$GUEST_IP}" >&2
 wait "$FC_PID"

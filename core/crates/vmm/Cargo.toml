@@ -5,7 +5,3 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-sandkiln-protocol = { path = "../protocol" }
-
-[dev-dependencies]
-base64 = "0.22"
