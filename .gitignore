@@ -1,0 +1,27 @@
+# Rust
+target/
+Cargo.lock
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+.turbo/
+
+# Images / large build artifacts
+images/build/
+images/*.ext4
+images/*.img
+*.vmlinux
+
+# Local env / secrets
+.env
+.env.*
+*.pem
+
+# OS / editor
+.DS_Store
+*.log
+
+# Local tooling state
+.claude/
