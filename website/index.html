@@ -354,7 +354,7 @@
       <div class="fcard">
         <span class="status done">Shipped</span>
         <h3>Networking</h3>
-        <p>Per-sandbox tap device leased from a pool, attached to a bridge, NAT'd outbound, DNS through a host-local proxy. Verified concurrent.</p>
+        <p>Per-sandbox tap device leased from a pool, attached to a bridge, NAT'd outbound, DNS through a host-local proxy. Sandboxes can't reach each other — bridge port isolation, verified.</p>
       </div>
       <div class="fcard">
         <span class="status done">Shipped</span>
@@ -379,7 +379,12 @@
       <div class="fcard">
         <span class="status done">Shipped</span>
         <h3>JS/TS SDK</h3>
-        <p><code>Sandbox.create()</code>, <code>runCommand()</code>, <code>stop()</code>, <code>list()</code>. ESM + CJS + full types, verified against a live daemon.</p>
+        <p>Matches the daemon's entire API — auth, tags, exec, file read/write. ESM + CJS + full types, verified against a live daemon.</p>
+      </div>
+      <div class="fcard">
+        <span class="status done">Shipped</span>
+        <h3>CLI</h3>
+        <p><code>kiln sandbox create|ls|rm|exec|read|write</code> — mirrors the SDK for manual and agentic use, no code required.</p>
       </div>
       <div class="fcard">
         <span class="status done">Shipped</span>
@@ -504,15 +509,15 @@
       <table class="lat-table">
         <thead><tr><th>Phase</th><th>Min</th><th>Mean</th><th>P95</th><th>Max</th></tr></thead>
         <tbody>
-          <tr><td>create</td><td>130ms</td><td>369ms</td><td>588ms</td><td>588ms</td></tr>
-          <tr><td>exec</td><td>1ms</td><td>202ms</td><td>453ms</td><td>463ms</td></tr>
-          <tr><td>delete</td><td>70ms</td><td>107ms</td><td>126ms</td><td>135ms</td></tr>
+          <tr><td>create</td><td>137ms</td><td>211ms</td><td>577ms</td><td>581ms</td></tr>
+          <tr><td>exec</td><td>1ms</td><td>366ms</td><td>440ms</td><td>447ms</td></tr>
+          <tr><td>delete</td><td>96ms</td><td>131ms</td><td>153ms</td><td>159ms</td></tr>
         </tbody>
       </table>
     </div>
 
     <div class="callout">
-      <b>What the numbers actually say:</b> <code>create</code>'s 369ms mean sits far above the 33ms boot figure — the gap is a synchronous ~300MB rootfs copy per sandbox, not the VM itself. Boot is already fast; the next optimization is copy-on-write image cloning, not the boot path.
+      <b>What the numbers actually say:</b> <code>create</code>'s mean was 369ms in the first measurement — far above the 33ms boot figure, because the ~300MB rootfs copy ran serially after the network lease. Parallelizing the two dropped it to 211ms, measured again, not assumed. The remaining gap is real file-copy time on this box's ext4 (no copy-on-write); a CoW-capable filesystem or a device-mapper layer is the next lever, not the boot path, which was already fast.
     </div>
   </div>
 </section>
@@ -557,8 +562,8 @@ console.log(result.stdout, result.exitCode);
       <div class="road-row"><div class="name">Egress firewall</div><div class="desc">Domain-level policy enforced at the DNS proxy layer.</div><div class="stat status planned">Planned</div></div>
       <div class="road-row"><div class="name">Jailer hardening</div><div class="desc">chroot, cgroups v2, seccomp, per-VM unprivileged uid.</div><div class="stat status planned">Planned</div></div>
       <div class="road-row"><div class="name">Multi-agent isolation</div><div class="desc">Per-agent Linux users and shared groups inside one sandbox.</div><div class="stat status planned">Planned</div></div>
-      <div class="road-row"><div class="name">CLI</div><div class="desc"><code>kiln sandbox create|exec|ls|rm</code> — mirrors the SDK for manual/agentic use.</div><div class="stat status planned">Planned</div></div>
-      <div class="road-row"><div class="name">Python SDK</div><div class="desc">Same surface as the JS SDK, once the JS one has file ops and streaming.</div><div class="stat status planned">Planned</div></div>
+      <div class="road-row"><div class="name">Python SDK</div><div class="desc">Same surface as the JS SDK.</div><div class="stat status planned">Planned</div></div>
+      <div class="road-row"><div class="name">Streamed output</div><div class="desc"><code>kiln logs -f</code> and streamed exec, once the daemon can stream.</div><div class="stat status planned">Planned</div></div>
       <div class="road-row"><div class="name">Multi-node &amp; regions</div><div class="desc">More than one daemon, a routing layer — deliberately last.</div><div class="stat status planned">Planned</div></div>
     </div>
   </div>
