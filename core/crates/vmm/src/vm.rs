@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+#[derive(Clone)]
 pub struct NetworkConfig {
     pub tap_device: String,
     pub guest_ip: Ipv4Addr,

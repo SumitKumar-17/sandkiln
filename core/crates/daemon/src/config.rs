@@ -1,3 +1,4 @@
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
 pub struct Config {
@@ -7,6 +8,12 @@ pub struct Config {
     pub base_rootfs_path: PathBuf,
     pub vcpu_count: u8,
     pub mem_size_mib: u32,
+    pub bridge_name: String,
+    pub bridge_gateway: Ipv4Addr,
+    /// The host interface sandbox traffic gets NATed out through. `None`
+    /// means "detect the default route interface at startup" — see
+    /// `network::detect_uplink_iface`.
+    pub uplink_iface: Option<String>,
 }
 
 impl Config {
@@ -18,6 +25,11 @@ impl Config {
             base_rootfs_path: expand_home(&env_or("SANDKILN_BASE_ROOTFS", "~/sandkiln-tools/images/ubuntu-22.04.ext4")),
             vcpu_count: env_or("SANDKILN_VCPU_COUNT", "2").parse().expect("SANDKILN_VCPU_COUNT must be a number"),
             mem_size_mib: env_or("SANDKILN_MEM_SIZE_MIB", "512").parse().expect("SANDKILN_MEM_SIZE_MIB must be a number"),
+            bridge_name: env_or("SANDKILN_BRIDGE_NAME", "sktapbr0"),
+            bridge_gateway: env_or("SANDKILN_BRIDGE_GATEWAY", "172.16.0.1")
+                .parse()
+                .expect("SANDKILN_BRIDGE_GATEWAY must be an IPv4 address"),
+            uplink_iface: std::env::var("SANDKILN_UPLINK_IFACE").ok(),
         }
     }
 }

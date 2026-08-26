@@ -7,6 +7,7 @@ mod state;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use config::Config;
+use sandkiln_vmm::network::{self, NetworkManager};
 use state::AppState;
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
@@ -20,7 +21,16 @@ async fn main() {
 
     let config = Config::from_env();
     let listen_addr = config.listen_addr.clone();
-    let state = Arc::new(AppState::new(config));
+
+    let uplink = match config.uplink_iface.clone() {
+        Some(iface) => iface,
+        None => network::detect_default_iface().expect("detect uplink interface (or set SANDKILN_UPLINK_IFACE)"),
+    };
+    let net_manager = NetworkManager::new(config.bridge_name.clone(), config.bridge_gateway, uplink.clone());
+    net_manager.ensure_ready().expect("set up sandbox network bridge (needs CAP_NET_ADMIN — see scripts/grant-net-admin.sh)");
+    tracing::info!(bridge = %config.bridge_name, gateway = %config.bridge_gateway, %uplink, "sandbox network ready");
+
+    let state = Arc::new(AppState::new(config, net_manager));
 
     let app = Router::new()
         .route("/sandboxes", post(routes::create_sandbox).get(routes::list_sandboxes))
