@@ -18,6 +18,10 @@ pub struct Config {
     /// is the daemon's max concurrent-sandbox-with-networking ceiling.
     pub tap_pool_prefix: String,
     pub tap_pool_size: u32,
+    /// Bearer token required on every `/sandboxes*` request. `None` (the
+    /// env var unset) disables auth entirely — fine for local dev, not
+    /// for anything reachable beyond localhost.
+    pub auth_token: Option<String>,
 }
 
 impl Config {
@@ -36,6 +40,7 @@ impl Config {
             uplink_iface: std::env::var("SANDKILN_UPLINK_IFACE").ok(),
             tap_pool_prefix: env_or("SANDKILN_TAP_POOL_PREFIX", "sktap"),
             tap_pool_size: env_or("SANDKILN_TAP_POOL_SIZE", "32").parse().expect("SANDKILN_TAP_POOL_SIZE must be a number"),
+            auth_token: std::env::var("SANDKILN_AUTH_TOKEN").ok(),
         }
     }
 }

@@ -1,9 +1,11 @@
+mod auth;
 mod config;
 mod error;
 mod routes;
 mod sandbox;
 mod state;
 
+use axum::middleware;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use config::Config;
@@ -45,16 +47,24 @@ async fn async_main() {
     net_manager.ensure_ready().expect("set up sandbox network bridge (needs CAP_NET_ADMIN — see scripts/grant-net-admin.sh)");
     tracing::info!(bridge = %config.bridge_name, gateway = %config.bridge_gateway, %uplink, "sandbox network ready");
 
+    let auth_enabled = config.auth_token.is_some();
     let state = Arc::new(AppState::new(config, net_manager));
 
-    let app = Router::new()
+    let sandbox_routes = Router::new()
         .route("/sandboxes", post(routes::create_sandbox).get(routes::list_sandboxes))
         .route("/sandboxes/:id", delete(routes::stop_sandbox))
         .route("/sandboxes/:id/exec", post(routes::exec))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
+
+    let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .merge(sandbox_routes)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
+    if !auth_enabled {
+        tracing::warn!("SANDKILN_AUTH_TOKEN not set — the daemon's API is unauthenticated");
+    }
     tracing::info!(%listen_addr, "sandkiln daemon starting");
     let listener = tokio::net::TcpListener::bind(&listen_addr).await.expect("bind listen address");
     axum::serve(listener, app).await.expect("server error");
