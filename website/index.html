@@ -388,6 +388,11 @@
       </div>
       <div class="fcard">
         <span class="status done">Shipped</span>
+        <h3>Python SDK</h3>
+        <p>Mirrors the JS SDK exactly — zero runtime dependencies, stdlib <code>urllib</code> only. Verified live end to end.</p>
+      </div>
+      <div class="fcard">
+        <span class="status done">Shipped</span>
         <h3>Benchmarking</h3>
         <p>Criterion benches for boot and exec latency, a scripted concurrent load test — real numbers, not estimates.</p>
       </div>
@@ -562,7 +567,6 @@ console.log(result.stdout, result.exitCode);
       <div class="road-row"><div class="name">Egress firewall</div><div class="desc">Domain-level policy enforced at the DNS proxy layer.</div><div class="stat status planned">Planned</div></div>
       <div class="road-row"><div class="name">Jailer hardening</div><div class="desc">chroot, cgroups v2, seccomp, per-VM unprivileged uid.</div><div class="stat status planned">Planned</div></div>
       <div class="road-row"><div class="name">Multi-agent isolation</div><div class="desc">Per-agent Linux users and shared groups inside one sandbox.</div><div class="stat status planned">Planned</div></div>
-      <div class="road-row"><div class="name">Python SDK</div><div class="desc">Same surface as the JS SDK.</div><div class="stat status planned">Planned</div></div>
       <div class="road-row"><div class="name">Streamed output</div><div class="desc"><code>kiln logs -f</code> and streamed exec, once the daemon can stream.</div><div class="stat status planned">Planned</div></div>
       <div class="road-row"><div class="name">Multi-node &amp; regions</div><div class="desc">More than one daemon, a routing layer — deliberately last.</div><div class="stat status planned">Planned</div></div>
     </div>
@@ -572,7 +576,7 @@ console.log(result.stdout, result.exitCode);
 <footer>
   <div class="wrap foot-row">
     <span>sandkiln — MIT licensed</span>
-    <span>Rust core · TypeScript SDK · not yet published</span>
+    <span>Rust core · TypeScript + Python SDKs · not yet published</span>
   </div>
 </footer>
 

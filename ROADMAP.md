@@ -68,8 +68,13 @@ outbound HTTP both still work.
   typechecked, which is how `stop()` returning `200` instead of the
   documented `204` got caught and fixed. Not published to npm yet. Still
   open: streamed logs, once the daemon can stream them.
-- **Python (`sandkiln` PyPI package).** Not started. Mirrors the JS SDK's
-  surface and ergonomics once it exists.
+- **Python (`sandkiln` PyPI package) — working, mirrors the JS SDK
+  exactly.** `Sandbox.create()`/`attach()`/`list()`, `run_command()`,
+  `read_file()`/`write_file()`, `stop()`. Zero runtime dependencies
+  (stdlib `urllib`, matching the JS SDK's own zero-dependency `fetch`
+  approach). Verified live end to end, including `attach()` reconstructing
+  a handle without a network call and correct 404 handling on a stopped
+  sandbox. Not published to PyPI yet.
 - Both talk to the daemon's HTTP API — no logic duplicated between them
   beyond what each language's idioms require.
 
