@@ -1,51 +1,72 @@
-import { resolveBaseUrl } from "./config.js";
+import { decodeBase64, encodeBase64 } from "./base64.js";
+import { resolveAuthToken, resolveBaseUrl } from "./config.js";
 import { request } from "./http.js";
 import type {
+  CreateSandboxOptions,
+  CreateSandboxRequestBody,
   CreateSandboxResponseBody,
   ExecRequestBody,
   ExecResponseBody,
   ExecResult,
+  ListSandboxesOptions,
   ListSandboxesResponseBody,
+  ReadFileRequestBody,
+  ReadFileResponseBody,
   SandboxInfo,
-  SandboxOptions,
+  WriteFileRequestBody,
 } from "./types.js";
+
+interface ClientContext {
+  baseUrl: string;
+  authToken?: string;
+}
 
 export class Sandbox {
   readonly id: string;
-  private readonly baseUrl: string;
+  private readonly client: ClientContext;
 
-  private constructor(id: string, baseUrl: string) {
+  private constructor(id: string, client: ClientContext) {
     this.id = id;
-    this.baseUrl = baseUrl;
+    this.client = client;
   }
 
-  static async create(options: SandboxOptions = {}): Promise<Sandbox> {
-    const baseUrl = resolveBaseUrl(options.baseUrl);
+  static async create(options: CreateSandboxOptions = {}): Promise<Sandbox> {
+    const client = resolveClient(options);
+    const requestBody: CreateSandboxRequestBody | undefined =
+      options.tags !== undefined ? { tags: options.tags } : undefined;
     const body = await request<CreateSandboxResponseBody>({
-      baseUrl,
+      ...client,
       method: "POST",
       path: "/sandboxes",
+      body: requestBody,
     });
-    return new Sandbox(body.id, baseUrl);
+    return new Sandbox(body.id, client);
   }
 
-  static async list(options: SandboxOptions = {}): Promise<SandboxInfo[]> {
-    const baseUrl = resolveBaseUrl(options.baseUrl);
+  static async list(options: ListSandboxesOptions = {}): Promise<SandboxInfo[]> {
+    const client = resolveClient(options);
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(options.tags ?? {})) {
+      query.set(`tag.${key}`, value);
+    }
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+
     const body = await request<ListSandboxesResponseBody>({
-      baseUrl,
+      ...client,
       method: "GET",
-      path: "/sandboxes",
+      path: `/sandboxes${suffix}`,
     });
     return body.sandboxes.map((summary) => ({
       id: summary.id,
       createdAt: new Date(summary.created_at_unix * 1000),
+      tags: summary.tags,
     }));
   }
 
   async runCommand(command: string, args: string[] = []): Promise<ExecResult> {
     const requestBody: ExecRequestBody = { command, args };
     const body = await request<ExecResponseBody>({
-      baseUrl: this.baseUrl,
+      ...this.client,
       method: "POST",
       path: `/sandboxes/${encodeURIComponent(this.id)}/exec`,
       body: requestBody,
@@ -53,11 +74,36 @@ export class Sandbox {
     return { stdout: body.stdout, stderr: body.stderr, exitCode: body.exit_code };
   }
 
+  async readFile(path: string): Promise<Uint8Array> {
+    const requestBody: ReadFileRequestBody = { path };
+    const body = await request<ReadFileResponseBody>({
+      ...this.client,
+      method: "POST",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/read-file`,
+      body: requestBody,
+    });
+    return decodeBase64(body.content_base64);
+  }
+
+  async writeFile(path: string, content: string | Uint8Array): Promise<void> {
+    const requestBody: WriteFileRequestBody = { path, content_base64: encodeBase64(content) };
+    await request<void>({
+      ...this.client,
+      method: "POST",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/write-file`,
+      body: requestBody,
+    });
+  }
+
   async stop(): Promise<void> {
     await request<void>({
-      baseUrl: this.baseUrl,
+      ...this.client,
       method: "DELETE",
       path: `/sandboxes/${encodeURIComponent(this.id)}`,
     });
   }
+}
+
+function resolveClient(options: { baseUrl?: string; authToken?: string }): ClientContext {
+  return { baseUrl: resolveBaseUrl(options.baseUrl), authToken: resolveAuthToken(options.authToken) };
 }

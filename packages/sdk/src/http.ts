@@ -6,12 +6,21 @@ export interface RequestOptions {
   method: "GET" | "POST" | "DELETE";
   path: string;
   body?: unknown;
+  authToken?: string;
 }
 
 export async function request<T>(options: RequestOptions): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (options.body !== undefined) {
+    headers["content-type"] = "application/json";
+  }
+  if (options.authToken !== undefined) {
+    headers.authorization = `Bearer ${options.authToken}`;
+  }
+
   const response = await fetch(`${options.baseUrl}${options.path}`, {
     method: options.method,
-    headers: options.body === undefined ? undefined : { "content-type": "application/json" },
+    headers: Object.keys(headers).length > 0 ? headers : undefined,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
 
