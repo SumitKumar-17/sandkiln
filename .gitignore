@@ -8,6 +8,12 @@ dist/
 *.tsbuildinfo
 .turbo/
 
+# Python
+__pycache__/
+*.egg-info/
+.venv/
+build/
+
 # Images / large build artifacts
 images/build/
 images/*.ext4
