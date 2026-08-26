@@ -1,3 +1,3 @@
-// sandkiln JS/TS SDK. Empty skeleton — the daemon it talks to now exists
-// (core/crates/daemon); this gets filled in next.
-export {};
+export { Sandbox } from "./sandbox.js";
+export { SandkilnApiError } from "./errors.js";
+export type { ExecResult, SandboxInfo, SandboxOptions } from "./types.js";
