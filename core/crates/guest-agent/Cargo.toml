@@ -1,11 +1,14 @@
 [package]
-name = "sandkiln-vmm"
+name = "sandkiln-guest-agent"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "sandkiln-agent"
+path = "src/main.rs"
+
 [dependencies]
 sandkiln-protocol = { path = "../protocol" }
-
-[dev-dependencies]
+vsock = "0.5"
 base64 = "0.22"
