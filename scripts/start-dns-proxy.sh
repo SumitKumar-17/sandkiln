@@ -7,7 +7,8 @@
 # host's own resolver (systemd-resolved's 127.0.0.53 stub) works fine.
 # dnsmasq here just forwards guest queries to that already-working
 # resolver, as a normal host-local client — this also gives us a natural
-# place to add domain allowlisting later (Phase 7).
+# place to add domain allowlisting later (see "Security hardening" in
+# ROADMAP.md).
 #
 # Usage: sudo scripts/start-dns-proxy.sh <tap-gateway-ip>
 # Example: sudo scripts/start-dns-proxy.sh 172.16.0.1

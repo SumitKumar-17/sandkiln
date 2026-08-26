@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Boots a single Firecracker microVM by hand, driving it purely through its
-# API socket. This is the Phase 1 proof that the primitive works — no
-# daemon, no SDK yet. Networking is optional: pass a tap device name (set
-# up via setup-tap-network.sh) to give the guest outbound internet at a
-# fixed static IP. Blocks with the console attached; the guest logs in as
-# root automatically. Stop the VM from another shell with
-# `kill <firecracker pid>` or SendCtrlAltDel over the API.
+# API socket — useful for manual testing outside the daemon. Networking is
+# optional: pass a tap device name (set up via setup-tap-network.sh) to
+# give the guest outbound internet at a fixed static IP. Blocks with the
+# console attached; the guest logs in as root automatically. Stop the VM
+# from another shell with `kill <firecracker pid>` or SendCtrlAltDel over
+# the API.
 #
 # This test rootfs doesn't configure DNS on its own — once booted, set
 # `nameserver <host-ip>` in the guest's /etc/resolv.conf (start-dns-proxy.sh
-# needs to be running on the host side first). Phase 2's own rootfs bakes
+# needs to be running on the host side first). A production rootfs bakes
 # this in at build time instead.
 #
 # Usage: scripts/boot-test-vm.sh [images-dir] [tap-device]

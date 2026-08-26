@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Fetches a known-good kernel + ext4 rootfs from Firecracker's public CI
-# artifact bucket, for manual boot testing (Phase 1). Not a production
-# image source — Phase 6 replaces this with our own built images.
+# artifact bucket, for manual boot testing. Not a production image source —
+# see the "Base and custom images" section of ROADMAP.md for our own
+# built images.
 
 set -euo pipefail
 

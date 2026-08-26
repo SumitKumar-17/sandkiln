@@ -1,3 +1,3 @@
-// sandkiln JS/TS SDK. Empty skeleton — Phase 4 fills this in once the
-// daemon (Phase 3) exists for it to talk to.
+// sandkiln JS/TS SDK. Empty skeleton — the daemon it talks to now exists
+// (core/crates/daemon); this gets filled in next.
 export {};

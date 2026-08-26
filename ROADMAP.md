@@ -1,128 +1,192 @@
 # Roadmap
 
-**Status: Phase 3 done, verified on real hardware.** A microVM boots with
-networking (Phase 1), the guest agent answers exec / read-file / write-file
-/ list-dir over vsock (Phase 2), and an HTTP daemon manages the full
-sandbox lifecycle end to end — create, exec, list, stop — with structured
-logs at both the HTTP and VM-lifecycle layers (Phase 3). All proven against
-a real Firecracker instance on the dev box, not just unit tests. Per-VM
-networking (each sandbox needs its own tap + IP, not the single shared one
-from Phase 1) is the next thing this needs before Phase 4.
+This is a working plan, not a spec — it gets rewritten as we learn things.
+Every milestone below ends with something concretely proven on real
+hardware, not just code that compiles.
 
-This is a working plan, not a spec. Phases will be reordered, merged, or
-rewritten as we learn things — nothing here is fixed. Each phase should end
-with something concretely runnable, not just code that compiles.
+## What works today
+
+- A Firecracker microVM boots under real KVM in ~30ms, with a guest agent
+  running inside it that answers `exec` / `read_file` / `write_file` /
+  `list_dir` over vsock.
+- An HTTP daemon (`sandkilnd`) manages the full lifecycle — create, exec,
+  list, stop — driving Firecracker directly from Rust rather than shelling
+  out.
+- Structured logging throughout: VM lifecycle events carry timing, HTTP
+  requests are traced, everything is correlatable and filterable.
+- Networking (tap + NAT + DNS) is proven to work but not yet wired into
+  the daemon per-sandbox — every VM the daemon boots today has no network.
+  That's the most important open gap.
 
 ## Engineering principles
 
 - **Modular, not monolithic.** Each concern is its own crate/package with a
-  narrow public API (`vmm`, `guest-agent`, the daemon, etc. stay separable —
-  no crate reaches into another's internals). A daemon change should not
-  require touching the guest agent, and vice versa.
+  narrow public API — `vmm`, `guest-agent`, the daemon, the SDK, the CLI
+  stay separable. No crate reaches into another's internals.
 - **Benchmark the hot paths.** Boot time, exec round-trip latency, and
   snapshot/resume time are the metrics that actually matter for this
-  product — each gets a `criterion` (Rust) or scripted benchmark once the
-  path it measures exists, not bolted on at the end.
-- **Prove it, don't assume it.** Every phase ends with something actually
-  run on real hardware (the remote box), not just code that compiles.
+  product. See the Benchmarking section below.
+- **Prove it, don't assume it.** Every milestone ends with something
+  actually run on real hardware, not just unit tests.
+- **No half-finished surfaces.** A feature either works end to end or it
+  isn't claimed as done. Deliberately deferred work is called out
+  explicitly, not left silently incomplete.
 
-Execution model: development happens in this repo; anything that needs KVM,
-a Linux toolchain, or real hardware (Rust builds, Firecracker, rootfs/kernel
-builds, actually booting a microVM) runs on the remote dev box over SSH.
+Execution model: development happens in this repo; anything that needs
+KVM, a Linux toolchain, or real hardware (Rust builds, Firecracker,
+rootfs/kernel builds, actually booting a microVM) runs on the remote dev
+box over SSH.
 
-## Phase 0 — Scaffolding
-- Repo layout, license, gitignore, base tooling decisions.
-- Rust workspace skeleton (`core/`), npm workspace skeleton (`packages/`).
-- Confirm KVM access end-to-end on the remote box (device permissions, group
-  membership, a `kvm-ok`-style check).
+## Networking — next up
 
-## Phase 1 — Prove the primitive: boot a microVM by hand
-- Fetch/build a minimal guest kernel and a minimal rootfs.
-- Get one Firecracker microVM booting via its API socket, driven by a small
-  Rust binary — no daemon, no SDK yet, just "can we boot and reach a VM."
-- Tap device + bridge + NAT so the guest has outbound network.
+Every sandbox the daemon boots needs its own tap device and IP, not the
+single shared static one from early testing. This blocks everything
+downstream that needs a sandbox to actually reach the network.
 
-## Phase 2 — Guest agent + exec primitive
-- Minimal static (musl) Rust agent baked into the rootfs, PID 1 or run from
-  init, listening on a vsock port.
-- Agent supports: exec a command and stream stdout/stderr/exit code, read
-  file, write file, list directory.
-- Host-side vsock client. End-to-end loop: boot → exec → get output →
-  shut down.
+- A per-sandbox tap device + IP allocator (a small subnet, one /30 or /29
+  per sandbox, or one shared bridge with per-VM DHCP-like static leases).
+- Wire the existing NAT/DNS-proxy setup to work with dynamically created
+  tap devices instead of one fixed one.
+- Concurrency: prove multiple sandboxes can run and reach the network
+  simultaneously without interfering with each other.
 
-## Phase 3 — Daemon and lifecycle API — done
-- HTTP API server (axum) wrapping the VM lifecycle: `POST /sandboxes`,
-  `GET /sandboxes`, `POST /sandboxes/:id/exec`, `DELETE /sandboxes/:id`.
-  VM lifecycle itself (boot/exec/stop) lives in `sandkiln-vmm` as real Rust
-  now, not shell scripts — the daemon just drives it.
-- In-memory sandbox state (id, VM handle, rootfs path, created-at). Sqlite
-  persistence, file read/write endpoints, streamed exec output, resource
-  limit configuration, and idle/orphan cleanup are still open — this phase
-  proved the shape works, not the full feature set.
-- **Known gap, deliberately deferred:** every sandbox currently boots with
-  no network (Phase 1's tap device is single-use, shared, static-IP — it
-  can't serve concurrent VMs). A per-sandbox tap + IP allocator is the next
-  piece of work before this is actually useful for real workloads.
+## Client SDKs
+
+- **JS/TS (`sandkiln` npm package).** `Sandbox.create()`,
+  `sandbox.runCommand()`, `sandbox.readFile()` / `writeFiles()`, streamed
+  logs, `sandbox.stop()`. Ships ESM + CJS + full type definitions.
+- **Python (`sandkiln` PyPI package).** Mirrors the JS SDK's surface and
+  ergonomics.
+- Both talk to the daemon's HTTP API — no logic duplicated between them
+  beyond what each language's idioms require.
+
+## CLI (`kiln`)
+
+- `kiln sandbox create|exec|ls|rm|cp`, `kiln logs -f`.
+- Built for manual testing, agentic workflows, and debugging — mirrors the
+  SDK surface, usable standalone without writing code.
+
+## Authentication and multi-tenancy
+
+- Token-based auth on the daemon's HTTP API — this is a self-hosted
+  project, not tied to any platform's identity system, so a straightforward
+  bearer-token scheme (issued and checked by the daemon itself) replaces
+  what a hosted platform would do with OIDC.
+- Per-token scoping (which sandboxes a token can see/act on) once more than
+  one caller shares a daemon instance.
+
+## Base and custom images
+
+- A **universal base image**: Ubuntu with current Node.js LTS, Python,
+  common CLI tooling, and full root access inside the sandbox — the
+  default every sandbox boots from unless told otherwise.
+- A small catalog of **managed images** for common language runtimes.
+- **Custom images**: accept a user-provided rootfs (or convert an OCI
+  image into one) so teams can bake their own tooling in and reuse it
+  across sandboxes.
+- Image build tooling lives in `images/` — reproducible, scripted builds,
+  not hand-built blobs.
+
+## Persistence and snapshotting
+
+- **Snapshot/resume**: save a running microVM's full state (memory + disk)
+  and resume it later, skipping boot and dependency installation entirely.
+- **Persistent-by-default sandboxes**: auto-snapshot on stop, so "stop and
+  come back later" is the default behavior, not something the caller has
+  to manage.
+- Explicit snapshot API for the SDK/CLI to trigger a save point on demand.
+
+## Drives and remote storage
+
+- **Drives**: attachable persistent filesystem storage that outlives a
+  single sandbox and can be reattached to a new one — for state that
+  should survive well past any one VM's lifetime.
+- **Remote storage mounts**: mount an external object store (S3-compatible)
+  into a sandbox via FUSE, so a sandbox can read/write remote files through
+  its normal filesystem interface.
+
+## Security hardening
+
+- Firecracker's jailer: chroot, cgroups v2 resource limits, seccomp
+  filters, dropped capabilities, an unprivileged uid per VM.
+- Network policy: isolated tap per sandbox (ties into the Networking
+  section above), egress allow-listing, no sandbox-to-sandbox traffic by
+  default.
+- The DNS proxy is a natural enforcement point for domain-level egress
+  policy — extend it rather than bolting policy on elsewhere.
+
+## Multi-agent isolation
+
+- Separate Linux users with private home directories within a single
+  sandbox, so multiple AI agents can share one VM without stepping on each
+  other.
+- Shared groups for deliberate, controlled file sharing between agents in
+  the same sandbox.
+
+## System-privileged workloads
+
+- Support workloads that need real system-level privileges inside the
+  guest: container runtimes (Docker-in-VM via nested virtualization or a
+  compatible runtime), VPN clients, FUSE filesystem drivers.
+- This needs care in the base image (kernel config, cgroups setup inside
+  the guest) more than in the host-side daemon.
+
+## Dev servers and live preview
+
+- A host-side reverse proxy that maps a sandbox's port to a reachable URL,
+  so a dev server running inside a sandbox can be previewed live.
+- Fast iterative file sync tuned for dev-server workflows — write many
+  small files quickly, ideally with watch-mode support.
+
+## Tags and sandbox metadata
+
+- Key/value tags on sandboxes (environment, team, owner, whatever the
+  caller wants) for filtering and listing.
+- Sqlite-backed sandbox state instead of the current in-memory map, so
+  tags, history, and listings survive a daemon restart.
+
+## Benchmarking
+
+Numbers gathered so far, informally, from tracing spans on the dev box:
+boot ≈30ms, vsock round-trip ≈1ms. These need to become real, repeatable
+benchmarks, not just log lines from one manual run:
+
+- `criterion` benchmarks in `sandkiln-vmm` for boot time and exec latency,
+  run against the real Firecracker binary (not mocked).
+- A scripted load test: concurrent sandbox creation/exec through the
+  daemon's HTTP API, to find where throughput actually breaks down once
+  per-sandbox networking exists.
+- Snapshot/resume timing once that exists — the whole point of persistence
+  is that resume should be dramatically faster than a cold boot; that
+  claim needs a number behind it.
+- Published, checked-in results (not just claims) that get re-run and
+  updated as the system changes, so regressions are visible.
 
 ## Observability
-- **Structured logging — done.** `tracing` throughout, not just at the
-  daemon's edge: HTTP requests/responses (method, path, status, latency)
-  via `tower-http`'s `TraceLayer`, and VM lifecycle events (boot with
-  timing, vsock call latency, stop) emitted from `sandkiln-vmm` itself so
-  the library is useful standalone, not just under the daemon. Correlated
-  by `vm_id`. Filterable per-module via `RUST_LOG`.
+
+- **Structured logging — working today.** `tracing` throughout, not just
+  at the daemon's edge: HTTP requests/responses (method, path, status,
+  latency) via `tower-http`'s `TraceLayer`, and VM lifecycle events (boot
+  with timing, vsock call latency, stop) emitted from `sandkiln-vmm`
+  itself so the library is useful standalone, not just under the daemon.
+  Correlated by `vm_id`, filterable per-module via `RUST_LOG`.
 - **Still open:**
   - Correlate an HTTP request all the way through to the VM operations it
     triggers with a single request/trace ID (currently `vm_id` and the
-    axum request span are separate; tying them together needs a
-    `tracing::Span` passed through `Vm::boot`/`call`/`stop`, not just
-    independent spans).
+    axum request span are independent; needs a `tracing::Span` threaded
+    through `Vm::boot`/`call`/`stop`).
   - A `/metrics` endpoint (Prometheus text format): sandboxes created
     (counter), sandboxes active (gauge), boot duration and exec latency
-    (histograms). No client library chosen yet.
-  - JSON log output for production (current output is pretty-printed for
-    a human terminal) — `tracing-subscriber`'s JSON formatter, switched by
-    an env var.
-  - Guest-side observability: today, output from a *failed-to-start*
-    process inside the guest (kernel panic, agent crash before it can
-    answer) is invisible from the host. Worth capturing the serial console
-    log per-VM even when nothing goes through vsock.
+    (histograms).
+  - JSON log output for production use (current output is pretty-printed
+    for a human terminal) — switched by an env var.
+  - Guest-side observability: today, output from a guest that fails before
+    it can answer over vsock (kernel panic, agent crash) is invisible from
+    the host. Worth capturing the serial console log per-VM regardless of
+    whether vsock ever came up.
 
-## Phase 4 — JS/TS SDK (`sandkiln`)
-- `Sandbox.create()`, `sandbox.runCommand()`, `sandbox.readFile()` /
-  `writeFiles()`, streamed logs, `sandbox.stop()`.
-- Token-based auth against the daemon.
-- Ship ESM + CJS + types.
+## Documentation and examples
 
-## Phase 5 — CLI (`kiln`)
-- `kiln sandbox create|exec|ls|rm|cp`, `kiln logs -f`.
-- Built for manual testing, agentic workflows, and debugging — mirrors the
-  SDK surface.
-
-## Phase 6 — Persistence, snapshotting, images
-- Snapshot/resume a stopped microVM (skip boot + dependency install).
-- Managed base images (a small set of prebuilt rootfs images with common
-  language runtimes) and custom image support.
-
-## Phase 7 — Security hardening
-- Firecracker jailer: chroot, cgroups v2 limits, seccomp, dropped
-  capabilities, unprivileged per-VM uid.
-- Network policy: isolated tap per sandbox, egress control, no
-  sandbox-to-sandbox traffic by default.
-- Multi-agent isolation within one sandbox (separate Linux users/home dirs,
-  shared groups for controlled file sharing).
-
-## Phase 8 — Dev servers and live preview
-- Host-side reverse proxy that maps a sandbox port to a reachable URL, for
-  previewing a dev server running inside a sandbox.
-- Fast iterative file sync for dev-server-style workflows.
-
-## Phase 9 — Drives and polish
-- Attachable persistent storage that outlives a single sandbox and can be
-  reattached to a new one.
-- Tags (key/value metadata) for filtering and listing sandboxes.
-- Closes out whatever's still open in the Observability section above.
-
-## Phase 10 — Python SDK and docs
-- `sandkiln` Python package mirroring the JS SDK.
-- Docs site and runnable examples.
+- A docs site with runnable examples covering both SDKs and the CLI.
+- Example projects: a code playground, an AI-agent sandbox runner, a
+  dev-server preview tool — real uses of the primitive, not toy snippets.
