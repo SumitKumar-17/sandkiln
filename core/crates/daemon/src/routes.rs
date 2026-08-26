@@ -44,8 +44,18 @@ pub async fn create_sandbox(
         let state = state.clone();
         let rootfs_path = rootfs_path.clone();
         move || -> std::io::Result<(Vm, Lease)> {
-            std::fs::copy(&state.config.base_rootfs_path, &rootfs_path)?;
-            let lease = state.network.lease()?;
+            // Copying the rootfs and leasing a network are independent —
+            // running them concurrently overlaps the (currently dominant)
+            // cost of the rootfs copy with the lease instead of paying for
+            // both serially.
+            let (copy_result, lease_result) = std::thread::scope(|scope| {
+                let copy_handle = scope.spawn(|| clone_rootfs(&state.config.base_rootfs_path, &rootfs_path));
+                let lease_handle = scope.spawn(|| state.network.lease());
+                (copy_handle.join().expect("rootfs copy thread panicked"), lease_handle.join().expect("lease thread panicked"))
+            });
+            copy_result?;
+            let lease = lease_result?;
+
             let vm = Vm::boot(&VmConfig {
                 firecracker_bin: state.config.firecracker_bin.clone(),
                 kernel_path: state.config.kernel_path.clone(),
@@ -212,4 +222,17 @@ async fn call_agent(state: Arc<AppState>, id: String, request: Request) -> Resul
     })
     .await
     .expect("agent call task panicked")
+}
+
+/// Clones the base rootfs for one sandbox. Uses `cp --reflink=auto`
+/// rather than `std::fs::copy` so this becomes an instant copy-on-write
+/// clone for free on a filesystem that supports it (XFS, Btrfs) — on
+/// ext4 (what the dev box runs) `--reflink=auto` just falls back to an
+/// ordinary copy, so this has no effect there, but costs nothing either.
+fn clone_rootfs(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    let status = std::process::Command::new("cp").arg("--reflink=auto").arg(src).arg(dst).status()?;
+    if !status.success() {
+        return Err(std::io::Error::other(format!("cp --reflink=auto {src:?} {dst:?} failed: {status}")));
+    }
+    Ok(())
 }

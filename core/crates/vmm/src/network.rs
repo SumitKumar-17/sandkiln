@@ -134,6 +134,11 @@ impl NetworkManager {
     fn attach_tap(&self, tap_device: &str) -> io::Result<()> {
         run("ip", &["link", "set", tap_device, "up"])?;
         run("ip", &["link", "set", tap_device, "master", &self.bridge_name])?;
+        // Isolated bridge ports can still reach the bridge itself (so
+        // routing out through the uplink keeps working) but can't forward
+        // frames to each other — this is what actually stops one sandbox
+        // from reaching another's IP on the shared bridge at L2.
+        run("bridge", &["link", "set", "dev", tap_device, "isolated", "on"])?;
         Ok(())
     }
 }
