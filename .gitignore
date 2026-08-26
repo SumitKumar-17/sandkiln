@@ -1,0 +1,33 @@
+# Rust
+target/
+Cargo.lock
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+.turbo/
+
+# Python
+__pycache__/
+*.egg-info/
+.venv/
+build/
+
+# Images / large build artifacts
+images/build/
+images/*.ext4
+images/*.img
+*.vmlinux
+
+# Local env / secrets
+.env
+.env.*
+*.pem
+
+# OS / editor
+.DS_Store
+*.log
+
+# Local tooling state
+.claude/

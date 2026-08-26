@@ -1,0 +1,143 @@
+import { readFileSync } from "node:fs";
+import { Command, Option } from "commander";
+import { Sandbox, SandkilnApiError } from "sandkiln";
+
+interface GlobalOptions {
+  baseUrl?: string;
+  token?: string;
+}
+
+function parseTag(value: string, previous: Record<string, string>): Record<string, string> {
+  const separatorIndex = value.indexOf("=");
+  if (separatorIndex === -1) {
+    throw new Error(`--tag expects key=value, got: ${value}`);
+  }
+  previous[value.slice(0, separatorIndex)] = value.slice(separatorIndex + 1);
+  return previous;
+}
+
+const tagOption = () => new Option("--tag <key=value>", "tag to attach (repeatable)").argParser(parseTag).default({});
+
+function clientOptions(cmd: Command): GlobalOptions {
+  return cmd.optsWithGlobals();
+}
+
+async function fail(message: string): Promise<never> {
+  process.stderr.write(`${message}\n`);
+  process.exit(1);
+}
+
+async function handleApiError(error: unknown): Promise<never> {
+  if (error instanceof SandkilnApiError) {
+    return fail(`error: ${error.message} (status ${error.status})`);
+  }
+  return fail(`error: ${error instanceof Error ? error.message : String(error)}`);
+}
+
+const program = new Command();
+program
+  .name("kiln")
+  .description("Manage sandkiln sandboxes from the command line.")
+  .option("--base-url <url>", "daemon URL (default: SANDKILN_DAEMON_URL or http://127.0.0.1:7777)")
+  .option("--token <token>", "auth token (default: SANDKILN_AUTH_TOKEN)");
+
+const sandbox = program.command("sandbox").description("Create, inspect, and manage sandboxes.");
+
+sandbox
+  .command("create")
+  .description("Boot a new sandbox.")
+  .addOption(tagOption())
+  .action(async function (this: Command, opts: { tag: Record<string, string> }) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const created = await Sandbox.create({ baseUrl, authToken: token, tags: opts.tag });
+      process.stdout.write(`${created.id}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("ls")
+  .description("List sandboxes.")
+  .addOption(tagOption())
+  .action(async function (this: Command, opts: { tag: Record<string, string> }) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const sandboxes = await Sandbox.list({ baseUrl, authToken: token, tags: opts.tag });
+      if (sandboxes.length === 0) {
+        process.stdout.write("no sandboxes\n");
+        return;
+      }
+      for (const info of sandboxes) {
+        const tags = Object.entries(info.tags).map(([k, v]) => `${k}=${v}`).join(",");
+        process.stdout.write(`${info.id}  ${info.createdAt.toISOString()}  ${tags}\n`);
+      }
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("rm <id>")
+  .description("Stop a sandbox and release its resources.")
+  .action(async function (this: Command, id: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).stop();
+      process.stdout.write(`${id} stopped\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("exec <id> <command> [args...]")
+  .description("Run a command inside a sandbox. Exits with the command's own exit code.")
+  .action(async function (this: Command, id: string, command: string, args: string[]) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const result = await attachSandbox(id, baseUrl, token).runCommand(command, args);
+      process.stdout.write(result.stdout);
+      process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("read <id> <path>")
+  .description("Read a file from a sandbox and print it to stdout.")
+  .action(async function (this: Command, id: string, path: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const bytes = await attachSandbox(id, baseUrl, token).readFile(path);
+      process.stdout.write(Buffer.from(bytes));
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("write <id> <path> <local-file>")
+  .description("Write a local file into a sandbox at the given path.")
+  .action(async function (this: Command, id: string, path: string, localFile: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const content = readFileSync(localFile);
+      await attachSandbox(id, baseUrl, token).writeFile(path, content);
+      process.stdout.write(`wrote ${localFile} -> ${id}:${path}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+/** Every subcommand above only has a sandbox id, not an instance — this
+ * reconstructs one without a round-trip, since every Sandbox method just
+ * needs the id plus the same client config already used to reach it. */
+function attachSandbox(id: string, baseUrl: string | undefined, token: string | undefined): Sandbox {
+  return Sandbox.attach(id, { baseUrl, authToken: token });
+}
+
+program.parseAsync(process.argv);

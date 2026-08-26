@@ -1,0 +1,43 @@
+name: Publish Python SDK to PyPI
+
+# Same reasoning as publish-sdk.yml: not automatic on every push, only a
+# manual dispatch or a py-v*.*.* tag.
+#
+# Setup required once, on pypi.org: register the package name, then under
+# its "Publishing" settings add a trusted publisher — owner
+# SumitKumar-17, repo sandkiln, workflow publish-python-sdk.yml,
+# environment left blank (or "pypi" if you set one below). This uses
+# PyPI's OIDC-based trusted publishing, which needs no stored token and
+# has no 2FA-on-publish friction to work around.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "py-v*.*.*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+        working-directory: packages/python
+      - name: Verify pyproject.toml version matches the tag
+        if: startsWith(github.ref, 'refs/tags/py-v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#py-v}"
+          PKG_VERSION="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "tag py-v$TAG_VERSION does not match pyproject.toml version $PKG_VERSION"
+            exit 1
+          fi
+        working-directory: packages/python
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/python/dist
