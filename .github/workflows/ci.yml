@@ -45,3 +45,18 @@ jobs:
       - run: npm run build -w sandkiln
       - run: npm run typecheck -w kiln
       - run: npm run build -w kiln
+
+  python:
+    name: Python SDK (build + import check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+        working-directory: packages/python
+      - run: pip install .
+        working-directory: packages/python
+      - run: python -c "import sandkiln; sandkiln.Sandbox; sandkiln.SandkilnApiError"
