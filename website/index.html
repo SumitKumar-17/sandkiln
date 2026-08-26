@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sandkiln</title>
+<meta name="description" content="A Rust-built compute primitive for safely running untrusted code in Firecracker microVMs — architecture, real benchmarks, and SDK.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔥</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800;900&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg: #eee9e1;
+    --surface: #f6f3ee;
+    --surface-2: #e7e0d4;
+    --border: #d3c8b8;
+    --text: #221a14;
+    --text-dim: #6b5d4d;
+    --text-faint: #948573;
+    --accent: #c53d14;
+    --accent-glow: #e8491c;
+    --accent-ink: #ffffff;
+    --good: #2f7a5c;
+    --pending: #8a6d1b;
+    --code-bg: #221a14;
+    --code-text: #f1e6d8;
+    --code-dim: #9a8a76;
+    --shadow: 0 1px 0 rgba(34,26,20,0.08);
+
+    --display: "Big Shoulders Display", "Arial Narrow", sans-serif;
+    --body: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #151009;
+      --surface: #1d160e;
+      --surface-2: #261c12;
+      --border: #3c2d1c;
+      --text: #f3e9db;
+      --text-dim: #b4a189;
+      --text-faint: #7d6d57;
+      --accent: #e8491c;
+      --accent-glow: #ff8a4c;
+      --accent-ink: #1a0f06;
+      --good: #6fbf9b;
+      --pending: #d8b64a;
+      --code-bg: #0f0b06;
+      --code-text: #efe2cf;
+      --code-dim: #7d6d57;
+      --shadow: 0 1px 0 rgba(0,0,0,0.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #151009;
+    --surface: #1d160e;
+    --surface-2: #261c12;
+    --border: #3c2d1c;
+    --text: #f3e9db;
+    --text-dim: #b4a189;
+    --text-faint: #7d6d57;
+    --accent: #e8491c;
+    --accent-glow: #ff8a4c;
+    --accent-ink: #1a0f06;
+    --good: #6fbf9b;
+    --pending: #d8b64a;
+    --code-bg: #0f0b06;
+    --code-text: #efe2cf;
+    --code-dim: #7d6d57;
+    --shadow: 0 1px 0 rgba(0,0,0,0.4);
+  }
+
+  * { box-sizing: border-box; }
+  html { text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--body);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent); color: var(--accent-ink); }
+
+  a { color: inherit; }
+  h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; letter-spacing: 0.01em; }
+  code, .mono { font-family: var(--mono); }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
+  @media (max-width: 640px) { .wrap { padding: 0 20px; } }
+
+  /* ---------- section scaffolding ---------- */
+  section { padding: 96px 0; border-bottom: 1px solid var(--border); }
+  section:last-of-type { border-bottom: none; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 22px;
+    height: 1px;
+    background: var(--accent);
+  }
+  .section-head { max-width: 640px; margin-bottom: 56px; }
+  .section-head h2 { font-size: clamp(28px, 4vw, 40px); font-weight: 800; }
+  .section-head p { color: var(--text-dim); font-size: 17px; margin: 14px 0 0; max-width: 58ch; }
+
+  /* ---------- header ---------- */
+  header.top {
+    position: sticky; top: 0; z-index: 50;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+  .topbar { display: flex; align-items: center; justify-content: space-between; padding: 18px 32px; max-width: 1080px; margin: 0 auto; }
+  .brand { display: flex; align-items: baseline; gap: 10px; font-family: var(--display); font-weight: 800; font-size: 22px; letter-spacing: 0.01em; }
+  .brand .dot { color: var(--accent); }
+  nav.topnav { display: flex; gap: 28px; font-size: 14px; }
+  nav.topnav a { text-decoration: none; color: var(--text-dim); }
+  nav.topnav a:hover { color: var(--text); }
+  @media (max-width: 720px) { nav.topnav { display: none; } }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 88px 0 96px; border-bottom: 1px solid var(--border); }
+  .hero-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 56px; align-items: center; }
+  @media (max-width: 900px) { .hero-grid { grid-template-columns: 1fr; } }
+
+  .hero h1 {
+    font-size: clamp(44px, 7vw, 76px);
+    font-weight: 900;
+    line-height: 0.96;
+    text-transform: uppercase;
+  }
+  .hero h1 .fire { color: var(--accent); }
+  .hero .tagline { font-size: 19px; color: var(--text-dim); max-width: 46ch; margin: 24px 0 0; }
+  .hero .lede { font-size: 15px; color: var(--text-faint); max-width: 50ch; margin: 14px 0 0; }
+
+  .stat-row { display: flex; gap: 32px; margin-top: 40px; flex-wrap: wrap; }
+  .stat b {
+    display: block; font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: 26px; font-weight: 600; color: var(--accent);
+  }
+  .stat span { font-size: 12px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.08em; }
+
+  .cta-row { display: flex; gap: 14px; margin-top: 36px; flex-wrap: wrap; }
+  .btn {
+    font-family: var(--mono); font-size: 13.5px; padding: 12px 20px;
+    border: 1px solid var(--border); text-decoration: none; display: inline-block;
+    color: var(--text);
+  }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  .btn.ghost { background: transparent; }
+
+  /* ---------- terminal panel ---------- */
+  .term {
+    background: var(--code-bg); color: var(--code-text);
+    border: 1px solid var(--border);
+    font-family: var(--mono); font-size: 12.6px; line-height: 1.65;
+    padding: 20px 22px; height: 360px; overflow: hidden;
+    box-shadow: var(--shadow);
+    position: relative;
+  }
+  .term-bar { display: flex; align-items: center; gap: 8px; margin: -20px -22px 16px; padding: 10px 16px; border-bottom: 1px solid color-mix(in srgb, var(--code-text) 12%, transparent); }
+  .term-bar span { width: 9px; height: 9px; border-radius: 50%; background: color-mix(in srgb, var(--code-text) 20%, transparent); }
+  .term-bar b { font-weight: 500; color: var(--code-dim); font-size: 11.5px; margin-left: 6px; letter-spacing: 0.04em; }
+  .term pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+  .term .k { color: var(--code-dim); }
+  .term .ok { color: var(--good); }
+  .term .hl { color: var(--accent-glow); }
+  .term .cursor { display: inline-block; width: 7px; height: 13px; background: var(--accent-glow); vertical-align: -2px; animation: blink 1s step-end infinite; }
+  @media (prefers-reduced-motion: reduce) { .term .cursor { animation: none; } }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ---------- comparison table ---------- */
+  .cmp { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  .cmp th, .cmp td { text-align: left; padding: 14px 18px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .cmp th { font-family: var(--mono); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); font-weight: 500; }
+  .cmp td.win { color: var(--good); font-weight: 600; }
+  .cmp tr td:first-child { color: var(--text-dim); font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+  .table-scroll { overflow-x: auto; border: 1px solid var(--border); }
+
+  /* ---------- feature grid ---------- */
+  .fgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); }
+  @media (max-width: 860px) { .fgrid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .fgrid { grid-template-columns: 1fr; } }
+  .fcard { background: var(--surface); padding: 24px 22px; display: flex; flex-direction: column; gap: 10px; min-height: 148px; }
+  .fcard h3 { font-size: 15.5px; font-family: var(--body); font-weight: 600; }
+  .fcard p { margin: 0; font-size: 13.5px; color: var(--text-dim); line-height: 1.55; }
+  .status { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; display: inline-flex; align-items: center; gap: 6px; width: fit-content; }
+  .status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; }
+  .status.done { color: var(--good); }
+  .status.done::before { background: var(--good); }
+  .status.planned { color: var(--pending); }
+  .status.planned::before { background: var(--pending); border: none; }
+
+  /* ---------- architecture ---------- */
+  .arch { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 48px; }
+  @media (max-width: 860px) { .arch { grid-template-columns: repeat(2, 1fr); } }
+  .crate { border: 1px solid var(--border); background: var(--surface); padding: 20px; position: relative; }
+  .crate .n { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+  .crate h3 { font-family: var(--mono); font-size: 15px; font-weight: 600; margin: 6px 0 10px; color: var(--accent); }
+  .crate p { margin: 0; font-size: 13px; color: var(--text-dim); line-height: 1.6; }
+  .arch-arrow { display: none; }
+  @media (min-width: 861px) {
+    .arch { position: relative; }
+  }
+
+  .lifecycle { display: flex; gap: 0; flex-wrap: wrap; }
+  .life-step { flex: 1; min-width: 150px; border-top: 3px solid var(--accent); padding: 18px 18px 0 0; }
+  .life-step .idx { font-family: var(--mono); color: var(--text-faint); font-size: 12px; }
+  .life-step h4 { font-size: 14.5px; margin: 6px 0 6px; font-weight: 600; }
+  .life-step p { margin: 0; font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+
+  /* ---------- benchmarks ---------- */
+  .bench-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); margin-bottom: 40px; }
+  @media (max-width: 720px) { .bench-grid { grid-template-columns: 1fr; } }
+  .bench-card { background: var(--surface); padding: 28px 24px; }
+  .bench-card .label { font-family: var(--mono); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); }
+  .bench-card .value { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 34px; font-weight: 600; color: var(--accent); margin: 10px 0 6px; }
+  .bench-card .ctx { font-size: 12.5px; color: var(--text-dim); }
+
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--surface-2);
+    padding: 20px 24px;
+    font-size: 14px;
+    color: var(--text-dim);
+  }
+  .callout b { color: var(--text); }
+
+  .lat-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .lat-table th, .lat-table td { padding: 10px 16px; border-bottom: 1px solid var(--border); text-align: right; }
+  .lat-table th:first-child, .lat-table td:first-child { text-align: left; color: var(--text-dim); }
+  .lat-table th { color: var(--text-faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500; }
+
+  /* ---------- code section ---------- */
+  .code-block {
+    background: var(--code-bg); color: var(--code-text);
+    border: 1px solid var(--border);
+    font-family: var(--mono); font-size: 13.2px; line-height: 1.7;
+    padding: 24px 26px; overflow-x: auto;
+  }
+  .code-block .c1 { color: var(--code-dim); }
+  .code-block .kw { color: var(--accent-glow); }
+  .code-block .str { color: var(--good); }
+
+  /* ---------- roadmap ---------- */
+  .road { display: flex; flex-direction: column; gap: 0; }
+  .road-row { display: grid; grid-template-columns: 200px 1fr 110px; gap: 20px; padding: 16px 0; border-bottom: 1px solid var(--border); align-items: baseline; }
+  @media (max-width: 640px) { .road-row { grid-template-columns: 1fr; gap: 4px; } }
+  .road-row .name { font-weight: 600; font-size: 14.5px; }
+  .road-row .desc { font-size: 13.5px; color: var(--text-dim); }
+  .road-row .stat { text-align: right; }
+  @media (max-width: 640px) { .road-row .stat { text-align: left; } }
+
+  footer { padding: 48px 0 64px; }
+  .foot-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--text-faint); font-family: var(--mono); }
+
+  ::-webkit-scrollbar { height: 10px; width: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="topbar">
+    <div class="brand"><span>sandkiln</span><span class="dot">.</span></div>
+    <nav class="topnav">
+      <a href="#features">Features</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#benchmarks">Benchmarks</a>
+      <a href="#code">SDK</a>
+      <a href="#roadmap">Roadmap</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <h1>Run untrusted<br>code without<br><span class="fire">flinching.</span></h1>
+      <p class="tagline">A compute primitive for safely executing untrusted or AI-generated code — each run gets its own Firecracker microVM, its own kernel, its own network.</p>
+      <p class="lede">Built from the metal up: a Rust VMM, a static guest agent talking over vsock, an HTTP daemon that drives it all — no shell scripts in the hot path, no container escape surface.</p>
+
+      <div class="stat-row">
+        <div class="stat"><b>32.7ms</b><span>Cold boot</span></div>
+        <div class="stat"><b>250µs</b><span>Exec round-trip</span></div>
+        <div class="stat"><b>MIT</b><span>License</span></div>
+        <div class="stat"><b>Rust</b><span>Core engine</span></div>
+      </div>
+
+      <div class="cta-row">
+        <a class="btn primary" href="#code">npm install sandkiln</a>
+        <a class="btn ghost" href="#architecture">Read the architecture →</a>
+      </div>
+    </div>
+
+    <div class="term" id="term">
+      <div class="term-bar"><span></span><span></span><span></span><b>sandkiln boot — real console output</b></div>
+      <pre id="term-out"></pre>
+    </div>
+  </div>
+</section>
+
+<section id="thesis">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">Why a microVM</div>
+      <h2>Containers share a kernel. Sandboxes can't afford to.</h2>
+      <p>Running code you didn't write — agent output, user uploads, third-party scripts — next to your own systems is a bad idea if the isolation boundary is a namespace. A compromised container can still be a compromised kernel. A compromised microVM is a compromised microVM.</p>
+    </div>
+
+    <div class="table-scroll">
+      <table class="cmp">
+        <thead><tr><th></th><th>Containers</th><th>sandkiln</th></tr></thead>
+        <tbody>
+          <tr><td>Kernel</td><td>Shared with the host</td><td class="win">Dedicated per sandbox</td></tr>
+          <tr><td>Isolation boundary</td><td>Namespaces + cgroups</td><td class="win">Hardware virtualization (KVM)</td></tr>
+          <tr><td>Cold start</td><td>~100ms–1s+</td><td class="win">32.7ms, measured</td></tr>
+          <tr><td>Escape surface</td><td>Shared syscall table</td><td class="win">microVM boundary</td></tr>
+          <tr><td>Filesystem</td><td>Overlay on host FS</td><td class="win">Dedicated virtio-blk device</td></tr>
+          <tr><td>Good for</td><td>Packaging trusted code</td><td class="win">Running code you don't trust</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">Feature surface</div>
+      <h2>Everything a sandbox platform needs. Built honestly.</h2>
+      <p>Every card below is marked by what's actually true today — proven on real hardware — versus what's designed and queued. Nothing here is vaporware dressed as a feature.</p>
+    </div>
+
+    <div class="fgrid">
+      <div class="fcard">
+        <span class="status done">Shipped</span>
+        <h3>Isolation</h3>
+        <p>Each sandbox is a real Firecracker microVM — own kernel, own filesystem, own network namespace. Not a container with extra steps.</p>
+      </div>
+      <div class="fcard">
+        <span class="status done">Shipped</span>
+        <h3>Networking</h3>
+        <p>Per-sandbox tap device leased from a pool, attached to a bridge, NAT'd outbound, DNS through a host-local proxy. Verified concurrent.</p>
+      </div>
+      <div class="fcard">
+        <span class="status done">Shipped</span>
+        <h3>Auth</h3>
+        <p>Bearer-token gated API. Off by default for local dev, on with one env var, warns loudly if you forget.</p>
+      </div>
+      <div class="fcard">
+        <span class="status done">Shipped</span>
+        <h3>Tags</h3>
+        <p>Key/value metadata on every sandbox, filterable at list time. Categorize by environment, owner, whatever you need.</p>
+      </div>
+      <div class="fcard">
+        <span class="status done">Shipped</span>
+        <h3>File operations</h3>
+        <p>Read and write files inside a running sandbox over the same vsock channel exec uses — no SSH, no sidecar.</p>
+      </div>
+      <div class="fcard">
+        <span class="status done">Shipped</span>
+        <h3>Observability</h3>
+        <p>Structured tracing from the VM layer up — boot timing, exec latency, HTTP request spans — not bolted on after the fact.</p>
+      </div>
+      <div class="fcard">
+        <span class="status done">Shipped</span>
+        <h3>JS/TS SDK</h3>
+        <p><code>Sandbox.create()</code>, <code>runCommand()</code>, <code>stop()</code>, <code>list()</code>. ESM + CJS + full types, verified against a live daemon.</p>
+      </div>
+      <div class="fcard">
+        <span class="status done">Shipped</span>
+        <h3>Benchmarking</h3>
+        <p>Criterion benches for boot and exec latency, a scripted concurrent load test — real numbers, not estimates.</p>
+      </div>
+      <div class="fcard">
+        <span class="status planned">Planned</span>
+        <h3>Snapshots &amp; persistence</h3>
+        <p>Save a running VM's full state and resume without re-booting or reinstalling — the whole point of "stop and come back later."</p>
+      </div>
+      <div class="fcard">
+        <span class="status planned">Planned</span>
+        <h3>Managed &amp; custom images</h3>
+        <p>A universal Ubuntu image with Node.js, Python, and common tooling out of the box — plus bring-your-own rootfs.</p>
+      </div>
+      <div class="fcard">
+        <span class="status planned">Planned</span>
+        <h3>Drives &amp; remote storage</h3>
+        <p>Persistent storage that outlives a single sandbox, and FUSE-mounted object storage read/written like local disk.</p>
+      </div>
+      <div class="fcard">
+        <span class="status planned">Planned</span>
+        <h3>Multi-agent isolation</h3>
+        <p>Separate Linux users with private home directories inside one sandbox, sharing files deliberately through groups.</p>
+      </div>
+      <div class="fcard">
+        <span class="status planned">Planned</span>
+        <h3>Egress firewall</h3>
+        <p>Domain-level allow/deny policy enforced at the DNS proxy, before a sandbox ever opens a connection.</p>
+      </div>
+      <div class="fcard">
+        <span class="status planned">Planned</span>
+        <h3>Jailer hardening</h3>
+        <p>Firecracker's jailer: chroot, cgroups v2 limits, seccomp filters, an unprivileged uid per VM.</p>
+      </div>
+      <div class="fcard">
+        <span class="status planned">Planned</span>
+        <h3>System-privileged workloads</h3>
+        <p>Docker-in-VM, VPN clients, FUSE drivers — workloads that need real privilege, safely contained by the microVM boundary.</p>
+      </div>
+      <div class="fcard">
+        <span class="status planned">Planned</span>
+        <h3>Multi-node &amp; regions</h3>
+        <p>More than one daemon, more than one box — a routing layer once single-node is fully solid.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">Under the hood</div>
+      <h2>Four crates. No crate reaches into another's internals.</h2>
+      <p>The core is a Rust workspace, kept deliberately modular — the daemon can change without touching the guest agent, and the guest agent ships as its own 700KB static binary independent of everything that talks to it.</p>
+    </div>
+
+    <div class="arch">
+      <div class="crate">
+        <div class="n">01</div>
+        <h3>sandkiln-protocol</h3>
+        <p>The wire format shared by host and guest — length-prefixed JSON, kept dependency-light so neither side reaches into the other.</p>
+      </div>
+      <div class="crate">
+        <div class="n">02</div>
+        <h3>sandkiln-guest-agent</h3>
+        <p>Runs inside the microVM as a systemd service. Listens on vsock, answers exec / read / write / list — 700KB, static, musl.</p>
+      </div>
+      <div class="crate">
+        <div class="n">03</div>
+        <h3>sandkiln-vmm</h3>
+        <p>Drives Firecracker directly: boot, network leasing, the vsock client. A hand-rolled HTTP client talks to Firecracker's API socket.</p>
+      </div>
+      <div class="crate">
+        <div class="n">04</div>
+        <h3>sandkiln-daemon</h3>
+        <p>axum + tokio HTTP API wrapping the lifecycle — create, exec, list, stop — with auth, tags, and tracing built in from day one.</p>
+      </div>
+    </div>
+
+    <div class="section-head" style="margin-bottom:28px;">
+      <div class="eyebrow">Boot lifecycle</div>
+      <h2 style="font-size:24px;">What happens inside 33 milliseconds</h2>
+    </div>
+    <div class="lifecycle">
+      <div class="life-step"><div class="idx">01</div><h4>Lease</h4><p>A tap device and IP are leased from the pool, attached to the bridge.</p></div>
+      <div class="life-step"><div class="idx">02</div><h4>Boot</h4><p>Firecracker starts, boot-source/drive/machine-config/vsock are configured over its API socket.</p></div>
+      <div class="life-step"><div class="idx">03</div><h4>Agent up</h4><p>The guest kernel boots, systemd starts the guest agent, it binds its vsock port.</p></div>
+      <div class="life-step"><div class="idx">04</div><h4>Ready</h4><p>The host's vsock client connects — the sandbox can now run anything you send it.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="benchmarks">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">Measured, not estimated</div>
+      <h2>Real numbers from real hardware.</h2>
+      <p>Every figure here came from <code>criterion</code> benchmarks or a scripted load test against a live daemon on real KVM — not a spec sheet claim.</p>
+    </div>
+
+    <div class="bench-grid">
+      <div class="bench-card">
+        <div class="label">Cold boot (criterion)</div>
+        <div class="value">32.3–33.1<span style="font-size:16px;">ms</span></div>
+        <div class="ctx">Process spawn to InstanceStart acknowledged</div>
+      </div>
+      <div class="bench-card">
+        <div class="label">Exec round-trip (criterion)</div>
+        <div class="value">225–275<span style="font-size:16px;">µs</span></div>
+        <div class="ctx">Over an already-open vsock connection</div>
+      </div>
+      <div class="bench-card">
+        <div class="label">Load test throughput</div>
+        <div class="value">5.59<span style="font-size:16px;">/sec</span></div>
+        <div class="ctx">4 concurrent workers, 20 cycles, 0 errors</div>
+      </div>
+    </div>
+
+    <div class="table-scroll" style="margin-bottom: 32px;">
+      <table class="lat-table">
+        <thead><tr><th>Phase</th><th>Min</th><th>Mean</th><th>P95</th><th>Max</th></tr></thead>
+        <tbody>
+          <tr><td>create</td><td>130ms</td><td>369ms</td><td>588ms</td><td>588ms</td></tr>
+          <tr><td>exec</td><td>1ms</td><td>202ms</td><td>453ms</td><td>463ms</td></tr>
+          <tr><td>delete</td><td>70ms</td><td>107ms</td><td>126ms</td><td>135ms</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <b>What the numbers actually say:</b> <code>create</code>'s 369ms mean sits far above the 33ms boot figure — the gap is a synchronous ~300MB rootfs copy per sandbox, not the VM itself. Boot is already fast; the next optimization is copy-on-write image cloning, not the boot path.
+    </div>
+  </div>
+</section>
+
+<section id="code">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">SDK</div>
+      <h2>Four methods. That's the whole surface, on purpose.</h2>
+      <p>The daemon's HTTP API is the source of truth — the SDK is a thin, fully-typed client over it, nothing more.</p>
+    </div>
+
+    <div class="code-block"><pre><span class="kw">import</span> { Sandbox } <span class="kw">from</span> <span class="str">"sandkiln"</span>;
+
+<span class="c1">// Boots a real Firecracker microVM — ~33ms, own kernel, own network.</span>
+<span class="kw">const</span> sandbox = <span class="kw">await</span> Sandbox.create({
+  tags: { env: <span class="str">"ci"</span>, owner: <span class="str">"pipeline"</span> },
+});
+
+<span class="kw">const</span> result = <span class="kw">await</span> sandbox.runCommand(<span class="str">"python3"</span>, [<span class="str">"analyze.py"</span>]);
+console.log(result.stdout, result.exitCode);
+
+<span class="kw">const</span> running = <span class="kw">await</span> Sandbox.list();
+<span class="c1">// → [{ id, createdAt, tags: { env: "ci", owner: "pipeline" } }]</span>
+
+<span class="kw">await</span> sandbox.stop(); <span class="c1">// tap, IP, and rootfs copy are all released</span></pre></div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">Where this goes next</div>
+      <h2>The plan, not a promise.</h2>
+      <p>Rewritten as we learn things. Every open item below is scoped, not vague — see the full roadmap in the repository for the reasoning behind each.</p>
+    </div>
+
+    <div class="road">
+      <div class="road-row"><div class="name">Persistence &amp; snapshots</div><div class="desc">Split sandbox identity from a running session; snapshot/resume without a cold boot.</div><div class="stat status planned">Planned</div></div>
+      <div class="road-row"><div class="name">Images</div><div class="desc">Universal base image, managed catalog, custom rootfs / OCI import.</div><div class="stat status planned">Planned</div></div>
+      <div class="road-row"><div class="name">Drives</div><div class="desc">Persistent storage across sandbox lifetimes, plus S3-compatible FUSE mounts.</div><div class="stat status planned">Planned</div></div>
+      <div class="road-row"><div class="name">Egress firewall</div><div class="desc">Domain-level policy enforced at the DNS proxy layer.</div><div class="stat status planned">Planned</div></div>
+      <div class="road-row"><div class="name">Jailer hardening</div><div class="desc">chroot, cgroups v2, seccomp, per-VM unprivileged uid.</div><div class="stat status planned">Planned</div></div>
+      <div class="road-row"><div class="name">Multi-agent isolation</div><div class="desc">Per-agent Linux users and shared groups inside one sandbox.</div><div class="stat status planned">Planned</div></div>
+      <div class="road-row"><div class="name">CLI</div><div class="desc"><code>kiln sandbox create|exec|ls|rm</code> — mirrors the SDK for manual/agentic use.</div><div class="stat status planned">Planned</div></div>
+      <div class="road-row"><div class="name">Python SDK</div><div class="desc">Same surface as the JS SDK, once the JS one has file ops and streaming.</div><div class="stat status planned">Planned</div></div>
+      <div class="road-row"><div class="name">Multi-node &amp; regions</div><div class="desc">More than one daemon, a routing layer — deliberately last.</div><div class="stat status planned">Planned</div></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-row">
+    <span>sandkiln — MIT licensed</span>
+    <span>Rust core · TypeScript SDK · not yet published</span>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var lines = [
+      { t: '[    0.000000] <span class="k">Linux version 5.10.223 (gcc 11.4.0) #1 SMP</span>' },
+      { t: '[    0.000000] <span class="k">Command line: console=ttyS0 reboot=k panic=1</span>' },
+      { t: '[    0.000000] <span class="hl">Hypervisor detected: KVM</span>' },
+      { t: '[    0.005803] Booting paravirtualized kernel on KVM' },
+      { t: '[    0.046087] smp: Brought up 1 node, 2 CPUs' },
+      { t: '[    0.214030] virtio_blk virtio0: [vda] 300 MiB' },
+      { t: '[    0.259624] <span class="ok">VFS: Mounted root (ext4) on device 254:0</span>' },
+      { t: '[    0.279281] Run /sbin/init as init process' },
+      { t: '[    0.302006] systemd[1]: systemd 249.11 running' },
+      { t: '         Starting <span class="hl">sandkiln-agent.service</span>...' },
+      { t: '<span class="ok">  OK  </span> Started sandkiln-agent.service' },
+      { t: '' },
+      { t: 'Ubuntu 22.04.5 LTS ubuntu-fc-uvm ttyS0' },
+      { t: 'ubuntu-fc-uvm login: <span class="hl">root</span> (automatic login)' },
+      { t: '' },
+      { t: '<span class="ok">agent</span>@sandkiln:~$ <span class="hl">boot complete — 32.7ms</span><span class="cursor"></span>' }
+    ];
+    var out = document.getElementById('term-out');
+    var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!out) return;
+    if (reduced) {
+      out.innerHTML = lines.map(function (l) { return l.t; }).join('\n');
+      return;
+    }
+    var i = 0;
+    function next() {
+      if (i >= lines.length) return;
+      var div = document.createElement('div');
+      div.innerHTML = lines[i].t;
+      out.appendChild(div);
+      i++;
+      var el = document.getElementById('term');
+      if (el) el.scrollTop = el.scrollHeight;
+      setTimeout(next, i === lines.length ? 0 : (28 + Math.random() * 70));
+    }
+    setTimeout(next, 300);
+  })();
+</script>
+</body>
+</html>
