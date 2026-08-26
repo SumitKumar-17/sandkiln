@@ -13,6 +13,7 @@ import type {
   ReadFileRequestBody,
   ReadFileResponseBody,
   SandboxInfo,
+  SandboxOptions,
   WriteFileRequestBody,
 } from "./types.js";
 
@@ -41,6 +42,17 @@ export class Sandbox {
       body: requestBody,
     });
     return new Sandbox(body.id, client);
+  }
+
+  /**
+   * Wraps an already-existing sandbox id without a network round-trip —
+   * for callers (like the CLI) that only have an id from a previous
+   * process and need a handle to call instance methods on. Doesn't
+   * verify the sandbox actually exists; the first call against it will
+   * fail with a 404 if it doesn't.
+   */
+  static attach(id: string, options: SandboxOptions = {}): Sandbox {
+    return new Sandbox(id, resolveClient(options));
   }
 
   static async list(options: ListSandboxesOptions = {}): Promise<SandboxInfo[]> {

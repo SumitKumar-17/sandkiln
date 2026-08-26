@@ -1,0 +1,35 @@
+{
+  "name": "kiln",
+  "version": "0.1.0",
+  "description": "CLI for sandkiln — manual testing, agentic workflows, and debugging for microVM sandboxes.",
+  "license": "MIT",
+  "author": "Sumit Kumar",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SumitKumar-17/sandkiln.git",
+    "directory": "packages/cli"
+  },
+  "type": "module",
+  "bin": {
+    "kiln": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "sandkiln": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  }
+}
