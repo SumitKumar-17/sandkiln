@@ -18,9 +18,10 @@ hardware, not just code that compiles.
   pool, attached to a shared bridge, its own IP, NAT'd outbound access,
   and DNS through a host-local proxy. Proven with two sandboxes running
   and reaching the internet concurrently through the daemon's HTTP API.
-- A real JS/TS SDK (`sandkiln` on npm, not yet published) — `Sandbox.create()`,
-  `runCommand()`, `stop()`, `Sandbox.list()` — verified end to end against
-  the live daemon, not just typechecked in isolation.
+- A real JS/TS SDK — [`sandkiln` on npm](https://www.npmjs.com/package/sandkiln),
+  published — `Sandbox.create()`, `runCommand()`, `stop()`, `Sandbox.list()`
+  — verified end to end against the live daemon, not just typechecked in
+  isolation.
 - `criterion` benchmarks for boot time and exec latency, and a concurrent
   load-test script against the daemon's HTTP API.
 
@@ -66,8 +67,10 @@ outbound HTTP both still work.
   `writeFile()`, `stop()`. ESM + CJS + full type definitions via `tsup`.
   Verified against a live, auth-enabled daemon end to end — not just
   typechecked, which is how `stop()` returning `200` instead of the
-  documented `204` got caught and fixed. Not published to npm yet. Still
-  open: streamed logs, once the daemon can stream them.
+  documented `204` got caught and fixed. **Published**:
+  [npmjs.com/package/sandkiln](https://www.npmjs.com/package/sandkiln)
+  (0.1.0, with signed provenance from the CI build). Still open: streamed
+  logs, once the daemon can stream them.
 - **Python (`sandkiln` PyPI package) — working, mirrors the JS SDK
   exactly.** `Sandbox.create()`/`attach()`/`list()`, `run_command()`,
   `read_file()`/`write_file()`, `stop()`. Zero runtime dependencies

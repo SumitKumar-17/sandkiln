@@ -47,6 +47,8 @@ await sandbox.stop();
 
 - `Sandbox.create(options?)` — boots a sandbox. `options.tags`,
   `options.baseUrl`, `options.authToken`.
+- `Sandbox.attach(id, options?)` — wraps an already-existing sandbox id
+  without a network round-trip.
 - `Sandbox.list(options?)` — lists sandboxes. `options.tags` filters by
   exact match on every given key.
 - `sandbox.runCommand(command, args?)` — runs a command, returns
@@ -58,10 +60,11 @@ await sandbox.stop();
 
 ## Status
 
-Early. This SDK matches the daemon's current HTTP API exactly — no more,
-no less. Streamed command output, snapshots, drives, and a Python
-equivalent are planned; see the [roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md)
-in the main repository for what's next.
+Early, but published and real. This SDK matches the daemon's current
+HTTP API exactly — no more, no less. Streamed command output, snapshots,
+and drives are planned; see the [roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md)
+in the main repository for what's next. A [Python equivalent](https://github.com/SumitKumar-17/sandkiln/tree/main/packages/python)
+already exists too.
 
 ## License
 

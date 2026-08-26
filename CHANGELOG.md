@@ -1,7 +1,9 @@
 # Changelog
 
-Not released to npm yet — this tracks notable changes to the project as a
-whole (daemon, core crates, SDK) ahead of a first published version.
+Tracks notable changes across the whole project (daemon, core crates,
+clients). The JS/TS SDK is published as [`sandkiln` on
+npm](https://www.npmjs.com/package/sandkiln); everything else here
+(daemon, core crates, Python SDK, CLI) doesn't have its own release yet.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
@@ -21,10 +23,15 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   through the HTTP API.
 - Structured observability: `tracing` spans from the VM lifecycle layer
   up through HTTP request/response logging.
-- JS/TS SDK (`sandkiln` package): `Sandbox.create()` (tags, auth token),
-  `Sandbox.list()` (tag-filterable), `runCommand()`, `readFile()` /
-  `writeFile()`, `stop()`. ESM + CJS + full types — matches the daemon's
-  entire HTTP surface, verified live against an auth-enabled daemon.
+- JS/TS SDK (`sandkiln` package, **published to npm, v0.1.0**):
+  `Sandbox.create()`/`attach()`/`list()` (tags, auth token), `runCommand()`,
+  `readFile()`/`writeFile()`, `stop()`. ESM + CJS + full types — matches
+  the daemon's entire HTTP surface, verified live against an auth-enabled
+  daemon, published with signed provenance from the CI build.
+- Python SDK (`sandkiln` on PyPI, not yet published): mirrors the JS SDK
+  exactly, zero runtime dependencies (stdlib `urllib`). Verified live end
+  to end, including `attach()` and correct 404 handling on a stopped
+  sandbox.
 - `criterion` benchmarks (boot time, exec latency) and a scripted
   concurrent load-test script against the daemon's HTTP API.
 - `AGENTS.md`: onboarding doc covering the non-obvious gotchas hit and
@@ -58,15 +65,19 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   network lease instead of after it, and uses `cp --reflink=auto` (free
   copy-on-write where the filesystem supports it). Measured `create`
   latency mean dropped 369ms → 211ms.
+- Python SDK import crash on Python <3.14 (`from __future__ import
+  annotations` needed — see `AGENTS.md`), caught by CI on 3.12 even
+  though local testing on 3.14 didn't hit it.
+- CI build order: `kiln` needs `sandkiln`'s `dist/` built before it can
+  typecheck, since it resolves it as a real workspace dependency.
 
 ### Known gaps (tracked in `ROADMAP.md`)
 - No snapshot/resume or persistence — a stopped sandbox's state is gone.
 - No image system beyond a fetched CI test rootfs — no universal base
   image, no custom image support yet.
-- No Python SDK, no streamed exec output, no `kiln logs -f`.
+- No streamed exec output, no `kiln logs -f`.
 - On ext4 (no copy-on-write), sandbox creation still pays real rootfs
   copy time — needs a CoW-capable filesystem or a device-mapper layer to
   actually eliminate, not just overlap with other work.
-- npm publish is set up (workflow + package metadata) but not yet
-  successfully run — needs an npm token type that actually bypasses 2FA
-  for automated publishing.
+- Python SDK not yet published to PyPI (workflow uses trusted publishing,
+  needs a one-time registration on pypi.org before it can run).
