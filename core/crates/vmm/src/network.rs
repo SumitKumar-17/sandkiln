@@ -185,3 +185,55 @@ fn run(program: &str, args: &[&str]) -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn octets_with_last_keeps_network_prefix() {
+        let base: Ipv4Addr = "172.16.0.1".parse().unwrap();
+        assert_eq!(octets_with_last(base, 2), "172.16.0.2".parse::<Ipv4Addr>().unwrap());
+        assert_eq!(octets_with_last(base, 254), "172.16.0.254".parse::<Ipv4Addr>().unwrap());
+    }
+
+    #[test]
+    fn new_pool_has_hosts_2_through_254_and_the_given_taps() {
+        let mgr = NetworkManager::new(
+            "test-br0",
+            "10.0.0.1".parse().unwrap(),
+            "eth-test",
+            ["tapA".to_string(), "tapB".to_string()],
+        );
+        assert_eq!(mgr.free_hosts.lock().unwrap().len(), 253); // 2..=254
+        assert_eq!(mgr.free_taps.lock().unwrap().len(), 2);
+    }
+
+    /// A tap device that can't actually be attached (this one doesn't
+    /// exist, and we're not asserting anything about root/permissions —
+    /// `ip link set` on a nonexistent device fails cleanly either way)
+    /// must not leak its IP or tap name out of the pool: a failed lease
+    /// should be exactly as if it never happened.
+    #[test]
+    fn failed_lease_returns_both_ip_and_tap_to_the_pool() {
+        let mgr = NetworkManager::new(
+            "test-br0-nonexistent",
+            "10.0.0.1".parse().unwrap(),
+            "eth-test",
+            ["tap-does-not-exist".to_string()],
+        );
+
+        let result = mgr.lease();
+        assert!(result.is_err(), "expected lease() to fail attaching a nonexistent tap");
+        assert_eq!(mgr.free_hosts.lock().unwrap().len(), 253, "host octet must be returned to the pool on failure");
+        assert_eq!(mgr.free_taps.lock().unwrap().len(), 1, "tap name must be returned to the pool on failure");
+    }
+
+    #[test]
+    fn lease_fails_with_no_free_taps_without_touching_the_ip_pool() {
+        let mgr = NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", std::iter::empty());
+        let result = mgr.lease();
+        assert!(result.is_err());
+        assert_eq!(mgr.free_hosts.lock().unwrap().len(), 253, "no tap was available, so no IP should be consumed either");
+    }
+}

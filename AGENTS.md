@@ -8,9 +8,10 @@ made and fixed once.
 
 `sandkiln`: a compute primitive for safely running untrusted or
 AI-generated code in hardware-isolated Firecracker microVMs. Rust core,
-TypeScript SDK. See `README.md` for the pitch and `ROADMAP.md` for the
-full feature plan — read the roadmap before starting new work, it's kept
-current and explains what's done, what's open, and why.
+JS/TS + Python SDKs, a CLI. See `README.md` for the pitch and
+`ROADMAP.md` for the full feature plan — read the roadmap before
+starting new work, it's kept current and explains what's done, what's
+open, and why.
 
 ## Repo layout
 
@@ -20,9 +21,21 @@ core/crates/guest-agent/ static musl binary, runs inside the VM
 core/crates/vmm/         drives Firecracker + networking (host side)
 core/crates/daemon/      axum HTTP API (sandkilnd)
 packages/sdk/            sandkiln npm package (TypeScript)
-images/                  rootfs/kernel fetch + agent-injection scripts
+packages/python/         sandkiln PyPI package (Python)
+packages/cli/            kiln CLI, wraps the JS/TS SDK
+images/                  rootfs/kernel build + agent-injection scripts
 scripts/                 dev-box setup: tap pool, network bridge, DNS proxy, sync
+website/                 the project site, deployed via GitHub Pages
+examples/                runnable reference projects (code playground, agent runner)
 ```
+
+**Each of these has its own `AGENTS.md`** with details scoped to that
+one piece (its specific gotchas, how to build/verify just that part) —
+read this file for project-wide context, then the relevant package's own
+`AGENTS.md` before working inside it. If you were handed just one
+package directory and not this whole repo, that package's `AGENTS.md`
+is written to be enough to start from — though skimming this file too,
+if you have access to it, still helps.
 
 ## Where the real work happens
 
@@ -87,17 +100,53 @@ real running daemon and a real microVM first.
   series. If you find yourself writing "Phase 4:", rename the concept to
   what it actually is (a subsystem, a milestone, a feature name).
 - **Commit small and often.** Each commit should be one coherent,
-  buildable, ideally-tested unit of change — not a giant batch. No
-  `Co-Authored-By` trailers on commits in this repo.
+  buildable, ideally-tested unit of change — not a giant batch. There is
+  no limit on commit count; more small commits is always preferred over
+  fewer large ones.
+- **Git identity is fixed: `SumitKumar-17 <sumitkanpur2005@gmail.com>`,
+  always.** Never the ambient session email, never any other name. No
+  `Co-Authored-By` trailer on any commit in this repo, ever — this is a
+  personal project with one author.
 - **Never mention any commercial platform by name** in code, docs, or the
   website — this project takes feature inspiration from prior art in the
-  space but is its own, unaffiliated, self-hosted product.
+  space but is its own, unaffiliated, self-hosted product. This extends
+  to comparable products researched for feature ideas (see `ROADMAP.md`)
+  — take the idea, never the name or branding.
 - **Zero clippy warnings** on every commit touching `core/`. Fix them,
   don't `#[allow]` them away unless you can justify why in a comment.
 - **No unused/speculative code.** Don't stub out a client method for a
   server endpoint that doesn't exist yet, don't add a config field
   nothing reads. If the roadmap says a feature is planned, the code
   reflects that it's *not* there yet, not a half-built version of it.
+- **Every crate needs real unit tests, not just compile-clean code.**
+  Colocated `#[cfg(test)] mod tests` at the bottom of the file they test
+  is the convention here (idiomatic Rust, keeps a test next to what it
+  covers) — not a separate `tests/` tree per file. Prefer pulling pure
+  logic out of framework plumbing specifically so it's unit-testable
+  (e.g. `auth::token_matches` pulled out of the axum middleware around
+  it) over skipping the test because "it needs a real request." Use real
+  temp-directory filesystem state instead of mocking wherever the
+  operation doesn't need KVM.
+- **No comments explaining what code does — only why, and only when it's
+  non-obvious.** A hidden constraint, a workaround for a specific bug, an
+  invariant a reader could easily violate — those earn a short comment.
+  Restating the code in prose does not. If a change needs real design
+  explanation (why this architecture, what alternatives were rejected and
+  why), that belongs on the website's architecture material, not as a
+  comment block in the source.
+- **Keep files scoped to one concern; split when a file outgrows it.**
+  `routes_drives.rs`/`routes_snapshot.rs`/`routes_sandbox.rs`/
+  `routes_exec.rs` and `vm/mod.rs`+`vm/snapshot.rs` are the precedent —
+  when a file starts covering two things that could reasonably be worked
+  on independently (or reads past ~250-300 lines for no structural
+  reason), split along that seam rather than letting it grow. This also
+  keeps parallel-agent work from producing merge conflicts on one shared
+  giant file.
+- **Every package/crate directory gets its own `AGENTS.md`**, kept in
+  sync with that directory's actual structure (see the list at the top
+  of this file). When you split or rename files, update the relevant
+  `AGENTS.md`'s file list in the same commit — a stale map is worse than
+  no map.
 
 ## Verifying a change actually works
 
@@ -106,14 +155,60 @@ The pattern used throughout this project's history:
 2. Grant `CAP_NET_ADMIN` if the daemon binary was rebuilt.
 3. Start `sandkilnd` with real env vars pointing at the real kernel/rootfs
    images and tap pool on the dev box.
-4. Drive it with `curl` (or the real SDK, port-forwarded — see
-   `git log` for the DELETE-status-code bug this caught) against the
-   actual HTTP API, not a mock.
+4. Run `scripts/integration-test.sh` against it (see below) — this is
+   step 4 below formalized into one repeatable command instead of a fresh
+   ad hoc `curl` session every time.
 5. Clean up: stop the daemon, kill any leftover `firecracker` processes
    (`pkill -x firecracker`), remove temp rootfs copies.
 
-Skipping step 4 is how bugs like the two above shipped in the first
-place — they both compiled and clippy-passed cleanly.
+Skipping step 4 is how bugs like the DELETE-status-code one and the
+vsock-hang-on-snapshot one shipped in the first place — they both
+compiled and clippy-passed cleanly.
+
+## Integration testing
+
+`scripts/integration-test.sh [base-url]` exercises the full daemon API
+end to end against a real running `sandkilnd`: sandbox lifecycle, tag
+filtering, drives (including persistence across sandboxes and conflict
+detection), snapshot/resume, auth, the `/metrics` endpoint, and error
+cases (404s, 409s) — one repeatable run instead of manually re-deriving
+the same `curl` session by hand every time a feature is touched, which is
+exactly how this got written (see `git log` for the session that produced
+it). It tracks and tears down everything it creates on exit, pass or
+fail.
+
+Run it with `SANDKILN_AUTH_TOKEN` set in the environment to also exercise
+the auth-rejection cases; without it, those are skipped with a note
+(a daemon started without that var can't be told to require a token at
+request time). This is separate from `cargo test` (pure logic, no KVM
+needed) and `scripts/load-test.sh` (concurrency/latency under load) — all
+three matter, and none substitutes for the others.
+
+**Every new HTTP-facing feature should add a case here**, not just get
+manually curl'd once and forgotten — that's the entire point of this
+script existing instead of staying tribal knowledge in a chat transcript.
+
+## Working with multiple agents in parallel
+
+When several independent pieces of work are ready at once, prefer running
+them as parallel, worktree-isolated agents over one long serial session:
+each agent reads this file and the relevant package `AGENTS.md`, works
+without KVM access (code changes only — the host verifies live
+afterward), commits in small increments, and avoids touching shared docs
+(`ROADMAP.md`, root `AGENTS.md`, `CHANGELOG.md`) to keep merge conflicts
+rare. Reconcile branches with `cherry-pick`, not merge, when their
+history has diverged from a rewritten `main`. After merging, always run
+the full verification pass (build, clippy, test, then live-test on the
+dev box) — an agent's own report that something "works" is not a
+substitute for that.
+
+## Self-hosting
+
+See `SELF_HOSTING.md` for the full guide to standing up your own instance
+of this service end to end (host requirements, building the images,
+running the daemon, networking setup). Keep it in sync with `scripts/`
+and `core/crates/daemon/src/config.rs` — a self-hosting doc that
+references a removed script or a renamed env var is worse than none.
 
 ## What's next
 

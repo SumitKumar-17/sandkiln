@@ -1,19 +1,11 @@
 import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
 import { Sandbox, SandkilnApiError } from "sandkiln";
+import { formatSandboxList, parseTag } from "./format.js";
 
 interface GlobalOptions {
   baseUrl?: string;
   token?: string;
-}
-
-function parseTag(value: string, previous: Record<string, string>): Record<string, string> {
-  const separatorIndex = value.indexOf("=");
-  if (separatorIndex === -1) {
-    throw new Error(`--tag expects key=value, got: ${value}`);
-  }
-  previous[value.slice(0, separatorIndex)] = value.slice(separatorIndex + 1);
-  return previous;
 }
 
 const tagOption = () => new Option("--tag <key=value>", "tag to attach (repeatable)").argParser(parseTag).default({});
@@ -65,14 +57,7 @@ sandbox
     const { baseUrl, token } = clientOptions(this);
     try {
       const sandboxes = await Sandbox.list({ baseUrl, authToken: token, tags: opts.tag });
-      if (sandboxes.length === 0) {
-        process.stdout.write("no sandboxes\n");
-        return;
-      }
-      for (const info of sandboxes) {
-        const tags = Object.entries(info.tags).map(([k, v]) => `${k}=${v}`).join(",");
-        process.stdout.write(`${info.id}  ${info.createdAt.toISOString()}  ${tags}\n`);
-      }
+      process.stdout.write(formatSandboxList(sandboxes));
     } catch (error) {
       await handleApiError(error);
     }
@@ -140,4 +125,11 @@ function attachSandbox(id: string, baseUrl: string | undefined, token: string | 
   return Sandbox.attach(id, { baseUrl, authToken: token });
 }
 
-program.parseAsync(process.argv);
+// Every subcommand's own action handler already catches its errors; this
+// is a backstop for anything that escapes one anyway (a bug in a future
+// subcommand, or a rejection from commander's own dispatch) so a caller
+// always gets a clean stderr message and exit code 1, never a raw stack
+// trace.
+program.parseAsync(process.argv).catch(async (error: unknown) => {
+  await fail(`error: ${error instanceof Error ? error.message : String(error)}`);
+});

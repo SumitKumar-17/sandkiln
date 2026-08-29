@@ -131,12 +131,28 @@ outbound HTTP both still work.
   daemon) instead of only an opaque id, so `get-or-create` is possible
   without the caller tracking ids itself.
 - Explicit snapshot API for the SDK/CLI to trigger a save point on demand.
+- **Auto-suspend on idle**: pause (not destroy) a sandbox that's gone
+  quiet for a configurable window, freeing its VM/network resources while
+  keeping its state resumable — cheaper than staying booted, faster than
+  a cold boot from scratch.
+- **VM forking**: clone a *running* VM's memory and filesystem to start
+  new sandboxes from that exact live state — distinct from snapshot/resume
+  (which restarts from a saved point after a stop); this forks something
+  still running, useful for parallel branches off one prepared environment
+  (e.g. N parallel test runs off one dependency-installed base) without
+  paying setup cost N times.
+- **Time-travel restore**: keep more than just the latest snapshot per
+  sandbox, so a caller can restore to an earlier point, not only the most
+  recent stop.
 
 ## Drives and remote storage
 
 - **Drives**: attachable persistent filesystem storage that outlives a
   single sandbox and can be reattached to a new one — for state that
   should survive well past any one VM's lifetime.
+- **Read-only shared drives**: one drive mounted read-only across many
+  sandboxes at once, for data or a common base layer that doesn't need
+  per-sandbox copies — distinct from a per-sandbox writable drive.
 - **Remote storage mounts**: mount an external object store (S3-compatible)
   into a sandbox via FUSE, so a sandbox can read/write remote files through
   its normal filesystem interface.
@@ -188,6 +204,10 @@ outbound HTTP both still work.
   so a dev server running inside a sandbox can be previewed live.
 - Fast iterative file sync tuned for dev-server workflows — write many
   small files quickly, ideally with watch-mode support.
+- **Interactive terminal access**: a real PTY inside the sandbox, exposed
+  over a WebSocket — distinct from batch `exec` (request in, response
+  out); this is a live, bidirectional shell session, what `kiln`'s
+  eventual interactive mode and any web-based terminal UI would need.
 
 ## Tags and sandbox metadata
 
@@ -207,6 +227,12 @@ outbound HTTP both still work.
   the daemon's HTTP API. Run with `scripts/load-test.sh [concurrency]
   [iterations] [base-url]` against a running `sandkilnd` (defaults: 10
   workers, 20 iterations each, `http://127.0.0.1:7777`).
+- **Done:** A full end-to-end integration test, `scripts/integration-test.sh
+  [base-url]` — sandbox lifecycle, tags, drives (including persistence
+  across sandboxes and conflict detection), snapshot/resume, auth,
+  `/metrics`, and error cases, all in one repeatable run against a real
+  daemon. Tracks and tears down everything it creates. See root
+  `AGENTS.md`'s "Integration testing" section.
 - **Real measured results** (dev box, single node, 8-tap pool):
   - Cold boot (criterion): **32.3–33.1ms**.
   - Exec round-trip on an already-open vsock connection (criterion):
@@ -283,14 +309,24 @@ The primitive is only as useful as what's built on top of it:
 - Example integrations with agent frameworks and coding-agent tools —
   showing a sandbox as the execution backend for agent-generated code,
   not just a standalone API.
-- A minimal reference "code playground" and a reference "AI agent runner"
-  as real, runnable example projects (ties into Documentation below), not
-  just SDK snippets.
+- **Done:** a minimal reference "code playground"
+  (`examples/code-playground`, JS/TS) and a reference "AI agent runner"
+  (`examples/agent-runner`, Python) as real, runnable example projects
+  against each SDK's actual current API — see `examples/AGENTS.md`.
 - Consider what a plugin/adapter surface would look like once there's
   more than one real integration to generalize from — not before.
+- **Deliberately out of scope for this project**: a durable-workflow layer
+  (queues, timers, retries, fan-out across many sandboxes) is a different
+  abstraction *on top of* a sandbox primitive, not part of the primitive
+  itself. Worth knowing that shape exists — it's what turns "run this
+  command in an isolated VM" into "orchestrate a long-running agent
+  workflow" — but it belongs in a separate project/library built against
+  this one's API, not merged into the daemon.
 
 ## Documentation and examples
 
 - A docs site with runnable examples covering both SDKs and the CLI.
-- Example projects: a code playground, an AI-agent sandbox runner, a
-  dev-server preview tool — real uses of the primitive, not toy snippets.
+- Example projects: **done** — code playground (JS/TS) and AI-agent
+  sandbox runner (Python), see `examples/`. Still open: a dev-server
+  preview tool, once the reverse-proxy work in "Dev servers and live
+  preview" above exists to build it on.

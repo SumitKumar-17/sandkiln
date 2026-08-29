@@ -1,23 +1,31 @@
+//! Sandbox lifecycle: create, list, stop. Exec and file operations live in
+//! `routes_exec` — split out because they share a `call_agent` helper that
+//! has nothing to do with lifecycle management.
+
 use crate::error::AppError;
+use crate::routes_drives::DriveAttachment;
 use crate::sandbox::Sandbox;
 use crate::state::AppState;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use sandkiln_protocol::{Request, Response as AgentResponse};
 use sandkiln_vmm::network::Lease;
-use sandkiln_vmm::vm::{Vm, VmConfig};
+use sandkiln_vmm::vm::{DriveConfig, Vm, VmConfig};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 #[derive(Deserialize, Default)]
 pub struct CreateSandboxRequest {
     #[serde(default)]
     tags: HashMap<String, String>,
+    /// Existing persistent drives (see `POST /drives`) to attach at boot,
+    /// each becoming its own block device inside the guest.
+    #[serde(default)]
+    drives: Vec<DriveAttachment>,
 }
 
 #[derive(Serialize)]
@@ -37,8 +45,38 @@ pub async fn create_sandbox(
             .map_err(|e| AppError::BadRequest(format!("invalid request body: {e}")))?
     };
 
+    if let Some(dup) = first_duplicate(request.drives.iter().map(|d| d.id.as_str())) {
+        return Err(AppError::BadRequest(format!("drive listed more than once: {dup}")));
+    }
+    for drive in &request.drives {
+        if !state.drives.exists(&drive.id) {
+            return Err(AppError::DriveNotFound(drive.id.clone()));
+        }
+    }
+    for drive in &request.drives {
+        if let Some(holder) = state.drive_holder(&drive.id) {
+            return Err(AppError::Conflict(format!("drive {} is already attached to {holder}", drive.id)));
+        }
+    }
+
     let id = Uuid::new_v4().to_string();
     let rootfs_path = std::env::temp_dir().join(format!("sandkiln-rootfs-{id}.ext4"));
+    let attached_drive_ids: Vec<String> = request.drives.iter().map(|d| d.id.clone()).collect();
+    // Firecracker's own drive_id namespace is per-VM, but prefix these
+    // anyway to keep them unambiguously distinct from the reserved
+    // "rootfs" id regardless of what a drive's storage id looks like.
+    // Firecracker only allows alphanumerics and underscores in a
+    // drive_id (drive ids here are UUIDs, which contain hyphens) — '-'
+    // has to become '_', not just the prefix's own separator.
+    let extra_drives: Vec<DriveConfig> = request
+        .drives
+        .iter()
+        .map(|d| DriveConfig {
+            drive_id: format!("drive_{}", d.id.replace('-', "_")),
+            path_on_host: state.drives.path_for(&d.id),
+            read_only: d.read_only,
+        })
+        .collect();
 
     let (vm, network) = tokio::task::spawn_blocking({
         let state = state.clone();
@@ -56,6 +94,7 @@ pub async fn create_sandbox(
             copy_result?;
             let lease = lease_result?;
 
+            let boot_started = Instant::now();
             let vm = Vm::boot(&VmConfig {
                 firecracker_bin: state.config.firecracker_bin.clone(),
                 kernel_path: state.config.kernel_path.clone(),
@@ -63,9 +102,13 @@ pub async fn create_sandbox(
                 vcpu_count: state.config.vcpu_count,
                 mem_size_mib: state.config.mem_size_mib,
                 network: Some(lease.config.clone()),
+                extra_drives,
             });
             match vm {
-                Ok(vm) => Ok((vm, lease)),
+                Ok(vm) => {
+                    state.metrics.record_boot_duration_ms(boot_started.elapsed().as_secs_f64() * 1000.0);
+                    Ok((vm, lease))
+                }
                 Err(e) => {
                     let _ = state.network.release(lease);
                     Err(e)
@@ -76,9 +119,18 @@ pub async fn create_sandbox(
     .await
     .expect("boot task panicked")?;
 
-    let sandbox =
-        Sandbox { id: id.clone(), vm, network, rootfs_path, tags: request.tags, created_at: SystemTime::now() };
+    let sandbox = Sandbox {
+        id: id.clone(),
+        vm,
+        network,
+        rootfs_path,
+        attached_drives: attached_drive_ids,
+        tags: request.tags,
+        created_at: SystemTime::now(),
+        last_activity: std::sync::Mutex::new(std::time::Instant::now()),
+    };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
+    state.metrics.record_sandbox_created();
 
     Ok(Json(CreateSandboxResponse { id }))
 }
@@ -126,6 +178,15 @@ pub async fn stop_sandbox(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    stop_sandbox_by_id(state, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Removes a sandbox from the map and tears it down: VM stop, network
+/// release, rootfs cleanup. Shared by the `DELETE` route above and the
+/// idle reaper (`idle_reaper::run`) — both need the exact same teardown,
+/// just triggered differently.
+pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<(), AppError> {
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
 
     tokio::task::spawn_blocking(move || {
@@ -136,92 +197,13 @@ pub async fn stop_sandbox(
     .await
     .expect("stop task panicked");
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
-#[derive(Deserialize)]
-pub struct ExecRequestBody {
-    command: String,
-    #[serde(default)]
-    args: Vec<String>,
-}
-
-#[derive(Serialize)]
-pub struct ExecResponseBody {
-    stdout: String,
-    stderr: String,
-    exit_code: i32,
-}
-
-#[tracing::instrument(skip(state, body), fields(command = %body.command))]
-pub async fn exec(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(body): Json<ExecRequestBody>,
-) -> Result<Json<ExecResponseBody>, AppError> {
-    let response = call_agent(state, id, Request::Exec { command: body.command, args: body.args }).await?;
-
-    match response {
-        AgentResponse::Exec { stdout, stderr, exit_code } => Ok(Json(ExecResponseBody { stdout, stderr, exit_code })),
-        other => Err(AppError::Internal(std::io::Error::other(format!("unexpected agent response: {other:?}")))),
-    }
-}
-
-#[derive(Deserialize)]
-pub struct ReadFileRequestBody {
-    path: String,
-}
-
-#[derive(Serialize)]
-pub struct ReadFileResponseBody {
-    content_base64: String,
-}
-
-#[tracing::instrument(skip(state, body), fields(path = %body.path))]
-pub async fn read_file(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(body): Json<ReadFileRequestBody>,
-) -> Result<Json<ReadFileResponseBody>, AppError> {
-    let response = call_agent(state, id, Request::ReadFile { path: body.path }).await?;
-    match response {
-        AgentResponse::File { content_base64 } => Ok(Json(ReadFileResponseBody { content_base64 })),
-        AgentResponse::Error { message } => Err(AppError::BadRequest(message)),
-        other => Err(AppError::Internal(std::io::Error::other(format!("unexpected agent response: {other:?}")))),
-    }
-}
-
-#[derive(Deserialize)]
-pub struct WriteFileRequestBody {
-    path: String,
-    content_base64: String,
-}
-
-#[tracing::instrument(skip(state, body), fields(path = %body.path))]
-pub async fn write_file(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(body): Json<WriteFileRequestBody>,
-) -> Result<StatusCode, AppError> {
-    let response =
-        call_agent(state, id, Request::WriteFile { path: body.path, content_base64: body.content_base64 }).await?;
-    match response {
-        AgentResponse::Ok => Ok(StatusCode::NO_CONTENT),
-        AgentResponse::Error { message } => Err(AppError::BadRequest(message)),
-        other => Err(AppError::Internal(std::io::Error::other(format!("unexpected agent response: {other:?}")))),
-    }
-}
-
-/// Shared by every route that just forwards one request to the guest
-/// agent and reports its response — exec/read/write all fit this shape.
-async fn call_agent(state: Arc<AppState>, id: String, request: Request) -> Result<AgentResponse, AppError> {
-    tokio::task::spawn_blocking(move || {
-        let sandboxes = state.sandboxes.lock().unwrap();
-        let sandbox = sandboxes.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
-        sandbox.vm.call(&request).map_err(AppError::from)
-    })
-    .await
-    .expect("agent call task panicked")
+/// Returns the first item that's already been seen, if any.
+fn first_duplicate<'a>(mut items: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let mut seen = HashSet::new();
+    items.find(|item| !seen.insert(*item))
 }
 
 /// Clones the base rootfs for one sandbox. Uses `cp --reflink=auto`
@@ -235,4 +217,44 @@ fn clone_rootfs(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
         return Err(std::io::Error::other(format!("cp --reflink=auto {src:?} {dst:?} failed: {status}")));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_duplicate_finds_a_repeat() {
+        assert_eq!(first_duplicate(["a", "b", "a"].into_iter()), Some("a"));
+        assert_eq!(first_duplicate(["a", "b", "c", "b"].into_iter()), Some("b"));
+    }
+
+    #[test]
+    fn first_duplicate_none_when_all_unique() {
+        assert_eq!(first_duplicate(["a", "b", "c"].into_iter()), None);
+        assert_eq!(first_duplicate(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn clone_rootfs_copies_real_file_contents() {
+        let dir = std::env::temp_dir().join(format!("sandkiln-clone-rootfs-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src.bin");
+        let dst = dir.join("dst.bin");
+        std::fs::write(&src, b"some rootfs bytes").unwrap();
+
+        clone_rootfs(&src, &dst).unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), b"some rootfs bytes");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clone_rootfs_fails_cleanly_for_a_missing_source() {
+        let dir = std::env::temp_dir().join(format!("sandkiln-clone-rootfs-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = clone_rootfs(&dir.join("does-not-exist.bin"), &dir.join("dst.bin"));
+        assert!(result.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

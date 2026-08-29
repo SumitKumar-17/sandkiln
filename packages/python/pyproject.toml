@@ -15,7 +15,9 @@ keywords = ["sandbox", "firecracker", "microvm", "isolation", "untrusted-code", 
 classifiers = [
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
   "Topic :: Software Development :: Libraries",
+  "Typing :: Typed",
 ]
 
 [project.urls]

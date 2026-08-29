@@ -1,14 +1,22 @@
 mod auth;
 mod config;
 mod error;
-mod routes;
+mod idle_reaper;
+mod metrics;
+mod routes_drives;
+mod routes_exec;
+mod routes_metrics;
+mod routes_sandbox;
+mod routes_snapshot;
 mod sandbox;
+mod snapshot;
 mod state;
 
 use axum::middleware;
 use axum::routing::{delete, get, post};
 use axum::Router;
-use config::Config;
+use config::{Config, LogFormat};
+use sandkiln_vmm::drive::DriveStore;
 use sandkiln_vmm::network::{self, NetworkManager};
 use state::AppState;
 use std::sync::Arc;
@@ -31,11 +39,8 @@ fn main() {
 }
 
 async fn async_main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .init();
-
     let config = Config::from_env();
+    init_tracing(config.log_format);
     let listen_addr = config.listen_addr.clone();
 
     let uplink = match config.uplink_iface.clone() {
@@ -47,20 +52,41 @@ async fn async_main() {
     net_manager.ensure_ready().expect("set up sandbox network bridge (needs CAP_NET_ADMIN — see scripts/grant-net-admin.sh)");
     tracing::info!(bridge = %config.bridge_name, gateway = %config.bridge_gateway, %uplink, "sandbox network ready");
 
+    let drives = DriveStore::new(&config.drives_dir)
+        .expect("create/verify the persistent drives directory (SANDKILN_DRIVES_DIR)");
+    tracing::info!(drives_dir = %config.drives_dir.display(), "persistent drive storage ready");
+
     let auth_enabled = config.auth_token.is_some();
-    let state = Arc::new(AppState::new(config, net_manager));
+    let idle_timeout = config.idle_timeout;
+    let state = Arc::new(AppState::new(config, net_manager, drives));
+
+    if let Some(idle_timeout) = idle_timeout {
+        tracing::info!(idle_timeout_secs = idle_timeout.as_secs(), "idle sandbox reaper enabled");
+        tokio::spawn(idle_reaper::run(state.clone(), idle_timeout));
+    }
 
     let sandbox_routes = Router::new()
-        .route("/sandboxes", post(routes::create_sandbox).get(routes::list_sandboxes))
-        .route("/sandboxes/:id", delete(routes::stop_sandbox))
-        .route("/sandboxes/:id/exec", post(routes::exec))
-        .route("/sandboxes/:id/read-file", post(routes::read_file))
-        .route("/sandboxes/:id/write-file", post(routes::write_file))
+        .route("/sandboxes", post(routes_sandbox::create_sandbox).get(routes_sandbox::list_sandboxes))
+        .route("/sandboxes/:id", delete(routes_sandbox::stop_sandbox))
+        .route("/sandboxes/:id/exec", post(routes_exec::exec))
+        .route("/sandboxes/:id/read-file", post(routes_exec::read_file))
+        .route("/sandboxes/:id/write-file", post(routes_exec::write_file))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
+
+    let drive_routes = Router::new()
+        .route("/drives", post(routes_drives::create_drive).get(routes_drives::list_drives))
+        .route("/drives/:id", delete(routes_drives::delete_drive))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
+
+    let snapshot_routes =
+        routes_snapshot::router().route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .route("/metrics", get(routes_metrics::metrics))
         .merge(sandbox_routes)
+        .merge(drive_routes)
+        .merge(snapshot_routes)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -70,6 +96,17 @@ async fn async_main() {
     tracing::info!(%listen_addr, "sandkiln daemon starting");
     let listener = tokio::net::TcpListener::bind(&listen_addr).await.expect("bind listen address");
     axum::serve(listener, app).await.expect("server error");
+}
+
+/// `.json()` and the default pretty layer are different builder types, so
+/// this can't be one `tracing_subscriber::fmt()` chain with a branch in
+/// the middle — each arm builds and `init()`s its own subscriber.
+fn init_tracing(log_format: LogFormat) {
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    match log_format {
+        LogFormat::Json => tracing_subscriber::fmt().with_env_filter(env_filter).json().init(),
+        LogFormat::Pretty => tracing_subscriber::fmt().with_env_filter(env_filter).init(),
+    }
 }
 
 /// The daemon needs CAP_NET_ADMIN itself (via `setcap ...+eip`, see

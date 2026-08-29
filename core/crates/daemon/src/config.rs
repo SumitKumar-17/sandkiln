@@ -1,5 +1,6 @@
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 pub struct Config {
     pub listen_addr: String,
@@ -22,6 +23,40 @@ pub struct Config {
     /// env var unset) disables auth entirely — fine for local dev, not
     /// for anything reachable beyond localhost.
     pub auth_token: Option<String>,
+    /// Where persistent drives live. Deliberately not
+    /// `std::env::temp_dir()` — that's where `create_sandbox` puts
+    /// per-sandbox rootfs copies, which get deleted on sandbox stop.
+    /// Drives are meant to outlive that, so they get their own directory.
+    pub drives_dir: PathBuf,
+    /// How long a sandbox can go without any exec/read-file/write-file
+    /// activity before the daemon stops it automatically (see
+    /// `idle_reaper`). `None` — the env var unset, or set to `0` — disables
+    /// this entirely: sandboxes run until explicitly stopped, today's
+    /// behavior, unchanged unless a self-hosted instance opts in.
+    pub idle_timeout: Option<Duration>,
+    /// `SANDKILN_LOG_FORMAT=json` switches structured logging to one
+    /// JSON object per line, for production log pipelines that expect to
+    /// parse fields rather than a human-readable terminal format.
+    pub log_format: LogFormat,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LogFormat {
+    Pretty,
+    Json,
+}
+
+impl LogFormat {
+    fn from_env() -> Self {
+        Self::parse(std::env::var("SANDKILN_LOG_FORMAT").ok().as_deref())
+    }
+
+    fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some(v) if v.eq_ignore_ascii_case("json") => LogFormat::Json,
+            _ => LogFormat::Pretty,
+        }
+    }
 }
 
 impl Config {
@@ -41,6 +76,13 @@ impl Config {
             tap_pool_prefix: env_or("SANDKILN_TAP_POOL_PREFIX", "sktap"),
             tap_pool_size: env_or("SANDKILN_TAP_POOL_SIZE", "32").parse().expect("SANDKILN_TAP_POOL_SIZE must be a number"),
             auth_token: std::env::var("SANDKILN_AUTH_TOKEN").ok(),
+            drives_dir: expand_home(&env_or("SANDKILN_DRIVES_DIR", "~/sandkiln-tools/drives")),
+            idle_timeout: std::env::var("SANDKILN_IDLE_TIMEOUT_SECS")
+                .ok()
+                .map(|v| v.parse::<u64>().expect("SANDKILN_IDLE_TIMEOUT_SECS must be a number"))
+                .filter(|secs| *secs > 0)
+                .map(Duration::from_secs),
+            log_format: LogFormat::from_env(),
         }
     }
 }
@@ -53,5 +95,29 @@ fn expand_home(path: &str) -> PathBuf {
     match path.strip_prefix("~/") {
         Some(rest) => PathBuf::from(std::env::var("HOME").expect("HOME must be set to expand ~")).join(rest),
         None => PathBuf::from(path),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_format_defaults_to_pretty_when_unset() {
+        assert_eq!(LogFormat::parse(None), LogFormat::Pretty);
+    }
+
+    #[test]
+    fn log_format_parses_json_case_insensitively() {
+        assert_eq!(LogFormat::parse(Some("json")), LogFormat::Json);
+        assert_eq!(LogFormat::parse(Some("JSON")), LogFormat::Json);
+        assert_eq!(LogFormat::parse(Some("Json")), LogFormat::Json);
+    }
+
+    #[test]
+    fn log_format_falls_back_to_pretty_for_anything_else() {
+        assert_eq!(LogFormat::parse(Some("pretty")), LogFormat::Pretty);
+        assert_eq!(LogFormat::parse(Some("")), LogFormat::Pretty);
+        assert_eq!(LogFormat::parse(Some("yaml")), LogFormat::Pretty);
     }
 }

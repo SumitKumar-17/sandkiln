@@ -11,13 +11,15 @@ agent sandboxes, code playgrounds, and untrusted-code execution services:
 isolate first, then run.
 
 **Website**: https://sumitkumar-17.github.io/sandkiln/ (architecture, real
-benchmark numbers, live feature status)
+benchmark numbers, live feature status) — also mirrored at
+https://sandkiln.vercel.app
 
 ## Quickstart
 
-There's no hosted service — you run a `sandkilnd` daemon yourself (see
-[ROADMAP.md](ROADMAP.md) for the setup this needs: KVM, a tap device pool,
-a base rootfs image), then talk to it from a client.
+There's no hosted service — you run a `sandkilnd` daemon yourself. See
+[SELF_HOSTING.md](SELF_HOSTING.md) for the full setup (KVM, Firecracker,
+the base rootfs image, tap device pool, daemon config), then talk to it
+from a client.
 
 ```
 npm install sandkiln
