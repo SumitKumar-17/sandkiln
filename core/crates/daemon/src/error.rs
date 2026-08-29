@@ -31,3 +31,63 @@ impl IntoResponse for AppError {
         (status, Json(json!({ "error": message }))).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    /// Every caller of this API depends on `{"error": "<message>"}` as
+    /// the error body shape — these pin both the status code and that
+    /// exact shape per variant, not just "it returns a response".
+    async fn status_and_message(response: Response) -> (StatusCode, String) {
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        (status, body["error"].as_str().unwrap().to_string())
+    }
+
+    #[tokio::test]
+    async fn not_found_is_404_with_sandbox_wording() {
+        let (status, message) = status_and_message(AppError::NotFound("abc".to_string()).into_response()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(message, "sandbox not found: abc");
+    }
+
+    #[tokio::test]
+    async fn drive_not_found_is_404_with_drive_wording() {
+        let (status, message) = status_and_message(AppError::DriveNotFound("d1".to_string()).into_response()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(message, "drive not found: d1");
+    }
+
+    #[tokio::test]
+    async fn bad_request_is_400_with_the_given_message_verbatim() {
+        let (status, message) = status_and_message(AppError::BadRequest("bad input".to_string()).into_response()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(message, "bad input");
+    }
+
+    #[tokio::test]
+    async fn conflict_is_409_with_the_given_message_verbatim() {
+        let (status, message) = status_and_message(AppError::Conflict("already attached".to_string()).into_response()).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(message, "already attached");
+    }
+
+    #[tokio::test]
+    async fn internal_is_500_and_never_leaks_beyond_the_io_error_text() {
+        let io_err = std::io::Error::other("disk on fire");
+        let (status, message) = status_and_message(AppError::Internal(io_err).into_response()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(message, "disk on fire");
+    }
+
+    #[tokio::test]
+    async fn io_error_converts_to_internal_via_from() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "nope");
+        let app_err: AppError = io_err.into();
+        let (status, _) = status_and_message(app_err.into_response()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}

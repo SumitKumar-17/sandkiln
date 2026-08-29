@@ -285,3 +285,43 @@ fn clone_rootfs(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_duplicate_finds_a_repeat() {
+        assert_eq!(first_duplicate(["a", "b", "a"].into_iter()), Some("a"));
+        assert_eq!(first_duplicate(["a", "b", "c", "b"].into_iter()), Some("b"));
+    }
+
+    #[test]
+    fn first_duplicate_none_when_all_unique() {
+        assert_eq!(first_duplicate(["a", "b", "c"].into_iter()), None);
+        assert_eq!(first_duplicate(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn clone_rootfs_copies_real_file_contents() {
+        let dir = std::env::temp_dir().join(format!("sandkiln-clone-rootfs-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src.bin");
+        let dst = dir.join("dst.bin");
+        std::fs::write(&src, b"some rootfs bytes").unwrap();
+
+        clone_rootfs(&src, &dst).unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), b"some rootfs bytes");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clone_rootfs_fails_cleanly_for_a_missing_source() {
+        let dir = std::env::temp_dir().join(format!("sandkiln-clone-rootfs-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = clone_rootfs(&dir.join("does-not-exist.bin"), &dir.join("dst.bin"));
+        assert!(result.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
