@@ -46,3 +46,14 @@ There's no build step to run — open the file directly in a browser, or
 push to `main` and let the Pages workflow deploy it
 (https://sumitkumar-17.github.io/sandkiln/), and actually look at it in
 both light and dark mode before calling a visual change done.
+
+## Deployment targets
+
+GitHub Pages (above) is the primary deploy, driven by
+`.github/workflows/deploy-pages.yml` on every push to `main`. The root
+`vercel.json` (`outputDirectory: "website"`, no build command) makes this
+directory also deployable as a static site on any platform that imports a
+git repo and reads that file — importing this repo there and pointing it
+at the default root directory is enough, no further config needed. This
+is a hosting choice only, same as Pages is — it has no bearing on what
+gets written in this file's content.
