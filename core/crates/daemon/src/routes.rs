@@ -1,4 +1,5 @@
 use crate::error::AppError;
+use crate::routes_drives::DriveAttachment;
 use crate::sandbox::Sandbox;
 use crate::state::AppState;
 use axum::body::Bytes;
@@ -7,9 +8,9 @@ use axum::http::StatusCode;
 use axum::Json;
 use sandkiln_protocol::{Request, Response as AgentResponse};
 use sandkiln_vmm::network::Lease;
-use sandkiln_vmm::vm::{Vm, VmConfig};
+use sandkiln_vmm::vm::{DriveConfig, Vm, VmConfig};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -18,6 +19,10 @@ use uuid::Uuid;
 pub struct CreateSandboxRequest {
     #[serde(default)]
     tags: HashMap<String, String>,
+    /// Existing persistent drives (see `POST /drives`) to attach at boot,
+    /// each becoming its own block device inside the guest.
+    #[serde(default)]
+    drives: Vec<DriveAttachment>,
 }
 
 #[derive(Serialize)]
@@ -37,8 +42,37 @@ pub async fn create_sandbox(
             .map_err(|e| AppError::BadRequest(format!("invalid request body: {e}")))?
     };
 
+    if let Some(dup) = first_duplicate(request.drives.iter().map(|d| d.id.as_str())) {
+        return Err(AppError::BadRequest(format!("drive listed more than once: {dup}")));
+    }
+    for drive in &request.drives {
+        if !state.drives.exists(&drive.id) {
+            return Err(AppError::DriveNotFound(drive.id.clone()));
+        }
+    }
+    {
+        let sandboxes = state.sandboxes.lock().unwrap();
+        if let Some(drive) = request.drives.iter().find(|d| sandboxes.values().any(|s| s.attached_drives.contains(&d.id)))
+        {
+            return Err(AppError::Conflict(format!("drive {} is already attached to another sandbox", drive.id)));
+        }
+    }
+
     let id = Uuid::new_v4().to_string();
     let rootfs_path = std::env::temp_dir().join(format!("sandkiln-rootfs-{id}.ext4"));
+    let attached_drive_ids: Vec<String> = request.drives.iter().map(|d| d.id.clone()).collect();
+    // Firecracker's own drive_id namespace is per-VM, but prefix these
+    // anyway to keep them unambiguously distinct from the reserved
+    // "rootfs" id regardless of what a drive's storage id looks like.
+    let extra_drives: Vec<DriveConfig> = request
+        .drives
+        .iter()
+        .map(|d| DriveConfig {
+            drive_id: format!("drive-{}", d.id),
+            path_on_host: state.drives.path_for(&d.id),
+            read_only: d.read_only,
+        })
+        .collect();
 
     let (vm, network) = tokio::task::spawn_blocking({
         let state = state.clone();
@@ -63,6 +97,7 @@ pub async fn create_sandbox(
                 vcpu_count: state.config.vcpu_count,
                 mem_size_mib: state.config.mem_size_mib,
                 network: Some(lease.config.clone()),
+                extra_drives,
             });
             match vm {
                 Ok(vm) => Ok((vm, lease)),
@@ -76,8 +111,15 @@ pub async fn create_sandbox(
     .await
     .expect("boot task panicked")?;
 
-    let sandbox =
-        Sandbox { id: id.clone(), vm, network, rootfs_path, tags: request.tags, created_at: SystemTime::now() };
+    let sandbox = Sandbox {
+        id: id.clone(),
+        vm,
+        network,
+        rootfs_path,
+        attached_drives: attached_drive_ids,
+        tags: request.tags,
+        created_at: SystemTime::now(),
+    };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
 
     Ok(Json(CreateSandboxResponse { id }))
@@ -222,6 +264,12 @@ async fn call_agent(state: Arc<AppState>, id: String, request: Request) -> Resul
     })
     .await
     .expect("agent call task panicked")
+}
+
+/// Returns the first item that's already been seen, if any.
+fn first_duplicate<'a>(mut items: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let mut seen = HashSet::new();
+    items.find(|item| !seen.insert(*item))
 }
 
 /// Clones the base rootfs for one sandbox. Uses `cp --reflink=auto`

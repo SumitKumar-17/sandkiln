@@ -22,7 +22,7 @@ use uuid::Uuid;
 /// A drive to attach to a sandbox at creation time — accepted as part of
 /// `POST /sandboxes`'s `drives` field, mirroring how `tags` is accepted
 /// there.
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize)]
 pub struct DriveAttachment {
     pub id: String,
     #[serde(default)]
@@ -44,7 +44,7 @@ pub struct DriveSummary {
     attached_to: Option<String>,
 }
 
-#[tracing::instrument(skip(state))]
+#[tracing::instrument(skip(state, body), fields(size_mib = body.size_mib))]
 pub async fn create_drive(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateDriveRequest>,
