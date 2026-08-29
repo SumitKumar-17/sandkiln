@@ -178,6 +178,16 @@ impl Vm {
     }
 
     pub fn stop(mut self) -> io::Result<()> {
+        // SIGKILL-ing Firecracker directly loses anything the guest
+        // hasn't flushed from its page cache to the virtio-blk backing
+        // file yet — this was silently losing recent writes to attached
+        // drives (rootfs copies don't care, they're discarded anyway).
+        // Best-effort: if the agent isn't reachable for any reason, fall
+        // through to the kill rather than hang shutdown on it.
+        if let Err(e) = self.call(&Request::Exec { command: "sync".to_string(), args: vec![] }) {
+            tracing::warn!(vm_id = self.id, error = %e, "sync before stop failed, proceeding anyway");
+        }
+
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.api_socket);

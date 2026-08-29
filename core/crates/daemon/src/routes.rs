@@ -64,11 +64,14 @@ pub async fn create_sandbox(
     // Firecracker's own drive_id namespace is per-VM, but prefix these
     // anyway to keep them unambiguously distinct from the reserved
     // "rootfs" id regardless of what a drive's storage id looks like.
+    // Firecracker only allows alphanumerics and underscores in a
+    // drive_id (drive ids here are UUIDs, which contain hyphens) — '-'
+    // has to become '_', not just the prefix's own separator.
     let extra_drives: Vec<DriveConfig> = request
         .drives
         .iter()
         .map(|d| DriveConfig {
-            drive_id: format!("drive-{}", d.id),
+            drive_id: format!("drive_{}", d.id.replace('-', "_")),
             path_on_host: state.drives.path_for(&d.id),
             read_only: d.read_only,
         })
