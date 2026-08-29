@@ -46,6 +46,7 @@ impl BenchConfig {
             vcpu_count: self.vcpu_count,
             mem_size_mib: self.mem_size_mib,
             network: None,
+            extra_drives: Vec::new(),
         }
     }
 }

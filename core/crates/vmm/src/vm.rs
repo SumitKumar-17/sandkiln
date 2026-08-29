@@ -24,6 +24,20 @@ pub struct NetworkConfig {
     pub guest_mac: String,
 }
 
+/// A non-root drive to attach at boot, in addition to the mandatory
+/// rootfs — e.g. a persistent drive from `crate::drive::DriveStore`. Each
+/// one becomes its own `PUT /drives/<drive_id>` call before
+/// `InstanceStart`, and shows up inside the guest as a separate block
+/// device (`/dev/vdb`, `/dev/vdc`, ... in attachment order).
+#[derive(Clone)]
+pub struct DriveConfig {
+    /// Must be unique among all drives attached to this VM, and must not
+    /// be `"rootfs"` (reserved for the root device).
+    pub drive_id: String,
+    pub path_on_host: PathBuf,
+    pub read_only: bool,
+}
+
 pub struct VmConfig {
     pub firecracker_bin: PathBuf,
     pub kernel_path: PathBuf,
@@ -33,6 +47,9 @@ pub struct VmConfig {
     pub vcpu_count: u8,
     pub mem_size_mib: u32,
     pub network: Option<NetworkConfig>,
+    /// Additional (non-root) drives to attach at boot, e.g. persistent
+    /// drives requested by the caller. Empty for a VM with just a rootfs.
+    pub extra_drives: Vec<DriveConfig>,
 }
 
 pub struct Vm {
@@ -88,6 +105,19 @@ impl Vm {
                 "is_read_only": false,
             }),
         )?;
+
+        for drive in &config.extra_drives {
+            put_checked(
+                &mut api,
+                &format!("/drives/{}", drive.drive_id),
+                &json!({
+                    "drive_id": drive.drive_id,
+                    "path_on_host": path_str(&drive.path_on_host),
+                    "is_root_device": false,
+                    "is_read_only": drive.read_only,
+                }),
+            )?;
+        }
 
         put_checked(
             &mut api,
