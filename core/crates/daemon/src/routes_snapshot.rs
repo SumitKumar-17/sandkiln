@@ -182,6 +182,7 @@ pub async fn resume_snapshot(
         attached_drives: snapshot.attached_drives,
         tags: snapshot.tags,
         created_at: SystemTime::now(),
+        last_activity: std::sync::Mutex::new(std::time::Instant::now()),
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
 

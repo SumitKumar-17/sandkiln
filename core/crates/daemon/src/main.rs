@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 mod error;
+mod idle_reaper;
 mod routes_drives;
 mod routes_exec;
 mod routes_sandbox;
@@ -57,7 +58,13 @@ async fn async_main() {
     tracing::info!(drives_dir = %config.drives_dir.display(), "persistent drive storage ready");
 
     let auth_enabled = config.auth_token.is_some();
+    let idle_timeout = config.idle_timeout;
     let state = Arc::new(AppState::new(config, net_manager, drives));
+
+    if let Some(idle_timeout) = idle_timeout {
+        tracing::info!(idle_timeout_secs = idle_timeout.as_secs(), "idle sandbox reaper enabled");
+        tokio::spawn(idle_reaper::run(state.clone(), idle_timeout));
+    }
 
     let sandbox_routes = Router::new()
         .route("/sandboxes", post(routes_sandbox::create_sandbox).get(routes_sandbox::list_sandboxes))

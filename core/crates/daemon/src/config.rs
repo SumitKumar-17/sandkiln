@@ -1,5 +1,6 @@
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 pub struct Config {
     pub listen_addr: String,
@@ -27,6 +28,12 @@ pub struct Config {
     /// per-sandbox rootfs copies, which get deleted on sandbox stop.
     /// Drives are meant to outlive that, so they get their own directory.
     pub drives_dir: PathBuf,
+    /// How long a sandbox can go without any exec/read-file/write-file
+    /// activity before the daemon stops it automatically (see
+    /// `idle_reaper`). `None` — the env var unset, or set to `0` — disables
+    /// this entirely: sandboxes run until explicitly stopped, today's
+    /// behavior, unchanged unless a self-hosted instance opts in.
+    pub idle_timeout: Option<Duration>,
 }
 
 impl Config {
@@ -47,6 +54,11 @@ impl Config {
             tap_pool_size: env_or("SANDKILN_TAP_POOL_SIZE", "32").parse().expect("SANDKILN_TAP_POOL_SIZE must be a number"),
             auth_token: std::env::var("SANDKILN_AUTH_TOKEN").ok(),
             drives_dir: expand_home(&env_or("SANDKILN_DRIVES_DIR", "~/sandkiln-tools/drives")),
+            idle_timeout: std::env::var("SANDKILN_IDLE_TIMEOUT_SECS")
+                .ok()
+                .map(|v| v.parse::<u64>().expect("SANDKILN_IDLE_TIMEOUT_SECS must be a number"))
+                .filter(|secs| *secs > 0)
+                .map(Duration::from_secs),
         }
     }
 }
