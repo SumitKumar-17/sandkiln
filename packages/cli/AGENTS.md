@@ -19,12 +19,16 @@ straight to the SDK.
   SDK's own env var resolution when unset — don't reimplement that
   resolution here, just pass `undefined` through. Every action handler
   catches its own errors and reports them on stderr with a non-zero exit
-  (`handleApiError`/`fail`).
+  (`handleApiError`/`fail`); `program.parseAsync(...)` at the bottom has
+  a `.catch()` backstop so nothing escapes as a raw stack trace.
 - `src/format.ts` — the pure logic pulled out of `index.ts` specifically
   so it's unit-testable without importing the CLI's top-level commander
   wiring (which parses `process.argv` as a side effect of module load):
-  `parseTag` (the `--tag key=value` parser) and `formatSandboxList` (the
-  `sandbox ls` output formatter, including the empty-list case).
+  `parseTag` (the `--tag key=value` parser — throws commander's
+  `InvalidArgumentError`, not a plain `Error`, so a bad `--tag` value
+  gets the same clean `error: ...` stderr message as everything else
+  instead of an unhandled-exception stack trace) and `formatSandboxList`
+  (the `sandbox ls` output formatter, including the empty-list case).
 
 ## Testing
 

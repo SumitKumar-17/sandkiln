@@ -125,4 +125,11 @@ function attachSandbox(id: string, baseUrl: string | undefined, token: string | 
   return Sandbox.attach(id, { baseUrl, authToken: token });
 }
 
-program.parseAsync(process.argv);
+// Every subcommand's own action handler already catches its errors; this
+// is a backstop for anything that escapes one anyway (a bug in a future
+// subcommand, or a rejection from commander's own dispatch) so a caller
+// always gets a clean stderr message and exit code 1, never a raw stack
+// trace.
+program.parseAsync(process.argv).catch(async (error: unknown) => {
+  await fail(`error: ${error instanceof Error ? error.message : String(error)}`);
+});

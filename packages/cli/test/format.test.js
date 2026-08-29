@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { InvalidArgumentError } from "commander";
 import { formatSandboxList, parseTag } from "../dist/format.js";
 
 test("parseTag splits on the first = and accumulates into the previous object", () => {
@@ -10,8 +11,15 @@ test("parseTag splits on the first = and accumulates into the previous object", 
   assert.deepEqual(acc, { env: "prod", owner: "a=b" });
 });
 
-test("parseTag rejects a value with no =", () => {
-  assert.throws(() => parseTag("noequals", {}), /--tag expects key=value, got: noequals/);
+test("parseTag rejects a value with no = with a commander InvalidArgumentError", () => {
+  // Must be commander's InvalidArgumentError, not a plain Error — that's
+  // the type commander recognizes to print a clean `error: ...` message
+  // instead of letting the exception escape as a raw stack trace.
+  assert.throws(() => parseTag("noequals", {}), (err) => {
+    assert.ok(err instanceof InvalidArgumentError);
+    assert.match(err.message, /--tag expects key=value, got: noequals/);
+    return true;
+  });
 });
 
 test("parseTag treats a leading = as an empty key", () => {
