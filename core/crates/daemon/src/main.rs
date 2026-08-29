@@ -1,8 +1,10 @@
 mod auth;
 mod config;
 mod error;
+mod metrics;
 mod routes_drives;
 mod routes_exec;
+mod routes_metrics;
 mod routes_sandbox;
 mod routes_snapshot;
 mod sandbox;
@@ -77,6 +79,7 @@ async fn async_main() {
 
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .route("/metrics", get(routes_metrics::metrics))
         .merge(sandbox_routes)
         .merge(drive_routes)
         .merge(snapshot_routes)
