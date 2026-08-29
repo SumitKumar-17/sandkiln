@@ -8,9 +8,10 @@ made and fixed once.
 
 `sandkiln`: a compute primitive for safely running untrusted or
 AI-generated code in hardware-isolated Firecracker microVMs. Rust core,
-TypeScript SDK. See `README.md` for the pitch and `ROADMAP.md` for the
-full feature plan — read the roadmap before starting new work, it's kept
-current and explains what's done, what's open, and why.
+JS/TS + Python SDKs, a CLI. See `README.md` for the pitch and
+`ROADMAP.md` for the full feature plan — read the roadmap before
+starting new work, it's kept current and explains what's done, what's
+open, and why.
 
 ## Repo layout
 
@@ -20,9 +21,20 @@ core/crates/guest-agent/ static musl binary, runs inside the VM
 core/crates/vmm/         drives Firecracker + networking (host side)
 core/crates/daemon/      axum HTTP API (sandkilnd)
 packages/sdk/            sandkiln npm package (TypeScript)
-images/                  rootfs/kernel fetch + agent-injection scripts
+packages/python/         sandkiln PyPI package (Python)
+packages/cli/            kiln CLI, wraps the JS/TS SDK
+images/                  rootfs/kernel build + agent-injection scripts
 scripts/                 dev-box setup: tap pool, network bridge, DNS proxy, sync
+website/                 the project site, deployed via GitHub Pages
 ```
+
+**Each of these has its own `AGENTS.md`** with details scoped to that
+one piece (its specific gotchas, how to build/verify just that part) —
+read this file for project-wide context, then the relevant package's own
+`AGENTS.md` before working inside it. If you were handed just one
+package directory and not this whole repo, that package's `AGENTS.md`
+is written to be enough to start from — though skimming this file too,
+if you have access to it, still helps.
 
 ## Where the real work happens
 
