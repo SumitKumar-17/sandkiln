@@ -155,14 +155,38 @@ The pattern used throughout this project's history:
 2. Grant `CAP_NET_ADMIN` if the daemon binary was rebuilt.
 3. Start `sandkilnd` with real env vars pointing at the real kernel/rootfs
    images and tap pool on the dev box.
-4. Drive it with `curl` (or the real SDK, port-forwarded — see
-   `git log` for the DELETE-status-code bug this caught) against the
-   actual HTTP API, not a mock.
+4. Run `scripts/integration-test.sh` against it (see below) — this is
+   step 4 below formalized into one repeatable command instead of a fresh
+   ad hoc `curl` session every time.
 5. Clean up: stop the daemon, kill any leftover `firecracker` processes
    (`pkill -x firecracker`), remove temp rootfs copies.
 
-Skipping step 4 is how bugs like the two above shipped in the first
-place — they both compiled and clippy-passed cleanly.
+Skipping step 4 is how bugs like the DELETE-status-code one and the
+vsock-hang-on-snapshot one shipped in the first place — they both
+compiled and clippy-passed cleanly.
+
+## Integration testing
+
+`scripts/integration-test.sh [base-url]` exercises the full daemon API
+end to end against a real running `sandkilnd`: sandbox lifecycle, tag
+filtering, drives (including persistence across sandboxes and conflict
+detection), snapshot/resume, auth, the `/metrics` endpoint, and error
+cases (404s, 409s) — one repeatable run instead of manually re-deriving
+the same `curl` session by hand every time a feature is touched, which is
+exactly how this got written (see `git log` for the session that produced
+it). It tracks and tears down everything it creates on exit, pass or
+fail.
+
+Run it with `SANDKILN_AUTH_TOKEN` set in the environment to also exercise
+the auth-rejection cases; without it, those are skipped with a note
+(a daemon started without that var can't be told to require a token at
+request time). This is separate from `cargo test` (pure logic, no KVM
+needed) and `scripts/load-test.sh` (concurrency/latency under load) — all
+three matter, and none substitutes for the others.
+
+**Every new HTTP-facing feature should add a case here**, not just get
+manually curl'd once and forgotten — that's the entire point of this
+script existing instead of staying tribal knowledge in a chat transcript.
 
 ## Working with multiple agents in parallel
 

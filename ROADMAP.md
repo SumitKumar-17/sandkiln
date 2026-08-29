@@ -227,6 +227,12 @@ outbound HTTP both still work.
   the daemon's HTTP API. Run with `scripts/load-test.sh [concurrency]
   [iterations] [base-url]` against a running `sandkilnd` (defaults: 10
   workers, 20 iterations each, `http://127.0.0.1:7777`).
+- **Done:** A full end-to-end integration test, `scripts/integration-test.sh
+  [base-url]` — sandbox lifecycle, tags, drives (including persistence
+  across sandboxes and conflict detection), snapshot/resume, auth,
+  `/metrics`, and error cases, all in one repeatable run against a real
+  daemon. Tracks and tears down everything it creates. See root
+  `AGENTS.md`'s "Integration testing" section.
 - **Real measured results** (dev box, single node, 8-tap pool):
   - Cold boot (criterion): **32.3–33.1ms**.
   - Exec round-trip on an already-open vsock connection (criterion):
