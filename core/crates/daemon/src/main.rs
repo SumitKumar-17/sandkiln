@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod error;
 mod routes;
+mod routes_drives;
 mod sandbox;
 mod state;
 
@@ -9,6 +10,7 @@ use axum::middleware;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use config::Config;
+use sandkiln_vmm::drive::DriveStore;
 use sandkiln_vmm::network::{self, NetworkManager};
 use state::AppState;
 use std::sync::Arc;
@@ -47,8 +49,12 @@ async fn async_main() {
     net_manager.ensure_ready().expect("set up sandbox network bridge (needs CAP_NET_ADMIN — see scripts/grant-net-admin.sh)");
     tracing::info!(bridge = %config.bridge_name, gateway = %config.bridge_gateway, %uplink, "sandbox network ready");
 
+    let drives = DriveStore::new(&config.drives_dir)
+        .expect("create/verify the persistent drives directory (SANDKILN_DRIVES_DIR)");
+    tracing::info!(drives_dir = %config.drives_dir.display(), "persistent drive storage ready");
+
     let auth_enabled = config.auth_token.is_some();
-    let state = Arc::new(AppState::new(config, net_manager));
+    let state = Arc::new(AppState::new(config, net_manager, drives));
 
     let sandbox_routes = Router::new()
         .route("/sandboxes", post(routes::create_sandbox).get(routes::list_sandboxes))
@@ -58,9 +64,15 @@ async fn async_main() {
         .route("/sandboxes/:id/write-file", post(routes::write_file))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
+    let drive_routes = Router::new()
+        .route("/drives", post(routes_drives::create_drive).get(routes_drives::list_drives))
+        .route("/drives/:id", delete(routes_drives::delete_drive))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
+
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .merge(sandbox_routes)
+        .merge(drive_routes)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

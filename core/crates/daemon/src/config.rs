@@ -22,6 +22,11 @@ pub struct Config {
     /// env var unset) disables auth entirely — fine for local dev, not
     /// for anything reachable beyond localhost.
     pub auth_token: Option<String>,
+    /// Where persistent drives live. Deliberately not
+    /// `std::env::temp_dir()` — that's where `create_sandbox` puts
+    /// per-sandbox rootfs copies, which get deleted on sandbox stop.
+    /// Drives are meant to outlive that, so they get their own directory.
+    pub drives_dir: PathBuf,
 }
 
 impl Config {
@@ -41,6 +46,7 @@ impl Config {
             tap_pool_prefix: env_or("SANDKILN_TAP_POOL_PREFIX", "sktap"),
             tap_pool_size: env_or("SANDKILN_TAP_POOL_SIZE", "32").parse().expect("SANDKILN_TAP_POOL_SIZE must be a number"),
             auth_token: std::env::var("SANDKILN_AUTH_TOKEN").ok(),
+            drives_dir: expand_home(&env_or("SANDKILN_DRIVES_DIR", "~/sandkiln-tools/drives")),
         }
     }
 }
