@@ -29,6 +29,12 @@ a dependency the JS SDK's equivalent doesn't need either (it uses native
   `config.ts` exactly (same env var names, same default).
 - `errors.py` — `SandkilnApiError(status, message)`, matching the JS
   SDK's `SandkilnApiError` shape.
+- `py.typed` — empty PEP 561 marker so downstream type checkers (mypy,
+  pyright) trust this package's type hints instead of treating it as
+  untyped. Ships in the wheel automatically — `python -m build` +
+  `unzip -l dist/*.whl` confirmed it, no `pyproject.toml` change needed;
+  hatchling's `[tool.hatch.build.targets.wheel]` `packages =
+  ["src/sandkiln"]` already includes every file under that directory.
 
 ## The bug that already happened here — read before adding a method
 
@@ -66,10 +72,32 @@ wheel CI and the publish workflow use — run it if you're touching
 
 ## Non-obvious things specific to this package
 
-- Not yet published to PyPI — the publish workflow
-  (`.github/workflows/publish-python-sdk.yml`) uses PyPI's OIDC trusted
-  publishing (no stored token, no 2FA friction, unlike the npm side) but
-  needs a one-time trusted-publisher registration on pypi.org first.
 - `Sandbox.attach(id, ...)` exists for the same reason as the JS SDK's:
   a fresh process reconstructing a handle to an existing sandbox without
   a network round-trip.
+
+## Publishing
+
+Not yet published to PyPI. Code-side, this package is ready:
+`pyproject.toml` is filled in with real values (no placeholders), the
+package builds a clean wheel/sdist (`python -m build`), and it carries a
+`py.typed` marker.
+
+**Already automated** — `.github/workflows/publish-python-sdk.yml`:
+triggers on a manual dispatch or a `py-v*.*.*` tag push, builds the
+sdist/wheel, and on a tag push additionally checks the tag's version
+against `pyproject.toml`'s `project.version` and fails the run if they
+don't match. It then publishes via `pypa/gh-action-pypi-publish` using
+PyPI's OIDC trusted publishing — no stored token, no 2FA-on-publish
+friction (the workflow's own `id-token: write` permission is what makes
+the OIDC exchange possible).
+
+**Still manual, one-time, needs the account owner** — trusted publishing
+has to be registered on pypi.org *before* the workflow above can
+succeed: register the `sandkiln` project name on PyPI, then under its
+"Publishing" settings add a trusted publisher pointing at owner
+`SumitKumar-17`, repo `sandkiln`, workflow file
+`publish-python-sdk.yml` (environment left blank unless one is added to
+the workflow later). This needs the pypi.org account itself — no agent
+or CI job can do it. Once registered, either push a `py-v0.1.0` tag or
+run the workflow manually to publish.
