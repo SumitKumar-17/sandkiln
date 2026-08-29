@@ -297,6 +297,7 @@
     <nav class="topnav">
       <a href="#features">Features</a>
       <a href="#architecture">Architecture</a>
+      <a href="#design-notes">Design notes</a>
       <a href="#benchmarks">Benchmarks</a>
       <a href="#code">SDK</a>
       <a href="#roadmap">Roadmap</a>
@@ -463,7 +464,7 @@
     <div class="section-head">
       <div class="eyebrow">Under the hood</div>
       <h2>Four crates. No crate reaches into another's internals.</h2>
-      <p>The core is a Rust workspace, kept deliberately modular — the daemon can change without touching the guest agent, and the guest agent ships as its own 700KB static binary independent of everything that talks to it.</p>
+      <p>The core is a Rust workspace, kept deliberately modular — the daemon can change without touching the guest agent, and the guest agent ships as its own 700KB static binary independent of everything that talks to it. The non-obvious parts of why it's shaped this way — the privilege model, the wire protocol, what a snapshot actually has to reference to stay correct, and a real bug that shaped one of them — are below the boot lifecycle.</p>
     </div>
 
     <div class="arch">
