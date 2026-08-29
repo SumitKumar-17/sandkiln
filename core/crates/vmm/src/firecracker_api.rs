@@ -80,3 +80,26 @@ fn parse_status_code(status_line: &str) -> io::Result<u16> {
         .and_then(|code| code.parse().ok())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("malformed status line: {status_line:?}")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_ok_from_a_normal_status_line() {
+        assert_eq!(parse_status_code("HTTP/1.1 204 No Content\r\n").unwrap(), 204);
+        assert_eq!(parse_status_code("HTTP/1.1 200 OK\r\n").unwrap(), 200);
+        assert_eq!(parse_status_code("HTTP/1.1 400 Bad Request\r\n").unwrap(), 400);
+    }
+
+    #[test]
+    fn rejects_a_line_with_no_code() {
+        assert!(parse_status_code("garbage\r\n").is_err());
+        assert!(parse_status_code("").is_err());
+    }
+
+    #[test]
+    fn rejects_a_non_numeric_code() {
+        assert!(parse_status_code("HTTP/1.1 OK No Content\r\n").is_err());
+    }
+}

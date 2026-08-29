@@ -135,3 +135,102 @@ fn validate_id(id: &str) -> io::Result<()> {
         Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid drive id: {id:?}")))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh, self-cleaning temp directory per test — these tests do
+    /// real file I/O (and `create` shells out to real `mkfs.ext4`, no
+    /// KVM/root needed for that), so they need real isolated storage,
+    /// not a mock.
+    struct TempStore {
+        store: DriveStore,
+        dir: PathBuf,
+    }
+
+    impl TempStore {
+        fn new(test_name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("sandkiln-drive-test-{test_name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            Self { store: DriveStore::new(&dir).unwrap(), dir }
+        }
+    }
+
+    impl Drop for TempStore {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn validate_id_accepts_alphanumeric_hyphen_underscore() {
+        assert!(validate_id("abc-123_XYZ").is_ok());
+        assert!(validate_id(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn validate_id_rejects_empty_too_long_or_unsafe_characters() {
+        assert!(validate_id("").is_err());
+        assert!(validate_id(&"a".repeat(65)).is_err());
+        assert!(validate_id("../etc/passwd").is_err(), "path traversal must be rejected");
+        assert!(validate_id("has space").is_err());
+        assert!(validate_id("has.dot").is_err());
+    }
+
+    #[test]
+    fn path_for_is_deterministic_and_does_not_require_the_drive_to_exist() {
+        let t = TempStore::new("path-for");
+        assert_eq!(t.store.path_for("abc"), t.dir.join("abc.ext4"));
+        assert!(!t.store.exists("abc"));
+    }
+
+    #[test]
+    fn create_rejects_size_below_minimum() {
+        let t = TempStore::new("min-size");
+        let err = t.store.create("too-small", MIN_DRIVE_SIZE_MIB - 1).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(!t.store.exists("too-small"), "a rejected create must not leave a file behind");
+    }
+
+    #[test]
+    fn create_rejects_invalid_id_before_touching_the_filesystem() {
+        let t = TempStore::new("invalid-id");
+        assert!(t.store.create("../escape", MIN_DRIVE_SIZE_MIB).is_err());
+        assert!(!t.dir.join("../escape.ext4").exists());
+    }
+
+    #[test]
+    fn create_then_exists_then_delete_full_cycle() {
+        let t = TempStore::new("full-cycle");
+        assert!(!t.store.exists("d1"));
+
+        let path = t.store.create("d1", MIN_DRIVE_SIZE_MIB).expect("mkfs.ext4 must be on PATH for this test");
+        assert!(t.store.exists("d1"));
+        assert_eq!(path, t.store.path_for("d1"));
+        assert_eq!(fs::metadata(&path).unwrap().len(), MIN_DRIVE_SIZE_MIB * 1024 * 1024);
+
+        t.store.delete("d1").unwrap();
+        assert!(!t.store.exists("d1"));
+    }
+
+    #[test]
+    fn create_fails_if_id_already_exists() {
+        let t = TempStore::new("dup-create");
+        t.store.create("d1", MIN_DRIVE_SIZE_MIB).unwrap();
+        let err = t.store.create("d1", MIN_DRIVE_SIZE_MIB).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn list_reflects_created_drives_and_ignores_unrelated_files() {
+        let t = TempStore::new("list");
+        t.store.create("d1", MIN_DRIVE_SIZE_MIB).unwrap();
+        t.store.create("d2", MIN_DRIVE_SIZE_MIB).unwrap();
+        fs::write(t.dir.join("not-a-drive.txt"), b"ignore me").unwrap();
+
+        let mut ids: Vec<String> = t.store.list().unwrap().into_iter().map(|d| d.id).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["d1", "d2"]);
+    }
+}
