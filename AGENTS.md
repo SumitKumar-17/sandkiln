@@ -99,17 +99,53 @@ real running daemon and a real microVM first.
   series. If you find yourself writing "Phase 4:", rename the concept to
   what it actually is (a subsystem, a milestone, a feature name).
 - **Commit small and often.** Each commit should be one coherent,
-  buildable, ideally-tested unit of change — not a giant batch. No
-  `Co-Authored-By` trailers on commits in this repo.
+  buildable, ideally-tested unit of change — not a giant batch. There is
+  no limit on commit count; more small commits is always preferred over
+  fewer large ones.
+- **Git identity is fixed: `SumitKumar-17 <sumitkanpur2005@gmail.com>`,
+  always.** Never the ambient session email, never any other name. No
+  `Co-Authored-By` trailer on any commit in this repo, ever — this is a
+  personal project with one author.
 - **Never mention any commercial platform by name** in code, docs, or the
   website — this project takes feature inspiration from prior art in the
-  space but is its own, unaffiliated, self-hosted product.
+  space but is its own, unaffiliated, self-hosted product. This extends
+  to comparable products researched for feature ideas (see `ROADMAP.md`)
+  — take the idea, never the name or branding.
 - **Zero clippy warnings** on every commit touching `core/`. Fix them,
   don't `#[allow]` them away unless you can justify why in a comment.
 - **No unused/speculative code.** Don't stub out a client method for a
   server endpoint that doesn't exist yet, don't add a config field
   nothing reads. If the roadmap says a feature is planned, the code
   reflects that it's *not* there yet, not a half-built version of it.
+- **Every crate needs real unit tests, not just compile-clean code.**
+  Colocated `#[cfg(test)] mod tests` at the bottom of the file they test
+  is the convention here (idiomatic Rust, keeps a test next to what it
+  covers) — not a separate `tests/` tree per file. Prefer pulling pure
+  logic out of framework plumbing specifically so it's unit-testable
+  (e.g. `auth::token_matches` pulled out of the axum middleware around
+  it) over skipping the test because "it needs a real request." Use real
+  temp-directory filesystem state instead of mocking wherever the
+  operation doesn't need KVM.
+- **No comments explaining what code does — only why, and only when it's
+  non-obvious.** A hidden constraint, a workaround for a specific bug, an
+  invariant a reader could easily violate — those earn a short comment.
+  Restating the code in prose does not. If a change needs real design
+  explanation (why this architecture, what alternatives were rejected and
+  why), that belongs on the website's architecture material, not as a
+  comment block in the source.
+- **Keep files scoped to one concern; split when a file outgrows it.**
+  `routes_drives.rs`/`routes_snapshot.rs`/`routes_sandbox.rs`/
+  `routes_exec.rs` and `vm/mod.rs`+`vm/snapshot.rs` are the precedent —
+  when a file starts covering two things that could reasonably be worked
+  on independently (or reads past ~250-300 lines for no structural
+  reason), split along that seam rather than letting it grow. This also
+  keeps parallel-agent work from producing merge conflicts on one shared
+  giant file.
+- **Every package/crate directory gets its own `AGENTS.md`**, kept in
+  sync with that directory's actual structure (see the list at the top
+  of this file). When you split or rename files, update the relevant
+  `AGENTS.md`'s file list in the same commit — a stale map is worse than
+  no map.
 
 ## Verifying a change actually works
 
@@ -126,6 +162,28 @@ The pattern used throughout this project's history:
 
 Skipping step 4 is how bugs like the two above shipped in the first
 place — they both compiled and clippy-passed cleanly.
+
+## Working with multiple agents in parallel
+
+When several independent pieces of work are ready at once, prefer running
+them as parallel, worktree-isolated agents over one long serial session:
+each agent reads this file and the relevant package `AGENTS.md`, works
+without KVM access (code changes only — the host verifies live
+afterward), commits in small increments, and avoids touching shared docs
+(`ROADMAP.md`, root `AGENTS.md`, `CHANGELOG.md`) to keep merge conflicts
+rare. Reconcile branches with `cherry-pick`, not merge, when their
+history has diverged from a rewritten `main`. After merging, always run
+the full verification pass (build, clippy, test, then live-test on the
+dev box) — an agent's own report that something "works" is not a
+substitute for that.
+
+## Self-hosting
+
+See `SELF_HOSTING.md` for the full guide to standing up your own instance
+of this service end to end (host requirements, building the images,
+running the daemon, networking setup). Keep it in sync with `scripts/`
+and `core/crates/daemon/src/config.rs` — a self-hosting doc that
+references a removed script or a renamed env var is worse than none.
 
 ## What's next
 

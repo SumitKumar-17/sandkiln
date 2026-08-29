@@ -30,9 +30,12 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   restart (see `ROADMAP.md`'s sqlite-backed-state item).
 - `sandbox.rs` — the `Sandbox` struct the daemon tracks per running VM
   (id, `Vm` handle, network `Lease`, rootfs path, tags, created-at).
-- `routes.rs` — the actual HTTP handlers. `call_agent()` is the shared
-  helper every exec/read/write-style route uses — extend it, don't
-  duplicate its pattern.
+- `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop.
+- `routes_exec.rs` — exec/read-file/write-file handlers. `call_agent()`
+  is the shared helper all three use — extend it, don't duplicate its
+  pattern.
+- `routes_drives.rs` / `routes_snapshot.rs` — drives and snapshot/resume
+  handlers, each in their own file for the same reason as above.
 - `error.rs` — `AppError`, the one error type every handler returns.
   Add a variant here rather than inventing a new ad hoc error shape.
 
@@ -52,12 +55,12 @@ cleanly but was still wrong.
 ## Non-obvious things specific to this crate
 
 - **New route handlers that touch the sandbox map or `vmm` should go in
-  their own file, not always into `routes.rs`** — when multiple people
-  (or parallel agents) are adding features concurrently, a shared
-  `routes.rs` is a guaranteed merge-conflict point. Follow whatever
-  precedent exists at the time (check for `routes_*.rs` files) and wire
-  new routers into `main.rs`'s route composition the same way the
-  existing ones are.
+  their own `routes_*.rs` file** — when multiple people (or parallel
+  agents) are adding features concurrently, a shared file is a
+  guaranteed merge-conflict point, and this is also why `routes.rs` got
+  split into `routes_sandbox.rs`/`routes_exec.rs` once it grew past
+  ~300 lines. Wire new routers into `main.rs`'s route composition the
+  same way the existing ones are.
 - **The sandbox map lock is a plain `std::sync::Mutex`, held across
   blocking calls inside `spawn_blocking`.** This is fine because those
   calls happen off the async runtime's threads, but don't assume you can

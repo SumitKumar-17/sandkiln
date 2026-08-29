@@ -20,10 +20,13 @@ not in `daemon`.
   JSON PUT/PATCH requests, not worth pulling in `hyper` or similar for.
   If you need a new Firecracker API call, add a method here following
   the existing `put`/`patch` pattern.
-- `vm.rs` — `Vm`/`VmConfig`: boot a microVM (spawn the Firecracker
+- `vm/mod.rs` — `Vm`/`VmConfig`: boot a microVM (spawn the Firecracker
   process, configure it over its API socket, start it), talk to its
   guest agent (`vm.call()`, retries briefly since the agent isn't
   listening the instant `InstanceStart` returns), stop it.
+- `vm/snapshot.rs` — `Vm::pause`/`snapshot`/`resume` and `ResumeConfig`,
+  as a submodule of `vm` (not a sibling) specifically so it can still see
+  `Vm`'s private fields. Split out once `vm.rs` passed ~350 lines.
 - `network.rs` — `NetworkManager`/`Lease`: the tap-device pool, bridge
   attachment, IP allocation, and bridge port isolation. Read the module
   doc comment at the top — it explains *why* a pool of pre-created tap
