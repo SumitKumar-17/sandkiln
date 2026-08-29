@@ -1,0 +1,17 @@
+{
+  "name": "sandkiln-example-code-playground",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Reference code-playground example: run arbitrary code inside a sandkiln sandbox.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "sandkiln": "^0.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
