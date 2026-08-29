@@ -303,9 +303,10 @@ The primitive is only as useful as what's built on top of it:
 - Example integrations with agent frameworks and coding-agent tools —
   showing a sandbox as the execution backend for agent-generated code,
   not just a standalone API.
-- A minimal reference "code playground" and a reference "AI agent runner"
-  as real, runnable example projects (ties into Documentation below), not
-  just SDK snippets.
+- **Done:** a minimal reference "code playground"
+  (`examples/code-playground`, JS/TS) and a reference "AI agent runner"
+  (`examples/agent-runner`, Python) as real, runnable example projects
+  against each SDK's actual current API — see `examples/AGENTS.md`.
 - Consider what a plugin/adapter surface would look like once there's
   more than one real integration to generalize from — not before.
 - **Deliberately out of scope for this project**: a durable-workflow layer
@@ -319,5 +320,7 @@ The primitive is only as useful as what's built on top of it:
 ## Documentation and examples
 
 - A docs site with runnable examples covering both SDKs and the CLI.
-- Example projects: a code playground, an AI-agent sandbox runner, a
-  dev-server preview tool — real uses of the primitive, not toy snippets.
+- Example projects: **done** — code playground (JS/TS) and AI-agent
+  sandbox runner (Python), see `examples/`. Still open: a dev-server
+  preview tool, once the reverse-proxy work in "Dev servers and live
+  preview" above exists to build it on.
