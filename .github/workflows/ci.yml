@@ -27,6 +27,9 @@ jobs:
       - name: Clippy (zero warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
         working-directory: core
+      - name: Test
+        run: cargo test --workspace
+        working-directory: core
 
   js:
     name: JS/TS packages (typecheck + build)
