@@ -135,6 +135,7 @@ All configuration is env vars, all optional with sane defaults (see
 | `SANDKILN_TAP_POOL_SIZE` | `32` | must match `create-tap-pool.sh`'s count |
 | `SANDKILN_AUTH_TOKEN` | unset (auth disabled) | bearer token required on `/sandboxes*`, `/drives*` |
 | `SANDKILN_DRIVES_DIR` | `~/sandkiln-tools/drives` | where persistent drives are stored |
+| `SANDKILN_IDLE_TIMEOUT_SECS` | unset (disabled) | stop a sandbox automatically after this many seconds with no exec/read-file/write-file activity; `0` also disables it |
 
 **Set `SANDKILN_AUTH_TOKEN` for anything reachable beyond localhost** — with
 it unset the API is completely open. Auth is a no-op middleware when
