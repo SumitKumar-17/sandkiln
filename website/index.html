@@ -503,6 +503,30 @@
   </div>
 </section>
 
+<section id="design-notes">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">Design rationale</div>
+      <h2>Why it's built this way, and what broke before it was.</h2>
+      <p>Every decision below came from hitting a real constraint on real hardware, not a whiteboard preference. Where something was learned the hard way, that's in here too — including the bug hunt behind it.</p>
+    </div>
+
+    <div class="note-block">
+      <span class="tag">Privilege model</span>
+      <h3>Ambient CAP_NET_ADMIN, a static tap pool, and a root that stays out of the hot path</h3>
+      <p>The daemon never runs as root. It runs as an ordinary user with a single Linux capability, <code>CAP_NET_ADMIN</code>, raised into its ambient set — enough to manage network devices, nothing else. The reasoning is blast radius: this daemon's entire job is booting VMs to run code nobody vouched for. If a bug in that path ever let an attacker influence what the daemon itself does, the difference between "can mess with network interfaces" and "can do anything root can" is the difference between an incident and a full host compromise.</p>
+      <p>That capability covers netlink operations — attaching a tap device to the bridge, bringing a link up or down, creating the bridge itself — but not creating a <em>new</em> tap device. That goes through a different kernel path, the <code>TUNSETIFF</code> ioctl on <code>/dev/net/tun</code>, and in practice that specific check doesn't honor ambient <code>CAP_NET_ADMIN</code> the way netlink calls do — it wants a genuinely privileged process. That's not a theoretical distinction, it's why tap devices here are pre-created once, as real root, by a one-time setup script, and the daemon only ever leases an existing device from that pool and attaches or detaches it — netlink operations its ambient capability actually covers. The trade-off is a fixed ceiling: pool size caps concurrent sandboxes until it's grown, and growing it is a deliberate, root-requiring step outside the daemon's own runtime, not something it can do for itself. That's the correct shape for this constraint, not a workaround waiting to be routed around later.</p>
+    </div>
+
+    <div class="note-block">
+      <span class="tag">Wire protocol</span>
+      <h3>vsock, a length-prefixed JSON frame, and a client that doesn't reach for a full HTTP stack</h3>
+      <p>Host and guest talk over vsock — a channel Firecracker exposes directly, so the guest agent is reachable without any guest network configuration and without sharing an attack surface with the sandbox's own outbound networking. On the wire, every message is a 4-byte little-endian length prefix followed by that many bytes of JSON, not a newline-delimited stream — <code>exec</code> output can contain arbitrary bytes, including embedded newlines, and a length prefix is the one framing scheme a payload can't corrupt by accident. JSON itself is a deliberate, boring choice: dependency-light, readable in a log or packet capture while debugging, and a tagged <code>cmd</code>/<code>status</code> enum on both ends keeps the handful of request and response shapes honest without needing a schema compiler for a protocol this small.</p>
+      <p>Firecracker's own control surface is a related problem with a different shape. The host configures boot-source, drives, machine-config, and vsock at boot, and later pauses, snapshots, and resumes a VM, all through a fixed, small set of JSON PUT/PATCH requests over Firecracker's own Unix socket. Pulling in a full HTTP client crate for that buys nothing — none of chunked encoding, redirects, TLS, or connection pooling will ever be exercised against a socket that speaks exactly one fixed API. So the VMM crate hand-rolls the roughly ninety lines a minimal HTTP/1.1 client actually needs: write the request line, headers, and body; read the status line; read headers looking only for <code>Content-Length</code>; read exactly that many body bytes. It has its own unit tests, no async runtime dependency, and works cleanly from the blocking contexts — a background thread, a synchronous pause-then-snapshot sequence — it's actually called from.</p>
+    </div>
+  </div>
+</section>
+
 <section id="benchmarks">
   <div class="wrap">
     <div class="section-head">
