@@ -31,3 +31,5 @@ images/*.img
 
 # Local tooling state
 .claude/
+.vercel
+.env*
