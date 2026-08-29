@@ -1,3 +1,7 @@
+//! Sandbox lifecycle: create, list, stop. Exec and file operations live in
+//! `routes_exec` — split out because they share a `call_agent` helper that
+//! has nothing to do with lifecycle management.
+
 use crate::error::AppError;
 use crate::routes_drives::DriveAttachment;
 use crate::sandbox::Sandbox;
@@ -6,7 +10,6 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use sandkiln_protocol::{Request, Response as AgentResponse};
 use sandkiln_vmm::network::Lease;
 use sandkiln_vmm::vm::{DriveConfig, Vm, VmConfig};
 use serde::{Deserialize, Serialize};
@@ -180,91 +183,6 @@ pub async fn stop_sandbox(
     .expect("stop task panicked");
 
     Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Deserialize)]
-pub struct ExecRequestBody {
-    command: String,
-    #[serde(default)]
-    args: Vec<String>,
-}
-
-#[derive(Serialize)]
-pub struct ExecResponseBody {
-    stdout: String,
-    stderr: String,
-    exit_code: i32,
-}
-
-#[tracing::instrument(skip(state, body), fields(command = %body.command))]
-pub async fn exec(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(body): Json<ExecRequestBody>,
-) -> Result<Json<ExecResponseBody>, AppError> {
-    let response = call_agent(state, id, Request::Exec { command: body.command, args: body.args }).await?;
-
-    match response {
-        AgentResponse::Exec { stdout, stderr, exit_code } => Ok(Json(ExecResponseBody { stdout, stderr, exit_code })),
-        other => Err(AppError::Internal(std::io::Error::other(format!("unexpected agent response: {other:?}")))),
-    }
-}
-
-#[derive(Deserialize)]
-pub struct ReadFileRequestBody {
-    path: String,
-}
-
-#[derive(Serialize)]
-pub struct ReadFileResponseBody {
-    content_base64: String,
-}
-
-#[tracing::instrument(skip(state, body), fields(path = %body.path))]
-pub async fn read_file(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(body): Json<ReadFileRequestBody>,
-) -> Result<Json<ReadFileResponseBody>, AppError> {
-    let response = call_agent(state, id, Request::ReadFile { path: body.path }).await?;
-    match response {
-        AgentResponse::File { content_base64 } => Ok(Json(ReadFileResponseBody { content_base64 })),
-        AgentResponse::Error { message } => Err(AppError::BadRequest(message)),
-        other => Err(AppError::Internal(std::io::Error::other(format!("unexpected agent response: {other:?}")))),
-    }
-}
-
-#[derive(Deserialize)]
-pub struct WriteFileRequestBody {
-    path: String,
-    content_base64: String,
-}
-
-#[tracing::instrument(skip(state, body), fields(path = %body.path))]
-pub async fn write_file(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(body): Json<WriteFileRequestBody>,
-) -> Result<StatusCode, AppError> {
-    let response =
-        call_agent(state, id, Request::WriteFile { path: body.path, content_base64: body.content_base64 }).await?;
-    match response {
-        AgentResponse::Ok => Ok(StatusCode::NO_CONTENT),
-        AgentResponse::Error { message } => Err(AppError::BadRequest(message)),
-        other => Err(AppError::Internal(std::io::Error::other(format!("unexpected agent response: {other:?}")))),
-    }
-}
-
-/// Shared by every route that just forwards one request to the guest
-/// agent and reports its response — exec/read/write all fit this shape.
-async fn call_agent(state: Arc<AppState>, id: String, request: Request) -> Result<AgentResponse, AppError> {
-    tokio::task::spawn_blocking(move || {
-        let sandboxes = state.sandboxes.lock().unwrap();
-        let sandbox = sandboxes.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
-        sandbox.vm.call(&request).map_err(AppError::from)
-    })
-    .await
-    .expect("agent call task panicked")
 }
 
 /// Returns the first item that's already been seen, if any.

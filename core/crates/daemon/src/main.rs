@@ -1,8 +1,9 @@
 mod auth;
 mod config;
 mod error;
-mod routes;
 mod routes_drives;
+mod routes_exec;
+mod routes_sandbox;
 mod routes_snapshot;
 mod sandbox;
 mod snapshot;
@@ -59,11 +60,11 @@ async fn async_main() {
     let state = Arc::new(AppState::new(config, net_manager, drives));
 
     let sandbox_routes = Router::new()
-        .route("/sandboxes", post(routes::create_sandbox).get(routes::list_sandboxes))
-        .route("/sandboxes/:id", delete(routes::stop_sandbox))
-        .route("/sandboxes/:id/exec", post(routes::exec))
-        .route("/sandboxes/:id/read-file", post(routes::read_file))
-        .route("/sandboxes/:id/write-file", post(routes::write_file))
+        .route("/sandboxes", post(routes_sandbox::create_sandbox).get(routes_sandbox::list_sandboxes))
+        .route("/sandboxes/:id", delete(routes_sandbox::stop_sandbox))
+        .route("/sandboxes/:id/exec", post(routes_exec::exec))
+        .route("/sandboxes/:id/read-file", post(routes_exec::read_file))
+        .route("/sandboxes/:id/write-file", post(routes_exec::write_file))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
     let drive_routes = Router::new()
