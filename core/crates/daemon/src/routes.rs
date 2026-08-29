@@ -50,11 +50,9 @@ pub async fn create_sandbox(
             return Err(AppError::DriveNotFound(drive.id.clone()));
         }
     }
-    {
-        let sandboxes = state.sandboxes.lock().unwrap();
-        if let Some(drive) = request.drives.iter().find(|d| sandboxes.values().any(|s| s.attached_drives.contains(&d.id)))
-        {
-            return Err(AppError::Conflict(format!("drive {} is already attached to another sandbox", drive.id)));
+    for drive in &request.drives {
+        if let Some(holder) = state.drive_holder(&drive.id) {
+            return Err(AppError::Conflict(format!("drive {} is already attached to {holder}", drive.id)));
         }
     }
 

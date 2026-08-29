@@ -50,7 +50,7 @@ pub async fn snapshot_sandbox(
     Path(id): Path<String>,
 ) -> Result<Json<SnapshotSandboxResponse>, AppError> {
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
-    let Sandbox { vm, network, rootfs_path, tags, .. } = sandbox;
+    let Sandbox { vm, network, rootfs_path, attached_drives, tags, .. } = sandbox;
 
     let snapshot_id = Uuid::new_v4().to_string();
     let dir = snapshot_dir(&snapshot_id);
@@ -94,6 +94,7 @@ pub async fn snapshot_sandbox(
         mem_file_path,
         rootfs_path,
         network,
+        attached_drives,
         tags,
         created_at: SystemTime::now(),
     };
@@ -178,6 +179,7 @@ pub async fn resume_snapshot(
         vm,
         network: snapshot.network,
         rootfs_path: snapshot.rootfs_path,
+        attached_drives: snapshot.attached_drives,
         tags: snapshot.tags,
         created_at: SystemTime::now(),
     };

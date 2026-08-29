@@ -30,6 +30,12 @@ pub struct Snapshot {
     /// reattach the exact same tap device rather than get a fresh lease.
     /// See `sandkiln_vmm::vm::Vm::resume`'s doc comment for why.
     pub network: Lease,
+    /// Carried over from the source sandbox's `attached_drives` — a
+    /// drive's data lives inside the snapshotted memory/rootfs state the
+    /// same way the network config does, so it must stay marked attached
+    /// while this snapshot exists, or a caller could attach it to a
+    /// second sandbox and corrupt it via two VMs writing to one file.
+    pub attached_drives: Vec<String>,
     pub tags: HashMap<String, String>,
     pub created_at: SystemTime,
 }

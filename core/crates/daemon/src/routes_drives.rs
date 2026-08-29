@@ -39,8 +39,10 @@ pub struct DriveSummary {
     id: String,
     size_mib: u64,
     created_at_unix: u64,
-    /// The sandbox this drive is currently attached to, if any. A drive
-    /// can't be deleted while this is set.
+    /// What currently holds this drive, if anything — `"sandbox <id>"`
+    /// or `"snapshot <id>"` (a snapshot can hold one too, see
+    /// `AppState::drive_holder`). A drive can't be deleted while this is
+    /// set.
     attached_to: Option<String>,
 }
 
@@ -81,11 +83,10 @@ pub async fn list_drives(State(state): State<Arc<AppState>>) -> Result<Json<List
     .expect("list drives task panicked")
     .map_err(AppError::Internal)?;
 
-    let sandboxes = state.sandboxes.lock().unwrap();
     let drives = infos
         .into_iter()
         .map(|info| {
-            let attached_to = sandboxes.values().find(|s| s.attached_drives.contains(&info.id)).map(|s| s.id.clone());
+            let attached_to = state.drive_holder(&info.id);
             DriveSummary {
                 id: info.id,
                 size_mib: info.size_bytes / (1024 * 1024),
@@ -103,13 +104,8 @@ pub async fn delete_drive(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    {
-        let sandboxes = state.sandboxes.lock().unwrap();
-        if let Some(sandbox_id) = sandboxes.values().find(|s| s.attached_drives.contains(&id)).map(|s| s.id.clone()) {
-            return Err(AppError::Conflict(format!(
-                "drive {id} is attached to sandbox {sandbox_id} — stop that sandbox before deleting it"
-            )));
-        }
+    if let Some(holder) = state.drive_holder(&id) {
+        return Err(AppError::Conflict(format!("drive {id} is attached to {holder} — release it before deleting")));
     }
 
     tokio::task::spawn_blocking({
