@@ -90,6 +90,7 @@ async fn call_agent(state: Arc<AppState>, id: String, request: Request) -> Resul
     tokio::task::spawn_blocking(move || {
         let sandboxes = state.sandboxes.lock().unwrap();
         let sandbox = sandboxes.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
+        *sandbox.last_activity.lock().unwrap() = std::time::Instant::now();
         sandbox.vm.call(&request).map_err(AppError::from)
     })
     .await

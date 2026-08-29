@@ -123,6 +123,7 @@ pub async fn create_sandbox(
         attached_drives: attached_drive_ids,
         tags: request.tags,
         created_at: SystemTime::now(),
+        last_activity: std::sync::Mutex::new(std::time::Instant::now()),
     };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
 
