@@ -23,7 +23,14 @@ not in `daemon`.
 - `vm/mod.rs` — `Vm`/`VmConfig`: boot a microVM (spawn the Firecracker
   process, configure it over its API socket, start it), talk to its
   guest agent (`vm.call()`, retries briefly since the agent isn't
-  listening the instant `InstanceStart` returns), stop it.
+  listening the instant `InstanceStart` returns), stop it. The spawned
+  Firecracker process's stdout/stderr (the guest's `console=ttyS0`
+  serial output) is captured to `/tmp/sandkiln-fc-<id>.log` rather than
+  discarded — see `console_log_path`/`console_log_stdio` — and
+  `annotate_with_console_log` appends that path to a boot failure's error
+  message, since a guest kernel panic or agent crash before vsock comes
+  up would otherwise be invisible from the host. `snapshot::resume` uses
+  the same three helpers for the fresh Firecracker process it spawns.
 - `vm/snapshot.rs` — `Vm::pause`/`snapshot`/`resume` and `ResumeConfig`,
   as a submodule of `vm` (not a sibling) specifically so it can still see
   `Vm`'s private fields. Split out once `vm.rs` passed ~350 lines.

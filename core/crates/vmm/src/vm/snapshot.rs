@@ -8,7 +8,7 @@ use crate::firecracker_api::ApiClient;
 use serde_json::json;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -90,14 +90,16 @@ impl Vm {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let api_socket = PathBuf::from(format!("/tmp/sandkiln-fc-{id}.sock"));
         let vsock_socket = PathBuf::from(format!("/tmp/sandkiln-vsock-{id}.sock"));
+        let log_path = super::console_log_path(id);
         let _ = std::fs::remove_file(&api_socket);
         let _ = std::fs::remove_file(&vsock_socket);
 
+        let (stdout, stderr) = super::console_log_stdio(&log_path)?;
         let mut child = Command::new(&config.firecracker_bin)
             .arg("--api-sock")
             .arg(&api_socket)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(stdout)
+            .stderr(stderr)
             .spawn()?;
 
         let result = super::wait_for_socket(&api_socket, Duration::from_secs(2)).and_then(|()| {
@@ -124,7 +126,7 @@ impl Vm {
             let _ = child.wait();
             let _ = std::fs::remove_file(&api_socket);
             let _ = std::fs::remove_file(&vsock_socket);
-            return Err(e);
+            return Err(super::annotate_with_console_log(e, &log_path));
         }
 
         tracing::info!(
