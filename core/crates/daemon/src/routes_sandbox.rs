@@ -173,6 +173,15 @@ pub async fn stop_sandbox(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    stop_sandbox_by_id(state, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Removes a sandbox from the map and tears it down: VM stop, network
+/// release, rootfs cleanup. Shared by the `DELETE` route above and the
+/// idle reaper (`idle_reaper::run`) — both need the exact same teardown,
+/// just triggered differently.
+pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<(), AppError> {
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
 
     tokio::task::spawn_blocking(move || {
@@ -183,7 +192,7 @@ pub async fn stop_sandbox(
     .await
     .expect("stop task panicked");
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
 /// Returns the first item that's already been seen, if any.

@@ -29,11 +29,18 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   *is* the daemon's entire notion of sandbox state — it doesn't survive a
   restart (see `ROADMAP.md`'s sqlite-backed-state item).
 - `sandbox.rs` — the `Sandbox` struct the daemon tracks per running VM
-  (id, `Vm` handle, network `Lease`, rootfs path, tags, created-at).
+  (id, `Vm` handle, network `Lease`, rootfs path, tags, created-at,
+  `last_activity`).
 - `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop.
+  `stop_sandbox_by_id()` is the shared teardown helper (VM stop, network
+  release, rootfs cleanup) used by both the `DELETE` route and
+  `idle_reaper`.
 - `routes_exec.rs` — exec/read-file/write-file handlers. `call_agent()`
   is the shared helper all three use — extend it, don't duplicate its
-  pattern.
+  pattern. It's also what bumps a sandbox's `last_activity`.
+- `idle_reaper.rs` — background task (spawned from `main.rs` only when
+  `SANDKILN_IDLE_TIMEOUT_SECS` is set) that stops sandboxes idle past the
+  configured timeout, via `routes_sandbox::stop_sandbox_by_id`.
 - `routes_drives.rs` / `routes_snapshot.rs` — drives and snapshot/resume
   handlers, each in their own file for the same reason as above.
 - `error.rs` — `AppError`, the one error type every handler returns.
