@@ -11,7 +11,8 @@ agent sandboxes, code playgrounds, and untrusted-code execution services:
 isolate first, then run.
 
 **Website**: https://sumitkumar-17.github.io/sandkiln/ (architecture, real
-benchmark numbers, live feature status)
+benchmark numbers, live feature status) — also mirrored at
+https://sandkiln.vercel.app
 
 ## Quickstart
 

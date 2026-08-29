@@ -57,3 +57,10 @@ git repo and reads that file — importing this repo there and pointing it
 at the default root directory is enough, no further config needed. This
 is a hosting choice only, same as Pages is — it has no bearing on what
 gets written in this file's content.
+
+A second live mirror is up at https://sandkiln.vercel.app, auto-deployed
+on every push to `main` via that platform's own GitHub integration (not a
+workflow file in this repo — configured directly on that project). Same
+content as Pages; if the two ever visibly disagree, Pages is the source
+of truth (deploy-pages.yml is the one deploy this repo directly controls
+and verifies).
