@@ -27,6 +27,29 @@ pub struct Config {
     /// per-sandbox rootfs copies, which get deleted on sandbox stop.
     /// Drives are meant to outlive that, so they get their own directory.
     pub drives_dir: PathBuf,
+    /// `SANDKILN_LOG_FORMAT=json` switches structured logging to one
+    /// JSON object per line, for production log pipelines that expect to
+    /// parse fields rather than a human-readable terminal format.
+    pub log_format: LogFormat,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LogFormat {
+    Pretty,
+    Json,
+}
+
+impl LogFormat {
+    fn from_env() -> Self {
+        Self::parse(std::env::var("SANDKILN_LOG_FORMAT").ok().as_deref())
+    }
+
+    fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some(v) if v.eq_ignore_ascii_case("json") => LogFormat::Json,
+            _ => LogFormat::Pretty,
+        }
+    }
 }
 
 impl Config {
@@ -47,6 +70,7 @@ impl Config {
             tap_pool_size: env_or("SANDKILN_TAP_POOL_SIZE", "32").parse().expect("SANDKILN_TAP_POOL_SIZE must be a number"),
             auth_token: std::env::var("SANDKILN_AUTH_TOKEN").ok(),
             drives_dir: expand_home(&env_or("SANDKILN_DRIVES_DIR", "~/sandkiln-tools/drives")),
+            log_format: LogFormat::from_env(),
         }
     }
 }
@@ -59,5 +83,29 @@ fn expand_home(path: &str) -> PathBuf {
     match path.strip_prefix("~/") {
         Some(rest) => PathBuf::from(std::env::var("HOME").expect("HOME must be set to expand ~")).join(rest),
         None => PathBuf::from(path),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_format_defaults_to_pretty_when_unset() {
+        assert_eq!(LogFormat::parse(None), LogFormat::Pretty);
+    }
+
+    #[test]
+    fn log_format_parses_json_case_insensitively() {
+        assert_eq!(LogFormat::parse(Some("json")), LogFormat::Json);
+        assert_eq!(LogFormat::parse(Some("JSON")), LogFormat::Json);
+        assert_eq!(LogFormat::parse(Some("Json")), LogFormat::Json);
+    }
+
+    #[test]
+    fn log_format_falls_back_to_pretty_for_anything_else() {
+        assert_eq!(LogFormat::parse(Some("pretty")), LogFormat::Pretty);
+        assert_eq!(LogFormat::parse(Some("")), LogFormat::Pretty);
+        assert_eq!(LogFormat::parse(Some("yaml")), LogFormat::Pretty);
     }
 }

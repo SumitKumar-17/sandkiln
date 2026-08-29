@@ -21,7 +21,9 @@ should mostly be: parse a request, call into `vmm`, shape a response.
 - `config.rs` — `Config::from_env()`, every daemon env var
   (`SANDKILN_*`) in one place. Adding a new configurable thing means a
   new field here plus an `env_or`/parse call, following the existing
-  pattern.
+  pattern. Also defines `LogFormat` (`SANDKILN_LOG_FORMAT=json` vs. the
+  default pretty output), read by `main.rs` before the tracing
+  subscriber is initialized.
 - `metrics.rs` — `Metrics`: the `/metrics` endpoint's counters/gauge/
   histograms and a hand-rolled Prometheus text-exposition-format writer.
   Lives on `AppState` (`state.metrics`); route handlers record into it at
