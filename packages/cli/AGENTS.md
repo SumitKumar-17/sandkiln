@@ -13,11 +13,36 @@ straight to the SDK.
 
 ## Files
 
-- `src/index.ts` — the entire CLI. `sandbox create|ls|rm|exec|read|write`
+- `src/index.ts` — the CLI. `sandbox create|ls|rm|exec|read|write`
   subcommands, each a thin call into `Sandbox`/`Sandbox.attach()`.
   `--base-url`/`--token` are global options that fall through to the
   SDK's own env var resolution when unset — don't reimplement that
-  resolution here, just pass `undefined` through.
+  resolution here, just pass `undefined` through. Every action handler
+  catches its own errors and reports them on stderr with a non-zero exit
+  (`handleApiError`/`fail`); `program.parseAsync(...)` at the bottom has
+  a `.catch()` backstop so nothing escapes as a raw stack trace.
+- `src/format.ts` — the pure logic pulled out of `index.ts` specifically
+  so it's unit-testable without importing the CLI's top-level commander
+  wiring (which parses `process.argv` as a side effect of module load):
+  `parseTag` (the `--tag key=value` parser — throws commander's
+  `InvalidArgumentError`, not a plain `Error`, so a bad `--tag` value
+  gets the same clean `error: ...` stderr message as everything else
+  instead of an unhandled-exception stack trace) and `formatSandboxList`
+  (the `sandbox ls` output formatter, including the empty-list case).
+
+## Testing
+
+`node:test` + `node:assert`, no added dependency — matches the project's
+convention of pulling pure logic out of framework plumbing so it's
+testable (see root `AGENTS.md`'s `auth::token_matches` precedent) rather
+than skipping tests because the rest of the file needs a live daemon.
+
+- `test/format.test.js` covers `src/format.ts`.
+- Tests import compiled output (`dist/format.js`), not TS source directly
+  — `format.ts` is built as its own `tsup` entry (no shebang banner)
+  specifically so it can be imported standalone. `npm test` runs
+  `pretest` (`npm run build`) first, so it's always testing current code.
+- Run: `npm run test -w kiln` (or `cd packages/cli && npm test`).
 
 ## The bug that already happened here — read before touching command registration
 
@@ -37,6 +62,7 @@ command object.
 ```
 npm run typecheck -w kiln
 npm run build -w kiln
+npm run test -w kiln
 ```
 **Requires `sandkiln` (the SDK) to already be built** — it's a real
 workspace dependency resolved through `packages/sdk/dist/`, not source.
@@ -53,9 +79,13 @@ actually run.
 
 ## Non-obvious things specific to this package
 
-- Ships as a single ESM bundle with a shebang banner (`tsup.config.ts`'s
+- Ships as an ESM bundle with a shebang banner (`tsup.config.ts`'s
   `banner: { js: "#!/usr/bin/env node" }`), not ESM+CJS like the SDK — a
   CLI binary doesn't need dual-format support the way a library does.
+  `tsup.config.ts` builds two entries: `index.ts` (the shebanged
+  executable) and `format.ts` (no banner, built standalone purely so
+  tests can import it) — the `bin` field in `package.json` only ever
+  points at `dist/index.js`.
 - `cp` (a single unified `sandbox:path`-style copy command, as originally
   sketched in `ROADMAP.md`) was deliberately simplified to explicit
   `read`/`write` subcommands instead — less magic path-prefix parsing for
