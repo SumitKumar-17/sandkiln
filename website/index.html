@@ -238,6 +238,24 @@
     color: var(--text-dim);
   }
   .callout b { color: var(--text); }
+  .callout p { margin: 0 0 12px; line-height: 1.6; }
+  .callout p:last-child { margin-bottom: 0; }
+
+  /* ---------- design notes ---------- */
+  .note-block { max-width: 760px; margin-bottom: 52px; }
+  .note-block:last-child { margin-bottom: 0; }
+  .note-block .tag {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--accent); display: block; margin-bottom: 8px;
+  }
+  .note-block h3 { font-family: var(--body); font-size: 19px; font-weight: 700; margin: 0 0 14px; }
+  .note-block p { margin: 0 0 14px; font-size: 15px; color: var(--text-dim); line-height: 1.75; }
+  .note-block p:last-child { margin-bottom: 0; }
+  .note-block code {
+    font-family: var(--mono); font-size: 0.88em; color: var(--text);
+    background: var(--surface-2); border: 1px solid var(--border); padding: 1px 5px;
+  }
+  .note-block .callout { font-size: 14.5px; }
 
   .lat-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
   .lat-table th, .lat-table td { padding: 10px 16px; border-bottom: 1px solid var(--border); text-align: right; }
