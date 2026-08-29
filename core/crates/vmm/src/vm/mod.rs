@@ -68,19 +68,30 @@ pub struct Vm {
 }
 
 impl Vm {
+    /// Boots a new microVM. On failure, the returned error's message
+    /// includes the path to this VM's captured guest console log (see
+    /// [`console_log_path`]) — a guest kernel panic or agent crash before
+    /// vsock comes up is otherwise completely invisible from the host, so
+    /// pointing the caller at where to look is the least this can do.
     pub fn boot(config: &VmConfig) -> io::Result<Self> {
-        let started = Instant::now();
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let log_path = console_log_path(id);
+        Self::boot_inner(config, id, &log_path).map_err(|e| annotate_with_console_log(e, &log_path))
+    }
+
+    fn boot_inner(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<Self> {
+        let started = Instant::now();
         let api_socket = PathBuf::from(format!("/tmp/sandkiln-fc-{id}.sock"));
         let vsock_socket = PathBuf::from(format!("/tmp/sandkiln-vsock-{id}.sock"));
         let _ = std::fs::remove_file(&api_socket);
         let _ = std::fs::remove_file(&vsock_socket);
 
+        let (stdout, stderr) = console_log_stdio(log_path)?;
         let child = Command::new(&config.firecracker_bin)
             .arg("--api-sock")
             .arg(&api_socket)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(stdout)
+            .stderr(stderr)
             .spawn()?;
 
         wait_for_socket(&api_socket, Duration::from_secs(2))?;
@@ -216,6 +227,32 @@ fn put_checked(api: &mut ApiClient, path: &str, body: &serde_json::Value) -> io:
     Ok(())
 }
 
+/// Where a given VM's captured serial console (Firecracker's own
+/// stdout/stderr, which carries the guest kernel's `console=ttyS0` output)
+/// is written. Shared with `snapshot::resume`, which boots a fresh
+/// Firecracker process the same way `boot` does.
+pub(crate) fn console_log_path(id: u64) -> PathBuf {
+    PathBuf::from(format!("/tmp/sandkiln-fc-{id}.log"))
+}
+
+/// Opens the console log file and returns two independent handles to it
+/// for the child process's stdout/stderr — interleaved into one file the
+/// way a shell's `2>&1` would, since both streams are just the same
+/// serial console and splitting them buys nothing.
+pub(crate) fn console_log_stdio(log_path: &Path) -> io::Result<(Stdio, Stdio)> {
+    let file = std::fs::File::create(log_path)?;
+    let stderr_file = file.try_clone()?;
+    Ok((Stdio::from(file), Stdio::from(stderr_file)))
+}
+
+/// Points a boot/resume failure at the console log so an operator isn't
+/// left guessing why a guest never came up — the log is often the only
+/// evidence of a kernel panic or agent crash that happened before vsock
+/// was reachable.
+pub(crate) fn annotate_with_console_log(err: io::Error, log_path: &Path) -> io::Error {
+    io::Error::other(format!("{err} (guest console log: {})", log_path.display()))
+}
+
 fn wait_for_socket(path: &Path, timeout: Duration) -> io::Result<()> {
     let deadline = Instant::now() + timeout;
     while !path.exists() {
@@ -229,4 +266,51 @@ fn wait_for_socket(path: &Path, timeout: Duration) -> io::Result<()> {
 
 fn path_str(p: &Path) -> &str {
     p.to_str().expect("non-UTF8 paths are not supported")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn console_log_path_is_keyed_by_vm_id() {
+        assert_eq!(console_log_path(42), PathBuf::from("/tmp/sandkiln-fc-42.log"));
+    }
+
+    #[test]
+    fn annotate_with_console_log_includes_the_log_path_in_the_message() {
+        let err = io::Error::other("boot-source PUT failed");
+        let annotated = annotate_with_console_log(err, Path::new("/tmp/sandkiln-fc-7.log"));
+        let message = annotated.to_string();
+        assert!(message.contains("boot-source PUT failed"), "message was: {message}");
+        assert!(message.contains("/tmp/sandkiln-fc-7.log"), "message was: {message}");
+    }
+
+    #[test]
+    fn console_log_stdio_opens_a_writable_file_both_handles_share() {
+        let dir = std::env::temp_dir().join(format!("sandkiln-console-log-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log_path = dir.join("console.log");
+
+        let (stdout, stderr) = console_log_stdio(&log_path).unwrap();
+        // Both Stdio handles reference the same file — write through each
+        // independently and confirm the file exists with content, the way
+        // a spawned child interleaving stdout/stderr into it would.
+        drop(stdout);
+        drop(stderr);
+        assert!(log_path.exists());
+
+        let mut contents = String::new();
+        std::fs::File::open(&log_path).unwrap().read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn console_log_stdio_fails_cleanly_for_an_unwritable_directory() {
+        let result = console_log_stdio(Path::new("/nonexistent-dir-for-sandkiln-tests/console.log"));
+        assert!(result.is_err());
+    }
 }

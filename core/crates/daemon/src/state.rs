@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::metrics::Metrics;
 use crate::sandbox::Sandbox;
 use crate::snapshot::Snapshot;
 use sandkiln_vmm::drive::DriveStore;
@@ -12,6 +13,7 @@ pub struct AppState {
     pub drives: DriveStore,
     pub sandboxes: Mutex<HashMap<String, Sandbox>>,
     pub snapshots: Mutex<HashMap<String, Snapshot>>,
+    pub metrics: Metrics,
 }
 
 impl AppState {
@@ -22,6 +24,7 @@ impl AppState {
             drives,
             sandboxes: Mutex::new(HashMap::new()),
             snapshots: Mutex::new(HashMap::new()),
+            metrics: Metrics::new(),
         }
     }
 

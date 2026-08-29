@@ -2,8 +2,10 @@ mod auth;
 mod config;
 mod error;
 mod idle_reaper;
+mod metrics;
 mod routes_drives;
 mod routes_exec;
+mod routes_metrics;
 mod routes_sandbox;
 mod routes_snapshot;
 mod sandbox;
@@ -13,7 +15,7 @@ mod state;
 use axum::middleware;
 use axum::routing::{delete, get, post};
 use axum::Router;
-use config::Config;
+use config::{Config, LogFormat};
 use sandkiln_vmm::drive::DriveStore;
 use sandkiln_vmm::network::{self, NetworkManager};
 use state::AppState;
@@ -37,11 +39,8 @@ fn main() {
 }
 
 async fn async_main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .init();
-
     let config = Config::from_env();
+    init_tracing(config.log_format);
     let listen_addr = config.listen_addr.clone();
 
     let uplink = match config.uplink_iface.clone() {
@@ -84,6 +83,7 @@ async fn async_main() {
 
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .route("/metrics", get(routes_metrics::metrics))
         .merge(sandbox_routes)
         .merge(drive_routes)
         .merge(snapshot_routes)
@@ -96,6 +96,17 @@ async fn async_main() {
     tracing::info!(%listen_addr, "sandkiln daemon starting");
     let listener = tokio::net::TcpListener::bind(&listen_addr).await.expect("bind listen address");
     axum::serve(listener, app).await.expect("server error");
+}
+
+/// `.json()` and the default pretty layer are different builder types, so
+/// this can't be one `tracing_subscriber::fmt()` chain with a branch in
+/// the middle — each arm builds and `init()`s its own subscriber.
+fn init_tracing(log_format: LogFormat) {
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    match log_format {
+        LogFormat::Json => tracing_subscriber::fmt().with_env_filter(env_filter).json().init(),
+        LogFormat::Pretty => tracing_subscriber::fmt().with_env_filter(env_filter).init(),
+    }
 }
 
 /// The daemon needs CAP_NET_ADMIN itself (via `setcap ...+eip`, see

@@ -10,6 +10,7 @@ use axum::Json;
 use sandkiln_protocol::{Request, Response as AgentResponse};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(Deserialize)]
 pub struct ExecRequestBody {
@@ -90,8 +91,11 @@ async fn call_agent(state: Arc<AppState>, id: String, request: Request) -> Resul
     tokio::task::spawn_blocking(move || {
         let sandboxes = state.sandboxes.lock().unwrap();
         let sandbox = sandboxes.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
-        *sandbox.last_activity.lock().unwrap() = std::time::Instant::now();
-        sandbox.vm.call(&request).map_err(AppError::from)
+        *sandbox.last_activity.lock().unwrap() = Instant::now();
+        let started = Instant::now();
+        let response = sandbox.vm.call(&request).map_err(AppError::from)?;
+        state.metrics.record_exec_latency_ms(started.elapsed().as_secs_f64() * 1000.0);
+        Ok(response)
     })
     .await
     .expect("agent call task panicked")

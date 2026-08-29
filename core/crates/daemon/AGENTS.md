@@ -21,7 +21,16 @@ should mostly be: parse a request, call into `vmm`, shape a response.
 - `config.rs` — `Config::from_env()`, every daemon env var
   (`SANDKILN_*`) in one place. Adding a new configurable thing means a
   new field here plus an `env_or`/parse call, following the existing
-  pattern.
+  pattern. Also defines `LogFormat` (`SANDKILN_LOG_FORMAT=json` vs. the
+  default pretty output), read by `main.rs` before the tracing
+  subscriber is initialized.
+- `metrics.rs` — `Metrics`: the `/metrics` endpoint's counters/gauge/
+  histograms and a hand-rolled Prometheus text-exposition-format writer.
+  Lives on `AppState` (`state.metrics`); route handlers record into it at
+  the same call sites `sandkiln-vmm`'s `tracing` events fire from
+  (`routes_sandbox::create_sandbox` for boot duration and the created
+  counter, `routes_exec::call_agent` for exec latency). No metrics crate
+  dependency — see the module doc comment for why.
 - `auth.rs` — bearer-token middleware. No-ops entirely if
   `SANDKILN_AUTH_TOKEN` is unset.
 - `state.rs` — `AppState`: the daemon's config, `NetworkManager`, and
@@ -43,6 +52,10 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   configured timeout, via `routes_sandbox::stop_sandbox_by_id`.
 - `routes_drives.rs` / `routes_snapshot.rs` — drives and snapshot/resume
   handlers, each in their own file for the same reason as above.
+- `routes_metrics.rs` — the `/metrics` handler. Unauthenticated like
+  `/healthz` (wired directly on `app` in `main.rs`, not through either
+  auth-gated router) since it's operational data about the daemon, not
+  sandbox data.
 - `error.rs` — `AppError`, the one error type every handler returns.
   Add a variant here rather than inventing a new ad hoc error shape.
 

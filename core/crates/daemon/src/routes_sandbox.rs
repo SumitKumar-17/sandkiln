@@ -15,7 +15,7 @@ use sandkiln_vmm::vm::{DriveConfig, Vm, VmConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 #[derive(Deserialize, Default)]
@@ -94,6 +94,7 @@ pub async fn create_sandbox(
             copy_result?;
             let lease = lease_result?;
 
+            let boot_started = Instant::now();
             let vm = Vm::boot(&VmConfig {
                 firecracker_bin: state.config.firecracker_bin.clone(),
                 kernel_path: state.config.kernel_path.clone(),
@@ -104,7 +105,10 @@ pub async fn create_sandbox(
                 extra_drives,
             });
             match vm {
-                Ok(vm) => Ok((vm, lease)),
+                Ok(vm) => {
+                    state.metrics.record_boot_duration_ms(boot_started.elapsed().as_secs_f64() * 1000.0);
+                    Ok((vm, lease))
+                }
                 Err(e) => {
                     let _ = state.network.release(lease);
                     Err(e)
@@ -126,6 +130,7 @@ pub async fn create_sandbox(
         last_activity: std::sync::Mutex::new(std::time::Instant::now()),
     };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
+    state.metrics.record_sandbox_created();
 
     Ok(Json(CreateSandboxResponse { id }))
 }
