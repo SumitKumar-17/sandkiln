@@ -10,12 +10,23 @@ use sandkiln_protocol::{
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::time::Duration;
+
+/// Bounds every blocking read/write on the vsock stream. Without this, a
+/// guest that connects but never answers — a paused VM (vCPUs halted, so
+/// the agent inside literally cannot respond) is the case that surfaced
+/// this — hangs the call forever: the retry/deadline logic in
+/// `crate::vm::Vm::call` only bounds *between* attempts, not a single
+/// attempt that never returns at all.
+const IO_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Sends one request to the guest agent and returns its response. Opens a
 /// fresh connection per call — fine for now; a persistent connection can
 /// replace this later if per-call handshake overhead matters.
 pub fn call(uds_path: &Path, guest_port: u32, request: &Request) -> io::Result<Response> {
     let mut stream = UnixStream::connect(uds_path)?;
+    stream.set_read_timeout(Some(IO_TIMEOUT))?;
+    stream.set_write_timeout(Some(IO_TIMEOUT))?;
     connect_handshake(&mut stream, guest_port)?;
 
     let payload = encode_request(request).map_err(to_io_err)?;
