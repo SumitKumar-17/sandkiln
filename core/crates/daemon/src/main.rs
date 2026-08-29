@@ -3,7 +3,9 @@ mod config;
 mod error;
 mod routes;
 mod routes_drives;
+mod routes_snapshot;
 mod sandbox;
+mod snapshot;
 mod state;
 
 use axum::middleware;
@@ -69,10 +71,14 @@ async fn async_main() {
         .route("/drives/:id", delete(routes_drives::delete_drive))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
+    let snapshot_routes =
+        routes_snapshot::router().route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
+
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .merge(sandbox_routes)
         .merge(drive_routes)
+        .merge(snapshot_routes)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
