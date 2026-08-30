@@ -38,4 +38,22 @@ pub struct Snapshot {
     pub attached_drives: Vec<String>,
     pub tags: HashMap<String, String>,
     pub created_at: SystemTime,
+    /// Id of the live sandbox currently forked from this snapshot without
+    /// consuming it (`POST /snapshots/:id/fork`), if any. `Vm::resume`'s
+    /// `/snapshot/load` reopens the exact rootfs file this snapshot
+    /// records, and — if the source sandbox was networked — the exact tap
+    /// device, since the guest's IP/MAC were finalized at the source
+    /// sandbox's *original* boot and are frozen into the snapshotted
+    /// memory image (see `sandkiln_vmm::vm::Vm::resume`'s doc comment).
+    /// A second live descendant sharing either at once means two
+    /// Firecracker processes writing one rootfs file, or two guests
+    /// presenting the same boot-time IP/MAC on the bridge simultaneously —
+    /// real corruption and a real network collision, not hypothetical
+    /// ones. This field is the lock that rules both out: set while a fork
+    /// is being resumed and cleared only once that descendant's `Vm` has
+    /// actually been killed (`routes_sandbox::stop_sandbox_by_id`), and
+    /// checked by `fork_snapshot`, `resume_snapshot`, `delete_snapshot`,
+    /// and `snapshot_sandbox` alike before any of them touch this
+    /// snapshot's shared resources.
+    pub forked_into: Option<String>,
 }
