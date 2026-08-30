@@ -24,7 +24,7 @@ packages/sdk/            sandkiln npm package (TypeScript)
 packages/python/         sandkiln PyPI package (Python)
 packages/cli/            kiln CLI, wraps the JS/TS SDK
 images/                  rootfs/kernel build + agent-injection scripts
-scripts/                 dev-box setup: tap pool, network bridge, DNS proxy, sync, integration/load tests, preflight checks, systemd install
+scripts/                 dev-box setup: tap pool, network bridge, DNS proxy, sync, integration/load tests, preflight checks, daemon lifecycle control, systemd install
 website/                 the project site, deployed via GitHub Pages (and a live mirror)
 examples/                runnable reference projects (code playground, agent runner)
 ```
@@ -43,6 +43,13 @@ not wherever this repo is checked out. `scripts/remote.sh sync|run|ssh`
 pushes the repo there and runs commands. Read that script before assuming
 `cargo build` locally does anything meaningful — it won't; there's no
 Rust toolchain expectation locally, only on the remote box.
+
+On the dev box, `scripts/sandkilnd-ctl.sh start` is the one-command way
+to get a real daemon up for manual poking (builds, preflight-checks,
+grants `CAP_NET_ADMIN` if needed, starts, waits for `/healthz`) —
+`restart`/`stop`/`status`/`logs` round it out. See `SELF_HOSTING.md`
+section 8 for the full explanation; this is the same tool a self-hoster
+uses, not a separate dev-only path.
 
 ---
 

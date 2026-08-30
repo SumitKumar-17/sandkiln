@@ -10,9 +10,9 @@ Everything here corresponds to a real script, binary, or configuration
 option that exists in this repository today — nothing is aspirational.
 Where a step used to require several manual commands with paths that had
 to match by hand, this guide also introduces the tooling
-(`scripts/preflight-check.sh`, `scripts/install-systemd-service.sh`)
-that now checks or automates it, rather than just describing the
-workaround.
+(`scripts/preflight-check.sh`, `scripts/sandkilnd-ctl.sh`,
+`scripts/install-systemd-service.sh`) that now checks or automates it,
+rather than just describing the workaround.
 
 ## 1. Requirements and prerequisites
 
@@ -346,23 +346,42 @@ correctly for whichever user actually runs the process (see the `sudo
 
 ## 8. Starting the daemon
 
-Once sections 3–7 are done, validate everything before starting for
-real:
+**One command**, once sections 3–7 are done:
 
 ```
-scripts/preflight-check.sh --daemon-bin core/target/release/sandkilnd
+SANDKILN_AUTH_TOKEN=$(openssl rand -hex 32) scripts/sandkilnd-ctl.sh start
 ```
 
-Fix anything reported as `FAIL`; review anything reported as `WARNING`.
-Then start it:
+`scripts/sandkilnd-ctl.sh` combines everything the steps above did by
+hand into one repeatable command: builds `sandkilnd` (fast/no-op if
+nothing changed), runs `preflight-check.sh` and refuses to start on a
+`FAIL`, grants `CAP_NET_ADMIN` via `sudo` if the binary doesn't already
+have it, starts the daemon in the background, and waits for `/healthz`
+to actually respond before returning — so "the command exited 0" means
+"the daemon is really up," not just "a process was spawned." It passes
+through every `SANDKILN_*` env var untouched, the same as running
+`sandkilnd` directly.
 
 ```
-SANDKILN_AUTH_TOKEN=$(openssl rand -hex 32) \
-  core/target/release/sandkilnd
+scripts/sandkilnd-ctl.sh status      # is it running, is it healthy
+scripts/sandkilnd-ctl.sh logs [-f]   # tail its log
+scripts/sandkilnd-ctl.sh restart     # stop, then start again — also
+                                      # reaps any Firecracker process the
+                                      # daemon left orphaned on the way down
+scripts/sandkilnd-ctl.sh stop
 ```
 
-Or, for a persistent, supervised deployment, skip straight to section 11
-instead of running it in a foreground shell.
+Safe to run repeatedly: `start` on an already-running daemon just prints
+its PID and exits; `stop` on a stopped one is a no-op. `start --no-build`
+skips the build step (if you've already built it yourself);
+`start --no-preflight` skips the check (for when you've already confirmed
+everything and just want it back up fast).
+
+Prefer to run it by hand instead — `SANDKILN_AUTH_TOKEN=... core/target/release/sandkilnd`
+in a foreground shell — and that still works exactly as before; the
+control script is a convenience, not a requirement. For a persistent,
+supervised deployment that survives a reboot, skip straight to section 11
+instead of either of the above.
 
 ## 9. Authentication and security
 
