@@ -56,9 +56,18 @@ async fn async_main() {
         .expect("create/verify the persistent drives directory (SANDKILN_DRIVES_DIR)");
     tracing::info!(drives_dir = %config.drives_dir.display(), "persistent drive storage ready");
 
+    // Must happen before the HTTP listener starts accepting connections
+    // and before `AppState` takes ownership of `net_manager`: a
+    // reconciled snapshot's tap device has to be pulled out of
+    // `net_manager`'s free pool (via `NetworkManager::reserve`, called
+    // from `reconcile`) before any live `POST /sandboxes` request can
+    // race it for the same tap.
+    let reconciled_snapshots = snapshot::reconcile(&net_manager);
+    tracing::info!(count = reconciled_snapshots.len(), "reconciled snapshots from disk");
+
     let auth_enabled = config.auth_token.is_some();
     let idle_timeout = config.idle_timeout;
-    let state = Arc::new(AppState::new(config, net_manager, drives));
+    let state = Arc::new(AppState::new(config, net_manager, drives, reconciled_snapshots));
 
     if let Some(idle_timeout) = idle_timeout {
         tracing::info!(idle_timeout_secs = idle_timeout.as_secs(), "idle sandbox reaper enabled");

@@ -17,13 +17,18 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(config: Config, network: NetworkManager, drives: DriveStore) -> Self {
+    /// `snapshots` is the result of `crate::snapshot::reconcile` run
+    /// against the on-disk snapshot store before this is called — passed
+    /// in rather than always starting empty so a daemon restart doesn't
+    /// silently orphan every snapshot that was durable on disk (see
+    /// `main.rs`).
+    pub fn new(config: Config, network: NetworkManager, drives: DriveStore, snapshots: HashMap<String, Snapshot>) -> Self {
         Self {
             config,
             network,
             drives,
             sandboxes: Mutex::new(HashMap::new()),
-            snapshots: Mutex::new(HashMap::new()),
+            snapshots: Mutex::new(snapshots),
             metrics: Metrics::new(),
         }
     }
