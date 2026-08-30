@@ -6,6 +6,7 @@ use crate::error::AppError;
 use crate::routes_drives::DriveAttachment;
 use crate::sandbox::Sandbox;
 use crate::state::AppState;
+use crate::tracing_util::spawn_blocking_in_current_span;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -78,17 +79,19 @@ pub async fn create_sandbox(
         })
         .collect();
 
-    let (vm, network) = tokio::task::spawn_blocking({
+    let (vm, network) = spawn_blocking_in_current_span("boot task panicked", {
         let state = state.clone();
         let rootfs_path = rootfs_path.clone();
         move || -> std::io::Result<(Vm, Lease)> {
+            let span = tracing::Span::current();
             // Copying the rootfs and leasing a network are independent —
             // running them concurrently overlaps the (currently dominant)
             // cost of the rootfs copy with the lease instead of paying for
             // both serially.
             let (copy_result, lease_result) = std::thread::scope(|scope| {
-                let copy_handle = scope.spawn(|| clone_rootfs(&state.config.base_rootfs_path, &rootfs_path));
-                let lease_handle = scope.spawn(|| state.network.lease());
+                let copy_handle =
+                    scope.spawn(|| span.in_scope(|| clone_rootfs(&state.config.base_rootfs_path, &rootfs_path)));
+                let lease_handle = scope.spawn(|| span.in_scope(|| state.network.lease()));
                 (copy_handle.join().expect("rootfs copy thread panicked"), lease_handle.join().expect("lease thread panicked"))
             });
             copy_result?;
@@ -116,8 +119,7 @@ pub async fn create_sandbox(
             }
         }
     })
-    .await
-    .expect("boot task panicked")?;
+    .await?;
 
     let sandbox = Sandbox {
         id: id.clone(),
@@ -189,13 +191,12 @@ pub async fn stop_sandbox(
 pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<(), AppError> {
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
 
-    tokio::task::spawn_blocking(move || {
+    spawn_blocking_in_current_span("stop task panicked", move || {
         let _ = sandbox.vm.stop();
         let _ = state.network.release(sandbox.network);
         let _ = std::fs::remove_file(&sandbox.rootfs_path);
     })
-    .await
-    .expect("stop task panicked");
+    .await;
 
     Ok(())
 }

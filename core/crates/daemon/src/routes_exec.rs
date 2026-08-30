@@ -4,6 +4,7 @@
 
 use crate::error::AppError;
 use crate::state::AppState;
+use crate::tracing_util::spawn_blocking_in_current_span;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -88,7 +89,7 @@ pub async fn write_file(
 /// Shared by every route that just forwards one request to the guest
 /// agent and reports its response — exec/read/write all fit this shape.
 async fn call_agent(state: Arc<AppState>, id: String, request: Request) -> Result<AgentResponse, AppError> {
-    tokio::task::spawn_blocking(move || {
+    spawn_blocking_in_current_span("agent call task panicked", move || {
         let sandboxes = state.sandboxes.lock().unwrap();
         let sandbox = sandboxes.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
         *sandbox.last_activity.lock().unwrap() = Instant::now();
@@ -98,5 +99,4 @@ async fn call_agent(state: Arc<AppState>, id: String, request: Request) -> Resul
         Ok(response)
     })
     .await
-    .expect("agent call task panicked")
 }
