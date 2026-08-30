@@ -115,6 +115,77 @@ daemon does itself: it's the one operation ambient `CAP_NET_ADMIN` alone
 doesn't cover, and doing it once ahead of time avoids needing to run the
 daemon with anything beyond that one capability.
 
+## Optional: enable jailer-based sandbox boot
+
+By default sandboxes boot via a direct Firecracker process spawn — no
+chroot, no cgroup limits, no per-VM uid separation beyond KVM itself and
+the daemon's own unprivileged-with-ambient-`CAP_NET_ADMIN` posture.
+Firecracker ships a companion binary, `jailer` (already downloaded into
+`~/sandkiln-tools/bin` by step 2), that re-execs Firecracker inside a
+chroot'd, cgroup-v2-limited environment running as a dedicated
+unprivileged uid/gid instead. This is opt-in, off by default — see
+`ROADMAP.md`'s "Security hardening" section for why it's worth turning on
+for anything running genuinely untrusted workloads.
+
+**cgroups v2 must be enabled on the host** (the default on any current
+distro; check with `mount | grep cgroup2` — a `cgroup2` mount at
+`/sys/fs/cgroup` means it's ready). Jailer is invoked with
+`--cgroup-version 2` unconditionally; a host still on the legacy cgroups
+v1 hierarchy needs to switch first (out of scope here — it's a kernel
+boot parameter, not something this project's tooling manages).
+
+**The `jailer` binary itself needs to run with privileges the daemon
+deliberately doesn't have** — chroot(2), setuid/setgid to drop to the
+per-VM uid/gid, creating device nodes for `/dev/kvm`/`/dev/net/tun` inside
+the jail, and cgroup management. Rather than grant the *daemon* those
+capabilities (which would be most of what root can do anyway, defeating
+the whole point of the unprivileged-daemon posture described below in
+"Why not just run as root"), make the small, purpose-built `jailer`
+binary itself setuid-root — the standard way Firecracker's own jailer is
+deployed without running its caller as root:
+
+```
+sudo chown root:root ~/sandkiln-tools/bin/jailer
+sudo chmod u+s ~/sandkiln-tools/bin/jailer
+```
+
+This does **not** survive a re-run of `scripts/install-firecracker.sh`
+(it overwrites the binary) — re-apply it after any jailer upgrade, the
+same way `grant-net-admin.sh` has to be re-run after every daemon
+rebuild.
+
+Then set:
+
+```
+SANDKILN_JAILER_ENABLED=true
+```
+
+Everything else has a default (see the table below): `SANDKILN_JAILER_BIN`
+(`~/sandkiln-tools/bin/jailer`), `SANDKILN_JAILER_CHROOT_BASE_DIR`
+(`~/sandkiln-tools/jail` — created automatically at startup if missing;
+keep it on the **same filesystem** as wherever `SANDKILN_DRIVES_DIR` and
+the OS temp dir live, so the rootfs/drive files this hard-links into each
+VM's chroot link instantly instead of falling back to a real copy on
+every boot), `SANDKILN_JAILER_UID_GID_BASE` (`600000`) and
+`SANDKILN_JAILER_POOL_SIZE` (`32`) — together these reserve
+`600000..600031` as a dedicated uid/gid range, handed out one distinct
+pair per concurrently-running jailed VM and released back on stop. Pick a
+base outside any real host account's uid (the `/etc/subuid` convention of
+staying at or above `100000`, and clear of anything `/etc/passwd` already
+uses, is the right instinct) — two jailed VMs ever sharing a uid would let
+one guest's escaped process interfere with the other's, which defeats the
+entire point.
+
+Jailer support is a daemon-operator setting, not something an individual
+`POST /sandboxes` request can opt out of — that's deliberate, so a
+compromised or malicious API client can't disable a security boundary the
+operator turned on.
+
+**Known limitation:** snapshotting a jailed sandbox isn't supported yet —
+`POST /sandboxes/<id>/snapshot` returns `400` for one. Resuming a snapshot
+always uses a direct spawn regardless of whether jailer is enabled. See
+`core/crates/vmm/src/jailer.rs`'s module doc comment for why.
+
 ## 6. Configure and run the daemon
 
 All configuration is env vars, all optional with sane defaults (see
@@ -136,6 +207,11 @@ All configuration is env vars, all optional with sane defaults (see
 | `SANDKILN_AUTH_TOKEN` | unset (auth disabled) | bearer token required on `/sandboxes*`, `/drives*` |
 | `SANDKILN_DRIVES_DIR` | `~/sandkiln-tools/drives` | where persistent drives are stored |
 | `SANDKILN_IDLE_TIMEOUT_SECS` | unset (disabled) | stop a sandbox automatically after this many seconds with no exec/read-file/write-file activity; `0` also disables it |
+| `SANDKILN_JAILER_ENABLED` | unset (disabled) | boot sandboxes via Firecracker's jailer instead of a direct spawn — see "Optional: enable jailer-based sandbox boot" above |
+| `SANDKILN_JAILER_BIN` | `~/sandkiln-tools/bin/jailer` | path to the jailer binary (must be setuid-root, see above) |
+| `SANDKILN_JAILER_CHROOT_BASE_DIR` | `~/sandkiln-tools/jail` | where per-VM chroots are created |
+| `SANDKILN_JAILER_UID_GID_BASE` | `600000` | first uid/gid in the range dedicated to jailed VMs |
+| `SANDKILN_JAILER_POOL_SIZE` | `32` | how many distinct uid/gid pairs (= max concurrent jailed sandboxes) |
 
 **Set `SANDKILN_AUTH_TOKEN` for anything reachable beyond localhost** — with
 it unset the API is completely open. Auth is a no-op middleware when
@@ -217,6 +293,17 @@ and may not interact correctly with the daemon's own
   `start-dns-proxy.sh` is running for guest DNS to work.
 - **`/dev/kvm: permission denied`** — add your user to the `kvm` group
   (`sudo usermod -aG kvm $USER`, then re-login).
+- **Sandbox creation fails with a jailer-related error after enabling
+  `SANDKILN_JAILER_ENABLED`** — almost always the setuid bit on the
+  `jailer` binary: check `ls -la ~/sandkiln-tools/bin/jailer` shows
+  `-rwsr-xr-x` owned by `root`, and re-apply `chown root:root` /
+  `chmod u+s` if you re-ran `install-firecracker.sh` since. If it's set
+  correctly and jailer still fails, check `mount | grep cgroup2` — jailer
+  is invoked with `--cgroup-version 2` unconditionally, and fails if the
+  host is still on the legacy cgroups v1 hierarchy.
+- **`400 snapshotting a jailed sandbox is not supported yet`** — expected;
+  see "Optional: enable jailer-based sandbox boot" above. Stop the
+  sandbox instead of snapshotting it if you don't need to resume it.
 
 For anything not covered here, `AGENTS.md` documents every non-obvious
 gotcha this project hit and fixed during development, with the reasoning
