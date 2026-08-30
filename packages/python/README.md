@@ -55,6 +55,17 @@ sandbox.stop()
 - `sandbox.read_file(path)` — returns file contents as `bytes`.
 - `sandbox.write_file(path, content)` — `content` is `str` or `bytes`.
 - `sandbox.stop()` — stops the sandbox and releases its resources.
+- `sandbox.snapshot()` — saves the sandbox's full state to disk and stops
+  it; returns a snapshot id.
+- `Sandbox.resume(snapshot_id, base_url=None, auth_token=None)` — boots a
+  new sandbox from a snapshot, **consuming** it (the snapshot is gone
+  afterward).
+- `Sandbox.fork(snapshot_id, base_url=None, auth_token=None)` — boots a
+  new sandbox from a snapshot **without** consuming it, so it can be
+  forked or resumed again later. Only one live fork of a given snapshot
+  may run at a time — a second concurrent `fork()` raises
+  `SandkilnApiError` with status 409 until the first is stopped; see
+  `ROADMAP.md`'s "Persistence and snapshotting" section for why.
 
 This mirrors the [JS/TS SDK](https://www.npmjs.com/package/sandkiln)
 exactly — same daemon, same operations, Python-idiomatic naming
@@ -63,8 +74,8 @@ exactly — same daemon, same operations, Python-idiomatic naming
 ## Status
 
 Early. This SDK matches the daemon's current HTTP API exactly — no more,
-no less. Streamed command output and a drives/snapshots API are planned;
-see the [roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md).
+no less. Streamed command output and a drives API are planned; see the
+[roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md).
 
 ## License
 
