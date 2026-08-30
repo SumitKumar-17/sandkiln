@@ -153,13 +153,14 @@ pub async fn create_sandbox(
     let sandbox = Sandbox {
         id: id.clone(),
         vm,
-        network,
+        network: Some(network),
         rootfs_path,
         attached_drives: attached_drive_ids,
         jail_id,
         tags: request.tags,
         created_at: SystemTime::now(),
         last_activity: std::sync::Mutex::new(std::time::Instant::now()),
+        source_snapshot_id: None,
     };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
     state.metrics.record_sandbox_created();
@@ -218,22 +219,47 @@ pub async fn stop_sandbox(
 /// release, rootfs cleanup. Shared by the `DELETE` route above and the
 /// idle reaper (`idle_reaper::run`) — both need the exact same teardown,
 /// just triggered differently.
+///
+/// A sandbox forked from a snapshot (`source_snapshot_id.is_some()`,
+/// see `routes_snapshot::fork_snapshot`) doesn't own its rootfs file or
+/// network lease — both still belong to the snapshot, so they're neither
+/// deleted nor released here. What it *does* release is the snapshot's
+/// fork lock (`Snapshot::forked_into`), letting a later `/fork` or
+/// `/resume` proceed — but only after `vm.stop()` returns, which kills
+/// and waits on the Firecracker process: clearing the lock any earlier
+/// would let a new fork start writing the shared rootfs file before the
+/// old one has actually stopped touching it.
 pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<(), AppError> {
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
+    let source_snapshot_id = sandbox.source_snapshot_id.clone();
+    let owns_rootfs = source_snapshot_id.is_none();
 
-    tokio::task::spawn_blocking(move || {
-        let _ = sandbox.vm.stop();
-        let _ = state.network.release(sandbox.network);
-        let _ = std::fs::remove_file(&sandbox.rootfs_path);
-        // `Vm::stop` already removed this sandbox's chroot directory if
-        // it was jailed — this releases the daemon-level uid/gid
-        // allocation, a separate resource `Vm` has no visibility into.
-        if let (Some(id), Some(pool)) = (sandbox.jail_id, &state.jailer_ids) {
-            pool.release(id);
+    tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || {
+            let _ = sandbox.vm.stop();
+            if let Some(network) = sandbox.network {
+                let _ = state.network.release(network);
+            }
+            if owns_rootfs {
+                let _ = std::fs::remove_file(&sandbox.rootfs_path);
+            }
+            // `Vm::stop` already removed this sandbox's chroot directory if
+            // it was jailed — this releases the daemon-level uid/gid
+            // allocation, a separate resource `Vm` has no visibility into.
+            if let (Some(id), Some(pool)) = (sandbox.jail_id, &state.jailer_ids) {
+                pool.release(id);
+            }
         }
     })
     .await
     .expect("stop task panicked");
+
+    if let Some(snapshot_id) = source_snapshot_id {
+        if let Some(snapshot) = state.snapshots.lock().unwrap().get_mut(&snapshot_id) {
+            snapshot.forked_into = None;
+        }
+    }
 
     Ok(())
 }

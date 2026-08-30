@@ -132,6 +132,48 @@ sandbox
     }
   });
 
+sandbox
+  .command("snapshot <id>")
+  .description("Save a sandbox's full state to disk and stop it. Prints the resulting snapshot id.")
+  .action(async function (this: Command, id: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const snapshotId = await attachSandbox(id, baseUrl, token).snapshot();
+      process.stdout.write(`${snapshotId}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("resume <snapshot-id>")
+  .description("Boot a new sandbox from a snapshot, consuming it. Prints the new sandbox id.")
+  .action(async function (this: Command, snapshotId: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const resumed = await Sandbox.resume(snapshotId, { baseUrl, authToken: token });
+      process.stdout.write(`${resumed.id}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("fork <snapshot-id>")
+  .description(
+    "Boot a new sandbox from a snapshot without consuming it, so it can be forked or resumed again later. " +
+      "Only one live fork of a given snapshot may run at a time. Prints the new sandbox id.",
+  )
+  .action(async function (this: Command, snapshotId: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const forked = await Sandbox.fork(snapshotId, { baseUrl, authToken: token });
+      process.stdout.write(`${forked.id}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
 /** Every subcommand above only has a sandbox id, not an instance — this
  * reconstructs one without a round-trip, since every Sandbox method just
  * needs the id plus the same client config already used to reach it. */

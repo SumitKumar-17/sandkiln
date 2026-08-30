@@ -57,12 +57,22 @@ await sandbox.stop();
 - `sandbox.writeFile(path, content)` — `content` is a `string` or
   `Uint8Array`.
 - `sandbox.stop()` — stops the sandbox and releases its resources.
+- `sandbox.snapshot()` — saves the sandbox's full state to disk and stops
+  it; returns a snapshot id.
+- `Sandbox.resume(snapshotId, options?)` — boots a new sandbox from a
+  snapshot, **consuming** it (the snapshot is gone afterward).
+- `Sandbox.fork(snapshotId, options?)` — boots a new sandbox from a
+  snapshot **without** consuming it, so it can be forked or resumed again
+  later. Only one live fork of a given snapshot may run at a time — a
+  second concurrent `fork()` rejects with a 409 until the first is
+  stopped; see `ROADMAP.md`'s "Persistence and snapshotting" section for
+  why.
 
 ## Status
 
 Early, but published and real. This SDK matches the daemon's current
-HTTP API exactly — no more, no less. Streamed command output, snapshots,
-and drives are planned; see the [roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md)
+HTTP API exactly — no more, no less. Streamed command output and drives
+are planned; see the [roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md)
 in the main repository for what's next. A [Python equivalent](https://github.com/SumitKumar-17/sandkiln/tree/main/packages/python)
 already exists too.
 

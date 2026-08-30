@@ -110,5 +110,46 @@ class Sandbox:
         suffix = f"?{urlencode({'token': self._auth_token})}" if self._auth_token else ""
         return f"{self._base_url}/sandboxes/{self.id}/preview/{port}{normalized_path}{suffix}"
 
+    def snapshot(self) -> str:
+        """Saves this sandbox's full state (memory + disk) to disk and
+        stops it, returning a snapshot id. The sandbox itself stops
+        existing — call `Sandbox.resume` or `Sandbox.fork` on the
+        returned id to boot from it again."""
+        response = self._request("POST", f"/sandboxes/{self.id}/snapshot")
+        return response["snapshot_id"]
+
+    @classmethod
+    def resume(cls, snapshot_id: str, base_url: str | None = None, auth_token: str | None = None) -> "Sandbox":
+        """Boots a new sandbox from a snapshot, consuming it — the
+        snapshot is gone afterward, and the new sandbox owns its state
+        outright, the same as one from `Sandbox.create`. Use
+        `Sandbox.fork` instead to boot from the same snapshot more than
+        once."""
+        resolved_base_url = resolve_base_url(base_url)
+        resolved_token = resolve_auth_token(auth_token)
+        response = request(resolved_base_url, "POST", f"/snapshots/{snapshot_id}/resume", resolved_token)
+        return cls(response["id"], resolved_base_url, resolved_token)
+
+    @classmethod
+    def fork(cls, snapshot_id: str, base_url: str | None = None, auth_token: str | None = None) -> "Sandbox":
+        """Boots a new sandbox from a snapshot *without* consuming it, so
+        the same snapshot can be forked or resumed again later — the
+        building block for starting parallel branches off one prepared
+        environment without repeating its setup cost.
+
+        Only one live sandbox forked from a given snapshot may exist at a
+        time: a fork reopens the exact rootfs file the snapshot recorded
+        (and, if the original sandbox was networked, the exact tap device
+        — its guest IP/MAC were frozen in at that sandbox's original
+        boot), so two live forks at once would mean either two VMs
+        writing the same disk image or two guests colliding on one
+        IP/MAC. A second `fork()` call while an earlier fork is still
+        running raises `SandkilnApiError` with status 409 until that one
+        is stopped."""
+        resolved_base_url = resolve_base_url(base_url)
+        resolved_token = resolve_auth_token(auth_token)
+        response = request(resolved_base_url, "POST", f"/snapshots/{snapshot_id}/fork", resolved_token)
+        return cls(response["id"], resolved_base_url, resolved_token)
+
     def _request(self, method: str, path: str, body=None):
         return request(self._base_url, method, path, self._auth_token, body)

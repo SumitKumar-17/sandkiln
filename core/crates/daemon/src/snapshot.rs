@@ -44,6 +44,24 @@ pub struct Snapshot {
     pub attached_drives: Vec<String>,
     pub tags: HashMap<String, String>,
     pub created_at: SystemTime,
+    /// Id of the live sandbox currently forked from this snapshot without
+    /// consuming it (`POST /snapshots/:id/fork`), if any. `Vm::resume`'s
+    /// `/snapshot/load` reopens the exact rootfs file this snapshot
+    /// records, and — if the source sandbox was networked — the exact tap
+    /// device, since the guest's IP/MAC were finalized at the source
+    /// sandbox's *original* boot and are frozen into the snapshotted
+    /// memory image (see `sandkiln_vmm::vm::Vm::resume`'s doc comment).
+    /// A second live descendant sharing either at once means two
+    /// Firecracker processes writing one rootfs file, or two guests
+    /// presenting the same boot-time IP/MAC on the bridge simultaneously —
+    /// real corruption and a real network collision, not hypothetical
+    /// ones. This field is the lock that rules both out: set while a fork
+    /// is being resumed and cleared only once that descendant's `Vm` has
+    /// actually been killed (`routes_sandbox::stop_sandbox_by_id`), and
+    /// checked by `fork_snapshot`, `resume_snapshot`, `delete_snapshot`,
+    /// and `snapshot_sandbox` alike before any of them touch this
+    /// snapshot's shared resources.
+    pub forked_into: Option<String>,
 }
 
 /// On-disk mirror of everything about a `Snapshot` that isn't already
@@ -291,6 +309,12 @@ fn load_one(dir: &Path, id: &str, network: &NetworkManager) -> Option<Snapshot> 
         attached_drives: meta.attached_drives,
         tags: meta.tags,
         created_at: UNIX_EPOCH + Duration::from_secs(meta.created_at_unix),
+        // Any fork that was live before a restart died with the daemon
+        // along with every other live sandbox — there's no on-disk record
+        // of a fork to resurrect (see `routes_snapshot`'s module doc
+        // comment: only the original snapshot's files persist), so a
+        // reconciled snapshot always starts with no live fork.
+        forked_into: None,
     })
 }
 
@@ -426,6 +450,7 @@ mod tests {
             attached_drives: vec!["d1".to_string(), "d2".to_string()],
             tags: HashMap::from([("owner".to_string(), "sumit".to_string())]),
             created_at: UNIX_EPOCH + Duration::from_secs(1_700_000_123),
+            forked_into: None,
         };
 
         snapshot.persist().unwrap();

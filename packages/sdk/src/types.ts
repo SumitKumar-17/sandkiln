@@ -75,3 +75,15 @@ export interface PreviewUrlOptions {
 export interface ApiErrorBody {
   error: string;
 }
+
+export interface SnapshotSandboxResponseBody {
+  snapshot_id: string;
+}
+
+export interface ResumeSnapshotResponseBody {
+  id: string;
+}
+
+export interface ForkSnapshotResponseBody {
+  id: string;
+}

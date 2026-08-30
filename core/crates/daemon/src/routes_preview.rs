@@ -64,7 +64,32 @@ async fn proxy(
         // no `exec` traffic shouldn't get the sandbox stopped out from
         // under it.
         *sandbox.last_activity.lock().unwrap() = Instant::now();
-        sandbox.network.config.guest_ip
+
+        // A sandbox forked from a snapshot (`source_snapshot_id.is_some()`)
+        // doesn't own a `Lease` of its own — the snapshot still holds it
+        // (see `routes_snapshot`'s module doc comment) — but the VM it
+        // booted still has a real, working network interface: the guest's
+        // IP/MAC were baked into the snapshotted memory image at the
+        // *original* boot and are unaffected by which `Sandbox` record the
+        // daemon happens to track the `Lease` under. Look it up via the
+        // snapshot instead of assuming every sandbox owns its own lease.
+        match &sandbox.network {
+            Some(lease) => lease.config.guest_ip,
+            None => {
+                let source_id = sandbox.source_snapshot_id.as_ref().ok_or_else(|| {
+                    AppError::Internal(std::io::Error::other(format!(
+                        "sandbox {id} has no network lease and no source snapshot — this is a bug"
+                    )))
+                })?;
+                let snapshots = state.snapshots.lock().unwrap();
+                let snapshot = snapshots.get(source_id).ok_or_else(|| {
+                    AppError::Internal(std::io::Error::other(format!(
+                        "sandbox {id} was forked from snapshot {source_id}, which no longer exists — this is a bug"
+                    )))
+                })?;
+                snapshot.network.config.guest_ip
+            }
+        }
     };
 
     let (parts, body) = req.into_parts();

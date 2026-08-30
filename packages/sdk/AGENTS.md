@@ -14,12 +14,18 @@ this package only ever catches up to what the daemon actually does.
 
 ## Files
 
-- `sandbox.ts` — the `Sandbox` class: `create`/`attach`/`list` (static),
-  `runCommand`/`readFile`/`writeFile`/`stop`/`previewUrl` (instance). Every
-  instance method reuses the `baseUrl`/`authToken` the sandbox was
-  created/attached with — see the `ClientContext` pattern. `previewUrl` is
-  pure and network-free like `attach` — it just builds the URL for the
-  daemon's `/sandboxes/:id/preview/:port` reverse proxy (see
+- `sandbox.ts` — the `Sandbox` class: `create`/`attach`/`list`/`resume`/
+  `fork` (static), `runCommand`/`readFile`/`writeFile`/`stop`/`snapshot`/
+  `previewUrl` (instance). Every instance method reuses the
+  `baseUrl`/`authToken` the sandbox was created/attached with — see the
+  `ClientContext` pattern. `resume`/`fork` are static (not instance
+  methods) because neither acts on an already-existing `Sandbox` — they
+  boot a *new* one from a snapshot id, the same shape as `create`. `fork`
+  doesn't consume the snapshot, `resume` does; see the daemon's
+  `routes_snapshot.rs` module doc comment for why at most one live fork of
+  a given snapshot can run at a time. `previewUrl` is pure and
+  network-free like `attach` — it just builds the URL for the daemon's
+  `/sandboxes/:id/preview/:port` reverse proxy (see
   `core/crates/daemon/src/routes_preview.rs`), appending the auth token as
   a `?token=` query parameter rather than a header when one is configured,
   since the caller is typically a browser tab or `<iframe>`.
