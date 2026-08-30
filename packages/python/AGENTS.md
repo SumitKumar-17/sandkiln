@@ -21,7 +21,15 @@ a dependency the JS SDK's equivalent doesn't need either (it uses native
 
 - `sandbox.py` — the `Sandbox` class, `ExecResult`/`SandboxInfo`
   dataclasses. Structurally mirrors `packages/sdk/src/sandbox.ts` — if
-  you change one, change the other the same way.
+  you change one, change the other the same way. `preview_url` is pure and
+  network-free like `attach` — it just builds the URL for the daemon's
+  `/sandboxes/:id/preview/:port` reverse proxy (see
+  `core/crates/daemon/src/routes_preview.rs`), appending the auth token as
+  a `?token=` query parameter rather than a header when one is configured,
+  since the caller is typically a browser tab or `<iframe>`. Unlike the JS
+  SDK's `previewUrl`, the sandbox id isn't URL-quoted here — matching this
+  file's own existing convention (`run_command`/`read_file`/etc. don't
+  quote it either), not an oversight.
 - `_http.py` — the one place `urllib.request` gets called. Leading
   underscore: not part of the public API, same convention as `_config.py`.
 - `_config.py` — env var fallback resolution
@@ -53,6 +61,18 @@ catch this class of bug locally even if you test there. This also
 happens to be required for real 3.9 compatibility (`X | None` syntax is
 a 3.10+ runtime feature without deferred annotations) — this package
 declares `requires-python = ">=3.9"`.
+
+## Testing
+
+`tests/test_preview_url.py` covers `Sandbox.preview_url`'s pure
+URL-building logic with stdlib `unittest` (mirrors
+`packages/sdk/test/previewUrl.test.js` on the JS side, zero added
+dependency — same reasoning as that package's `node:test` choice). Run:
+`python packages/python/tests/test_preview_url.py` (a plain
+`unittest.main()` invocation, not `unittest discover`, since there's no
+`tests/__init__.py` to make the directory importable as a package for
+discovery). Every other method needs a live daemon to test meaningfully,
+which is why this is the only test file here today.
 
 ## Building and verifying
 
