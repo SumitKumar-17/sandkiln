@@ -43,7 +43,9 @@
   },
   "scripts": {
     "build": "tsup",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run build",
+    "test": "node --test test/*.test.js"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",
