@@ -13,14 +13,19 @@ straight to the SDK.
 
 ## Files
 
-- `src/index.ts` — the CLI. `sandbox create|ls|rm|exec|read|write`
+- `src/index.ts` — the CLI. `sandbox create|ls|rm|exec|read|write|preview`
   subcommands, each a thin call into `Sandbox`/`Sandbox.attach()`.
   `--base-url`/`--token` are global options that fall through to the
   SDK's own env var resolution when unset — don't reimplement that
   resolution here, just pass `undefined` through. Every action handler
   catches its own errors and reports them on stderr with a non-zero exit
   (`handleApiError`/`fail`); `program.parseAsync(...)` at the bottom has
-  a `.catch()` backstop so nothing escapes as a raw stack trace.
+  a `.catch()` backstop so nothing escapes as a raw stack trace. `preview`
+  is the one subcommand that makes no network call at all — it just
+  prints `Sandbox.previewUrl()`'s pure result, same reasoning as why that
+  SDK method itself does no round-trip; port-range validation lives in
+  the SDK (`Sandbox.previewUrl` throws `RangeError`), not duplicated here,
+  matching this package's own "essentially no logic of its own" rule.
 - `src/format.ts` — the pure logic pulled out of `index.ts` specifically
   so it's unit-testable without importing the CLI's top-level commander
   wiring (which parses `process.argv` as a side effect of module load):

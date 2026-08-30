@@ -118,6 +118,20 @@ sandbox
     }
   });
 
+sandbox
+  .command("preview <id> <port>")
+  .description("Print the URL to reach a server listening on <port> inside a sandbox, proxied through the daemon.")
+  .option("--path <path>", "path within the sandbox's server to preview", "/")
+  .action(async function (this: Command, id: string, port: string, opts: { path: string }) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const url = attachSandbox(id, baseUrl, token).previewUrl(Number(port), { path: opts.path });
+      process.stdout.write(`${url}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
 /** Every subcommand above only has a sandbox id, not an instance — this
  * reconstructs one without a round-trip, since every Sandbox method just
  * needs the id plus the same client config already used to reach it. */
