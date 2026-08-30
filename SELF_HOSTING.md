@@ -319,8 +319,10 @@ source):
 | `SANDKILN_FIRECRACKER_BIN` | `~/sandkiln-tools/bin/firecracker` | path to the Firecracker binary |
 | `SANDKILN_KERNEL_PATH` | `~/sandkiln-tools/images/vmlinux-5.10.223` | guest kernel image |
 | `SANDKILN_BASE_ROOTFS` | `~/sandkiln-tools/images/ubuntu-22.04.ext4` | base rootfs cloned per sandbox — **the default is the small test image; override this for a production image, see section 4** |
-| `SANDKILN_VCPU_COUNT` | `2` | vCPUs per sandbox |
-| `SANDKILN_MEM_SIZE_MIB` | `512` | memory per sandbox |
+| `SANDKILN_VCPU_COUNT` | `2` | vCPUs per sandbox, when a request doesn't override it |
+| `SANDKILN_MEM_SIZE_MIB` | `512` | memory per sandbox, when a request doesn't override it |
+| `SANDKILN_MAX_VCPU_COUNT` | `16` | ceiling on a per-request `vcpu_count` override (`POST /sandboxes`); a request above this, or `0`, is rejected with `400` |
+| `SANDKILN_MAX_MEM_SIZE_MIB` | `16384` | ceiling on a per-request `mem_size_mib` override, same semantics as above |
 | `SANDKILN_BRIDGE_NAME` | `sktapbr0` | bridge the daemon creates and manages |
 | `SANDKILN_BRIDGE_GATEWAY` | `172.16.0.1` | bridge/gateway IP (a `/24` subnet) |
 | `SANDKILN_UPLINK_IFACE` | auto-detected from the default route | host interface sandboxes NAT out through |

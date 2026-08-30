@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # End-to-end integration test against a running sandkilnd daemon: exercises
 # the full API surface in one repeatable run — sandbox lifecycle, tags,
-# drives (including persistence across sandboxes and conflict detection),
-# snapshot/resume/fork (including the one-live-fork-at-a-time conflict
-# rules), auth, metrics, and error cases — instead of re-deriving
+# per-sandbox resource overrides and their ceiling, drives (including
+# persistence across sandboxes and conflict detection), snapshot/resume/
+# fork (including the one-live-fork-at-a-time conflict rules), request id
+# correlation, auth, metrics, and error cases — instead of re-deriving
 # the same manual curl session by hand every time a feature is touched.
 #
 # This does not replace `cargo test` (pure logic, no KVM needed) or
@@ -190,6 +191,45 @@ else
   status="$(req GET /sandboxes)"
   assert_not_contains "stopped sandbox no longer listed" "$(cat "$WORKDIR/resp.json")" "$SBX1"
 fi
+
+section "resource overrides"
+status="$(req POST /sandboxes '{"tags":{"suite":"integration","case":"resource-override"},"vcpu_count":1,"mem_size_mib":256}')"
+assert_status "create sandbox with a valid vcpu_count/mem_size_mib override" 200 "$status"
+SBX_RES="$(extract id < "$WORKDIR/resp.json")"
+if [ -z "$SBX_RES" ]; then
+  fail "create sandbox with resource override returned no id — aborting override checks"
+else
+  CREATED_SANDBOXES+=("$SBX_RES")
+  pass "create sandbox with resource override returned an id ($SBX_RES)"
+
+  status="$(req POST "/sandboxes/$SBX_RES/exec" '{"command":"nproc","args":[]}')"
+  assert_status "exec in resource-overridden sandbox" 200 "$status"
+  assert_contains "overridden vcpu_count of 1 is visible inside the guest" "$(cat "$WORKDIR/resp.json")" '"stdout":"1'
+
+  status="$(req DELETE "/sandboxes/$SBX_RES")"
+  assert_status "stop resource-overridden sandbox" 204 "$status"
+  CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_RES}")
+fi
+
+status="$(req POST /sandboxes '{"vcpu_count":0}')"
+assert_status "vcpu_count of 0 is rejected" 400 "$status"
+
+status="$(req POST /sandboxes '{"mem_size_mib":0}')"
+assert_status "mem_size_mib of 0 is rejected" 400 "$status"
+
+status="$(req POST /sandboxes '{"vcpu_count":999}')"
+assert_status "vcpu_count above the configured ceiling is rejected" 400 "$status"
+
+status="$(req POST /sandboxes '{"mem_size_mib":999999999}')"
+assert_status "mem_size_mib above the configured ceiling is rejected" 400 "$status"
+
+section "request id correlation"
+resp_headers="$(curl -s -D - -o /dev/null "$BASE_URL/healthz")"
+assert_contains "a request with no X-Request-Id gets one generated and echoed back" "$resp_headers" "x-request-id:"
+
+custom_request_id="integration-test-$(date +%s)-$$"
+resp_headers="$(curl -s -D - -o /dev/null -H "X-Request-Id: $custom_request_id" "$BASE_URL/healthz")"
+assert_contains "a caller-supplied X-Request-Id is echoed back verbatim" "$resp_headers" "$custom_request_id"
 
 section "error cases"
 status="$(req POST "/sandboxes/not-a-real-id/exec" '{"command":"echo","args":[]}')"

@@ -3,6 +3,7 @@ mod config;
 mod error;
 mod idle_reaper;
 mod metrics;
+mod request_id;
 mod routes_drives;
 mod routes_exec;
 mod routes_metrics;
@@ -12,6 +13,7 @@ mod routes_snapshot;
 mod sandbox;
 mod snapshot;
 mod state;
+mod tracing_util;
 
 use axum::middleware;
 use axum::routing::{any, delete, get, post};
@@ -133,6 +135,14 @@ async fn async_main() {
         .merge(snapshot_routes)
         .merge(preview_routes)
         .layer(TraceLayer::new_for_http())
+        // Outermost: wraps everything above, including `TraceLayer`, so a
+        // caller-supplied or freshly generated request id is already
+        // established as the active span before any per-request logging
+        // happens, and `TraceLayer`'s own request-complete log line ends
+        // up correlated too. See `request_id`'s module doc for how that
+        // correlation then survives into `sandkiln-vmm` calls made from
+        // inside `spawn_blocking` (`tracing_util::spawn_blocking_in_current_span`).
+        .layer(middleware::from_fn(request_id::correlate))
         .with_state(state);
 
     if !auth_enabled {

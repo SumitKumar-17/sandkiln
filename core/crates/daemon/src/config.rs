@@ -30,6 +30,15 @@ pub struct Config {
     pub base_rootfs_path: PathBuf,
     pub vcpu_count: u8,
     pub mem_size_mib: u32,
+    /// Upper bound on a per-sandbox `vcpu_count` override accepted via
+    /// `POST /sandboxes` (see `routes_sandbox::CreateSandboxRequest`) —
+    /// without a ceiling, a caller could ask for a VM sized to exhaust the
+    /// host. Doesn't affect `vcpu_count` above, which is still what's used
+    /// when a request doesn't override it, and is expected to be `<=`
+    /// this (checked at startup, below).
+    pub max_vcpu_count: u8,
+    /// Same ceiling, for `mem_size_mib`.
+    pub max_mem_size_mib: u32,
     pub bridge_name: String,
     pub bridge_gateway: Ipv4Addr,
     /// The host interface sandbox traffic gets NATed out through. `None`
@@ -90,13 +99,38 @@ impl LogFormat {
 
 impl Config {
     pub fn from_env() -> Self {
+        let vcpu_count: u8 = env_or("SANDKILN_VCPU_COUNT", "2").parse().expect("SANDKILN_VCPU_COUNT must be a number");
+        let mem_size_mib: u32 =
+            env_or("SANDKILN_MEM_SIZE_MIB", "512").parse().expect("SANDKILN_MEM_SIZE_MIB must be a number");
+        // Defaults chosen generously enough not to surprise a self-hoster
+        // who never touches these — 16 vCPUs / 16 GiB is well above
+        // anything a single sandbox plausibly needs — while still being an
+        // actual ceiling rather than "unbounded unless you opt in", since
+        // the whole point is closing a resource-exhaustion gap by default,
+        // not just when an operator remembers to configure one.
+        let max_vcpu_count: u8 =
+            env_or("SANDKILN_MAX_VCPU_COUNT", "16").parse().expect("SANDKILN_MAX_VCPU_COUNT must be a number");
+        let max_mem_size_mib: u32 = env_or("SANDKILN_MAX_MEM_SIZE_MIB", "16384")
+            .parse()
+            .expect("SANDKILN_MAX_MEM_SIZE_MIB must be a number");
+        assert!(
+            vcpu_count <= max_vcpu_count,
+            "SANDKILN_VCPU_COUNT ({vcpu_count}) exceeds SANDKILN_MAX_VCPU_COUNT ({max_vcpu_count}) — the daemon's own default would be rejected"
+        );
+        assert!(
+            mem_size_mib <= max_mem_size_mib,
+            "SANDKILN_MEM_SIZE_MIB ({mem_size_mib}) exceeds SANDKILN_MAX_MEM_SIZE_MIB ({max_mem_size_mib}) — the daemon's own default would be rejected"
+        );
+
         Self {
             listen_addr: env_or("SANDKILN_LISTEN_ADDR", "127.0.0.1:7777"),
             firecracker_bin: expand_home(&env_or("SANDKILN_FIRECRACKER_BIN", "~/sandkiln-tools/bin/firecracker")),
             kernel_path: expand_home(&env_or("SANDKILN_KERNEL_PATH", "~/sandkiln-tools/images/vmlinux-5.10.223")),
             base_rootfs_path: expand_home(&env_or("SANDKILN_BASE_ROOTFS", "~/sandkiln-tools/images/ubuntu-22.04.ext4")),
-            vcpu_count: env_or("SANDKILN_VCPU_COUNT", "2").parse().expect("SANDKILN_VCPU_COUNT must be a number"),
-            mem_size_mib: env_or("SANDKILN_MEM_SIZE_MIB", "512").parse().expect("SANDKILN_MEM_SIZE_MIB must be a number"),
+            vcpu_count,
+            mem_size_mib,
+            max_vcpu_count,
+            max_mem_size_mib,
             bridge_name: env_or("SANDKILN_BRIDGE_NAME", "sktapbr0"),
             bridge_gateway: env_or("SANDKILN_BRIDGE_GATEWAY", "172.16.0.1")
                 .parse()

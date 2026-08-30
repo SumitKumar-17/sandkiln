@@ -52,6 +52,7 @@ use crate::error::AppError;
 use crate::sandbox::Sandbox;
 use crate::snapshot::{snapshot_dir, Snapshot};
 use crate::state::AppState;
+use crate::tracing_util::spawn_blocking_in_current_span;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
@@ -133,7 +134,7 @@ pub async fn snapshot_sandbox(
     let snapshot_path = dir.join("state.snap");
     let mem_file_path = dir.join("mem.bin");
 
-    let result = tokio::task::spawn_blocking({
+    let result = spawn_blocking_in_current_span("snapshot task panicked", {
         let dir = dir.clone();
         let snapshot_path = snapshot_path.clone();
         let mem_file_path = mem_file_path.clone();
@@ -148,18 +149,16 @@ pub async fn snapshot_sandbox(
             outcome
         }
     })
-    .await
-    .expect("snapshot task panicked");
+    .await;
 
     if let Err(e) = result {
         let _ = std::fs::remove_dir_all(&dir);
         let cleanup_state = state.clone();
-        tokio::task::spawn_blocking(move || {
+        spawn_blocking_in_current_span("cleanup task panicked", move || {
             let _ = cleanup_state.network.release(network);
             let _ = std::fs::remove_file(&rootfs_path);
         })
-        .await
-        .expect("cleanup task panicked");
+        .await;
         return Err(AppError::from(e));
     }
 
@@ -379,11 +378,10 @@ pub async fn fork_snapshot(
 
 async fn resume_vm(state: &Arc<AppState>, snapshot_path: PathBuf, mem_file_path: PathBuf) -> std::io::Result<Vm> {
     let state = state.clone();
-    tokio::task::spawn_blocking(move || {
+    spawn_blocking_in_current_span("resume task panicked", move || {
         Vm::resume(&ResumeConfig { firecracker_bin: state.config.firecracker_bin.clone(), snapshot_path, mem_file_path })
     })
     .await
-    .expect("resume task panicked")
 }
 
 /// Pure decision behind every guard in this file: an operation that needs
@@ -413,7 +411,7 @@ pub async fn delete_snapshot(State(state): State<Arc<AppState>>, Path(id): Path<
         snapshots.remove(&id).expect("just checked it exists")
     };
 
-    tokio::task::spawn_blocking({
+    spawn_blocking_in_current_span("delete task panicked", {
         let state = state.clone();
         move || {
             let _ = state.network.release(snapshot.network);
@@ -421,8 +419,7 @@ pub async fn delete_snapshot(State(state): State<Arc<AppState>>, Path(id): Path<
             let _ = std::fs::remove_dir_all(snapshot_dir(&snapshot.id));
         }
     })
-    .await
-    .expect("delete task panicked");
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }

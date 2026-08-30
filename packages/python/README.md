@@ -44,8 +44,10 @@ sandbox.stop()
 
 ## API
 
-- `Sandbox.create(tags=None, base_url=None, auth_token=None)` — boots a
-  sandbox.
+- `Sandbox.create(tags=None, base_url=None, auth_token=None, vcpu_count=None, mem_size_mib=None)` —
+  boots a sandbox. `vcpu_count`/`mem_size_mib` override the daemon's
+  configured defaults for this one sandbox, subject to the daemon's
+  configured ceiling.
 - `Sandbox.attach(id, base_url=None, auth_token=None)` — wraps an
   existing sandbox id without a network round-trip.
 - `Sandbox.list(tags=None, base_url=None, auth_token=None)` — lists

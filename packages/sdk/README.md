@@ -46,7 +46,9 @@ await sandbox.stop();
 ## API
 
 - `Sandbox.create(options?)` — boots a sandbox. `options.tags`,
-  `options.baseUrl`, `options.authToken`.
+  `options.baseUrl`, `options.authToken`, `options.vcpuCount`,
+  `options.memSizeMib` (both override the daemon's configured defaults
+  for this one sandbox, subject to the daemon's configured ceiling).
 - `Sandbox.attach(id, options?)` — wraps an already-existing sandbox id
   without a network round-trip.
 - `Sandbox.list(options?)` — lists sandboxes. `options.tags` filters by
