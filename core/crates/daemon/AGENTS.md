@@ -50,6 +50,20 @@ should mostly be: parse a request, call into `vmm`, shape a response.
 - `idle_reaper.rs` — background task (spawned from `main.rs` only when
   `SANDKILN_IDLE_TIMEOUT_SECS` is set) that stops sandboxes idle past the
   configured timeout, via `routes_sandbox::stop_sandbox_by_id`.
+- `snapshot.rs` — the `Snapshot` type (`state.snapshots`'s value type)
+  plus everything that makes it durable across a daemon restart: on-disk
+  metadata (`meta.json`, alongside `state.snap`/`mem.bin` under
+  `snapshot_dir(id)`) written atomically via write-then-rename, and
+  `reconcile()`, which scans `snapshots_root()` at startup and rebuilds
+  `AppState::snapshots` from what's actually on disk — the same
+  "filesystem is the source of truth" pattern `sandkiln_vmm::drive`'s
+  `DriveStore::list()` uses for drives. A snapshot directory missing any
+  of its three files is treated as a crash-mid-write and skipped with a
+  warning rather than guessed at. `reconcile()` also calls
+  `NetworkManager::reserve()` for each reconciled snapshot's held tap
+  device/host octet so a live `lease()` call afterward can't hand the
+  same tap to a second sandbox — see `main.rs`, which runs this before
+  the HTTP listener starts accepting connections.
 - `routes_drives.rs` / `routes_snapshot.rs` — drives and snapshot/resume
   handlers, each in their own file for the same reason as above.
 - `routes_metrics.rs` — the `/metrics` handler. Unauthenticated like
