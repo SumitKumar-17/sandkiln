@@ -24,6 +24,12 @@ hardware, not just code that compiles.
   isolation.
 - `criterion` benchmarks for boot time and exec latency, and a concurrent
   load-test script against the daemon's HTTP API.
+- Snapshot/resume/fork, durable across a daemon restart; a host-side
+  reverse proxy for previewing a dev server running inside a sandbox;
+  per-sandbox resource overrides with enforced ceilings; request-id
+  correlation and a `/metrics` endpoint; opt-in Firecracker jailer
+  hardening. All exposed through both SDKs and the CLI, live-verified via
+  `scripts/integration-test.sh` (89 checks, 0 failing).
 
 ## Engineering principles
 
@@ -62,31 +68,38 @@ outbound HTTP both still work.
 ## Client SDKs
 
 - **JS/TS (`sandkiln` npm package) — working, matches the daemon's full
-  surface.** `Sandbox.create()` (with tags and an auth token),
-  `Sandbox.list()` (tag-filterable), `runCommand()`, `readFile()` /
-  `writeFile()`, `stop()`. ESM + CJS + full type definitions via `tsup`.
-  Verified against a live, auth-enabled daemon end to end — not just
-  typechecked, which is how `stop()` returning `200` instead of the
-  documented `204` got caught and fixed. **Published**:
+  surface.** `Sandbox.create()` (tags, an auth token, and optional
+  `vcpuCount`/`memSizeMib` overrides), `Sandbox.list()` (tag-filterable),
+  `Sandbox.resume()`/`Sandbox.fork()` (static, boot from a snapshot),
+  `runCommand()`, `readFile()`/`writeFile()`, `snapshot()`, `previewUrl()`,
+  `stop()`. ESM + CJS + full type definitions via `tsup`. Verified against
+  a live, auth-enabled daemon end to end — not just typechecked, which is
+  how `stop()` returning `200` instead of the documented `204` got caught
+  and fixed. **Published**:
   [npmjs.com/package/sandkiln](https://www.npmjs.com/package/sandkiln)
-  (0.1.0, with signed provenance from the CI build). Still open: streamed
-  logs, once the daemon can stream them.
+  (0.1.0, with signed provenance from the CI build; the additions above
+  landed after that publish and need a version bump before they're live
+  on npm — check the published version's own surface before assuming
+  parity with this repo). Still open: streamed logs, once the daemon can
+  stream them.
 - **Python (`sandkiln` PyPI package) — working, mirrors the JS SDK
-  exactly.** `Sandbox.create()`/`attach()`/`list()`, `run_command()`,
-  `read_file()`/`write_file()`, `stop()`. Zero runtime dependencies
-  (stdlib `urllib`, matching the JS SDK's own zero-dependency `fetch`
-  approach). Verified live end to end, including `attach()` reconstructing
-  a handle without a network call and correct 404 handling on a stopped
-  sandbox. Not published to PyPI yet.
+  exactly**, including `resume()`/`fork()`/`snapshot()`/`preview_url()`
+  and resource overrides. Zero runtime dependencies (stdlib `urllib`,
+  matching the JS SDK's own zero-dependency `fetch` approach). Verified
+  live end to end, including `attach()` reconstructing a handle without a
+  network call and correct 404 handling on a stopped sandbox. Not
+  published to PyPI yet (see `packages/python/AGENTS.md`'s Publishing
+  section — code-side ready, needs the account owner's one-time
+  trusted-publisher registration).
 - Both talk to the daemon's HTTP API — no logic duplicated between them
   beyond what each language's idioms require.
 
 ## CLI (`kiln`) — working
 
-- **Done:** `kiln sandbox create|ls|rm|exec|read|write` — a thin
-  `commander`-based wrapper over the SDK, verified live end to end.
-  `cp` (a single unified copy command) was simplified to explicit
-  `read`/`write` subcommands instead — less magic than parsing a
+- **Done:** `kiln sandbox create|ls|rm|exec|read|write|preview|snapshot|
+  resume|fork` — a thin `commander`-based wrapper over the SDK, verified
+  live end to end. `cp` (a single unified copy command) was simplified to
+  explicit `read`/`write` subcommands instead — less magic than parsing a
   `sandbox:path` prefix syntax for a first version.
 - Still open: `kiln logs -f`, once the daemon can stream output.
 - Built for manual testing, agentic workflows, and debugging — mirrors the
@@ -122,8 +135,12 @@ outbound HTTP both still work.
   it. A sandbox resumed daily for a week is one sandbox, seven sessions —
   our current `Sandbox` type conflates the two (it dies with its VM) and
   needs to split before persistence can work at all.
-- **Snapshot/resume**: save a running microVM's full state (memory + disk)
-  and resume it later, skipping boot and dependency installation entirely.
+- **Done: snapshot/resume.** Save a running microVM's full state (memory +
+  disk) and resume it later, skipping boot and dependency installation
+  entirely — `POST /sandboxes/:id/snapshot`, `POST /snapshots/:id/resume`,
+  exposed as `Sandbox.snapshot()`/`Sandbox.resume()` in both SDKs and
+  `kiln sandbox snapshot|resume`. Live-verified repeatedly this session,
+  including with drives attached.
 - **Done: snapshots durable across a daemon restart.** Snapshot metadata
   is written atomically to disk alongside its state/memory files and
   reconciled back into the daemon at startup — a snapshot taken before a
@@ -145,12 +162,19 @@ outbound HTTP both still work.
   quiet for a configurable window, freeing its VM/network resources while
   keeping its state resumable — cheaper than staying booted, faster than
   a cold boot from scratch.
-- **VM forking**: clone a *running* VM's memory and filesystem to start
-  new sandboxes from that exact live state — distinct from snapshot/resume
-  (which restarts from a saved point after a stop); this forks something
-  still running, useful for parallel branches off one prepared environment
-  (e.g. N parallel test runs off one dependency-installed base) without
-  paying setup cost N times.
+- **Done (partial): non-consuming snapshot fork.** `POST /snapshots/:id/fork`
+  boots a new sandbox from a snapshot without consuming it, so the same
+  prepared state can be resumed from repeatedly — `Sandbox.fork()` in both
+  SDKs and `kiln sandbox fork`. **Not** true simultaneous parallel forking:
+  Firecracker has no verified mechanism to give two live descendants of one
+  snapshot independent rootfs backing files or independent guest IP/MAC
+  (both are frozen into the snapshotted state), so at most one live fork of
+  a given snapshot may exist at a time (`Snapshot::forked_into`, enforced
+  for resume/fork/delete/snapshot alike — a second fork attempt while one
+  is live is a `409`). Real parallel branches off one snapshot still needs
+  either a verified per-fork drive-path override or a from-scratch
+  live-memory-clone approach — genuinely open, see
+  `core/crates/daemon/src/routes_snapshot.rs`'s module doc comment.
 - **Time-travel restore**: keep more than just the latest snapshot per
   sandbox, so a caller can restore to an earlier point, not only the most
   recent stop.
@@ -182,12 +206,26 @@ outbound HTTP both still work.
 
 ## Security hardening
 
-- Firecracker's jailer: chroot, cgroups v2 resource limits, seccomp
-  filters, dropped capabilities, an unprivileged uid per VM.
-- Enforced per-sandbox resource ceilings (CPU, memory, disk) and an
-  automatic idle timeout — today `vcpu_count`/`mem_size_mib` are set at
-  boot but nothing stops a sandbox from running forever or a caller from
-  requesting unreasonable resources.
+- **Done (opt-in): Firecracker's jailer** — chroot, cgroup v2 resource
+  limits, a dedicated unprivileged uid/gid per VM
+  (`SANDKILN_JAILER_ENABLED`, see `SELF_HOSTING.md`'s "Optional:
+  jailer-based sandbox boot"). Off by default; the daemon still boots
+  every sandbox via a direct Firecracker spawn unless explicitly turned
+  on. Builds and passes unit tests, but the actual chroot/cgroup/uid-drop
+  behavior against a real installed jailer binary hasn't been proven on
+  real hardware yet — verify before relying on it for a genuinely
+  adversarial workload. Snapshotting a jailed sandbox isn't supported
+  (`400`) — jailer support covers `Vm::boot` only, `Vm::resume` always
+  spawns directly.
+- **Done: enforced per-sandbox resource ceilings.** A `POST /sandboxes`
+  request may now override `vcpu_count`/`mem_size_mib` per sandbox
+  (defaulting to the daemon's configured values when omitted), checked
+  against `SANDKILN_MAX_VCPU_COUNT`/`SANDKILN_MAX_MEM_SIZE_MIB` — `0` or
+  above-ceiling is rejected with `400`, not silently clamped. Live-verified.
+  seccomp filters and disk-size ceilings are still open.
+- **Done:** automatic idle timeout (`SANDKILN_IDLE_TIMEOUT_SECS`) — a
+  sandbox with no exec/read/write activity past the configured window is
+  stopped automatically.
 - **Done:** network isolation between sandboxes on the shared bridge (see
   the Networking section) — bridge port isolation, no sandbox-to-sandbox
   traffic by default.
@@ -210,8 +248,19 @@ outbound HTTP both still work.
 
 ## Dev servers and live preview
 
-- A host-side reverse proxy that maps a sandbox's port to a reachable URL,
-  so a dev server running inside a sandbox can be previewed live.
+- **Done: host-side reverse proxy.** `GET/POST/... /sandboxes/:id/preview/:port[/path]`
+  proxies a full HTTP request to a server listening on that port inside
+  the sandbox, over the bridge network — `Sandbox.previewUrl()`/
+  `preview_url()` in both SDKs, `kiln sandbox preview`, an
+  `examples/dev-server-preview` reference. Preview routes accept the auth
+  token as a `?token=` query parameter (not just a header), since the
+  caller is typically a browser tab or `<iframe>` that can't set one.
+  Live-verified, including a real `python3 -m http.server` proxied
+  end to end, the 502/404/401 error paths, and previewing a sandbox
+  forked from a snapshot (which borrows its network lease rather than
+  owning one). WebSocket proxying (dev-server HMR/live-reload) is a real,
+  explicitly-scoped-out follow-up, not silently broken — plain HTTP only
+  for now.
 - Fast iterative file sync tuned for dev-server workflows — write many
   small files quickly, ideally with watch-mode support.
 - **Interactive terminal access**: a real PTY inside the sandbox, exposed
@@ -280,20 +329,24 @@ outbound HTTP both still work.
   with timing, vsock call latency, stop) emitted from `sandkiln-vmm`
   itself so the library is useful standalone, not just under the daemon.
   Correlated by `vm_id`, filterable per-module via `RUST_LOG`.
-- **Still open:**
-  - Correlate an HTTP request all the way through to the VM operations it
-    triggers with a single request/trace ID (currently `vm_id` and the
-    axum request span are independent; needs a `tracing::Span` threaded
-    through `Vm::boot`/`call`/`stop`).
-  - A `/metrics` endpoint (Prometheus text format): sandboxes created
-    (counter), sandboxes active (gauge), boot duration and exec latency
-    (histograms).
-  - JSON log output for production use (current output is pretty-printed
-    for a human terminal) — switched by an env var.
-  - Guest-side observability: today, output from a guest that fails before
-    it can answer over vsock (kernel panic, agent crash) is invisible from
-    the host. Worth capturing the serial console log per-VM regardless of
-    whether vsock ever came up.
+- **Done: request-id correlation.** Every HTTP request gets an id (caller-
+  supplied via `X-Request-Id`, or generated) established as the active
+  `tracing::Span` before any handler runs, echoed back in the response,
+  and propagated across `spawn_blocking` into every `sandkiln-vmm` call
+  the request triggers (`tracing_util::spawn_blocking_in_current_span`) —
+  so one id ties an HTTP request to the VM boot/call/stop log lines it
+  caused. Live-verified.
+- **Done: `/metrics` endpoint** (Prometheus text format, unauthenticated
+  like `/healthz`): `sandboxes_created_total` (counter), `sandboxes_active`
+  (gauge), boot duration and exec latency (histograms). Hand-rolled text
+  exposition rather than a new dependency — see `metrics.rs`.
+- **Done: JSON log output** (`SANDKILN_LOG_FORMAT=json`) for production log
+  pipelines, alongside the default pretty terminal format.
+- **Done: guest-side console capture.** A guest that fails before it can
+  answer over vsock (kernel panic, agent crash) is no longer invisible —
+  the spawned Firecracker process's stdout/stderr (the guest's
+  `console=ttyS0` output) is captured to a per-VM log file, and a boot
+  failure's error message includes that file's path.
 
 ## Multi-node and regions
 
@@ -336,7 +389,5 @@ The primitive is only as useful as what's built on top of it:
 ## Documentation and examples
 
 - A docs site with runnable examples covering both SDKs and the CLI.
-- Example projects: **done** — code playground (JS/TS) and AI-agent
-  sandbox runner (Python), see `examples/`. Still open: a dev-server
-  preview tool, once the reverse-proxy work in "Dev servers and live
-  preview" above exists to build it on.
+- Example projects: **done** — code playground (JS/TS), AI-agent sandbox
+  runner (Python), and dev-server preview (JS/TS), see `examples/`.
