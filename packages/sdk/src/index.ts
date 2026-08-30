@@ -4,6 +4,7 @@ export type {
   CreateSandboxOptions,
   ExecResult,
   ListSandboxesOptions,
+  PreviewUrlOptions,
   SandboxInfo,
   SandboxOptions,
 } from "./types.js";

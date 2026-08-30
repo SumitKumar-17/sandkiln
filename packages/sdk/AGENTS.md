@@ -15,9 +15,14 @@ this package only ever catches up to what the daemon actually does.
 ## Files
 
 - `sandbox.ts` — the `Sandbox` class: `create`/`attach`/`list` (static),
-  `runCommand`/`readFile`/`writeFile`/`stop` (instance). Every instance
-  method reuses the `baseUrl`/`authToken` the sandbox was
-  created/attached with — see the `ClientContext` pattern.
+  `runCommand`/`readFile`/`writeFile`/`stop`/`previewUrl` (instance). Every
+  instance method reuses the `baseUrl`/`authToken` the sandbox was
+  created/attached with — see the `ClientContext` pattern. `previewUrl` is
+  pure and network-free like `attach` — it just builds the URL for the
+  daemon's `/sandboxes/:id/preview/:port` reverse proxy (see
+  `core/crates/daemon/src/routes_preview.rs`), appending the auth token as
+  a `?token=` query parameter rather than a header when one is configured,
+  since the caller is typically a browser tab or `<iframe>`.
 - `http.ts` — the one place `fetch` gets called. Non-2xx responses throw
   `SandkilnApiError`; a 204 (or any empty body) resolves to `undefined`.
   If the daemon's status-code contract ever doesn't match what's handled
@@ -32,6 +37,17 @@ this package only ever catches up to what the daemon actually does.
   exactly (including its `snake_case` fields like `content_base64`,
   `exit_code`) — the public-facing types (`ExecResult`, `SandboxInfo`)
   translate those into idiomatic `camelCase`.
+
+## Testing
+
+`test/previewUrl.test.js` covers `Sandbox.previewUrl`'s pure URL-building
+logic with `node:test` (no added dependency — same convention as `kiln`'s
+`test/format.test.js`). It imports the built `../dist/index.js`, not TS
+source directly, so `npm test` runs `pretest` (`npm run build`) first.
+Every other instance method needs a live daemon to test meaningfully (see
+"Building and verifying" below), which is why this is the only file here
+today — it's specifically the one piece of genuinely pure logic in this
+package. Run: `npm run test -w sandkiln`.
 
 ## Building and verifying
 

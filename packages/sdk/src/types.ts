@@ -66,6 +66,12 @@ export interface WriteFileRequestBody {
   content_base64: string;
 }
 
+export interface PreviewUrlOptions {
+  /** Path within the guest's server to preview, e.g. `/api/health`.
+   * Defaults to `/`. A value with no leading slash gets one added. */
+  path?: string;
+}
+
 export interface ApiErrorBody {
   error: string;
 }

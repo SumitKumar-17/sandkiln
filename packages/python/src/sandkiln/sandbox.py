@@ -90,5 +90,25 @@ class Sandbox:
     def stop(self) -> None:
         self._request("DELETE", f"/sandboxes/{self.id}")
 
+    def preview_url(self, port: int, path: str = "/") -> str:
+        """URL a browser can open directly to reach a server listening on
+        `port` inside this sandbox, proxied through the daemon's
+        `/sandboxes/:id/preview/:port` route. Pure and network-free, like
+        `attach` — the daemon proxies lazily on each request, so there's
+        nothing to create or await up front.
+
+        If this sandbox's client has an auth token configured, it's
+        appended as a `?token=` query parameter rather than sent as a
+        header: the caller of this URL is typically a browser tab or an
+        `<iframe src=...>` embed, neither of which can attach an
+        `Authorization` header, and the daemon's preview route accepts the
+        token either way.
+        """
+        if isinstance(port, bool) or not isinstance(port, int) or port < 1 or port > 65535:
+            raise ValueError(f"invalid preview port: {port}")
+        normalized_path = path if path.startswith("/") else f"/{path}"
+        suffix = f"?{urlencode({'token': self._auth_token})}" if self._auth_token else ""
+        return f"{self._base_url}/sandboxes/{self.id}/preview/{port}{normalized_path}{suffix}"
+
     def _request(self, method: str, path: str, body=None):
         return request(self._base_url, method, path, self._auth_token, body)

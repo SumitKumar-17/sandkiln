@@ -70,6 +70,23 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   `/healthz` (wired directly on `app` in `main.rs`, not through either
   auth-gated router) since it's operational data about the daemon, not
   sandbox data.
+- `routes_preview.rs` — the `GET/POST/... /sandboxes/:id/preview/:port[/*path]`
+  reverse proxy: forwards a full HTTP request to
+  `http://<sandbox guest ip>:<port>/<path>` on the bridge network
+  (`sandkiln_vmm::network::Lease::config.guest_ip`) via `AppState::preview_client`
+  (a `hyper_util::client::legacy::Client`, built once in `state::build_preview_client`
+  so requests reuse pooled connections), and streams the response straight
+  back. Its own router in `main.rs`, guarded by `auth::require_preview_token`
+  instead of `auth::require_bearer_token` — see that middleware's doc
+  comment and this module's doc comment for the auth reasoning (short
+  version: a browser navigating directly to a preview URL can't attach an
+  `Authorization` header, so this route also accepts the token as a
+  `?token=` query parameter, which is then stripped, along with the
+  `Authorization` header itself, before anything is forwarded to the
+  guest — the guest runs untrusted/AI-generated code and must never see
+  this API's credential). Connection-refused/unreachable maps to
+  `AppError::BadGateway` (502); no response within `Config::preview_timeout`
+  maps to `AppError::GatewayTimeout` (504) — see `error.rs`.
 - `error.rs` — `AppError`, the one error type every handler returns.
   Add a variant here rather than inventing a new ad hoc error shape.
 
@@ -106,3 +123,25 @@ cleanly but was still wrong.
   runs inside `tokio::task::spawn_blocking`, not directly in an async
   handler. Follow that pattern for new VM-touching routes; don't block
   the async runtime's worker threads directly.
+- **`/sandboxes/:id/preview/:port` is deliberately not behind the same
+  bearer-token middleware as the rest of `/sandboxes*`.** It has its own
+  (`auth::require_preview_token`) that accepts the token via a `?token=`
+  query parameter as well as the `Authorization` header, because the
+  thing hitting this URL is normally a browser tab or an `<iframe>`
+  embedding a sandbox's dev server — neither can set a custom header on a
+  plain navigation. This is still gated behind `SANDKILN_AUTH_TOKEN` when
+  one is configured (no-op when it isn't, same as the rest of the API);
+  the tradeoff accepted here is that a preview link, once handed out, is a
+  bearer credential in URL form (referrer leakage, shell history, browser
+  history) — reasonable for a short-lived dev-preview link, not something
+  to reuse as a general auth pattern elsewhere in this API.
+- **WebSocket proxying (for a dev server's HMR/live-reload) is explicitly
+  out of scope for the initial `/preview` implementation.** The route
+  proxies plain request/response HTTP; an `Upgrade: websocket` request
+  currently just gets `Connection`/`Upgrade` stripped as hop-by-hop
+  headers like any other, which will not upgrade correctly. Real support
+  needs the daemon to detect the upgrade request, hijack both the
+  client-facing and guest-facing connections, and pump bytes between them
+  — a distinct enough problem (and untested without a live dev server
+  actually using HMR) that it's a deliberate follow-up, not folded into
+  this change.

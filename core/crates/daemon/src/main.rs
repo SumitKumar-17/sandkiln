@@ -6,6 +6,7 @@ mod metrics;
 mod routes_drives;
 mod routes_exec;
 mod routes_metrics;
+mod routes_preview;
 mod routes_sandbox;
 mod routes_snapshot;
 mod sandbox;
@@ -13,7 +14,7 @@ mod snapshot;
 mod state;
 
 use axum::middleware;
-use axum::routing::{delete, get, post};
+use axum::routing::{any, delete, get, post};
 use axum::Router;
 use config::{Config, LogFormat};
 use sandkiln_vmm::drive::DriveStore;
@@ -90,12 +91,22 @@ async fn async_main() {
     let snapshot_routes =
         routes_snapshot::router().route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
+    // Its own router, guarded by `auth::require_preview_token` rather than
+    // `auth::require_bearer_token` — see that middleware's doc comment for
+    // why a preview URL needs different auth handling than the rest of the
+    // `/sandboxes*` API.
+    let preview_routes = Router::new()
+        .route("/sandboxes/:id/preview/:port", any(routes_preview::preview_root))
+        .route("/sandboxes/:id/preview/:port/*path", any(routes_preview::preview_path))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_preview_token));
+
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/metrics", get(routes_metrics::metrics))
         .merge(sandbox_routes)
         .merge(drive_routes)
         .merge(snapshot_routes)
+        .merge(preview_routes)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

@@ -1,0 +1,17 @@
+{
+  "name": "sandkiln-example-dev-server-preview",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Reference dev-server-preview example: run a server inside a sandkiln sandbox and reach it from a browser via Sandbox.previewUrl().",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "sandkiln": "^0.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
