@@ -405,6 +405,27 @@ reintroduce them:
   unavoidable (e.g. waiting on a fresh SSH connection to reflect state
   from a command run over a previous one), keep it short and justified,
   not a blanket `sleep 10`.
+- **Neither `cargo` nor a current Node.js is on `PATH` in a non-interactive
+  SSH shell on the dev box.** Both are installed via rustup/nvm, which are
+  wired up by lines sourced from `.bashrc` — a login/interactive shell
+  picks that up, `ssh host 'cmd'` does not, and you silently get the
+  wrong (or no) binary: a bare `node --version` there returns a stale
+  system-installed v12, not the real v20 the project targets. Source
+  `$HOME/.cargo/env` / `$HOME/.nvm/nvm.sh` explicitly before running
+  `cargo`/`npm`/`node` this way — `scripts/sandkilnd-ctl.sh` and
+  `scripts/setup.sh` already do this for cargo; do the equivalent for nvm
+  when scripting a JS/TS build over SSH.
+- **A near-full disk can silently truncate a file mid-write, not just
+  fail loudly.** Hit this for real: `@rollup/rollup-linux-x64-gnu`'s
+  native `.node` binary got written at ~354KB instead of its real ~2.1MB
+  during an `npm install` while the dev box was at 100% disk, and nothing
+  reported an error at install time — the failure only surfaced later, as
+  `node` itself crashing with `SIGBUS`/`BUS_ADRERR` (via `strace -e
+  trace=mmap,openat`) the moment something tried to `mmap()` and execute
+  the truncated file. If a native addon crashes with `SIGBUS` (not a
+  normal exception), suspect a truncated file over a code bug first —
+  check disk space, then `rm -rf node_modules && npm install` once there's
+  real headroom, don't just retry in place.
 
 ---
 
