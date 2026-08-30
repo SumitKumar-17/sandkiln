@@ -11,7 +11,7 @@
 
 use crate::error::AppError;
 use crate::sandbox::Sandbox;
-use crate::snapshot::Snapshot;
+use crate::snapshot::{snapshot_dir, Snapshot};
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -20,7 +20,6 @@ use axum::{Json, Router};
 use sandkiln_vmm::vm::{ResumeConfig, Vm};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -98,6 +97,33 @@ pub async fn snapshot_sandbox(
         tags,
         created_at: SystemTime::now(),
     };
+
+    // Persist metadata before this snapshot is visible in `AppState` at
+    // all: `state.snap`/`mem.bin` already exist on disk at this point
+    // (the earlier spawn_blocking succeeded), so if metadata fails to
+    // write, the only correct move is the same one a failed snapshot
+    // itself gets — tear the whole thing down and return an error — not
+    // to keep a `Snapshot` alive in memory whose durability contract is
+    // already broken.
+    let (snapshot, persist_result) = tokio::task::spawn_blocking(move || {
+        let persist_result = snapshot.persist();
+        (snapshot, persist_result)
+    })
+    .await
+    .expect("persist snapshot metadata task panicked");
+
+    if let Err(e) = persist_result {
+        let _ = std::fs::remove_dir_all(&dir);
+        let cleanup_state = state.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = cleanup_state.network.release(snapshot.network);
+            let _ = std::fs::remove_file(&snapshot.rootfs_path);
+        })
+        .await
+        .expect("cleanup task panicked");
+        return Err(AppError::from(e));
+    }
+
     state.snapshots.lock().unwrap().insert(snapshot_id.clone(), snapshot);
 
     Ok(Json(SnapshotSandboxResponse { snapshot_id }))
@@ -213,13 +239,4 @@ pub async fn delete_snapshot(State(state): State<Arc<AppState>>, Path(id): Path<
     .expect("delete task panicked");
 
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// Where one snapshot's state + memory files live: a dedicated directory
-/// per snapshot under the daemon's temp dir, alongside the loose
-/// `sandkiln-rootfs-*.ext4` files `create_sandbox` writes there — mirrors
-/// that same "OS temp dir, daemon-prefixed" convention rather than
-/// inventing a new storage location.
-fn snapshot_dir(snapshot_id: &str) -> PathBuf {
-    std::env::temp_dir().join("sandkiln-snapshots").join(snapshot_id)
 }

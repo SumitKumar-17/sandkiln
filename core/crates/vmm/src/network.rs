@@ -36,6 +36,17 @@ pub struct Lease {
     host_octet: u8,
 }
 
+impl Lease {
+    /// Exposed so a caller that needs to persist a lease's full identity
+    /// (e.g. the daemon writing a `Snapshot`'s held lease to disk so it
+    /// survives a restart) can round-trip it — `host_octet` itself stays
+    /// private since nothing outside this module should construct a
+    /// `Lease` except through `lease()` or `NetworkManager::reserve()`.
+    pub fn host_octet(&self) -> u8 {
+        self.host_octet
+    }
+}
+
 impl NetworkManager {
     /// `gateway_ip`/24 defines the shared subnet; host octets 2..254 are
     /// handed out to VMs (1 is the gateway itself). `tap_pool` must match
@@ -131,6 +142,48 @@ impl NetworkManager {
         Ok(())
     }
 
+    /// Reconstructs a `Lease` for a tap device/host octet that's already
+    /// held by something outside this `NetworkManager`'s own bookkeeping —
+    /// specifically, a `Snapshot` reconciled from disk at daemon startup,
+    /// which holds a real tap device (frozen into its saved memory image,
+    /// see `sandkiln_vmm::vm::snapshot`'s `Vm::resume` doc comment) that
+    /// this fresh `NetworkManager` instance has no record of ever handing
+    /// out. Without this, the tap/host octet would sit in the free pool
+    /// and a later live `lease()` call could hand the same tap device to
+    /// a second, unrelated sandbox — two VMs fighting over one device.
+    /// Removes both from the free pools (idempotent-ish: logs a warning
+    /// rather than panicking if either was already absent, since that
+    /// indicates pool/config drift worth knowing about but not fatal to
+    /// startup) and returns the equivalent of a normal `lease()`.
+    pub fn reserve(&self, config: NetworkConfig, host_octet: u8) -> Lease {
+        let tap_was_free = remove_first(&self.free_taps, |t| t == &config.tap_device);
+        let host_was_free = remove_first(&self.free_hosts, |h| *h == host_octet);
+        if !tap_was_free {
+            tracing::warn!(
+                tap_device = %config.tap_device,
+                "reserved tap device was not present in the free pool (already reserved, \
+                 leased, or outside the configured tap pool) — proceeding anyway"
+            );
+        }
+        if !host_was_free {
+            tracing::warn!(
+                host_octet,
+                "reserved host octet was not present in the free pool (already reserved, \
+                 leased, or outside the configured host range) — proceeding anyway"
+            );
+        }
+        Lease { config, host_octet }
+    }
+
+    /// A snapshot of which tap devices are currently free. Useful for
+    /// observability, and lets cross-crate callers (the daemon's own
+    /// tests, verifying that reconciling a snapshot from disk actually
+    /// removed its held tap from the live pool) check pool state without
+    /// reaching into this module's private fields.
+    pub fn free_tap_devices(&self) -> Vec<String> {
+        self.free_taps.lock().unwrap().iter().cloned().collect()
+    }
+
     fn attach_tap(&self, tap_device: &str) -> io::Result<()> {
         run("ip", &["link", "set", tap_device, "up"])?;
         run("ip", &["link", "set", tap_device, "master", &self.bridge_name])?;
@@ -154,6 +207,21 @@ pub fn detect_default_iface() -> io::Result<String> {
         .find(|(word, _)| *word == "dev")
         .map(|(_, iface)| iface.to_string())
         .ok_or_else(|| io::Error::other("no default route found — pass SANDKILN_UPLINK_IFACE explicitly"))
+}
+
+/// Removes and discards the first element matching `pred` from a pooled
+/// `VecDeque`, reporting whether anything was actually removed. `reserve`
+/// needs that boolean to decide whether the removal was a no-op (pool
+/// drift) worth warning about.
+fn remove_first<T>(pool: &Mutex<VecDeque<T>>, pred: impl Fn(&T) -> bool) -> bool {
+    let mut pool = pool.lock().unwrap();
+    match pool.iter().position(pred) {
+        Some(idx) => {
+            pool.remove(idx);
+            true
+        }
+        None => false,
+    }
 }
 
 fn octets_with_last(base: Ipv4Addr, last: u8) -> Ipv4Addr {
@@ -235,5 +303,68 @@ mod tests {
         let result = mgr.lease();
         assert!(result.is_err());
         assert_eq!(mgr.free_hosts.lock().unwrap().len(), 253, "no tap was available, so no IP should be consumed either");
+    }
+
+    fn test_config(tap: &str) -> NetworkConfig {
+        NetworkConfig {
+            tap_device: tap.to_string(),
+            guest_ip: "10.0.0.5".parse().unwrap(),
+            gateway_ip: "10.0.0.1".parse().unwrap(),
+            guest_mac: "AA:FC:00:00:05:05".to_string(),
+        }
+    }
+
+    /// This is the core of the tap-double-lease fix: a snapshot reconciled
+    /// from disk at startup calls `reserve` for the tap it holds, and a
+    /// live `lease()` call afterward must not be handed that same device.
+    #[test]
+    fn reserve_removes_tap_and_host_octet_from_the_free_pools() {
+        let mgr = NetworkManager::new(
+            "test-br0",
+            "10.0.0.1".parse().unwrap(),
+            "eth-test",
+            ["tapA".to_string(), "tapB".to_string()],
+        );
+
+        let lease = mgr.reserve(test_config("tapA"), 5);
+        assert_eq!(lease.config.tap_device, "tapA");
+        assert_eq!(lease.host_octet(), 5);
+
+        let free_taps = mgr.free_taps.lock().unwrap();
+        assert!(!free_taps.contains(&"tapA".to_string()), "reserved tap must leave the free pool");
+        assert!(free_taps.contains(&"tapB".to_string()), "unrelated tap must stay in the free pool");
+        drop(free_taps);
+        assert!(
+            !mgr.free_hosts.lock().unwrap().contains(&5),
+            "reserved host octet must leave the free pool"
+        );
+    }
+
+    /// Reserving something already outside the pool (stale config,
+    /// duplicate reservation) must not panic or corrupt the pool — it's a
+    /// startup-time warning, not a fatal error, since the daemon still
+    /// needs to come up.
+    #[test]
+    fn reserve_of_an_already_absent_tap_does_not_panic_or_touch_unrelated_entries() {
+        let mgr = NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", ["tapB".to_string()]);
+
+        // 255 is outside the pool's 2..=254 host-octet range, so it can
+        // never have been present to begin with.
+        let lease = mgr.reserve(test_config("tap-not-in-pool"), 255);
+        assert_eq!(lease.config.tap_device, "tap-not-in-pool");
+        assert_eq!(mgr.free_taps.lock().unwrap().len(), 1, "tapB must be untouched");
+        assert_eq!(mgr.free_hosts.lock().unwrap().len(), 253, "no host octet should have been removed");
+    }
+
+    /// After a reserve, the reserved tap is unavailable to a subsequent
+    /// live lease — the actual resource-ownership property this exists to
+    /// guarantee, not just an isolated pool-bookkeeping detail.
+    #[test]
+    fn a_reserved_tap_cannot_then_be_leased_to_a_different_caller() {
+        let mgr = NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", ["only-tap".to_string()]);
+        let _held = mgr.reserve(test_config("only-tap"), 2);
+
+        let result = mgr.lease();
+        assert!(result.is_err(), "the only tap device is already reserved, lease() must fail rather than double-hand it out");
     }
 }
