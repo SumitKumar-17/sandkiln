@@ -6,6 +6,7 @@ use crate::snapshot::Snapshot;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use sandkiln_vmm::drive::DriveStore;
+use sandkiln_vmm::jailer::JailerIdPool;
 use sandkiln_vmm::network::NetworkManager;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -15,6 +16,12 @@ pub struct AppState {
     pub config: Config,
     pub network: NetworkManager,
     pub drives: DriveStore,
+    /// `Some` exactly when `config.jailer` is `Some` — the pool of
+    /// uid/gid pairs `routes_sandbox::create_sandbox` leases from for
+    /// each jailed boot, released back on `stop_sandbox_by_id`. Built
+    /// here rather than passed in separately since its range comes
+    /// straight out of `config.jailer`.
+    pub jailer_ids: Option<JailerIdPool>,
     pub sandboxes: Mutex<HashMap<String, Sandbox>>,
     pub snapshots: Mutex<HashMap<String, Snapshot>>,
     pub metrics: Metrics,
@@ -33,10 +40,12 @@ impl AppState {
     /// silently orphan every snapshot that was durable on disk (see
     /// `main.rs`).
     pub fn new(config: Config, network: NetworkManager, drives: DriveStore, snapshots: HashMap<String, Snapshot>) -> Self {
+        let jailer_ids = config.jailer.as_ref().map(|j| JailerIdPool::new(j.uid_gid_range.clone()));
         Self {
             config,
             network,
             drives,
+            jailer_ids,
             sandboxes: Mutex::new(HashMap::new()),
             snapshots: Mutex::new(snapshots),
             metrics: Metrics::new(),

@@ -66,6 +66,31 @@ async fn async_main() {
     let reconciled_snapshots = snapshot::reconcile(&net_manager);
     tracing::info!(count = reconciled_snapshots.len(), "reconciled snapshots from disk");
 
+    match &config.jailer {
+        Some(jailer_cfg) => {
+            std::fs::create_dir_all(&jailer_cfg.chroot_base_dir)
+                .expect("create/verify the jailer chroot base dir (SANDKILN_JAILER_CHROOT_BASE_DIR)");
+            assert!(
+                jailer_cfg.jailer_bin.is_file(),
+                "SANDKILN_JAILER_BIN does not point at a file: {} — run scripts/install-firecracker.sh first",
+                jailer_cfg.jailer_bin.display()
+            );
+            tracing::info!(
+                jailer_bin = %jailer_cfg.jailer_bin.display(),
+                chroot_base_dir = %jailer_cfg.chroot_base_dir.display(),
+                uid_gid_range_start = *jailer_cfg.uid_gid_range.start(),
+                uid_gid_range_end = *jailer_cfg.uid_gid_range.end(),
+                "jailer-based sandbox boot enabled — sandboxes will boot chroot'd, cgroup-limited, under a dedicated uid/gid"
+            );
+        }
+        None => {
+            tracing::info!(
+                "jailer-based sandbox boot disabled (SANDKILN_JAILER_ENABLED not set) — \
+                 sandboxes boot via a direct Firecracker process spawn, see ROADMAP.md's Security hardening section"
+            );
+        }
+    }
+
     let auth_enabled = config.auth_token.is_some();
     let idle_timeout = config.idle_timeout;
     let state = Arc::new(AppState::new(config, net_manager, drives, reconciled_snapshots));

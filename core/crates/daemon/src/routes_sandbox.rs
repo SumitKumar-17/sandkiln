@@ -10,6 +10,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
+use sandkiln_vmm::jailer::JailLaunch;
 use sandkiln_vmm::network::Lease;
 use sandkiln_vmm::vm::{DriveConfig, Vm, VmConfig};
 use serde::{Deserialize, Serialize};
@@ -78,10 +79,10 @@ pub async fn create_sandbox(
         })
         .collect();
 
-    let (vm, network) = tokio::task::spawn_blocking({
+    let (vm, network, jail_id) = tokio::task::spawn_blocking({
         let state = state.clone();
         let rootfs_path = rootfs_path.clone();
-        move || -> std::io::Result<(Vm, Lease)> {
+        move || -> std::io::Result<(Vm, Lease, Option<u32>)> {
             // Copying the rootfs and leasing a network are independent —
             // running them concurrently overlaps the (currently dominant)
             // cost of the rootfs copy with the lease instead of paying for
@@ -94,6 +95,32 @@ pub async fn create_sandbox(
             copy_result?;
             let lease = lease_result?;
 
+            // A jail id (uid == gid, leased from `AppState::jailer_ids`)
+            // is the third resource a sandbox needs, alongside the rootfs
+            // copy and the network lease — leased after both since it's
+            // an in-memory pool pop (no I/O to overlap with), and
+            // released immediately if leasing it is the thing that fails,
+            // exactly like a failed `Vm::boot` releases the network lease
+            // below.
+            let jail_id = match &state.jailer_ids {
+                Some(pool) => match pool.lease() {
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        let _ = state.network.release(lease);
+                        return Err(e);
+                    }
+                },
+                None => None,
+            };
+            let jail = jail_id.and_then(|id| {
+                state.config.jailer.as_ref().map(|j| JailLaunch {
+                    jailer_bin: j.jailer_bin.clone(),
+                    chroot_base_dir: j.chroot_base_dir.clone(),
+                    uid: id,
+                    gid: id,
+                })
+            });
+
             let boot_started = Instant::now();
             let vm = Vm::boot(&VmConfig {
                 firecracker_bin: state.config.firecracker_bin.clone(),
@@ -103,14 +130,18 @@ pub async fn create_sandbox(
                 mem_size_mib: state.config.mem_size_mib,
                 network: Some(lease.config.clone()),
                 extra_drives,
+                jail,
             });
             match vm {
                 Ok(vm) => {
                     state.metrics.record_boot_duration_ms(boot_started.elapsed().as_secs_f64() * 1000.0);
-                    Ok((vm, lease))
+                    Ok((vm, lease, jail_id))
                 }
                 Err(e) => {
                     let _ = state.network.release(lease);
+                    if let (Some(id), Some(pool)) = (jail_id, &state.jailer_ids) {
+                        pool.release(id);
+                    }
                     Err(e)
                 }
             }
@@ -125,6 +156,7 @@ pub async fn create_sandbox(
         network,
         rootfs_path,
         attached_drives: attached_drive_ids,
+        jail_id,
         tags: request.tags,
         created_at: SystemTime::now(),
         last_activity: std::sync::Mutex::new(std::time::Instant::now()),
@@ -193,6 +225,12 @@ pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String) -> Resu
         let _ = sandbox.vm.stop();
         let _ = state.network.release(sandbox.network);
         let _ = std::fs::remove_file(&sandbox.rootfs_path);
+        // `Vm::stop` already removed this sandbox's chroot directory if
+        // it was jailed — this releases the daemon-level uid/gid
+        // allocation, a separate resource `Vm` has no visibility into.
+        if let (Some(id), Some(pool)) = (sandbox.jail_id, &state.jailer_ids) {
+            pool.release(id);
+        }
     })
     .await
     .expect("stop task panicked");

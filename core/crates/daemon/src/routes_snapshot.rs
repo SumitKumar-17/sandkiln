@@ -48,6 +48,28 @@ pub async fn snapshot_sandbox(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<SnapshotSandboxResponse>, AppError> {
+    // Checked before removing the sandbox from the map, so a rejected
+    // request leaves it exactly as it was (still running, still listed)
+    // rather than needing to be put back.
+    {
+        let sandboxes = state.sandboxes.lock().unwrap();
+        let sandbox = sandboxes.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
+        if sandbox.vm.is_jailed() {
+            // Firecracker's own snapshot/device state bakes in the
+            // in-jail paths (e.g. "/rootfs.ext4") the sandbox's own
+            // chroot used, and `Vm::resume` only ever spawns directly —
+            // resuming such a snapshot would try to open those paths
+            // against the *host's* real root filesystem and fail (or,
+            // worse, coincidentally resolve to an unrelated file). Rather
+            // than produce a snapshot that can never be resumed
+            // correctly, refuse up front. See `sandkiln_vmm::jailer`'s
+            // module doc comment.
+            return Err(AppError::BadRequest(
+                "snapshotting a jailed sandbox is not supported yet".to_string(),
+            ));
+        }
+    }
+
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
     let Sandbox { vm, network, rootfs_path, attached_drives, tags, .. } = sandbox;
 
@@ -206,6 +228,9 @@ pub async fn resume_snapshot(
         network: snapshot.network,
         rootfs_path: snapshot.rootfs_path,
         attached_drives: snapshot.attached_drives,
+        // `Vm::resume` always spawns directly (see its doc comment) —
+        // never jailed, so there's no uid/gid allocation to track here.
+        jail_id: None,
         tags: snapshot.tags,
         created_at: SystemTime::now(),
         last_activity: std::sync::Mutex::new(std::time::Instant::now()),

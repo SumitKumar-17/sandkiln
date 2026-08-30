@@ -23,7 +23,11 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   new field here plus an `env_or`/parse call, following the existing
   pattern. Also defines `LogFormat` (`SANDKILN_LOG_FORMAT=json` vs. the
   default pretty output), read by `main.rs` before the tracing
-  subscriber is initialized.
+  subscriber is initialized. `JailerHostConfig`/`Config::jailer`
+  (`SANDKILN_JAILER_ENABLED` and friends) is the daemon-operator switch
+  for jailer-based sandbox boot — see `sandkiln_vmm::jailer` and
+  `SELF_HOSTING.md`'s jailer section. Deliberately not something a
+  `POST /sandboxes` request body can override.
 - `metrics.rs` — `Metrics`: the `/metrics` endpoint's counters/gauge/
   histograms and a hand-rolled Prometheus text-exposition-format writer.
   Lives on `AppState` (`state.metrics`); route handlers record into it at
@@ -33,13 +37,15 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   dependency — see the module doc comment for why.
 - `auth.rs` — bearer-token middleware. No-ops entirely if
   `SANDKILN_AUTH_TOKEN` is unset.
-- `state.rs` — `AppState`: the daemon's config, `NetworkManager`, and
+- `state.rs` — `AppState`: the daemon's config, `NetworkManager`, an
+  optional `JailerIdPool` (`Some` only when `config.jailer` is set), and
   in-memory sandbox map (`Mutex<HashMap<String, Sandbox>>`). This map
   *is* the daemon's entire notion of sandbox state — it doesn't survive a
   restart (see `ROADMAP.md`'s sqlite-backed-state item).
 - `sandbox.rs` — the `Sandbox` struct the daemon tracks per running VM
   (id, `Vm` handle, network `Lease`, rootfs path, tags, created-at,
-  `last_activity`).
+  `last_activity`, and `jail_id` — the leased uid/gid if this sandbox
+  booted jailed, released back to `state.jailer_ids` on stop).
 - `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop.
   `stop_sandbox_by_id()` is the shared teardown helper (VM stop, network
   release, rootfs cleanup) used by both the `DELETE` route and
@@ -66,6 +72,10 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   the HTTP listener starts accepting connections.
 - `routes_drives.rs` / `routes_snapshot.rs` — drives and snapshot/resume
   handlers, each in their own file for the same reason as above.
+  `snapshot_sandbox` refuses to snapshot a jailed sandbox (`Vm::is_jailed`)
+  — `Vm::resume` only ever spawns directly, so a jailed sandbox's snapshot
+  could never be resumed correctly; see `sandkiln_vmm::jailer`'s module
+  doc comment before changing this.
 - `routes_metrics.rs` — the `/metrics` handler. Unauthenticated like
   `/healthz` (wired directly on `app` in `main.rs`, not through either
   auth-gated router) since it's operational data about the daemon, not

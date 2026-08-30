@@ -18,7 +18,12 @@
 #   http://127.0.0.1:7777. If SANDKILN_AUTH_TOKEN is set in the environment,
 #   auth-specific checks run too; otherwise they're skipped with a note,
 #   since a daemon started without SANDKILN_AUTH_TOKEN can't be told to
-#   require one at request time.
+#   require one at request time. Likewise, if SANDKILN_JAILER_ENABLED is
+#   set in this script's own environment, jailer-specific checks run too
+#   (exec inside a jailed sandbox, and that snapshotting one is rejected) —
+#   set it to whatever value the daemon under test was actually started
+#   with jailer enabled via, so this only runs those checks when they can
+#   actually pass.
 #
 # Every sandbox/drive/snapshot this script creates is tracked and torn
 # down on exit, pass or fail — see the cleanup trap near the bottom.
@@ -328,6 +333,32 @@ else
   status="$(req DELETE "/sandboxes/$SBXP")"
   assert_status "stop the preview sandbox" 204 "$status"
   CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBXP}")
+fi
+
+section "jailer"
+if [ -z "${SANDKILN_JAILER_ENABLED:-}" ]; then
+  echo "  skip - SANDKILN_JAILER_ENABLED not set in this script's environment, presumed off on the daemon too"
+else
+  status="$(req POST /sandboxes '{"tags":{"suite":"integration","case":"jailer"}}')"
+  assert_status "create sandbox under jailer" 200 "$status"
+  SBX_JAIL="$(extract id < "$WORKDIR/resp.json")"
+  if [ -z "$SBX_JAIL" ]; then
+    fail "create sandbox under jailer returned no id — aborting jailer checks"
+  else
+    CREATED_SANDBOXES+=("$SBX_JAIL")
+    pass "create sandbox under jailer returned an id ($SBX_JAIL)"
+
+    status="$(req POST "/sandboxes/$SBX_JAIL/exec" '{"command":"echo","args":["hello-from-a-jailed-vm"]}')"
+    assert_status "exec in a jailed sandbox" 200 "$status"
+    assert_contains "exec output is correct from inside the chroot" "$(cat "$WORKDIR/resp.json")" "hello-from-a-jailed-vm"
+
+    status="$(req POST "/sandboxes/$SBX_JAIL/snapshot")"
+    assert_status "snapshotting a jailed sandbox is rejected" 400 "$status"
+
+    status="$(req DELETE "/sandboxes/$SBX_JAIL")"
+    assert_status "stop the jailed sandbox" 204 "$status"
+    CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_JAIL}")
+  fi
 fi
 
 section "auth"
