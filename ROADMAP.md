@@ -102,12 +102,12 @@ outbound HTTP both still work.
 - Still open: `kiln logs -f`, once the daemon can stream output.
 - Built for manual testing, agentic workflows, and debugging — mirrors the
   SDK surface, usable standalone without writing code.
-- **Not published to npm — `kiln` is a pre-existing, unrelated package**
-  (`node-kiln`, owned by someone else since before this project existed);
-  publishing under that name isn't possible. Needs a package rename
-  before it can be published at all — see `packages/cli/AGENTS.md`. Run
-  from source (`packages/cli`) until then. The publish workflow
-  (`.github/workflows/publish-cli.yml`) is otherwise ready.
+- **Published**: [npmjs.com/package/sandkiln-cli](https://www.npmjs.com/package/sandkiln-cli)
+  (0.2.0, signed provenance) — not as `kiln`, which is a pre-existing,
+  unrelated package (`node-kiln`, owned by someone else since before this
+  project existed). `npm install -g sandkiln-cli` still gives you the
+  `kiln` command (npm's `bin` field maps them independently). Verified
+  live: installed fresh from the registry, ran `kiln --help` successfully.
 
 ## Authentication and multi-tenancy
 

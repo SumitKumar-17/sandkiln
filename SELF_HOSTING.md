@@ -464,12 +464,12 @@ npm install sandkiln
 pip install sandkiln
 ```
 
-The CLI (`kiln`) isn't published to npm yet — the name is taken by an
-unrelated package, see `packages/cli/AGENTS.md` — so run it from source
-for now:
+The CLI installs as `sandkiln-cli` (the bare name `kiln` was already
+taken by an unrelated package — see `packages/cli/AGENTS.md`) but the
+command itself is still `kiln`:
 ```
-cd packages/cli && npm run build
-node dist/index.js sandbox create --base-url http://127.0.0.1:7777 --token $SANDKILN_AUTH_TOKEN
+npm install -g sandkiln-cli
+kiln sandbox create --base-url http://127.0.0.1:7777 --token $SANDKILN_AUTH_TOKEN
 ```
 Each SDK/CLI's own `AGENTS.md` documents its exact configuration surface
 (`packages/sdk`, `packages/python`, `packages/cli`) — all three default to

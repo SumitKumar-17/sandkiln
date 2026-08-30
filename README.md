@@ -34,8 +34,14 @@ console.log(result.stdout, result.exitCode);
 await sandbox.stop();
 ```
 
-Python and a CLI (`kiln`) ship the same operations — see
-[`packages/python`](packages/python) and [`packages/cli`](packages/cli).
+Python and a CLI ship the same operations:
+
+```
+pip install sandkiln
+npm install -g sandkiln-cli   # installs the `kiln` command
+```
+
+See [`packages/python`](packages/python) and [`packages/cli`](packages/cli).
 
 ## Status
 
