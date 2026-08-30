@@ -26,6 +26,11 @@
 
 set -uo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# If scripts/setup.sh has been run, fill in from its generated env file —
+# only for variables not already exported, so explicit overrides still win.
+[ -f "$SCRIPT_DIR/../.env.sandkiln-setup" ] && source "$SCRIPT_DIR/../.env.sandkiln-setup"
+
 DAEMON_BIN=""
 ROOT_CHECKS=0
 while [ $# -gt 0 ]; do

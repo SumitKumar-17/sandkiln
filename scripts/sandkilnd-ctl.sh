@@ -22,6 +22,11 @@
 #   SANDKILN_CTL_PID_FILE   default: /tmp/sandkiln-daemon.pid
 #   SANDKILN_CTL_LOG_FILE   default: /tmp/sandkiln-daemon.log
 #
+# If scripts/setup.sh has been run, its generated .env.sandkiln-setup (at
+# the repo root) is sourced automatically below — it only fills in
+# variables you haven't already exported yourself, so this still works
+# exactly the same if you set everything by hand instead.
+#
 # Safe to run repeatedly: `start` on an already-running daemon is a no-op
 # (prints its PID and exits 0), `stop` on a non-running one is a no-op.
 
@@ -38,6 +43,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CORE_DIR="$REPO_ROOT/core"
 DAEMON_BIN="$CORE_DIR/target/release/sandkilnd"
+
+[ -f "$REPO_ROOT/.env.sandkiln-setup" ] && source "$REPO_ROOT/.env.sandkiln-setup"
 
 PID_FILE="${SANDKILN_CTL_PID_FILE:-/tmp/sandkiln-daemon.pid}"
 LOG_FILE="${SANDKILN_CTL_LOG_FILE:-/tmp/sandkiln-daemon.log}"

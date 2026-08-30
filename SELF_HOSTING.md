@@ -10,9 +10,31 @@ Everything here corresponds to a real script, binary, or configuration
 option that exists in this repository today — nothing is aspirational.
 Where a step used to require several manual commands with paths that had
 to match by hand, this guide also introduces the tooling
-(`scripts/preflight-check.sh`, `scripts/sandkilnd-ctl.sh`,
-`scripts/install-systemd-service.sh`) that now checks or automates it,
-rather than just describing the workaround.
+(`scripts/setup.sh`, `scripts/preflight-check.sh`,
+`scripts/sandkilnd-ctl.sh`, `scripts/install-systemd-service.sh`) that
+now checks or automates it, rather than just describing the workaround.
+
+## Quick start
+
+Sections 1–8 below, condensed to two commands, for a host that already
+has Rust and Firecracker's own prerequisites (KVM, sudo) available:
+
+```
+scripts/setup.sh          # builds everything, fetches a test image,
+                           # injects the guest agent, creates the tap
+                           # pool, grants CAP_NET_ADMIN — idempotent,
+                           # safe to re-run
+scripts/sandkilnd-ctl.sh start
+```
+
+That's a real, working daemon — enough to prove the whole stack end to
+end — but booting from the small Firecracker CI test image (~300MiB,
+missing `ca-certificates` and any language runtime). Add `--production`
+to `setup.sh` for a real base image (needs sudo and ~8GiB free disk;
+takes several minutes): `scripts/setup.sh --production`. Read sections
+1–8 if you want to understand what each step is actually doing, need to
+customize something the flags don't cover, or are debugging a step that
+failed.
 
 ## 1. Requirements and prerequisites
 
@@ -500,6 +522,12 @@ trusting the result — that's exactly what it exists for.
 
 ## 13. Troubleshooting
 
+- **`scripts/setup.sh` fails with "a terminal is required to read the
+  password"** — it ran non-interactively (e.g. over `ssh host 'cmd'`
+  rather than an interactive session) and one of its `sudo` steps had no
+  TTY to prompt on. Run it from a real interactive shell, or
+  `sudo -v` first to cache credentials in that session before invoking it
+  non-interactively.
 - **"Operation not permitted" on any network call** — you rebuilt the
   daemon and are running it manually (not under the systemd unit) and
   forgot to re-run `grant-net-admin.sh`. See section 6.
