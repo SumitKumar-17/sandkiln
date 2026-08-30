@@ -77,11 +77,9 @@ outbound HTTP both still work.
   how `stop()` returning `200` instead of the documented `204` got caught
   and fixed. **Published**:
   [npmjs.com/package/sandkiln](https://www.npmjs.com/package/sandkiln)
-  (0.1.0, with signed provenance from the CI build; the additions above
-  landed after that publish and need a version bump before they're live
-  on npm — check the published version's own surface before assuming
-  parity with this repo). Still open: streamed logs, once the daemon can
-  stream them.
+  (0.2.0, with signed provenance from the CI build — includes everything
+  in this bullet). Still open: streamed logs, once the daemon can stream
+  them.
 - **Python (`sandkiln` PyPI package) — working, mirrors the JS SDK
   exactly**, including `resume()`/`fork()`/`snapshot()`/`preview_url()`
   and resource overrides. Zero runtime dependencies (stdlib `urllib`,
@@ -104,6 +102,12 @@ outbound HTTP both still work.
 - Still open: `kiln logs -f`, once the daemon can stream output.
 - Built for manual testing, agentic workflows, and debugging — mirrors the
   SDK surface, usable standalone without writing code.
+- **Not published to npm — `kiln` is a pre-existing, unrelated package**
+  (`node-kiln`, owned by someone else since before this project existed);
+  publishing under that name isn't possible. Needs a package rename
+  before it can be published at all — see `packages/cli/AGENTS.md`. Run
+  from source (`packages/cli`) until then. The publish workflow
+  (`.github/workflows/publish-cli.yml`) is otherwise ready.
 
 ## Authentication and multi-tenancy
 

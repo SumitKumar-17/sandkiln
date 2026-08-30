@@ -458,11 +458,18 @@ process used to validate this guide itself; see `AGENTS.md`'s
 
 Or point a real client at it instead of `curl`:
 ```
-npm install -g kiln
-kiln sandbox create --base-url http://127.0.0.1:7777 --token $SANDKILN_AUTH_TOKEN
+npm install sandkiln
 ```
 ```
 pip install sandkiln
+```
+
+The CLI (`kiln`) isn't published to npm yet — the name is taken by an
+unrelated package, see `packages/cli/AGENTS.md` — so run it from source
+for now:
+```
+cd packages/cli && npm run build
+node dist/index.js sandbox create --base-url http://127.0.0.1:7777 --token $SANDKILN_AUTH_TOKEN
 ```
 Each SDK/CLI's own `AGENTS.md` documents its exact configuration surface
 (`packages/sdk`, `packages/python`, `packages/cli`) — all three default to

@@ -100,6 +100,18 @@ actually run.
   a first version. If you're tempted to add a unified `cp`, that's a
   legitimate improvement, just don't assume the roadmap's original
   wording is the final word on the exact command shape.
+- **`kiln` cannot be published on npm — the name is already taken by a
+  completely unrelated, pre-existing package** (`node-kiln`, "Provides
+  Kiln API functionality," owned by a third party since before this
+  project existed — confirmed via `npm view kiln repository`, points at
+  `boneskull/node-kiln`, nothing to do with sandkiln). A publish attempt
+  under this name gets a real `403 Forbidden` from npm, not a config
+  problem on our end. This package's own `name` field needs to change to
+  something available before it can ever be published — check
+  availability with `npm view <candidate-name>` (a `404` means it's
+  free) before picking one, then update `package.json`'s `name`, the
+  `bin` entry if it should change too, and every doc/README that
+  currently says `npm install -g kiln`.
 - Published with `npm publish --provenance` from CI
   (`.github/workflows/publish-cli.yml`), not manually — mirrors
   `publish-sdk.yml`'s trigger (`workflow_dispatch` or a `cli-v*.*.*` tag)
@@ -107,3 +119,5 @@ actually run.
   (this package depends on it as a real workspace dependency, same
   ordering constraint `ci.yml` already documents), so a CLI release can
   be tagged independently of, and doesn't require, a fresh SDK release.
+  **Currently blocked** on the package-name collision above — the
+  workflow itself is ready to go the moment the name changes.

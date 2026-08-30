@@ -8,13 +8,18 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
-**Published:** `sandkiln@0.2.0` and `kiln@0.2.0` on npm (minor bump from
-0.1.0 — `resume`/`fork`/`snapshot`/`previewUrl`, `vcpuCount`/`memSizeMib`
-overrides, and the matching `kiln sandbox` subcommands are all new,
-backward-compatible additions, nothing removed or changed). Everything
-below this line has landed in the repo since the 0.1.0 publish; most of
-it is now live in 0.2.0 — check the published package if you need to
-know exactly what's on npm right now versus what's only in this repo.
+**Published:** `sandkiln@0.2.0` on npm (minor bump from 0.1.0 —
+`resume`/`fork`/`snapshot`/`previewUrl` and `vcpuCount`/`memSizeMib`
+overrides are all new, backward-compatible additions, nothing removed or
+changed). The CLI is **not** published as `kiln` — that name on npm is a
+pre-existing, unrelated package (`node-kiln`, owned by someone else since
+before this project existed); publishing under that name is not possible.
+The CLI needs a different npm package name before it can be published at
+all — see `packages/cli/AGENTS.md`. Until then, run it from source.
+Everything below this line has landed in the repo since the SDK's 0.1.0
+publish; most of it is now live in `sandkiln@0.2.0` — check the published
+package if you need to know exactly what's on npm right now versus
+what's only in this repo.
 
 ### Added
 - Core execution primitive: Firecracker microVM boot, a guest agent
