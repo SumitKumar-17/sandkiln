@@ -1,0 +1,50 @@
+name: Publish CLI to npm
+
+# Deliberately not triggered on every push to main — publishing a version
+# is permanent, so it only runs when someone explicitly asks for it:
+# either a manual dispatch, or pushing a tag like `cli-v0.2.0`. Mirrors
+# publish-sdk.yml — see that file for the one-time NPM_TOKEN setup this
+# also relies on.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "cli-v*.*.*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+      - run: npm ci
+      # kiln depends on sandkiln as a real workspace dependency resolved
+      # through its built dist/ (see ci.yml's comment on this same
+      # ordering constraint) — has to be built from source here too, not
+      # installed from the registry, since a CLI version can be tagged
+      # for publish independently of (and potentially ahead of) the SDK's
+      # own next npm release.
+      - run: npm run typecheck -w sandkiln
+      - run: npm run build -w sandkiln
+      - run: npm run typecheck -w kiln
+      - run: npm run build -w kiln
+      - run: npm run test -w kiln
+      - name: Verify package.json version matches the tag
+        if: startsWith(github.ref, 'refs/tags/cli-v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#cli-v}"
+          PKG_VERSION="$(node -p "require('./packages/cli/package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "tag cli-v$TAG_VERSION does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+      - run: npm publish --workspace kiln --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

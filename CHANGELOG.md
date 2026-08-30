@@ -8,6 +8,14 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+**Published:** `sandkiln@0.2.0` and `kiln@0.2.0` on npm (minor bump from
+0.1.0 — `resume`/`fork`/`snapshot`/`previewUrl`, `vcpuCount`/`memSizeMib`
+overrides, and the matching `kiln sandbox` subcommands are all new,
+backward-compatible additions, nothing removed or changed). Everything
+below this line has landed in the repo since the 0.1.0 publish; most of
+it is now live in 0.2.0 — check the published package if you need to
+know exactly what's on npm right now versus what's only in this repo.
+
 ### Added
 - Core execution primitive: Firecracker microVM boot, a guest agent
   (vsock exec / read_file / write_file / list_dir), and a host-side

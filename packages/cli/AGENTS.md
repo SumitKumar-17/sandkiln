@@ -100,3 +100,10 @@ actually run.
   a first version. If you're tempted to add a unified `cp`, that's a
   legitimate improvement, just don't assume the roadmap's original
   wording is the final word on the exact command shape.
+- Published with `npm publish --provenance` from CI
+  (`.github/workflows/publish-cli.yml`), not manually — mirrors
+  `publish-sdk.yml`'s trigger (`workflow_dispatch` or a `cli-v*.*.*` tag)
+  and its `NPM_TOKEN` requirement. Builds `sandkiln` from source first
+  (this package depends on it as a real workspace dependency, same
+  ordering constraint `ci.yml` already documents), so a CLI release can
+  be tagged independently of, and doesn't require, a fresh SDK release.
