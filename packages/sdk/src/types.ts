@@ -5,6 +5,14 @@ export interface SandboxOptions {
 
 export interface CreateSandboxOptions extends SandboxOptions {
   tags?: Record<string, string>;
+  /** Overrides the daemon's configured default vCPU count for this one
+   * sandbox. Rejected by the daemon if it's `0` or exceeds the daemon's
+   * configured ceiling (`SANDKILN_MAX_VCPU_COUNT`). */
+  vcpuCount?: number;
+  /** Overrides the daemon's configured default memory size (MiB) for
+   * this one sandbox. Same ceiling semantics as `vcpuCount`, checked
+   * against `SANDKILN_MAX_MEM_SIZE_MIB`. */
+  memSizeMib?: number;
 }
 
 export interface ListSandboxesOptions extends SandboxOptions {
@@ -26,6 +34,8 @@ export interface ExecResult {
 
 export interface CreateSandboxRequestBody {
   tags?: Record<string, string>;
+  vcpu_count?: number;
+  mem_size_mib?: number;
 }
 
 export interface CreateSandboxResponseBody {

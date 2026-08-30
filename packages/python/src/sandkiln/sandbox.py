@@ -38,11 +38,24 @@ class Sandbox:
         tags: dict[str, str] | None = None,
         base_url: str | None = None,
         auth_token: str | None = None,
+        vcpu_count: int | None = None,
+        mem_size_mib: int | None = None,
     ) -> "Sandbox":
+        """`vcpu_count`/`mem_size_mib` override the daemon's configured
+        defaults for this one sandbox; omitted (the default) uses them
+        unchanged. The daemon rejects a value of `0` or anything above its
+        configured ceiling (`SANDKILN_MAX_VCPU_COUNT`/
+        `SANDKILN_MAX_MEM_SIZE_MIB`) with a 400."""
         resolved_base_url = resolve_base_url(base_url)
         resolved_token = resolve_auth_token(auth_token)
-        body = {"tags": tags} if tags is not None else None
-        response = request(resolved_base_url, "POST", "/sandboxes", resolved_token, body)
+        body: dict[str, object] = {}
+        if tags is not None:
+            body["tags"] = tags
+        if vcpu_count is not None:
+            body["vcpu_count"] = vcpu_count
+        if mem_size_mib is not None:
+            body["mem_size_mib"] = mem_size_mib
+        response = request(resolved_base_url, "POST", "/sandboxes", resolved_token, body or None)
         return cls(response["id"], resolved_base_url, resolved_token)
 
     @classmethod

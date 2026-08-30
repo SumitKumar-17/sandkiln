@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
 import { Sandbox, SandkilnApiError } from "sandkiln";
-import { formatSandboxList, parseTag } from "./format.js";
+import { formatSandboxList, parsePositiveInt, parseTag } from "./format.js";
 
 interface GlobalOptions {
   baseUrl?: string;
@@ -39,10 +39,18 @@ sandbox
   .command("create")
   .description("Boot a new sandbox.")
   .addOption(tagOption())
-  .action(async function (this: Command, opts: { tag: Record<string, string> }) {
+  .option("--vcpu <count>", "vCPU count override (daemon default if omitted)", parsePositiveInt("--vcpu"))
+  .option("--mem <mib>", "memory size override in MiB (daemon default if omitted)", parsePositiveInt("--mem"))
+  .action(async function (this: Command, opts: { tag: Record<string, string>; vcpu?: number; mem?: number }) {
     const { baseUrl, token } = clientOptions(this);
     try {
-      const created = await Sandbox.create({ baseUrl, authToken: token, tags: opts.tag });
+      const created = await Sandbox.create({
+        baseUrl,
+        authToken: token,
+        tags: opts.tag,
+        vcpuCount: opts.vcpu,
+        memSizeMib: opts.mem,
+      });
       process.stdout.write(`${created.id}\n`);
     } catch (error) {
       await handleApiError(error);
