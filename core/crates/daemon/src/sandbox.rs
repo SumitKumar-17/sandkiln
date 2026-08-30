@@ -17,6 +17,12 @@ pub struct Sandbox {
     /// Removing this sandbox from `AppState::sandboxes` is what "detaches"
     /// them: they become eligible for attaching to a later sandbox again.
     pub attached_drives: Vec<String>,
+    /// The uid/gid leased from `AppState::jailer_ids` for this sandbox's
+    /// VM, if it was booted jailed — `None` for a direct (unjailed) boot.
+    /// Released back to the pool in `stop_sandbox_by_id`; `Vm::stop`
+    /// itself only knows how to tear down the chroot directory, not this
+    /// daemon-level allocation, so the two are released independently.
+    pub jail_id: Option<u32>,
     pub tags: HashMap<String, String>,
     pub created_at: SystemTime,
     /// Updated on every real interaction (exec/read-file/write-file — see

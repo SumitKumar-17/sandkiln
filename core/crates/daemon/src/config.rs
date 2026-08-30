@@ -1,6 +1,27 @@
 use std::net::Ipv4Addr;
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::time::Duration;
+
+/// Firecracker jailer support: chroot, cgroup v2 limits, a dedicated
+/// unprivileged uid/gid per VM. Presence of a `Config::jailer` (vs.
+/// `None`) is what turns this on for the whole daemon — see
+/// `Config::from_env`'s `SANDKILN_JAILER_ENABLED` handling.
+///
+/// Deliberately a daemon-operator setting, not a per-`POST /sandboxes`
+/// request field: letting an API caller opt out of a security boundary
+/// the operator turned on would defeat the point of turning it on. See
+/// `sandkiln_vmm::jailer`'s module doc comment for what jailer actually
+/// does and why it needs the `jailer` binary itself made setuid-root
+/// (`SELF_HOSTING.md` documents the one-time setup).
+pub struct JailerHostConfig {
+    pub jailer_bin: PathBuf,
+    pub chroot_base_dir: PathBuf,
+    /// The uid/gid range dedicated to jailed VMs — see
+    /// `sandkiln_vmm::jailer::JailerIdPool`'s doc comment for why this
+    /// needs to be a range the host doesn't use for anything else.
+    pub uid_gid_range: RangeInclusive<u32>,
+}
 
 pub struct Config {
     pub listen_addr: String,
@@ -38,6 +59,9 @@ pub struct Config {
     /// JSON object per line, for production log pipelines that expect to
     /// parse fields rather than a human-readable terminal format.
     pub log_format: LogFormat,
+    /// `None` (the default) — `SANDKILN_JAILER_ENABLED` unset or falsy —
+    /// keeps today's direct Firecracker spawn. See `JailerHostConfig`.
+    pub jailer: Option<JailerHostConfig>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -83,12 +107,41 @@ impl Config {
                 .filter(|secs| *secs > 0)
                 .map(Duration::from_secs),
             log_format: LogFormat::from_env(),
+            jailer: jailer_config_from_env(),
         }
     }
 }
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+fn parse_bool_env(value: Option<&str>) -> bool {
+    matches!(value, Some(v) if v.eq_ignore_ascii_case("true") || v == "1")
+}
+
+/// The uid/gid range dedicated to jailed VMs: `base..=(base + size - 1)`.
+/// A `size` of `0` would produce an empty (and thus useless) range —
+/// callers should treat that as a configuration error rather than a
+/// silently-disabled pool, so this doesn't special-case it away.
+fn jailer_uid_gid_range(base: u32, size: u32) -> RangeInclusive<u32> {
+    base..=(base + size.saturating_sub(1))
+}
+
+fn jailer_config_from_env() -> Option<JailerHostConfig> {
+    if !parse_bool_env(std::env::var("SANDKILN_JAILER_ENABLED").ok().as_deref()) {
+        return None;
+    }
+    let uid_gid_base: u32 =
+        env_or("SANDKILN_JAILER_UID_GID_BASE", "600000").parse().expect("SANDKILN_JAILER_UID_GID_BASE must be a number");
+    let pool_size: u32 =
+        env_or("SANDKILN_JAILER_POOL_SIZE", "32").parse().expect("SANDKILN_JAILER_POOL_SIZE must be a number");
+    assert!(pool_size > 0, "SANDKILN_JAILER_POOL_SIZE must be at least 1 when jailer is enabled");
+    Some(JailerHostConfig {
+        jailer_bin: expand_home(&env_or("SANDKILN_JAILER_BIN", "~/sandkiln-tools/bin/jailer")),
+        chroot_base_dir: expand_home(&env_or("SANDKILN_JAILER_CHROOT_BASE_DIR", "~/sandkiln-tools/jail")),
+        uid_gid_range: jailer_uid_gid_range(uid_gid_base, pool_size),
+    })
 }
 
 fn expand_home(path: &str) -> PathBuf {
@@ -119,5 +172,37 @@ mod tests {
         assert_eq!(LogFormat::parse(Some("pretty")), LogFormat::Pretty);
         assert_eq!(LogFormat::parse(Some("")), LogFormat::Pretty);
         assert_eq!(LogFormat::parse(Some("yaml")), LogFormat::Pretty);
+    }
+
+    #[test]
+    fn parse_bool_env_accepts_true_and_1_case_insensitively() {
+        assert!(parse_bool_env(Some("true")));
+        assert!(parse_bool_env(Some("True")));
+        assert!(parse_bool_env(Some("TRUE")));
+        assert!(parse_bool_env(Some("1")));
+    }
+
+    #[test]
+    fn parse_bool_env_rejects_everything_else_including_unset() {
+        assert!(!parse_bool_env(None));
+        assert!(!parse_bool_env(Some("false")));
+        assert!(!parse_bool_env(Some("0")));
+        assert!(!parse_bool_env(Some("yes")));
+        assert!(!parse_bool_env(Some("")));
+    }
+
+    #[test]
+    fn jailer_uid_gid_range_covers_exactly_size_ids_starting_at_base() {
+        let range = jailer_uid_gid_range(600000, 32);
+        assert_eq!(*range.start(), 600000);
+        assert_eq!(*range.end(), 600031);
+        assert_eq!(range.count(), 32);
+    }
+
+    #[test]
+    fn jailer_uid_gid_range_of_size_one_is_a_single_id() {
+        let range = jailer_uid_gid_range(700000, 1);
+        assert_eq!(*range.start(), 700000);
+        assert_eq!(*range.end(), 700000);
     }
 }
