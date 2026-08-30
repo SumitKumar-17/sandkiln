@@ -14,10 +14,16 @@ this package only ever catches up to what the daemon actually does.
 
 ## Files
 
-- `sandbox.ts` — the `Sandbox` class: `create`/`attach`/`list` (static),
-  `runCommand`/`readFile`/`writeFile`/`stop` (instance). Every instance
-  method reuses the `baseUrl`/`authToken` the sandbox was
-  created/attached with — see the `ClientContext` pattern.
+- `sandbox.ts` — the `Sandbox` class: `create`/`attach`/`list`/`resume`/
+  `fork` (static), `runCommand`/`readFile`/`writeFile`/`stop`/`snapshot`
+  (instance). Every instance method reuses the `baseUrl`/`authToken` the
+  sandbox was created/attached with — see the `ClientContext` pattern.
+  `resume`/`fork` are static (not instance methods) because neither acts
+  on an already-existing `Sandbox` — they boot a *new* one from a
+  snapshot id, the same shape as `create`. `fork` doesn't consume the
+  snapshot, `resume` does; see the daemon's `routes_snapshot.rs` module
+  doc comment for why at most one live fork of a given snapshot can run
+  at a time.
 - `http.ts` — the one place `fetch` gets called. Non-2xx responses throw
   `SandkilnApiError`; a 204 (or any empty body) resolves to `undefined`.
   If the daemon's status-code contract ever doesn't match what's handled

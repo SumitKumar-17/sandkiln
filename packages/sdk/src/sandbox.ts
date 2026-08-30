@@ -8,12 +8,15 @@ import type {
   ExecRequestBody,
   ExecResponseBody,
   ExecResult,
+  ForkSnapshotResponseBody,
   ListSandboxesOptions,
   ListSandboxesResponseBody,
   ReadFileRequestBody,
   ReadFileResponseBody,
+  ResumeSnapshotResponseBody,
   SandboxInfo,
   SandboxOptions,
+  SnapshotSandboxResponseBody,
   WriteFileRequestBody,
 } from "./types.js";
 
@@ -113,6 +116,62 @@ export class Sandbox {
       method: "DELETE",
       path: `/sandboxes/${encodeURIComponent(this.id)}`,
     });
+  }
+
+  /**
+   * Saves this sandbox's full state (memory + disk) to disk and stops it,
+   * returning a snapshot id. The sandbox itself stops existing — call
+   * `Sandbox.resume` or `Sandbox.fork` on the returned id to boot from it
+   * again.
+   */
+  async snapshot(): Promise<string> {
+    const body = await request<SnapshotSandboxResponseBody>({
+      ...this.client,
+      method: "POST",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/snapshot`,
+    });
+    return body.snapshot_id;
+  }
+
+  /**
+   * Boots a new sandbox from a snapshot, consuming it — the snapshot is
+   * gone afterward, and the new sandbox owns its state outright, the same
+   * as one from `Sandbox.create`. Use `Sandbox.fork` instead if you want
+   * to boot from the same snapshot more than once.
+   */
+  static async resume(snapshotId: string, options: SandboxOptions = {}): Promise<Sandbox> {
+    const client = resolveClient(options);
+    const body = await request<ResumeSnapshotResponseBody>({
+      ...client,
+      method: "POST",
+      path: `/snapshots/${encodeURIComponent(snapshotId)}/resume`,
+    });
+    return new Sandbox(body.id, client);
+  }
+
+  /**
+   * Boots a new sandbox from a snapshot *without* consuming it, so the
+   * same snapshot can be forked or resumed again later — the building
+   * block for starting parallel branches off one prepared environment
+   * without repeating its setup cost.
+   *
+   * Only one live sandbox forked from a given snapshot may exist at a
+   * time: a fork reopens the exact rootfs file the snapshot recorded
+   * (and, if the original sandbox was networked, the exact tap device —
+   * its guest IP/MAC were frozen in at that sandbox's original boot), so
+   * two live forks at once would mean either two VMs writing the same
+   * disk image or two guests colliding on one IP/MAC. A second `fork()`
+   * call while an earlier fork is still running rejects with a 409 until
+   * that one is stopped.
+   */
+  static async fork(snapshotId: string, options: SandboxOptions = {}): Promise<Sandbox> {
+    const client = resolveClient(options);
+    const body = await request<ForkSnapshotResponseBody>({
+      ...client,
+      method: "POST",
+      path: `/snapshots/${encodeURIComponent(snapshotId)}/fork`,
+    });
+    return new Sandbox(body.id, client);
   }
 }
 
