@@ -24,7 +24,7 @@ packages/sdk/            sandkiln npm package (TypeScript)
 packages/python/         sandkiln PyPI package (Python)
 packages/cli/            kiln CLI, wraps the JS/TS SDK
 images/                  rootfs/kernel build + agent-injection scripts
-scripts/                 dev-box setup: tap pool, network bridge, DNS proxy, sync, integration/load tests
+scripts/                 dev-box setup: tap pool, network bridge, DNS proxy, sync, integration/load tests, preflight checks, systemd install
 website/                 the project site, deployed via GitHub Pages (and a live mirror)
 examples/                runnable reference projects (code playground, agent runner)
 ```
