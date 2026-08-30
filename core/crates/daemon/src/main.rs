@@ -124,6 +124,13 @@ async fn async_main() {
     // `/sandboxes*` API.
     let preview_routes = Router::new()
         .route("/sandboxes/:id/preview/:port", any(routes_preview::preview_root))
+        // `*path` only matches when there's at least one character after
+        // the trailing `/` — a bare trailing slash with nothing after it
+        // (exactly what `previewUrl()`'s default `path: "/"` produces in
+        // every SDK) matches neither this route nor the bare one above
+        // without this third explicit registration. Found live: every
+        // preview request with the SDKs' own default path 404'd.
+        .route("/sandboxes/:id/preview/:port/", any(routes_preview::preview_root))
         .route("/sandboxes/:id/preview/:port/*path", any(routes_preview::preview_path))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_preview_token));
 

@@ -27,10 +27,14 @@ use std::time::Instant;
 
 pub type PreviewClient = hyper_util::client::legacy::Client<HttpConnector, axum::body::Body>;
 
-/// No sub-path given (`/sandboxes/:id/preview/:port`, no trailing
-/// segment) — a separate route from `preview_path` below because axum's
-/// `*rest` wildcard only matches when there's at least a trailing `/`,
-/// not the bare prefix.
+/// No sub-path given — handles both `/sandboxes/:id/preview/:port` (no
+/// trailing slash) and `/sandboxes/:id/preview/:port/` (trailing slash,
+/// nothing after it — what every SDK's `previewUrl()` produces by
+/// default). Kept separate from `preview_path` below because axum's
+/// `*path` wildcard only matches when there's at least one character
+/// after the trailing `/`; an empty tail matches neither the wildcard
+/// route nor the bare one without this route registered explicitly (see
+/// `main.rs`'s three-route registration for this handler + `preview_path`).
 pub async fn preview_root(
     State(state): State<Arc<AppState>>,
     Path((id, port)): Path<(String, String)>,
