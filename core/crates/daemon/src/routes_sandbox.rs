@@ -27,6 +27,18 @@ pub struct CreateSandboxRequest {
     /// each becoming its own block device inside the guest.
     #[serde(default)]
     drives: Vec<DriveAttachment>,
+    /// Overrides the daemon's configured default vCPU count
+    /// (`SANDKILN_VCPU_COUNT`) for this one sandbox. Omitted means "use
+    /// the default" — today's behavior, unchanged. Rejected outright
+    /// (`400`) rather than clamped if it's `0` or exceeds the configured
+    /// ceiling (`SANDKILN_MAX_VCPU_COUNT`) — see `resolve_resource_override`.
+    #[serde(default)]
+    vcpu_count: Option<u8>,
+    /// Overrides the daemon's configured default memory size in MiB
+    /// (`SANDKILN_MEM_SIZE_MIB`) for this one sandbox. Same semantics as
+    /// `vcpu_count` above, checked against `SANDKILN_MAX_MEM_SIZE_MIB`.
+    #[serde(default)]
+    mem_size_mib: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -59,6 +71,12 @@ pub async fn create_sandbox(
             return Err(AppError::Conflict(format!("drive {} is already attached to {holder}", drive.id)));
         }
     }
+
+    let vcpu_count = resolve_resource_override(request.vcpu_count, state.config.vcpu_count, state.config.max_vcpu_count, "vcpu_count")
+        .map_err(AppError::BadRequest)?;
+    let mem_size_mib =
+        resolve_resource_override(request.mem_size_mib, state.config.mem_size_mib, state.config.max_mem_size_mib, "mem_size_mib")
+            .map_err(AppError::BadRequest)?;
 
     let id = Uuid::new_v4().to_string();
     let rootfs_path = std::env::temp_dir().join(format!("sandkiln-rootfs-{id}.ext4"));
@@ -102,8 +120,8 @@ pub async fn create_sandbox(
                 firecracker_bin: state.config.firecracker_bin.clone(),
                 kernel_path: state.config.kernel_path.clone(),
                 rootfs_path,
-                vcpu_count: state.config.vcpu_count,
-                mem_size_mib: state.config.mem_size_mib,
+                vcpu_count,
+                mem_size_mib,
                 network: Some(lease.config.clone()),
                 extra_drives,
             });
@@ -201,6 +219,29 @@ pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String) -> Resu
     Ok(())
 }
 
+/// Resolves a per-request resource override (`vcpu_count`/`mem_size_mib`
+/// on `CreateSandboxRequest`) against the daemon's configured default and
+/// ceiling. `None` (the field omitted) returns `default` unchanged —
+/// today's behavior for a caller that doesn't ask for anything special. A
+/// caller-supplied `0` (meaningless — a VM can't run with zero vCPUs or
+/// zero memory) or anything above `max` is rejected outright rather than
+/// silently clamped, so an unreasonable request fails loudly instead of
+/// quietly running with less than the caller thought they'd get. A
+/// negative value can't reach here at all: `vcpu_count`/`mem_size_mib`
+/// deserialize as unsigned integers, so `serde_json` already rejects a
+/// negative number in the request body before this is ever called.
+fn resolve_resource_override<T>(requested: Option<T>, default: T, max: T, field: &str) -> Result<T, String>
+where
+    T: PartialOrd + Copy + Default + std::fmt::Display,
+{
+    match requested {
+        None => Ok(default),
+        Some(value) if value == T::default() => Err(format!("{field} must be greater than 0")),
+        Some(value) if value > max => Err(format!("{field} {value} exceeds the configured maximum of {max}")),
+        Some(value) => Ok(value),
+    }
+}
+
 /// Returns the first item that's already been seen, if any.
 fn first_duplicate<'a>(mut items: impl Iterator<Item = &'a str>) -> Option<&'a str> {
     let mut seen = HashSet::new();
@@ -223,6 +264,43 @@ fn clone_rootfs(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_resource_override_uses_the_default_when_omitted() {
+        assert_eq!(resolve_resource_override(None, 2u8, 16u8, "vcpu_count"), Ok(2));
+    }
+
+    #[test]
+    fn resolve_resource_override_accepts_a_value_within_the_ceiling() {
+        assert_eq!(resolve_resource_override(Some(8u8), 2u8, 16u8, "vcpu_count"), Ok(8));
+    }
+
+    #[test]
+    fn resolve_resource_override_accepts_a_value_exactly_at_the_ceiling() {
+        assert_eq!(resolve_resource_override(Some(16u8), 2u8, 16u8, "vcpu_count"), Ok(16));
+    }
+
+    #[test]
+    fn resolve_resource_override_rejects_zero() {
+        assert_eq!(resolve_resource_override(Some(0u8), 2u8, 16u8, "vcpu_count"), Err("vcpu_count must be greater than 0".to_string()));
+    }
+
+    #[test]
+    fn resolve_resource_override_rejects_above_the_ceiling() {
+        assert_eq!(
+            resolve_resource_override(Some(17u8), 2u8, 16u8, "vcpu_count"),
+            Err("vcpu_count 17 exceeds the configured maximum of 16".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_resource_override_works_for_mem_size_mib_too() {
+        assert_eq!(resolve_resource_override(Some(4096u32), 512u32, 16384u32, "mem_size_mib"), Ok(4096));
+        assert_eq!(
+            resolve_resource_override(Some(u32::MAX), 512u32, 16384u32, "mem_size_mib"),
+            Err(format!("mem_size_mib {} exceeds the configured maximum of 16384", u32::MAX))
+        );
+    }
 
     #[test]
     fn first_duplicate_finds_a_repeat() {

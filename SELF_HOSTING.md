@@ -126,8 +126,10 @@ All configuration is env vars, all optional with sane defaults (see
 | `SANDKILN_FIRECRACKER_BIN` | `~/sandkiln-tools/bin/firecracker` | path to the Firecracker binary |
 | `SANDKILN_KERNEL_PATH` | `~/sandkiln-tools/images/vmlinux-5.10.223` | guest kernel image |
 | `SANDKILN_BASE_ROOTFS` | `~/sandkiln-tools/images/ubuntu-22.04.ext4` | base rootfs cloned per sandbox |
-| `SANDKILN_VCPU_COUNT` | `2` | vCPUs per sandbox |
-| `SANDKILN_MEM_SIZE_MIB` | `512` | memory per sandbox |
+| `SANDKILN_VCPU_COUNT` | `2` | vCPUs per sandbox, when a request doesn't override it |
+| `SANDKILN_MEM_SIZE_MIB` | `512` | memory per sandbox, when a request doesn't override it |
+| `SANDKILN_MAX_VCPU_COUNT` | `16` | ceiling on a per-request `vcpu_count` override (`POST /sandboxes`); a request above this, or `0`, is rejected with `400` |
+| `SANDKILN_MAX_MEM_SIZE_MIB` | `16384` | ceiling on a per-request `mem_size_mib` override, same semantics as above |
 | `SANDKILN_BRIDGE_NAME` | `sktapbr0` | shared bridge the daemon creates |
 | `SANDKILN_BRIDGE_GATEWAY` | `172.16.0.1` | bridge/gateway IP (`/24` subnet) |
 | `SANDKILN_UPLINK_IFACE` | auto-detected | host interface sandboxes NAT out through |
@@ -136,6 +138,7 @@ All configuration is env vars, all optional with sane defaults (see
 | `SANDKILN_AUTH_TOKEN` | unset (auth disabled) | bearer token required on `/sandboxes*`, `/drives*` |
 | `SANDKILN_DRIVES_DIR` | `~/sandkiln-tools/drives` | where persistent drives are stored |
 | `SANDKILN_IDLE_TIMEOUT_SECS` | unset (disabled) | stop a sandbox automatically after this many seconds with no exec/read-file/write-file activity; `0` also disables it |
+| `SANDKILN_LOG_FORMAT` | `pretty` | `json` switches to one JSON object per log line, for production log pipelines |
 
 **Set `SANDKILN_AUTH_TOKEN` for anything reachable beyond localhost** — with
 it unset the API is completely open. Auth is a no-op middleware when
