@@ -46,8 +46,8 @@ jobs:
       # locally that skipping this order breaks kiln's typecheck.
       - run: npm run typecheck -w sandkiln
       - run: npm run build -w sandkiln
-      - run: npm run typecheck -w kiln
-      - run: npm run build -w kiln
+      - run: npm run typecheck -w sandkiln-cli
+      - run: npm run build -w sandkiln-cli
 
   python:
     name: Python SDK (build + import check)

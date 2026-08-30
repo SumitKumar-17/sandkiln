@@ -50,7 +50,7 @@ than skipping tests because the rest of the file needs a live daemon.
   — `format.ts` is built as its own `tsup` entry (no shebang banner)
   specifically so it can be imported standalone. `npm test` runs
   `pretest` (`npm run build`) first, so it's always testing current code.
-- Run: `npm run test -w kiln` (or `cd packages/cli && npm test`).
+- Run: `npm run test -w sandkiln-cli` (or `cd packages/cli && npm test`).
 
 ## The bug that already happened here — read before touching command registration
 
@@ -68,9 +68,9 @@ command object.
 ## Building and verifying
 
 ```
-npm run typecheck -w kiln
-npm run build -w kiln
-npm run test -w kiln
+npm run typecheck -w sandkiln-cli
+npm run build -w sandkiln-cli
+npm run test -w sandkiln-cli
 ```
 **Requires `sandkiln` (the SDK) to already be built** — it's a real
 workspace dependency resolved through `packages/sdk/dist/`, not source.
@@ -100,18 +100,17 @@ actually run.
   a first version. If you're tempted to add a unified `cp`, that's a
   legitimate improvement, just don't assume the roadmap's original
   wording is the final word on the exact command shape.
-- **`kiln` cannot be published on npm — the name is already taken by a
-  completely unrelated, pre-existing package** (`node-kiln`, "Provides
-  Kiln API functionality," owned by a third party since before this
-  project existed — confirmed via `npm view kiln repository`, points at
-  `boneskull/node-kiln`, nothing to do with sandkiln). A publish attempt
-  under this name gets a real `403 Forbidden` from npm, not a config
-  problem on our end. This package's own `name` field needs to change to
-  something available before it can ever be published — check
-  availability with `npm view <candidate-name>` (a `404` means it's
-  free) before picking one, then update `package.json`'s `name`, the
-  `bin` entry if it should change too, and every doc/README that
-  currently says `npm install -g kiln`.
+- **Published on npm as `sandkiln-cli`, not `kiln`.** The short name
+  `kiln` is already taken by a completely unrelated, pre-existing package
+  (`node-kiln`, "Provides Kiln API functionality," owned by a third party
+  since before this project existed — confirmed via `npm view kiln
+  repository`, points at `boneskull/node-kiln`, nothing to do with
+  sandkiln; a publish attempt under that name gets a real `403 Forbidden`
+  from npm). The installed **command** is still `kiln` — only the npm
+  package name differs from the binary name, which npm's `bin` field
+  supports directly (`package.json`'s `bin.kiln` points at
+  `dist/index.js` regardless of what `name` says). Install with
+  `npm install -g sandkiln-cli`, then just run `kiln ...`.
 - Published with `npm publish --provenance` from CI
   (`.github/workflows/publish-cli.yml`), not manually — mirrors
   `publish-sdk.yml`'s trigger (`workflow_dispatch` or a `cli-v*.*.*` tag)
@@ -119,5 +118,3 @@ actually run.
   (this package depends on it as a real workspace dependency, same
   ordering constraint `ci.yml` already documents), so a CLI release can
   be tagged independently of, and doesn't require, a fresh SDK release.
-  **Currently blocked** on the package-name collision above — the
-  workflow itself is ready to go the moment the name changes.

@@ -1,7 +1,7 @@
 {
-  "name": "kiln",
+  "name": "sandkiln-cli",
   "version": "0.2.0",
-  "description": "CLI for sandkiln — manual testing, agentic workflows, and debugging for microVM sandboxes.",
+  "description": "CLI for sandkiln — manual testing, agentic workflows, and debugging for microVM sandboxes. Installs the `kiln` command.",
   "license": "MIT",
   "author": "Sumit Kumar",
   "repository": {
