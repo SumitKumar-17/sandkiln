@@ -124,6 +124,16 @@ outbound HTTP both still work.
   needs to split before persistence can work at all.
 - **Snapshot/resume**: save a running microVM's full state (memory + disk)
   and resume it later, skipping boot and dependency installation entirely.
+- **Done: snapshots durable across a daemon restart.** Snapshot metadata
+  is written atomically to disk alongside its state/memory files and
+  reconciled back into the daemon at startup — a snapshot taken before a
+  daemon crash or restart is still listable and resumable afterward, with
+  its held network tap device correctly reserved out of the pool before
+  the daemon starts accepting new sandbox creates (preventing a
+  double-lease race). Verified live: killed a daemon with a snapshot on
+  disk, started a fresh instance, resumed it, data intact. Not durable
+  across a host *reboot* by default — snapshot storage lives under
+  `$TMPDIR`, see `SELF_HOSTING.md`'s persistent-state section.
 - **Persistent-by-default sandboxes**: auto-snapshot on stop, so "stop and
   come back later" is the default behavior, not something the caller has
   to manage.

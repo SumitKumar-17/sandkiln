@@ -463,14 +463,28 @@ trusting the result — that's exactly what it exists for.
   `mem_size_mib` apply uniformly to every sandbox via daemon config;
   nothing today stops a caller from running a sandbox indefinitely
   except the optional `SANDKILN_IDLE_TIMEOUT_SECS`.
-- **Persistent state and where it lives**: persistent drives
-  (`SANDKILN_DRIVES_DIR`) and snapshots (under the daemon's own working
-  directory — see `core/crates/daemon/src/routes_snapshot.rs` for the
-  exact path) are the only state that outlives a sandbox stop; back
-  those up if they matter to you. The daemon's own bookkeeping of
-  *running* sandboxes is in-memory only — a daemon restart does not
-  preserve live sandboxes (their VM processes are gone with it), only
-  drives and snapshots on disk.
+- **Persistent state and where it lives**: persistent drives live under
+  `SANDKILN_DRIVES_DIR`. Snapshots (state + memory + metadata) live under
+  `$TMPDIR/sandkiln-snapshots` (`std::env::temp_dir()` joined with a
+  fixed subdirectory — typically `/tmp/sandkiln-snapshots`;
+  `core/crates/daemon/src/snapshot.rs::snapshots_root()` is the
+  authoritative source). Both are the only state that outlives a sandbox
+  stop — back them up if they matter to you. Snapshots specifically are
+  durable across a **daemon restart** (verified live: the daemon
+  reconciles every valid snapshot directory back into memory at
+  startup — killed a daemon with `kill -9` mid-session with a snapshot on
+  disk, started a fresh instance, and resumed it successfully with its
+  data intact) but **not necessarily across a host reboot** — whether
+  `/tmp` survives a reboot depends on that host's own configuration (many
+  systemd-based distributions mount `/tmp` as tmpfs by default, which
+  does not survive a reboot). If snapshot durability across a reboot
+  matters for your deployment, point `TMPDIR` at a path on persistent
+  storage before starting the daemon, or move `SANDKILN_DRIVES_DIR` and
+  snapshot storage onto the same durable volume and verify your host's
+  `/tmp` mount before relying on the default. The daemon's own
+  bookkeeping of *running* sandboxes is in-memory only regardless — a
+  restart never preserves live sandboxes (their VM processes exit with
+  the daemon), only drives and snapshots on disk.
 - **Cleanup on crash**: if `sandkilnd` is killed ungracefully, any
   Firecracker child processes it had spawned are orphaned (not part of
   a process group the daemon tears down on its own exit) — check
