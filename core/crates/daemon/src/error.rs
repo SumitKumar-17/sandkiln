@@ -10,6 +10,15 @@ pub enum AppError {
     /// The request is well-formed but conflicts with current state — e.g.
     /// deleting or attaching a drive that's already attached elsewhere.
     Conflict(String),
+    /// A `/preview` proxy request reached a sandbox but not the target
+    /// port inside it — connection refused (nothing listening), reset, or
+    /// otherwise unreachable at the TCP level. Distinct from `Internal`
+    /// since this is never the daemon's own fault: it's exactly what a
+    /// browser sees hitting a dead port through any reverse proxy.
+    BadGateway(String),
+    /// A `/preview` proxy request's guest side didn't respond within
+    /// `Config::preview_timeout`.
+    GatewayTimeout(String),
     Internal(std::io::Error),
 }
 
@@ -26,6 +35,8 @@ impl IntoResponse for AppError {
             AppError::DriveNotFound(id) => (StatusCode::NOT_FOUND, format!("drive not found: {id}")),
             AppError::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
             AppError::Conflict(message) => (StatusCode::CONFLICT, message),
+            AppError::BadGateway(message) => (StatusCode::BAD_GATEWAY, message),
+            AppError::GatewayTimeout(message) => (StatusCode::GATEWAY_TIMEOUT, message),
             AppError::Internal(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         };
         (status, Json(json!({ "error": message }))).into_response()
@@ -73,6 +84,21 @@ mod tests {
         let (status, message) = status_and_message(AppError::Conflict("already attached".to_string()).into_response()).await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(message, "already attached");
+    }
+
+    #[tokio::test]
+    async fn bad_gateway_is_502_with_the_given_message_verbatim() {
+        let (status, message) = status_and_message(AppError::BadGateway("connection refused".to_string()).into_response()).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(message, "connection refused");
+    }
+
+    #[tokio::test]
+    async fn gateway_timeout_is_504_with_the_given_message_verbatim() {
+        let (status, message) =
+            status_and_message(AppError::GatewayTimeout("no response in time".to_string()).into_response()).await;
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(message, "no response in time");
     }
 
     #[tokio::test]

@@ -1,11 +1,15 @@
 use crate::config::Config;
 use crate::metrics::Metrics;
+use crate::routes_preview::PreviewClient;
 use crate::sandbox::Sandbox;
 use crate::snapshot::Snapshot;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::TokioExecutor;
 use sandkiln_vmm::drive::DriveStore;
 use sandkiln_vmm::network::NetworkManager;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::Duration;
 
 pub struct AppState {
     pub config: Config,
@@ -14,6 +18,12 @@ pub struct AppState {
     pub sandboxes: Mutex<HashMap<String, Sandbox>>,
     pub snapshots: Mutex<HashMap<String, Snapshot>>,
     pub metrics: Metrics,
+    /// Reused across every `/preview` proxy request rather than built
+    /// per-request, so repeated hits on one dev server benefit from
+    /// `hyper-util`'s connection pooling instead of a fresh TCP handshake
+    /// (and, for a WebSocket-using dev server later, from a client
+    /// already wired for keep-alive) every time.
+    pub preview_client: PreviewClient,
 }
 
 impl AppState {
@@ -25,6 +35,7 @@ impl AppState {
             sandboxes: Mutex::new(HashMap::new()),
             snapshots: Mutex::new(HashMap::new()),
             metrics: Metrics::new(),
+            preview_client: build_preview_client(),
         }
     }
 
@@ -47,4 +58,16 @@ impl AppState {
         }
         None
     }
+}
+
+/// A short connect timeout is what actually turns "guest port isn't
+/// listening" into a fast, clear error — a refused connection fails
+/// immediately either way, but a black-holed one (SYN silently dropped,
+/// e.g. a guest firewall rule) would otherwise hang until the request-level
+/// timeout in `Config::preview_timeout`, which is tuned for slow dev-server
+/// compiles, not connection setup.
+fn build_preview_client() -> PreviewClient {
+    let mut connector = HttpConnector::new();
+    connector.set_connect_timeout(Some(Duration::from_secs(5)));
+    hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build(connector)
 }

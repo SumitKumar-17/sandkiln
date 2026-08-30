@@ -38,6 +38,11 @@ pub struct Config {
     /// JSON object per line, for production log pipelines that expect to
     /// parse fields rather than a human-readable terminal format.
     pub log_format: LogFormat,
+    /// How long `GET/POST/... /sandboxes/:id/preview/:port/*path` waits
+    /// for the guest's dev server to respond before giving up with a 504.
+    /// Deliberately generous compared to `exec`'s latency: a dev server
+    /// can be slow to first-compile a page (webpack/vite cold start).
+    pub preview_timeout: Duration,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -83,6 +88,9 @@ impl Config {
                 .filter(|secs| *secs > 0)
                 .map(Duration::from_secs),
             log_format: LogFormat::from_env(),
+            preview_timeout: Duration::from_secs(
+                env_or("SANDKILN_PREVIEW_TIMEOUT_SECS", "30").parse().expect("SANDKILN_PREVIEW_TIMEOUT_SECS must be a number"),
+            ),
         }
     }
 }
