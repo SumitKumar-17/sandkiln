@@ -13,22 +13,40 @@ straight to the SDK.
 
 ## Files
 
-- `src/index.ts` — the CLI. `sandbox create|ls|rm|exec|read|write`
-  subcommands, each a thin call into `Sandbox`/`Sandbox.attach()`.
+- `src/index.ts` — the CLI. `sandbox create|get-or-create|by-name|ls|rm|
+  exec|read|write|preview|snapshot|resume|fork` and `image create|ls|rm`
+  subcommands, each a thin call into `Sandbox`/`Sandbox.attach()`/`Image`.
+  `resume`/`fork`/`get-or-create`/`by-name` call the SDK's static
+  `Sandbox.resume`/`Sandbox.fork`/`Sandbox.getOrCreate`/`Sandbox.byName`
+  directly (none acts on an already-existing handle — `resume`/`fork`
+  take a snapshot id, `by-name`/`get-or-create` a name, not a sandbox id,
+  so there's no existing handle to attach to); `image` subcommands call
+  `Image`'s static methods the same way, since an image has no instance
+  handle at all. `sandbox create --image <id>` boots from a registered
+  image instead of the daemon's default rootfs. `rm` defaults to the
+  SDK's `stop()` persist-by-default behavior and reports whether the
+  sandbox was preserved (with its snapshot id) or destroyed; `--destroy`
+  opts into full destruction (`stop({ keep: false })`).
   `--base-url`/`--token` are global options that fall through to the
   SDK's own env var resolution when unset — don't reimplement that
   resolution here, just pass `undefined` through. Every action handler
   catches its own errors and reports them on stderr with a non-zero exit
   (`handleApiError`/`fail`); `program.parseAsync(...)` at the bottom has
-  a `.catch()` backstop so nothing escapes as a raw stack trace.
+  a `.catch()` backstop so nothing escapes as a raw stack trace. `preview`
+  is the one subcommand that makes no network call at all — it just
+  prints `Sandbox.previewUrl()`'s pure result, same reasoning as why that
+  SDK method itself does no round-trip; port-range validation lives in
+  the SDK (`Sandbox.previewUrl` throws `RangeError`), not duplicated here,
+  matching this package's own "essentially no logic of its own" rule.
 - `src/format.ts` — the pure logic pulled out of `index.ts` specifically
   so it's unit-testable without importing the CLI's top-level commander
   wiring (which parses `process.argv` as a side effect of module load):
   `parseTag` (the `--tag key=value` parser — throws commander's
   `InvalidArgumentError`, not a plain `Error`, so a bad `--tag` value
   gets the same clean `error: ...` stderr message as everything else
-  instead of an unhandled-exception stack trace) and `formatSandboxList`
-  (the `sandbox ls` output formatter, including the empty-list case).
+  instead of an unhandled-exception stack trace), `formatSandboxList`
+  (the `sandbox ls` output formatter, including the empty-list case), and
+  `formatImageList` (the `image ls` equivalent).
 
 ## Testing
 
@@ -42,7 +60,7 @@ than skipping tests because the rest of the file needs a live daemon.
   — `format.ts` is built as its own `tsup` entry (no shebang banner)
   specifically so it can be imported standalone. `npm test` runs
   `pretest` (`npm run build`) first, so it's always testing current code.
-- Run: `npm run test -w kiln` (or `cd packages/cli && npm test`).
+- Run: `npm run test -w sandkiln-cli` (or `cd packages/cli && npm test`).
 
 ## The bug that already happened here — read before touching command registration
 
@@ -60,9 +78,9 @@ command object.
 ## Building and verifying
 
 ```
-npm run typecheck -w kiln
-npm run build -w kiln
-npm run test -w kiln
+npm run typecheck -w sandkiln-cli
+npm run build -w sandkiln-cli
+npm run test -w sandkiln-cli
 ```
 **Requires `sandkiln` (the SDK) to already be built** — it's a real
 workspace dependency resolved through `packages/sdk/dist/`, not source.
@@ -92,3 +110,21 @@ actually run.
   a first version. If you're tempted to add a unified `cp`, that's a
   legitimate improvement, just don't assume the roadmap's original
   wording is the final word on the exact command shape.
+- **Published on npm as `sandkiln-cli`, not `kiln`.** The short name
+  `kiln` is already taken by a completely unrelated, pre-existing package
+  (`node-kiln`, "Provides Kiln API functionality," owned by a third party
+  since before this project existed — confirmed via `npm view kiln
+  repository`, points at `boneskull/node-kiln`, nothing to do with
+  sandkiln; a publish attempt under that name gets a real `403 Forbidden`
+  from npm). The installed **command** is still `kiln` — only the npm
+  package name differs from the binary name, which npm's `bin` field
+  supports directly (`package.json`'s `bin.kiln` points at
+  `dist/index.js` regardless of what `name` says). Install with
+  `npm install -g sandkiln-cli`, then just run `kiln ...`.
+- Published with `npm publish --provenance` from CI
+  (`.github/workflows/publish-cli.yml`), not manually — mirrors
+  `publish-sdk.yml`'s trigger (`workflow_dispatch` or a `cli-v*.*.*` tag)
+  and its `NPM_TOKEN` requirement. Builds `sandkiln` from source first
+  (this package depends on it as a real workspace dependency, same
+  ordering constraint `ci.yml` already documents), so a CLI release can
+  be tagged independently of, and doesn't require, a fresh SDK release.

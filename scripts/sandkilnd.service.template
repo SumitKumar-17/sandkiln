@@ -1,0 +1,32 @@
+[Unit]
+Description=sandkiln daemon (sandkilnd)
+Documentation=https://github.com/SumitKumar-17/sandkiln
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=@SANDKILN_BIN_DIR@/preflight-check.sh --daemon-bin @SANDKILN_DAEMON_BIN@
+ExecStart=@SANDKILN_DAEMON_BIN@
+Restart=on-failure
+RestartSec=2
+
+User=@SANDKILN_USER@
+Group=@SANDKILN_GROUP@
+EnvironmentFile=-@SANDKILN_ENV_FILE@
+
+# Granted per-start by systemd itself, not via `setcap` on the binary —
+# this is what lets the unit survive a `cargo build --release` producing
+# a new binary with no file capability of its own: systemd re-grants
+# CAP_NET_ADMIN into the new process's ambient set on every start
+# regardless of what (if anything) is setcap'd on the file. The daemon's
+# own startup code (core/crates/daemon/src/main.rs::raise_net_admin_ambient)
+# still runs its `caps::raise(...)` calls either way — they become no-ops
+# when the capability is already ambient, which is exactly what happens
+# here. See SELF_HOSTING.md's "Running as a persistent service" section.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

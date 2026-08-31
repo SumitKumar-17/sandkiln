@@ -20,6 +20,10 @@ external user of the published packages would write.
 - `agent-runner/` — Python, the `sandkiln` PyPI package. Runs a
   hardcoded stand-in "agent-generated" script inside a sandbox and reads
   back a result file it produced.
+- `dev-server-preview/` — JS/TS, the `sandkiln` npm package. Starts a
+  server inside a sandbox and prints the URL to reach it from a browser
+  via `Sandbox.previewUrl()` and the daemon's `/sandboxes/:id/preview/:port`
+  reverse proxy.
 
 ## Conventions
 

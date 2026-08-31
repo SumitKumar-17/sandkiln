@@ -3,20 +3,26 @@ mod config;
 mod error;
 mod idle_reaper;
 mod metrics;
+mod request_id;
 mod routes_drives;
 mod routes_exec;
+mod routes_images;
 mod routes_metrics;
+mod routes_preview;
 mod routes_sandbox;
+mod routes_sandbox_name;
 mod routes_snapshot;
 mod sandbox;
 mod snapshot;
 mod state;
+mod tracing_util;
 
 use axum::middleware;
-use axum::routing::{delete, get, post};
+use axum::routing::{any, delete, get, post};
 use axum::Router;
 use config::{Config, LogFormat};
 use sandkiln_vmm::drive::DriveStore;
+use sandkiln_vmm::image::ImageStore;
 use sandkiln_vmm::network::{self, NetworkManager};
 use state::AppState;
 use std::sync::Arc;
@@ -56,17 +62,63 @@ async fn async_main() {
         .expect("create/verify the persistent drives directory (SANDKILN_DRIVES_DIR)");
     tracing::info!(drives_dir = %config.drives_dir.display(), "persistent drive storage ready");
 
+    let images = ImageStore::new(&config.images_dir)
+        .expect("create/verify the registered images directory (SANDKILN_IMAGES_DIR)");
+    tracing::info!(images_dir = %config.images_dir.display(), "registered image storage ready");
+
+    // Must happen before the HTTP listener starts accepting connections
+    // and before `AppState` takes ownership of `net_manager`: a
+    // reconciled snapshot's tap device has to be pulled out of
+    // `net_manager`'s free pool (via `NetworkManager::reserve`, called
+    // from `reconcile`) before any live `POST /sandboxes` request can
+    // race it for the same tap.
+    let reconciled_snapshots = snapshot::reconcile(&net_manager);
+    tracing::info!(count = reconciled_snapshots.len(), "reconciled snapshots from disk");
+
+    match &config.jailer {
+        Some(jailer_cfg) => {
+            std::fs::create_dir_all(&jailer_cfg.chroot_base_dir)
+                .expect("create/verify the jailer chroot base dir (SANDKILN_JAILER_CHROOT_BASE_DIR)");
+            assert!(
+                jailer_cfg.jailer_bin.is_file(),
+                "SANDKILN_JAILER_BIN does not point at a file: {} — run scripts/install-firecracker.sh first",
+                jailer_cfg.jailer_bin.display()
+            );
+            tracing::info!(
+                jailer_bin = %jailer_cfg.jailer_bin.display(),
+                chroot_base_dir = %jailer_cfg.chroot_base_dir.display(),
+                uid_gid_range_start = *jailer_cfg.uid_gid_range.start(),
+                uid_gid_range_end = *jailer_cfg.uid_gid_range.end(),
+                "jailer-based sandbox boot enabled — sandboxes will boot chroot'd, cgroup-limited, under a dedicated uid/gid"
+            );
+        }
+        None => {
+            tracing::info!(
+                "jailer-based sandbox boot disabled (SANDKILN_JAILER_ENABLED not set) — \
+                 sandboxes boot via a direct Firecracker process spawn, see ROADMAP.md's Security hardening section"
+            );
+        }
+    }
+
     let auth_enabled = config.auth_token.is_some();
     let idle_timeout = config.idle_timeout;
-    let state = Arc::new(AppState::new(config, net_manager, drives));
+    let auto_suspend_timeout = config.auto_suspend_timeout;
+    let state = Arc::new(AppState::new(config, net_manager, drives, images, reconciled_snapshots));
 
-    if let Some(idle_timeout) = idle_timeout {
-        tracing::info!(idle_timeout_secs = idle_timeout.as_secs(), "idle sandbox reaper enabled");
-        tokio::spawn(idle_reaper::run(state.clone(), idle_timeout));
+    if idle_timeout.is_some() || auto_suspend_timeout.is_some() {
+        if let Some(auto_suspend_timeout) = auto_suspend_timeout {
+            tracing::info!(auto_suspend_timeout_secs = auto_suspend_timeout.as_secs(), "idle sandbox auto-suspend enabled");
+        }
+        if let Some(idle_timeout) = idle_timeout {
+            tracing::info!(idle_timeout_secs = idle_timeout.as_secs(), "idle sandbox destroy reaper enabled");
+        }
+        tokio::spawn(idle_reaper::run(state.clone(), idle_timeout, auto_suspend_timeout));
     }
 
     let sandbox_routes = Router::new()
         .route("/sandboxes", post(routes_sandbox::create_sandbox).get(routes_sandbox::list_sandboxes))
+        .route("/sandboxes/get-or-create", post(routes_sandbox_name::get_or_create_sandbox))
+        .route("/sandboxes/by-name/:name", get(routes_sandbox_name::get_sandbox_by_name))
         .route("/sandboxes/:id", delete(routes_sandbox::stop_sandbox))
         .route("/sandboxes/:id/exec", post(routes_exec::exec))
         .route("/sandboxes/:id/read-file", post(routes_exec::read_file))
@@ -78,16 +130,47 @@ async fn async_main() {
         .route("/drives/:id", delete(routes_drives::delete_drive))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
+    let image_routes = Router::new()
+        .route("/images", post(routes_images::create_image).get(routes_images::list_images))
+        .route("/images/:id", delete(routes_images::delete_image))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
+
     let snapshot_routes =
         routes_snapshot::router().route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
+
+    // Its own router, guarded by `auth::require_preview_token` rather than
+    // `auth::require_bearer_token` — see that middleware's doc comment for
+    // why a preview URL needs different auth handling than the rest of the
+    // `/sandboxes*` API.
+    let preview_routes = Router::new()
+        .route("/sandboxes/:id/preview/:port", any(routes_preview::preview_root))
+        // `*path` only matches when there's at least one character after
+        // the trailing `/` — a bare trailing slash with nothing after it
+        // (exactly what `previewUrl()`'s default `path: "/"` produces in
+        // every SDK) matches neither this route nor the bare one above
+        // without this third explicit registration. Found live: every
+        // preview request with the SDKs' own default path 404'd.
+        .route("/sandboxes/:id/preview/:port/", any(routes_preview::preview_root))
+        .route("/sandboxes/:id/preview/:port/*path", any(routes_preview::preview_path))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_preview_token));
 
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/metrics", get(routes_metrics::metrics))
         .merge(sandbox_routes)
         .merge(drive_routes)
+        .merge(image_routes)
         .merge(snapshot_routes)
+        .merge(preview_routes)
         .layer(TraceLayer::new_for_http())
+        // Outermost: wraps everything above, including `TraceLayer`, so a
+        // caller-supplied or freshly generated request id is already
+        // established as the active span before any per-request logging
+        // happens, and `TraceLayer`'s own request-complete log line ends
+        // up correlated too. See `request_id`'s module doc for how that
+        // correlation then survives into `sandkiln-vmm` calls made from
+        // inside `spawn_blocking` (`tracing_util::spawn_blocking_in_current_span`).
+        .layer(middleware::from_fn(request_id::correlate))
         .with_state(state);
 
     if !auth_enabled {

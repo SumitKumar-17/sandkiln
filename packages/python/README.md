@@ -44,8 +44,10 @@ sandbox.stop()
 
 ## API
 
-- `Sandbox.create(tags=None, base_url=None, auth_token=None)` — boots a
-  sandbox.
+- `Sandbox.create(tags=None, base_url=None, auth_token=None, vcpu_count=None, mem_size_mib=None)` —
+  boots a sandbox. `vcpu_count`/`mem_size_mib` override the daemon's
+  configured defaults for this one sandbox, subject to the daemon's
+  configured ceiling.
 - `Sandbox.attach(id, base_url=None, auth_token=None)` — wraps an
   existing sandbox id without a network round-trip.
 - `Sandbox.list(tags=None, base_url=None, auth_token=None)` — lists
@@ -55,6 +57,26 @@ sandbox.stop()
 - `sandbox.read_file(path)` — returns file contents as `bytes`.
 - `sandbox.write_file(path, content)` — `content` is `str` or `bytes`.
 - `sandbox.stop()` — stops the sandbox and releases its resources.
+- `sandbox.snapshot()` — saves the sandbox's full state to disk and stops
+  it; returns a snapshot id. The daemon can also do this on its own, for
+  an idle sandbox, if the operator has `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`
+  configured — see `Sandbox.list_snapshots` below for how to notice it and
+  find the resulting snapshot.
+- `Sandbox.resume(snapshot_id, base_url=None, auth_token=None)` — boots a
+  new sandbox from a snapshot, **consuming** it (the snapshot is gone
+  afterward).
+- `Sandbox.fork(snapshot_id, base_url=None, auth_token=None)` — boots a
+  new sandbox from a snapshot **without** consuming it, so it can be
+  forked or resumed again later. Only one live fork of a given snapshot
+  may run at a time — a second concurrent `fork()` raises
+  `SandkilnApiError` with status 409 until the first is stopped; see
+  `ROADMAP.md`'s "Persistence and snapshotting" section for why.
+- `Sandbox.list_snapshots(source_sandbox_id=None, base_url=None, auth_token=None)`
+  — lists snapshots. `source_sandbox_id` narrows this to the (at most one)
+  snapshot taken from that original sandbox id — the way to find out
+  whether a sandbox id that dropped out of `Sandbox.list()` turned into a
+  snapshot (via a manual `snapshot()` or the daemon's auto-suspend) and
+  what its new id is.
 
 This mirrors the [JS/TS SDK](https://www.npmjs.com/package/sandkiln)
 exactly — same daemon, same operations, Python-idiomatic naming
@@ -63,8 +85,8 @@ exactly — same daemon, same operations, Python-idiomatic naming
 ## Status
 
 Early. This SDK matches the daemon's current HTTP API exactly — no more,
-no less. Streamed command output and a drives/snapshots API are planned;
-see the [roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md).
+no less. Streamed command output and a drives API are planned; see the
+[roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md).
 
 ## License
 

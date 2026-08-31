@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
-import { Sandbox, SandkilnApiError } from "sandkiln";
-import { formatSandboxList, parseTag } from "./format.js";
+import { Image, Sandbox, SandkilnApiError } from "sandkiln";
+import { formatImageList, formatSandboxList, formatSnapshotList, parsePositiveInt, parseTag } from "./format.js";
 
 interface GlobalOptions {
   baseUrl?: string;
@@ -38,12 +38,68 @@ const sandbox = program.command("sandbox").description("Create, inspect, and man
 sandbox
   .command("create")
   .description("Boot a new sandbox.")
+  .option("--name <name>", "caller-given identity, unique among live sandboxes and held snapshots")
   .addOption(tagOption())
-  .action(async function (this: Command, opts: { tag: Record<string, string> }) {
+  .option("--vcpu <count>", "vCPU count override (daemon default if omitted)", parsePositiveInt("--vcpu"))
+  .option("--mem <mib>", "memory size override in MiB (daemon default if omitted)", parsePositiveInt("--mem"))
+  .option("--image <id>", "boot from a registered image instead of the daemon's default rootfs (see 'kiln image ls')")
+  .action(async function (
+    this: Command,
+    opts: { name?: string; tag: Record<string, string>; vcpu?: number; mem?: number; image?: string },
+  ) {
     const { baseUrl, token } = clientOptions(this);
     try {
-      const created = await Sandbox.create({ baseUrl, authToken: token, tags: opts.tag });
+      const created = await Sandbox.create({
+        baseUrl,
+        authToken: token,
+        name: opts.name,
+        tags: opts.tag,
+        vcpuCount: opts.vcpu,
+        memSizeMib: opts.mem,
+        imageId: opts.image,
+      });
       process.stdout.write(`${created.id}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("get-or-create")
+  .description(
+    "Resolve --name to a sandbox in one call, creating it if it doesn't exist yet: a live sandbox with this " +
+      "name is returned as-is, a stopped one is resumed, otherwise a fresh one is created and named. Prints the " +
+      "sandbox id, plus whether it was freshly created.",
+  )
+  .requiredOption("--name <name>", "name to resolve or claim")
+  .addOption(tagOption())
+  .option("--vcpu <count>", "vCPU count override, used only if a fresh sandbox is created", parsePositiveInt("--vcpu"))
+  .option("--mem <mib>", "memory size override in MiB, used only if a fresh sandbox is created", parsePositiveInt("--mem"))
+  .action(async function (this: Command, opts: { name: string; tag: Record<string, string>; vcpu?: number; mem?: number }) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const { sandbox: resolved, created } = await Sandbox.getOrCreate({
+        baseUrl,
+        authToken: token,
+        name: opts.name,
+        tags: opts.tag,
+        vcpuCount: opts.vcpu,
+        memSizeMib: opts.mem,
+      });
+      process.stdout.write(`${resolved.id}  ${created ? "created" : "existing"}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("by-name <name>")
+  .description("Resolve a name to a live sandbox's id.")
+  .action(async function (this: Command, name: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const resolved = await Sandbox.byName(name, { baseUrl, authToken: token });
+      process.stdout.write(`${resolved.id}\n`);
     } catch (error) {
       await handleApiError(error);
     }
@@ -65,12 +121,20 @@ sandbox
 
 sandbox
   .command("rm <id>")
-  .description("Stop a sandbox and release its resources.")
-  .action(async function (this: Command, id: string) {
+  .description(
+    "Stop a sandbox. By default this preserves its state as a resumable snapshot (the daemon's default " +
+      "'stop and come back later' behavior) rather than releasing everything outright.",
+  )
+  .option("--destroy", "fully destroy the sandbox instead — no snapshot, nothing left to resume")
+  .action(async function (this: Command, id: string, opts: { destroy?: boolean }) {
     const { baseUrl, token } = clientOptions(this);
     try {
-      await attachSandbox(id, baseUrl, token).stop();
-      process.stdout.write(`${id} stopped\n`);
+      const result = await attachSandbox(id, baseUrl, token).stop({ keep: !opts.destroy });
+      if (result.kept) {
+        process.stdout.write(`${id} stopped and preserved as snapshot ${result.snapshotId}\n`);
+      } else {
+        process.stdout.write(`${id} stopped and destroyed\n`);
+      }
     } catch (error) {
       await handleApiError(error);
     }
@@ -118,12 +182,134 @@ sandbox
     }
   });
 
+sandbox
+  .command("preview <id> <port>")
+  .description("Print the URL to reach a server listening on <port> inside a sandbox, proxied through the daemon.")
+  .option("--path <path>", "path within the sandbox's server to preview", "/")
+  .action(async function (this: Command, id: string, port: string, opts: { path: string }) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const url = attachSandbox(id, baseUrl, token).previewUrl(Number(port), { path: opts.path });
+      process.stdout.write(`${url}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("snapshot <id>")
+  .description("Save a sandbox's full state to disk and stop it. Prints the resulting snapshot id.")
+  .action(async function (this: Command, id: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const snapshotId = await attachSandbox(id, baseUrl, token).snapshot();
+      process.stdout.write(`${snapshotId}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("snapshots")
+  .description(
+    "List snapshots. A sandbox can turn into one on its own (auto-suspend), not just via `kiln sandbox snapshot`" +
+      " — use --source to find the snapshot a given sandbox id became.",
+  )
+  .option("--source <sandbox-id>", "only the snapshot (if any) taken from this original sandbox id")
+  .action(async function (this: Command, opts: { source?: string }) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const snapshots = await Sandbox.listSnapshots({ baseUrl, authToken: token, sourceSandboxId: opts.source });
+      process.stdout.write(formatSnapshotList(snapshots));
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("resume <snapshot-id>")
+  .description("Boot a new sandbox from a snapshot, consuming it. Prints the new sandbox id.")
+  .action(async function (this: Command, snapshotId: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const resumed = await Sandbox.resume(snapshotId, { baseUrl, authToken: token });
+      process.stdout.write(`${resumed.id}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("fork <snapshot-id>")
+  .description(
+    "Boot a new sandbox from a snapshot without consuming it, so it can be forked or resumed again later. " +
+      "Only one live fork of a given snapshot may run at a time. Prints the new sandbox id.",
+  )
+  .action(async function (this: Command, snapshotId: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const forked = await Sandbox.fork(snapshotId, { baseUrl, authToken: token });
+      process.stdout.write(`${forked.id}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
 /** Every subcommand above only has a sandbox id, not an instance — this
  * reconstructs one without a round-trip, since every Sandbox method just
  * needs the id plus the same client config already used to reach it. */
 function attachSandbox(id: string, baseUrl: string | undefined, token: string | undefined): Sandbox {
   return Sandbox.attach(id, { baseUrl, authToken: token });
 }
+
+const image = program.command("image").description("Register, inspect, and manage rootfs images sandboxes can boot from.");
+
+image
+  .command("create <id> <path>")
+  .description(
+    "Register an already-built ext4 rootfs file at <path> on the daemon's own host filesystem under <id> " +
+      "(not a file upload — <path> must already exist where sandkilnd runs). Prints a warning: the daemon " +
+      "cannot verify the guest agent is baked in without root access to loop-mount the file; run " +
+      "'scripts/preflight-check.sh --root-checks --rootfs-image <path>' out of band first if you haven't already.",
+  )
+  .action(async function (this: Command, id: string, path: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const registered = await Image.register(id, path, { baseUrl, authToken: token });
+      process.stdout.write(`${registered.id}\n`);
+      if (!registered.guestAgentVerified) {
+        process.stderr.write(`warning: ${registered.verificationHint}\n`);
+      }
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+image
+  .command("ls")
+  .description("List registered images.")
+  .action(async function (this: Command) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const images = await Image.list({ baseUrl, authToken: token });
+      process.stdout.write(formatImageList(images));
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+image
+  .command("rm <id>")
+  .description("Delete a registered image. Refused while any sandbox, in-flight boot, or snapshot still references it.")
+  .action(async function (this: Command, id: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await Image.delete(id, { baseUrl, authToken: token });
+      process.stdout.write(`${id} deleted\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
 
 // Every subcommand's own action handler already catches its errors; this
 // is a backstop for anything that escapes one anyway (a bug in a future

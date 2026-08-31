@@ -47,6 +47,7 @@ impl BenchConfig {
             mem_size_mib: self.mem_size_mib,
             network: None,
             extra_drives: Vec::new(),
+            jail: None,
         }
     }
 }

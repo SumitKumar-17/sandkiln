@@ -8,7 +8,51 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+**Published:** `sandkiln@0.2.0` (minor bump from 0.1.0 —
+`resume`/`fork`/`snapshot`/`previewUrl` and `vcpuCount`/`memSizeMib`
+overrides are all new, backward-compatible additions, nothing removed or
+changed) and `sandkiln-cli@0.2.0` (first publish — `kiln`, the obvious
+name, is a pre-existing unrelated package on npm, so the CLI publishes
+under `sandkiln-cli` instead; `npm install -g sandkiln-cli` still gives
+you the `kiln` command). Both on npm with signed provenance. Everything
+below this line has landed in the repo since the SDK's 0.1.0 publish;
+most of it is now live — check the published packages if you need to
+know exactly what's on npm right now versus what's only in this repo.
+
 ### Added
+- Custom/managed base images: `POST /images` registers an already-built
+  ext4 rootfs from a host path (`GET /images` to list, `DELETE /images/:id`
+  refused while anything still references it); `POST /sandboxes` accepts
+  an `image_id` to boot from one instead of the daemon's default rootfs.
+  The daemon can't verify the guest agent is baked in (runs unprivileged,
+  no loop-mount) — `scripts/preflight-check.sh --root-checks --rootfs-image
+  <path>` does that check out of band. Both SDKs (`Image.register/list/
+  delete`, `imageId`/`image_id` on `create`) and the CLI (`kiln image
+  ls|create|rm`, `kiln sandbox create --image`) are updated to match.
+- Named sandboxes and persistent-by-default stop: `DELETE /sandboxes/:id`
+  now auto-snapshots on stop by default instead of destroying (`?keep=false`
+  or `kiln sandbox rm --destroy` opts back into the old hard-destroy
+  behavior); sandboxes can carry a caller-given `name` (unique among live
+  sandboxes) via `POST /sandboxes`, resolved with `GET
+  /sandboxes/by-name/:name` (live only) or resumed/created in one
+  race-safe call with `POST /sandboxes/get-or-create`. Both SDKs and the
+  CLI (`--name`, `sandbox get-or-create`, `sandbox get`, `rm --destroy`)
+  are updated to match.
+- Auto-suspend on idle (`SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`): an idle
+  sandbox is paused and snapshotted instead of destroyed, freeing its
+  VM/network while keeping it resumable. `SANDKILN_IDLE_TIMEOUT_SECS`
+  (plain destroy) still works as before and now acts as a backstop when
+  both are set (must be strictly longer). `GET /snapshots
+  ?source_sandbox_id=<id>` and matching SDK/CLI methods find what a
+  vanished sandbox turned into.
+- Read-only shared drives: a drive attached read-only may now be attached
+  to arbitrarily many sandboxes (and held snapshots) concurrently; any
+  read-write attachment, existing or requested, still needs exclusive
+  access. **API shape change**: `GET /drives`/`POST /drives`'s
+  `attached_to` field changed from `Option<String>` to a list of holders
+  (each with a `read_only` flag) — not yet published to any SDK, so no
+  external break, but worth knowing if you're consuming the daemon's raw
+  HTTP API directly.
 - Core execution primitive: Firecracker microVM boot, a guest agent
   (vsock exec / read_file / write_file / list_dir), and a host-side
   vsock client, all proven end to end on real hardware.
@@ -44,6 +88,40 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 - Project website (`website/`), deployed via GitHub Pages on every push.
 - GitHub Actions: CI (build + clippy + SDK typecheck/build on every push)
   and a manual/tag-triggered npm publish workflow.
+- Persistent drives (`POST /drives`, attachable at sandbox creation),
+  with cross-sandbox conflict detection and persistence across sandboxes
+  verified live.
+- Snapshot/resume/fork: save a running sandbox's full state to disk and
+  boot a new sandbox from it, either consuming the snapshot (`resume`) or
+  not (`fork`, so the same state can be resumed repeatedly). Durable
+  across a daemon restart (metadata persisted atomically, reconciled at
+  startup). Exposed through both SDKs and `kiln`.
+- Host-side reverse proxy for dev-server preview
+  (`/sandboxes/:id/preview/:port`), token-in-query-param auth for
+  browser/iframe use, `Sandbox.previewUrl()` in both SDKs, `kiln sandbox
+  preview`, and an `examples/dev-server-preview` reference.
+- Per-sandbox resource overrides (`vcpu_count`/`mem_size_mib` on
+  `POST /sandboxes`) with enforced, configurable ceilings.
+- Automatic idle-timeout reaper (`SANDKILN_IDLE_TIMEOUT_SECS`).
+- Opt-in Firecracker jailer support (chroot, cgroup v2 limits, a
+  dedicated uid/gid per VM) via `SANDKILN_JAILER_ENABLED`.
+- Request-id correlation (caller-supplied or generated `X-Request-Id`)
+  threaded through every VM operation an HTTP request triggers; a
+  `/metrics` endpoint (Prometheus text format); `SANDKILN_LOG_FORMAT=json`;
+  guest serial console captured to a per-VM log file.
+- Universal base rootfs image build (`images/build-universal-image.sh`):
+  Ubuntu, current Node.js/Python, common tooling, multi-agent isolation
+  users, built reproducibly rather than a fetched test image.
+- `scripts/preflight-check.sh` and `scripts/install-systemd-service.sh` +
+  a real systemd unit template — a tested, reproducible self-hosting path,
+  written up in full in `SELF_HOSTING.md`.
+- `scripts/integration-test.sh`: a full end-to-end test suite against a
+  real running daemon (89 checks as of this entry), covering every HTTP
+  route this changelog lists.
+- 144 Rust unit tests across the workspace, plus real unit tests for the
+  CLI and both SDKs' pure logic (`node:test`/`unittest`).
+- `examples/code-playground` (JS/TS) and `examples/agent-runner` (Python)
+  reference projects.
 
 ### Fixed
 - Ambient `CAP_NET_ADMIN` not reaching Tokio's worker/blocking threads
@@ -70,14 +148,32 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   though local testing on 3.14 didn't hit it.
 - CI build order: `kiln` needs `sandkiln`'s `dist/` built before it can
   typecheck, since it resolves it as a real workspace dependency.
+- Snapshots living only in memory, so a daemon restart made every
+  existing snapshot's files permanently unreachable through the API even
+  though the bytes were still on disk — fixed by persisting metadata
+  atomically and reconciling it at startup.
+- Preview URLs 404ing on every SDK-generated URL: axum's `*path` wildcard
+  doesn't match a bare trailing slash with nothing after it, which is
+  exactly what `previewUrl()`'s default path produces — added the missing
+  explicit route.
 
 ### Known gaps (tracked in `ROADMAP.md`)
-- No snapshot/resume or persistence — a stopped sandbox's state is gone.
-- No image system beyond a fetched CI test rootfs — no universal base
-  image, no custom image support yet.
+- No custom/user-provided image support yet — only the universal base
+  image.
 - No streamed exec output, no `kiln logs -f`.
+- No true simultaneous parallel snapshot forking — at most one live fork
+  of a given snapshot at a time (see the Persistence section).
+- WebSocket proxying (dev-server HMR/live-reload) through the preview
+  proxy isn't implemented — plain HTTP only.
+- Jailer's actual chroot/cgroup/uid-drop behavior hasn't been proven
+  against a real installed jailer binary on real hardware yet — opt-in,
+  not recommended as-is for adversarial workloads until verified.
+- No per-sandbox seccomp filters or disk-size ceiling.
 - On ext4 (no copy-on-write), sandbox creation still pays real rootfs
   copy time — needs a CoW-capable filesystem or a device-mapper layer to
   actually eliminate, not just overlap with other work.
-- Python SDK not yet published to PyPI (workflow uses trusted publishing,
-  needs a one-time registration on pypi.org before it can run).
+- Python SDK not yet published to PyPI (code-side ready; needs the
+  account owner's one-time trusted-publisher registration on pypi.org).
+- Snapshot storage lives under `$TMPDIR` — durable across a daemon
+  restart, not necessarily a host reboot (depends on whether `/tmp` is
+  tmpfs on that host).

@@ -1,4 +1,14 @@
 from .errors import SandkilnApiError
-from .sandbox import ExecResult, Sandbox, SandboxInfo
+from .image import Image, ImageInfo
+from .sandbox import ExecResult, Sandbox, SandboxInfo, SnapshotInfo, StopResult
 
-__all__ = ["Sandbox", "SandboxInfo", "ExecResult", "SandkilnApiError"]
+__all__ = [
+    "Sandbox",
+    "SandboxInfo",
+    "SnapshotInfo",
+    "ExecResult",
+    "StopResult",
+    "Image",
+    "ImageInfo",
+    "SandkilnApiError",
+]

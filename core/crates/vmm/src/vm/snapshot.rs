@@ -135,7 +135,16 @@ impl Vm {
             resume_ms = started.elapsed().as_millis(),
             "vm resumed from snapshot"
         );
-        Ok(Self { id, child, api_socket, vsock_socket })
+        // Resuming a snapshot always spawns Firecracker directly — jailer
+        // support only covers `Vm::boot` in this pass (see
+        // `crate::jailer`'s module doc comment). A snapshot taken from a
+        // jailed sandbox would need its device state's baked-in in-jail
+        // paths (`/rootfs.ext4`, etc.) relinked into a *fresh* chroot
+        // before this could work, which `daemon::routes_snapshot`
+        // deliberately refuses to attempt yet (see
+        // `Vm::is_jailed`/`AGENTS.md`'s "no half-finished surfaces") —
+        // this always constructs an unjailed `Vm` as a result.
+        Ok(Self { id, child, api_socket, vsock_socket, jail_instance_dir: None })
     }
 }
 

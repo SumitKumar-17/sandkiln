@@ -14,10 +14,40 @@ this package only ever catches up to what the daemon actually does.
 
 ## Files
 
-- `sandbox.ts` — the `Sandbox` class: `create`/`attach`/`list` (static),
-  `runCommand`/`readFile`/`writeFile`/`stop` (instance). Every instance
-  method reuses the `baseUrl`/`authToken` the sandbox was
-  created/attached with — see the `ClientContext` pattern.
+- `sandbox.ts` — the `Sandbox` class: `create`/`attach`/`list`/`resume`/
+  `fork`/`byName`/`getOrCreate` (static), `runCommand`/`readFile`/
+  `writeFile`/`stop`/`snapshot`/`previewUrl` (instance). Every instance
+  method reuses the `baseUrl`/`authToken` the sandbox was created/attached
+  with — see the `ClientContext` pattern. `resume`/`fork`/`byName` are
+  static (not instance methods) because none acts on an already-existing
+  `Sandbox` — they resolve to one from a snapshot id or a name, the same
+  shape as `create`. `fork` doesn't consume the snapshot, `resume` does;
+  see the daemon's `routes_snapshot.rs` module doc comment for why at
+  most one live fork of a given snapshot can run at a time. `getOrCreate`
+  returns `{ sandbox, created }` rather than a bare `Sandbox` — it's the
+  one static factory whose caller genuinely needs to know whether they
+  got a fresh environment or an existing one back. `stop()` returns
+  `{ kept, snapshotId }`: the daemon preserves state by default on stop
+  (internally snapshotting rather than destroying), so there's something
+  worth reporting now — pass `{ keep: false }` for the old "just destroy
+  it" behavior. `previewUrl` is pure and network-free like `attach` — it
+  just builds the URL for the daemon's `/sandboxes/:id/preview/:port`
+  reverse proxy (see `core/crates/daemon/src/routes_preview.rs`),
+  appending the auth token as a `?token=` query parameter rather than a
+  header when one is configured, since the caller is typically a browser
+  tab or `<iframe>`. `CreateSandboxOptions.imageId` boots from a
+  registered image (see `image.ts`) instead of the daemon's configured
+  default rootfs.
+- `image.ts` — the `Image` class: `register`/`list`/`delete`, all static —
+  unlike `Sandbox`, an image has no instance behavior (delete only ever
+  needs an id), so this is a namespace of operations, not a stateful
+  handle. Mirrors `core/crates/daemon/src/routes_images.rs`'s response
+  shape, including `guestAgentVerified`/`verificationHint` on every
+  result (always `false` — the daemon can never verify this itself, see
+  that file's module doc comment).
+- `client.ts` — `ClientContext`/`resolveClient`, pulled out of
+  `sandbox.ts` once `image.ts` needed the exact same
+  `baseUrl`/`authToken` resolution.
 - `http.ts` — the one place `fetch` gets called. Non-2xx responses throw
   `SandkilnApiError`; a 204 (or any empty body) resolves to `undefined`.
   If the daemon's status-code contract ever doesn't match what's handled
@@ -30,8 +60,19 @@ this package only ever catches up to what the daemon actually does.
   reasoning as `config.ts`.
 - `types.ts` — every request/response shape, matching the daemon's JSON
   exactly (including its `snake_case` fields like `content_base64`,
-  `exit_code`) — the public-facing types (`ExecResult`, `SandboxInfo`)
-  translate those into idiomatic `camelCase`.
+  `exit_code`) — the public-facing types (`ExecResult`, `SandboxInfo`,
+  `ImageInfo`) translate those into idiomatic `camelCase`.
+
+## Testing
+
+`test/previewUrl.test.js` covers `Sandbox.previewUrl`'s pure URL-building
+logic with `node:test` (no added dependency — same convention as `kiln`'s
+`test/format.test.js`). It imports the built `../dist/index.js`, not TS
+source directly, so `npm test` runs `pretest` (`npm run build`) first.
+Every other instance method needs a live daemon to test meaningfully (see
+"Building and verifying" below), which is why this is the only file here
+today — it's specifically the one piece of genuinely pure logic in this
+package. Run: `npm run test -w sandkiln`.
 
 ## Building and verifying
 
