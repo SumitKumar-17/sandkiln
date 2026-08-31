@@ -19,6 +19,11 @@ export interface CreateSandboxOptions extends SandboxOptions {
    * this one sandbox. Same ceiling semantics as `vcpuCount`, checked
    * against `SANDKILN_MAX_MEM_SIZE_MIB`. */
   memSizeMib?: number;
+  /** Boots from a registered image (see `Image.register`) instead of the
+   * daemon's configured default rootfs. Omitted means today's behavior,
+   * unchanged. Rejected if no image with this id is currently
+   * registered. */
+  imageId?: string;
 }
 
 /** `tags`/`vcpuCount`/`memSizeMib` are used only when
@@ -55,6 +60,7 @@ export interface CreateSandboxRequestBody {
   tags?: Record<string, string>;
   vcpu_count?: number;
   mem_size_mib?: number;
+  image_id?: string;
 }
 
 export interface CreateSandboxResponseBody {
@@ -177,4 +183,49 @@ export interface GetOrCreateSandboxRequestBody {
 export interface GetOrCreateSandboxResponseBody {
   id: string;
   created: boolean;
+}
+
+export interface ImageOptions {
+  baseUrl?: string;
+  authToken?: string;
+}
+
+/** A registered rootfs image a sandbox can boot from — see
+ * `Image.register`. Not a class/handle like `Sandbox`: an image has no
+ * instance operations besides delete, which only ever needs an id, so
+ * this is plain data, matching `SandboxInfo`'s shape for `Sandbox.list`. */
+export interface ImageInfo {
+  id: string;
+  sizeMib: number;
+  createdAt: Date;
+  /** What currently holds this image, if anything (a sandbox id, a
+   * snapshot id, or a sandbox still being created from it) — `null` if
+   * nothing does. An image can't be deleted while this is set. */
+  inUseBy: string | null;
+  /** Always `false` — the daemon cannot verify the guest agent is baked
+   * into a registered image (that needs loop-mounting it as root, which
+   * the daemon deliberately doesn't have). See `verificationHint`. */
+  guestAgentVerified: boolean;
+  /** Guidance for verifying the guest agent out of band before relying on
+   * this image — the daemon can never fill in `guestAgentVerified: true`
+   * itself. */
+  verificationHint: string;
+}
+
+export interface CreateImageRequestBody {
+  id: string;
+  path: string;
+}
+
+export interface ImageSummaryBody {
+  id: string;
+  size_mib: number;
+  created_at_unix: number;
+  in_use_by: string | null;
+  guest_agent_verified: boolean;
+  verification_hint: string;
+}
+
+export interface ListImagesResponseBody {
+  images: ImageSummaryBody[];
 }

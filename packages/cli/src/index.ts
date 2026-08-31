@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
-import { Sandbox, SandkilnApiError } from "sandkiln";
-import { formatSandboxList, formatSnapshotList, parsePositiveInt, parseTag } from "./format.js";
+import { Image, Sandbox, SandkilnApiError } from "sandkiln";
+import { formatImageList, formatSandboxList, formatSnapshotList, parsePositiveInt, parseTag } from "./format.js";
 
 interface GlobalOptions {
   baseUrl?: string;
@@ -42,7 +42,11 @@ sandbox
   .addOption(tagOption())
   .option("--vcpu <count>", "vCPU count override (daemon default if omitted)", parsePositiveInt("--vcpu"))
   .option("--mem <mib>", "memory size override in MiB (daemon default if omitted)", parsePositiveInt("--mem"))
-  .action(async function (this: Command, opts: { name?: string; tag: Record<string, string>; vcpu?: number; mem?: number }) {
+  .option("--image <id>", "boot from a registered image instead of the daemon's default rootfs (see 'kiln image ls')")
+  .action(async function (
+    this: Command,
+    opts: { name?: string; tag: Record<string, string>; vcpu?: number; mem?: number; image?: string },
+  ) {
     const { baseUrl, token } = clientOptions(this);
     try {
       const created = await Sandbox.create({
@@ -52,6 +56,7 @@ sandbox
         tags: opts.tag,
         vcpuCount: opts.vcpu,
         memSizeMib: opts.mem,
+        imageId: opts.image,
       });
       process.stdout.write(`${created.id}\n`);
     } catch (error) {
@@ -256,6 +261,55 @@ sandbox
 function attachSandbox(id: string, baseUrl: string | undefined, token: string | undefined): Sandbox {
   return Sandbox.attach(id, { baseUrl, authToken: token });
 }
+
+const image = program.command("image").description("Register, inspect, and manage rootfs images sandboxes can boot from.");
+
+image
+  .command("create <id> <path>")
+  .description(
+    "Register an already-built ext4 rootfs file at <path> on the daemon's own host filesystem under <id> " +
+      "(not a file upload — <path> must already exist where sandkilnd runs). Prints a warning: the daemon " +
+      "cannot verify the guest agent is baked in without root access to loop-mount the file; run " +
+      "'scripts/preflight-check.sh --root-checks --rootfs-image <path>' out of band first if you haven't already.",
+  )
+  .action(async function (this: Command, id: string, path: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const registered = await Image.register(id, path, { baseUrl, authToken: token });
+      process.stdout.write(`${registered.id}\n`);
+      if (!registered.guestAgentVerified) {
+        process.stderr.write(`warning: ${registered.verificationHint}\n`);
+      }
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+image
+  .command("ls")
+  .description("List registered images.")
+  .action(async function (this: Command) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const images = await Image.list({ baseUrl, authToken: token });
+      process.stdout.write(formatImageList(images));
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+image
+  .command("rm <id>")
+  .description("Delete a registered image. Refused while any sandbox, in-flight boot, or snapshot still references it.")
+  .action(async function (this: Command, id: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await Image.delete(id, { baseUrl, authToken: token });
+      process.stdout.write(`${id} deleted\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
 
 // Every subcommand's own action handler already catches its errors; this
 // is a backstop for anything that escapes one anyway (a bug in a future

@@ -171,7 +171,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
     }
 
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or(SnapshotStopError::NotFound)?;
-    let Sandbox { vm, network, rootfs_path, attached_drives, tags, name, .. } = sandbox;
+    let Sandbox { vm, network, rootfs_path, attached_drives, image_id, tags, name, .. } = sandbox;
     // Only a forked descendant (rejected above) ever has `network: None`.
     let network = network.expect("non-fork sandboxes always hold a network lease");
 
@@ -216,6 +216,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
         rootfs_path,
         network,
         attached_drives,
+        image_id,
         tags,
         created_at: SystemTime::now(),
         name,
@@ -372,6 +373,7 @@ pub(crate) async fn resume_snapshot_by_id(state: Arc<AppState>, snapshot_id: Str
         network: Some(snapshot.network),
         rootfs_path: snapshot.rootfs_path,
         attached_drives: snapshot.attached_drives,
+        image_id: snapshot.image_id,
         // `Vm::resume` always spawns directly (see its doc comment) —
         // never jailed, so there's no uid/gid allocation to track here.
         jail_id: None,
@@ -460,6 +462,7 @@ pub async fn fork_snapshot(
             network: None,
             rootfs_path: snapshot.rootfs_path.clone(),
             attached_drives: snapshot.attached_drives.clone(),
+            image_id: snapshot.image_id.clone(),
             // Jailer support covers `Vm::boot` only — every resume/fork
             // (this path) always spawns directly, regardless of whether
             // the original sandbox was jailed. See `jailer.rs`'s module

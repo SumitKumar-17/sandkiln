@@ -52,11 +52,38 @@ pub struct CreateSandboxRequest {
     /// `vcpu_count` above, checked against `SANDKILN_MAX_MEM_SIZE_MIB`.
     #[serde(default)]
     pub(crate) mem_size_mib: Option<u32>,
+    /// Boots from a registered image (see `POST /images`,
+    /// `sandkiln_vmm::image::ImageStore`) instead of the daemon's
+    /// `SANDKILN_BASE_ROOTFS` default. Omitted means "use the default" —
+    /// today's behavior, unchanged. Rejected with `404` if no image with
+    /// this id is currently registered.
+    #[serde(default)]
+    pub(crate) image_id: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct CreateSandboxResponse {
     id: String,
+}
+
+/// RAII pairing for `AppState::reserve_pending_image_boot`/
+/// `release_pending_image_boot` — releases the claim on drop, covering
+/// every exit path out of `create_sandbox` (the happy path, an early `?`
+/// return, or a panic unwind out of the boot task) rather than requiring
+/// every one of those to remember to release it manually. A no-op `Drop`
+/// when `image_id` is `None` (the common case — most boots don't reference
+/// a registered image at all).
+struct PendingImageBootGuard {
+    state: Arc<AppState>,
+    image_id: Option<String>,
+}
+
+impl Drop for PendingImageBootGuard {
+    fn drop(&mut self) {
+        if let Some(image_id) = &self.image_id {
+            self.state.release_pending_image_boot(image_id);
+        }
+    }
 }
 
 #[tracing::instrument(skip(state, body))]
@@ -126,6 +153,24 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
     let mem_size_mib =
         resolve_resource_override(request.mem_size_mib, state.config.mem_size_mib, state.config.max_mem_size_mib, "mem_size_mib")
             .map_err(AppError::BadRequest)?;
+    // Checked and reserved before the (slow) boot starts, not just relied
+    // on implicitly once the sandbox is inserted into `state.sandboxes` at
+    // the end — closes the window where a concurrent `DELETE /images/:id`
+    // could otherwise remove the very file this boot's rootfs copy is
+    // reading from. `_image_boot_guard` releases the reservation on every
+    // exit path below (success, an early `?` return, or a panicking
+    // `spawn_blocking` task), see `PendingImageBootGuard`.
+    if let Some(image_id) = &request.image_id {
+        if !state.images.exists(image_id) {
+            return Err(AppError::ImageNotFound(image_id.clone()));
+        }
+        state.reserve_pending_image_boot(image_id);
+    }
+    let _image_boot_guard = PendingImageBootGuard { state: state.clone(), image_id: request.image_id.clone() };
+    let base_rootfs_source = match &request.image_id {
+        Some(image_id) => state.images.path_for(image_id),
+        None => state.config.base_rootfs_path.clone(),
+    };
 
     let id = Uuid::new_v4().to_string();
     let rootfs_path = std::env::temp_dir().join(format!("sandkiln-rootfs-{id}.ext4"));
@@ -150,6 +195,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
     let (vm, network, jail_id) = spawn_blocking_in_current_span("boot task panicked", {
         let state = state.clone();
         let rootfs_path = rootfs_path.clone();
+        let base_rootfs_source = base_rootfs_source.clone();
         move || -> std::io::Result<(Vm, Lease, Option<u32>)> {
             let span = tracing::Span::current();
             // Copying the rootfs and leasing a network are independent —
@@ -157,8 +203,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
             // cost of the rootfs copy with the lease instead of paying for
             // both serially.
             let (copy_result, lease_result) = std::thread::scope(|scope| {
-                let copy_handle =
-                    scope.spawn(|| span.in_scope(|| clone_rootfs(&state.config.base_rootfs_path, &rootfs_path)));
+                let copy_handle = scope.spawn(|| span.in_scope(|| clone_rootfs(&base_rootfs_source, &rootfs_path)));
                 let lease_handle = scope.spawn(|| span.in_scope(|| state.network.lease()));
                 (copy_handle.join().expect("rootfs copy thread panicked"), lease_handle.join().expect("lease thread panicked"))
             });
@@ -225,6 +270,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
         network: Some(network),
         rootfs_path,
         attached_drives,
+        image_id: request.image_id,
         jail_id,
         tags: request.tags,
         created_at: SystemTime::now(),

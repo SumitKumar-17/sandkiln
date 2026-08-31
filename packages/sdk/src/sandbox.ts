@@ -1,5 +1,5 @@
 import { decodeBase64, encodeBase64 } from "./base64.js";
-import { resolveAuthToken, resolveBaseUrl } from "./config.js";
+import { resolveClient, type ClientContext } from "./client.js";
 import { request } from "./http.js";
 import type {
   CreateSandboxOptions,
@@ -28,11 +28,6 @@ import type {
   StopSandboxResponseBody,
   WriteFileRequestBody,
 } from "./types.js";
-
-interface ClientContext {
-  baseUrl: string;
-  authToken?: string;
-}
 
 export class Sandbox {
   readonly id: string;
@@ -329,10 +324,6 @@ export class Sandbox {
   }
 }
 
-function resolveClient(options: { baseUrl?: string; authToken?: string }): ClientContext {
-  return { baseUrl: resolveBaseUrl(options.baseUrl), authToken: resolveAuthToken(options.authToken) };
-}
-
 /** `undefined` (rather than `{}`) when the caller didn't set anything,
  * matching the daemon's own "empty body means all defaults" handling and
  * this SDK's existing convention for an all-default `POST /sandboxes`. */
@@ -342,5 +333,6 @@ function buildCreateSandboxRequestBody(options: CreateSandboxOptions): CreateSan
   if (options.tags !== undefined) body.tags = options.tags;
   if (options.vcpuCount !== undefined) body.vcpu_count = options.vcpuCount;
   if (options.memSizeMib !== undefined) body.mem_size_mib = options.memSizeMib;
+  if (options.imageId !== undefined) body.image_id = options.imageId;
   return Object.keys(body).length > 0 ? body : undefined;
 }

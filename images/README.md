@@ -22,8 +22,20 @@ Kernel and rootfs build scripts for sandbox base images.
   `build-universal-image.sh`, or standalone against any already-built ext4
   rootfs image. Needs sudo. See "Multi-agent isolation" in `ROADMAP.md`.
 
-Still open: the managed image catalog and custom image (user-provided or
-OCI-converted) support — see "Base and custom images" in `ROADMAP.md`.
+**Done: registering multiple named images and picking one per sandbox.**
+An already-built ext4 rootfs (produced with the scripts above) can be
+registered with the daemon under a name (`POST /images`, `kiln image
+create <id> <path>`) and referenced by a specific `POST /sandboxes` call
+(`image_id`, `kiln sandbox create --image <id>`) instead of the
+daemon-wide `SANDKILN_BASE_ROOTFS` default — see `SELF_HOSTING.md`'s
+"Custom and managed images" and `core/crates/daemon/src/routes_images.rs`.
+This does not accept a file upload or build anything; `path` must already
+be a real ext4 rootfs on the daemon's own host.
+
+Still open: **OCI conversion** — turning a Docker/OCI image into a
+bootable ext4 rootfs (layers, entrypoint, etc.) — see "Base and custom
+images" in `ROADMAP.md`. That remains a separate, larger problem than
+registering an image that's already built.
 
 Built artifacts (kernels, rootfs images) are not committed — see
 `.gitignore` — they're large binary blobs that get rebuilt or fetched, not

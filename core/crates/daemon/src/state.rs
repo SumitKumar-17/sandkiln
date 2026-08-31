@@ -6,6 +6,7 @@ use crate::snapshot::Snapshot;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use sandkiln_vmm::drive::DriveStore;
+use sandkiln_vmm::image::ImageStore;
 use sandkiln_vmm::jailer::JailerIdPool;
 use sandkiln_vmm::network::NetworkManager;
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,7 @@ pub struct AppState {
     pub config: Config,
     pub network: NetworkManager,
     pub drives: DriveStore,
+    pub images: ImageStore,
     /// `Some` exactly when `config.jailer` is `Some` — the pool of
     /// uid/gid pairs `routes_sandbox::create_sandbox` leases from for
     /// each jailed boot, released back on `stop_sandbox_by_id`. Built
@@ -42,6 +44,17 @@ pub struct AppState {
     /// concurrent callers using the *same* name, without serializing
     /// unrelated names against each other — see `AppState::lock_name`.
     pub name_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Refcounted claims on an image id that's being cloned into a
+    /// not-yet-registered `Sandbox` right now (`routes_sandbox::create_sandbox`
+    /// holds one for the duration of the boot). Closes the race between
+    /// "checked the image exists" and "the new sandbox is actually visible
+    /// in `sandboxes`, so `image_holder` can see it there instead": without
+    /// this, `DELETE /images/:id` could succeed in the gap while a boot
+    /// from that exact image is still in flight, deleting the file out
+    /// from under an in-progress `cp`. Keyed by image id rather than a
+    /// single bool per id because two sandboxes can legitimately boot from
+    /// the same image concurrently.
+    pending_image_boots: Mutex<HashMap<String, u32>>,
     pub metrics: Metrics,
     /// Reused across every `/preview` proxy request rather than built
     /// per-request, so repeated hits on one dev server benefit from
@@ -57,16 +70,24 @@ impl AppState {
     /// in rather than always starting empty so a daemon restart doesn't
     /// silently orphan every snapshot that was durable on disk (see
     /// `main.rs`).
-    pub fn new(config: Config, network: NetworkManager, drives: DriveStore, snapshots: HashMap<String, Snapshot>) -> Self {
+    pub fn new(
+        config: Config,
+        network: NetworkManager,
+        drives: DriveStore,
+        images: ImageStore,
+        snapshots: HashMap<String, Snapshot>,
+    ) -> Self {
         let jailer_ids = config.jailer.as_ref().map(|j| JailerIdPool::new(j.uid_gid_range.clone()));
         Self {
             config,
             network,
             drives,
+            images,
             jailer_ids,
             sandboxes: Mutex::new(HashMap::new()),
             snapshots: Mutex::new(snapshots),
             name_locks: Mutex::new(HashMap::new()),
+            pending_image_boots: Mutex::new(HashMap::new()),
             metrics: Metrics::new(),
             preview_client: build_preview_client(),
         }
@@ -146,6 +167,30 @@ impl AppState {
         None
     }
 
+    /// Where an image id is currently referenced, if anywhere — mirrors
+    /// `drive_holder`, but for `sandkiln_vmm::image::ImageStore` entries.
+    /// Checked before a sandbox boot commits to an image id and before
+    /// `DELETE /images/:id`. Also covers a boot currently in flight from
+    /// this image (`pending_image_boots`) — a sandbox isn't inserted into
+    /// `sandboxes` until its `Vm` has actually booted, but the image is
+    /// already "in use" for deletion purposes from the moment the boot
+    /// starts, not just once the sandbox is visible.
+    pub fn image_holder(&self, image_id: &str) -> Option<String> {
+        if self.pending_image_boots.lock().unwrap().get(image_id).is_some_and(|count| *count > 0) {
+            return Some("a sandbox currently being created".to_string());
+        }
+        if let Some(sandbox) = self.sandboxes.lock().unwrap().values().find(|s| s.image_id.as_deref() == Some(image_id))
+        {
+            return Some(format!("sandbox {}", sandbox.id));
+        }
+        if let Some(snapshot) =
+            self.snapshots.lock().unwrap().values().find(|s| s.image_id.as_deref() == Some(image_id))
+        {
+            return Some(format!("snapshot {}", snapshot.id));
+        }
+        None
+    }
+
     /// Serializes every operation that claims or resolves one particular
     /// name against concurrent callers using that *same* name, while
     /// leaving unrelated names free to proceed in parallel — the race
@@ -173,6 +218,25 @@ impl AppState {
         };
         let guard = Arc::clone(&lock).lock_owned().await;
         NameLockGuard { state: self.clone(), name: name.to_string(), lock, _guard: guard }
+    }
+
+    /// Claims a pending reference on `image_id` for the duration of a
+    /// sandbox boot from it — see `pending_image_boots`'s doc comment.
+    /// Paired with `release_pending_image_boot`, ideally via an RAII guard
+    /// at the call site so it's released on every exit path, not just the
+    /// success one (see `routes_sandbox::ImagePendingBootGuard`).
+    pub fn reserve_pending_image_boot(&self, image_id: &str) {
+        *self.pending_image_boots.lock().unwrap().entry(image_id.to_string()).or_insert(0) += 1;
+    }
+
+    pub fn release_pending_image_boot(&self, image_id: &str) {
+        let mut pending = self.pending_image_boots.lock().unwrap();
+        if let Some(count) = pending.get_mut(image_id) {
+            *count -= 1;
+            if *count == 0 {
+                pending.remove(image_id);
+            }
+        }
     }
 }
 
@@ -353,6 +417,7 @@ mod tests {
             tap_pool_size: 0,
             auth_token: None,
             drives_dir: dir.join("drives"),
+            images_dir: dir.join("images"),
             idle_timeout: None,
             auto_suspend_timeout: None,
             log_format: LogFormat::Pretty,
@@ -361,7 +426,8 @@ mod tests {
         };
         let network = NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", Vec::<String>::new());
         let drives = DriveStore::new(dir.join("drives")).expect("create test drives dir");
-        Arc::new(AppState::new(config, network, drives, HashMap::new()))
+        let images = ImageStore::new(dir.join("images")).expect("create test images dir");
+        Arc::new(AppState::new(config, network, drives, images, HashMap::new()))
     }
 
     #[test]
@@ -472,4 +538,115 @@ mod tests {
             .await
             .expect("re-locking a name after its guard was dropped must not hang");
     }
+
+    /// Builds a real `AppState` against real, isolated temp directories —
+    /// no KVM/root needed for anything exercised here: `NetworkManager` is
+    /// only ever constructed, never `ensure_ready()`'d or `lease()`'d (both
+    /// need real netlink access), so a fake bridge/uplink name is fine, the
+    /// same convention `snapshot.rs`'s tests already use.
+    struct TestState {
+        state: AppState,
+        dir: PathBuf,
+    }
+
+    impl TestState {
+        fn new(test_name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("sandkiln-appstate-test-{test_name}-{}", std::process::id()));
+            let _ = fs_remove(&dir);
+            let drives = DriveStore::new(dir.join("drives")).unwrap();
+            let images = ImageStore::new(dir.join("images")).unwrap();
+            let network = NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", Vec::<String>::new());
+            let config = Config {
+                listen_addr: "127.0.0.1:0".to_string(),
+                firecracker_bin: PathBuf::from("/nonexistent/firecracker"),
+                kernel_path: PathBuf::from("/nonexistent/vmlinux"),
+                base_rootfs_path: PathBuf::from("/nonexistent/base.ext4"),
+                vcpu_count: 2,
+                mem_size_mib: 512,
+                max_vcpu_count: 16,
+                max_mem_size_mib: 16384,
+                bridge_name: "test-br0".to_string(),
+                bridge_gateway: "10.0.0.1".parse().unwrap(),
+                uplink_iface: Some("eth-test".to_string()),
+                tap_pool_prefix: "sktap".to_string(),
+                tap_pool_size: 0,
+                auth_token: None,
+                drives_dir: dir.join("drives"),
+                images_dir: dir.join("images"),
+                idle_timeout: None,
+                auto_suspend_timeout: None,
+                log_format: LogFormat::Pretty,
+                preview_timeout: Duration::from_secs(30),
+                jailer: None,
+            };
+            let state = AppState::new(config, network, drives, images, HashMap::new());
+            Self { state, dir }
+        }
+    }
+
+    impl Drop for TestState {
+        fn drop(&mut self) {
+            let _ = fs_remove(&self.dir);
+        }
+    }
+
+    fn fs_remove(dir: &std::path::Path) -> std::io::Result<()> {
+        std::fs::remove_dir_all(dir)
+    }
+
+    #[test]
+    fn image_holder_is_none_for_an_untouched_image_id() {
+        let t = TestState::new("image-holder-none");
+        assert_eq!(t.state.image_holder("img1"), None);
+    }
+
+    #[test]
+    fn reserve_pending_image_boot_makes_image_holder_report_it() {
+        let t = TestState::new("reserve-visible");
+        t.state.reserve_pending_image_boot("img1");
+        assert_eq!(t.state.image_holder("img1"), Some("a sandbox currently being created".to_string()));
+    }
+
+    #[test]
+    fn release_pending_image_boot_clears_the_claim() {
+        let t = TestState::new("release-clears");
+        t.state.reserve_pending_image_boot("img1");
+        t.state.release_pending_image_boot("img1");
+        assert_eq!(t.state.image_holder("img1"), None);
+    }
+
+    #[test]
+    fn two_concurrent_reservations_on_the_same_image_both_require_release() {
+        let t = TestState::new("two-reservations");
+        t.state.reserve_pending_image_boot("img1");
+        t.state.reserve_pending_image_boot("img1");
+
+        // One boot finishing (or failing) releases only its own claim —
+        // the other in-flight boot from the same image still blocks
+        // deletion.
+        t.state.release_pending_image_boot("img1");
+        assert!(t.state.image_holder("img1").is_some(), "a second in-flight boot must still hold the image");
+
+        t.state.release_pending_image_boot("img1");
+        assert_eq!(t.state.image_holder("img1"), None);
+    }
+
+    #[test]
+    fn release_without_a_matching_reservation_does_not_panic_or_underflow() {
+        let t = TestState::new("release-without-reserve");
+        // Defensive: a bug elsewhere calling release twice (e.g. once from
+        // a guard's `Drop` and once explicitly) must not panic the whole
+        // request thread or wrap the counter around to `u32::MAX`.
+        t.state.release_pending_image_boot("never-reserved");
+        assert_eq!(t.state.image_holder("never-reserved"), None);
+    }
+
+    // `image_holder`'s sandbox-map and snapshot-map branches aren't
+    // exercised here: both need a real `sandkiln_vmm::vm::Vm` (a running
+    // Firecracker process/vsock connection) or a real `Lease` to construct
+    // a `Sandbox`/`Snapshot` at all, which needs KVM — the same reason
+    // `drive_holder`, this method's existing sibling, has no unit test of
+    // its own either. The logic both branches share with the
+    // `pending_image_boots` branch tested above (`Option<String>`-typed
+    // `.find` over a map) is otherwise identical and already covered.
 }

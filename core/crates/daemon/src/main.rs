@@ -6,6 +6,7 @@ mod metrics;
 mod request_id;
 mod routes_drives;
 mod routes_exec;
+mod routes_images;
 mod routes_metrics;
 mod routes_preview;
 mod routes_sandbox;
@@ -21,6 +22,7 @@ use axum::routing::{any, delete, get, post};
 use axum::Router;
 use config::{Config, LogFormat};
 use sandkiln_vmm::drive::DriveStore;
+use sandkiln_vmm::image::ImageStore;
 use sandkiln_vmm::network::{self, NetworkManager};
 use state::AppState;
 use std::sync::Arc;
@@ -60,6 +62,10 @@ async fn async_main() {
         .expect("create/verify the persistent drives directory (SANDKILN_DRIVES_DIR)");
     tracing::info!(drives_dir = %config.drives_dir.display(), "persistent drive storage ready");
 
+    let images = ImageStore::new(&config.images_dir)
+        .expect("create/verify the registered images directory (SANDKILN_IMAGES_DIR)");
+    tracing::info!(images_dir = %config.images_dir.display(), "registered image storage ready");
+
     // Must happen before the HTTP listener starts accepting connections
     // and before `AppState` takes ownership of `net_manager`: a
     // reconciled snapshot's tap device has to be pulled out of
@@ -97,7 +103,7 @@ async fn async_main() {
     let auth_enabled = config.auth_token.is_some();
     let idle_timeout = config.idle_timeout;
     let auto_suspend_timeout = config.auto_suspend_timeout;
-    let state = Arc::new(AppState::new(config, net_manager, drives, reconciled_snapshots));
+    let state = Arc::new(AppState::new(config, net_manager, drives, images, reconciled_snapshots));
 
     if idle_timeout.is_some() || auto_suspend_timeout.is_some() {
         if let Some(auto_suspend_timeout) = auto_suspend_timeout {
@@ -124,6 +130,11 @@ async fn async_main() {
         .route("/drives/:id", delete(routes_drives::delete_drive))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
+    let image_routes = Router::new()
+        .route("/images", post(routes_images::create_image).get(routes_images::list_images))
+        .route("/images/:id", delete(routes_images::delete_image))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
+
     let snapshot_routes =
         routes_snapshot::router().route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
@@ -148,6 +159,7 @@ async fn async_main() {
         .route("/metrics", get(routes_metrics::metrics))
         .merge(sandbox_routes)
         .merge(drive_routes)
+        .merge(image_routes)
         .merge(snapshot_routes)
         .merge(preview_routes)
         .layer(TraceLayer::new_for_http())

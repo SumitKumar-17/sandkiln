@@ -30,6 +30,14 @@ pub struct Sandbox {
     /// become eligible for attaching to a later sandbox again, subject to
     /// `crate::state::can_attach_read_only`'s multi-holder rule.
     pub attached_drives: Vec<AttachedDrive>,
+    /// Id of the registered image (see `sandkiln_vmm::image::ImageStore`
+    /// and `routes_images`) this sandbox's `rootfs_path` was cloned from,
+    /// if it booted from one via `POST /sandboxes`'s `image_id` field.
+    /// `None` means it booted from the daemon-wide `SANDKILN_BASE_ROOTFS`
+    /// default instead — today's unchanged behavior. Checked by
+    /// `AppState::image_holder` so `DELETE /images/:id` can refuse to
+    /// remove an image a live sandbox was booted from.
+    pub image_id: Option<String>,
     /// The uid/gid leased from `AppState::jailer_ids` for this sandbox's
     /// VM, if it was booted jailed — `None` for a direct (unjailed) boot.
     /// Released back to the pool in `stop_sandbox_by_id`; `Vm::stop`

@@ -29,7 +29,13 @@ a dependency the JS SDK's equivalent doesn't need either (it uses native
   since the caller is typically a browser tab or `<iframe>`. Unlike the JS
   SDK's `previewUrl`, the sandbox id isn't URL-quoted here — matching this
   file's own existing convention (`run_command`/`read_file`/etc. don't
-  quote it either), not an oversight.
+  quote it either), not an oversight. `Sandbox.create`'s `image_id`
+  boots from a registered image (see `image.py`) instead of the daemon's
+  configured default rootfs.
+- `image.py` — the `Image` class, `ImageInfo` dataclass. Mirrors
+  `packages/sdk/src/image.ts`: `register`/`list`/`delete` are all
+  classmethods, no instance state — an image has no behavior besides
+  delete, and delete only ever needs an id.
 - `_http.py` — the one place `urllib.request` gets called. Leading
   underscore: not part of the public API, same convention as `_config.py`.
 - `_config.py` — env var fallback resolution

@@ -38,5 +38,24 @@ that mount/chroot).
   rather than claiming it works; whoever has access to the real dev box
   needs to actually run it before it's "done."
 - The daemon's `SANDKILN_BASE_ROOTFS` env var controls which image every
-  new sandbox boots from — building a new image doesn't change daemon
-  behavior until that env var points at it (and the daemon is restarted).
+  new sandbox boots from **by default** — building a new image doesn't
+  change that default until the env var points at it (and the daemon is
+  restarted). A single sandbox can instead boot from a *registered*
+  image without touching that default at all — see "Managed images"
+  below.
+- **Managed images**: `core/crates/daemon/src/routes_images.rs`
+  (`POST /images`, `GET /images`, `DELETE /images/:id`) lets a caller
+  register an already-built ext4 rootfs file — one built with the
+  scripts here — under a name, and reference it per sandbox via
+  `POST /sandboxes`'s `image_id` field (`kiln sandbox create --image
+  <id>`). Registration copies the file (via `sandkiln_vmm::image::ImageStore`)
+  into `SANDKILN_IMAGES_DIR`; it does not accept an HTTP upload and does
+  not build or convert anything — the file handed to it must already be a
+  real ext4 rootfs, produced the same way `SANDKILN_BASE_ROOTFS` is (this
+  directory's scripts, run out of band, with the agent already injected
+  via `inject-agent.sh`). The daemon cannot verify that last step itself
+  (no root to loop-mount) — `scripts/preflight-check.sh --root-checks
+  --rootfs-image <path>` is the way to confirm it before registering.
+  **Converting a Docker/OCI image into a bootable rootfs is a separate,
+  larger problem, not attempted by this mechanism** — see "Still open"
+  below.

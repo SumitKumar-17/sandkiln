@@ -14,16 +14,19 @@ straight to the SDK.
 ## Files
 
 - `src/index.ts` — the CLI. `sandbox create|get-or-create|by-name|ls|rm|
-  exec|read|write|preview|snapshot|resume|fork` subcommands, each a thin
-  call into `Sandbox`/`Sandbox.attach()`. `resume`/`fork`/`get-or-create`/
-  `by-name` call the SDK's static `Sandbox.resume`/`Sandbox.fork`/
-  `Sandbox.getOrCreate`/`Sandbox.byName` directly (none acts on an
-  already-existing handle — `resume`/`fork` take a snapshot id, `by-name`/
-  `get-or-create` a name, not a sandbox id, so there's no existing handle
-  to attach to). `rm` defaults to the SDK's `stop()` persist-by-default
-  behavior and reports whether the sandbox was preserved (with its
-  snapshot id) or destroyed; `--destroy` opts into full destruction
-  (`stop({ keep: false })`).
+  exec|read|write|preview|snapshot|resume|fork` and `image create|ls|rm`
+  subcommands, each a thin call into `Sandbox`/`Sandbox.attach()`/`Image`.
+  `resume`/`fork`/`get-or-create`/`by-name` call the SDK's static
+  `Sandbox.resume`/`Sandbox.fork`/`Sandbox.getOrCreate`/`Sandbox.byName`
+  directly (none acts on an already-existing handle — `resume`/`fork`
+  take a snapshot id, `by-name`/`get-or-create` a name, not a sandbox id,
+  so there's no existing handle to attach to); `image` subcommands call
+  `Image`'s static methods the same way, since an image has no instance
+  handle at all. `sandbox create --image <id>` boots from a registered
+  image instead of the daemon's default rootfs. `rm` defaults to the
+  SDK's `stop()` persist-by-default behavior and reports whether the
+  sandbox was preserved (with its snapshot id) or destroyed; `--destroy`
+  opts into full destruction (`stop({ keep: false })`).
   `--base-url`/`--token` are global options that fall through to the
   SDK's own env var resolution when unset — don't reimplement that
   resolution here, just pass `undefined` through. Every action handler
@@ -41,8 +44,9 @@ straight to the SDK.
   `parseTag` (the `--tag key=value` parser — throws commander's
   `InvalidArgumentError`, not a plain `Error`, so a bad `--tag` value
   gets the same clean `error: ...` stderr message as everything else
-  instead of an unhandled-exception stack trace) and `formatSandboxList`
-  (the `sandbox ls` output formatter, including the empty-list case).
+  instead of an unhandled-exception stack trace), `formatSandboxList`
+  (the `sandbox ls` output formatter, including the empty-list case), and
+  `formatImageList` (the `image ls` equivalent).
 
 ## Testing
 

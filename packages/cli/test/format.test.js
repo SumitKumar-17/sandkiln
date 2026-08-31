@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InvalidArgumentError } from "commander";
-import { formatSandboxList, formatSnapshotList, parseTag } from "../dist/format.js";
+import { formatImageList, formatSandboxList, formatSnapshotList, parseTag } from "../dist/format.js";
 
 test("parseTag splits on the first = and accumulates into the previous object", () => {
   const acc = parseTag("env=prod", {});
@@ -74,4 +74,34 @@ test("formatSnapshotList appends forked_into only when a live fork exists", () =
     { id: "snap-1", sourceSandboxId: "sb-1", createdAt: new Date("2026-01-01T00:00:00.000Z"), tags: {}, forkedInto: "sb-2" },
   ];
   assert.equal(formatSnapshotList(snapshots), "snap-1  source=sb-1  2026-01-01T00:00:00.000Z    forked_into=sb-2\n");
+});
+
+test("formatImageList reports an empty list distinctly", () => {
+  assert.equal(formatImageList([]), "no images\n");
+});
+
+test("formatImageList renders id, size, ISO timestamp, and in-use holder (or 'not in use') per line", () => {
+  const images = [
+    {
+      id: "python-3.12-custom",
+      sizeMib: 2048,
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      inUseBy: "sandbox sb-1",
+      guestAgentVerified: false,
+      verificationHint: "...",
+    },
+    {
+      id: "node-lts-custom",
+      sizeMib: 1024,
+      createdAt: new Date("2026-01-02T00:00:00.000Z"),
+      inUseBy: null,
+      guestAgentVerified: false,
+      verificationHint: "...",
+    },
+  ];
+  assert.equal(
+    formatImageList(images),
+    "python-3.12-custom  2048MiB  2026-01-01T00:00:00.000Z  sandbox sb-1\n" +
+      "node-lts-custom  1024MiB  2026-01-02T00:00:00.000Z  not in use\n",
+  );
 });

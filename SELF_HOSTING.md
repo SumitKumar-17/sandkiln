@@ -172,6 +172,44 @@ if `SANDKILN_BASE_ROOTFS` looks like the small test image, and
 `--root-checks` verifies the agent is actually baked into whatever image
 is configured — run it before starting the daemon for real.
 
+### Custom and managed images
+
+`SANDKILN_BASE_ROOTFS` is the daemon-wide default every sandbox boots
+from unless told otherwise, but a single caller can also register
+additional images and pick one per sandbox:
+
+```
+kiln image create python-3.12-custom ~/sandkiln-tools/images/python-3.12-custom.ext4
+kiln sandbox create --image python-3.12-custom
+```
+
+(equivalently, `POST /images` with `{"id": ..., "path": ...}`, then
+`POST /sandboxes` with `{"image_id": ...}`.) `path` must already be an
+ext4 rootfs file staged on the host the daemon process itself runs on —
+this does **not** accept an upload, and it does **not** convert a
+Docker/OCI image into a bootable rootfs; both are separate, larger
+problems not attempted here. The file is copied (not referenced in
+place) into a managed directory (`SANDKILN_IMAGES_DIR`), so editing or
+deleting the original afterward is safe.
+
+**The daemon cannot verify the guest agent is baked into a registered
+image** — the same loop-mount-and-inspect check `--root-checks` does for
+`SANDKILN_BASE_ROOTFS` above needs real root, which the daemon
+deliberately doesn't have (see section 6's "why not just run as root").
+Every `POST /images`/`GET /images` response says so explicitly
+(`guest_agent_verified: false`), and `kiln image create` prints a
+warning to stderr. Run the same check against the candidate file
+yourself, before registering it:
+
+```
+sudo -E scripts/preflight-check.sh --root-checks --rootfs-image ~/sandkiln-tools/images/python-3.12-custom.ext4
+```
+
+`DELETE /images/:id` (`kiln image rm <id>`) refuses while any live
+sandbox, in-flight boot, or held snapshot still references the image —
+the same "can't delete what's in use" rule `DELETE /drives/:id` already
+enforces.
+
 ## 5. Networking and the TAP pool
 
 The daemon manages its own bridge network at startup — you do not need
@@ -350,8 +388,9 @@ source):
 | `SANDKILN_UPLINK_IFACE` | auto-detected from the default route | host interface sandboxes NAT out through |
 | `SANDKILN_TAP_POOL_PREFIX` | `sktap` | must match what `create-tap-pool.sh` was run with |
 | `SANDKILN_TAP_POOL_SIZE` | `32` | must match what `create-tap-pool.sh` was run with |
-| `SANDKILN_AUTH_TOKEN` | unset (auth disabled) | bearer token required on `/sandboxes*`, `/drives*`, `/snapshots*` — **unset means the API is completely open, see section 9** |
+| `SANDKILN_AUTH_TOKEN` | unset (auth disabled) | bearer token required on `/sandboxes*`, `/drives*`, `/images*`, `/snapshots*` — **unset means the API is completely open, see section 9** |
 | `SANDKILN_DRIVES_DIR` | `~/sandkiln-tools/drives` | where persistent drives are stored |
+| `SANDKILN_IMAGES_DIR` | `~/sandkiln-tools/images-registered` | where registered images (`POST /images`, `kiln image create`) are stored — see "Custom and managed images" in section 4 |
 | `SANDKILN_IDLE_TIMEOUT_SECS` | unset (disabled) | auto-**destroy** a sandbox after this many idle seconds (no exec/read/write activity) — VM killed, network released, rootfs deleted, state gone for good; `0` also disables it |
 | `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS` | unset (disabled) | auto-**suspend** an idle sandbox instead: pause + snapshot it (same as `POST /sandboxes/:id/snapshot`) and free its VM/vcpu/memory, keeping it resumable; `0` also disables it. If both this and `SANDKILN_IDLE_TIMEOUT_SECS` are set, this must be strictly smaller — auto-suspend always gets first crack at an idle sandbox, and the destroy timeout becomes a backstop for a sandbox whose auto-suspend keeps failing (see `core/crates/daemon/src/config.rs`'s `auto_suspend_timeout` doc comment) |
 | `SANDKILN_LOG_FORMAT` | `pretty` | set to `json` for one JSON object per log line, for log pipelines that parse fields |
@@ -634,7 +673,9 @@ trusting the result — that's exactly what it exists for.
   half-paused — it will not appear as a snapshot in that case, since
   there's nothing valid on disk to represent.
 - **Persistent state and where it lives**: persistent drives live under
-  `SANDKILN_DRIVES_DIR`. Snapshots (state + memory + metadata) live under
+  `SANDKILN_DRIVES_DIR`, registered images under `SANDKILN_IMAGES_DIR`
+  (see "Custom and managed images" in section 4). Snapshots (state +
+  memory + metadata) live under
   `$TMPDIR/sandkiln-snapshots` (`std::env::temp_dir()` joined with a
   fixed subdirectory — typically `/tmp/sandkiln-snapshots`;
   `core/crates/daemon/src/snapshot.rs::snapshots_root()` is the

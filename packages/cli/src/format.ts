@@ -1,5 +1,5 @@
 import { InvalidArgumentError } from "commander";
-import type { SandboxInfo, SnapshotInfo } from "sandkiln";
+import type { ImageInfo, SandboxInfo, SnapshotInfo } from "sandkiln";
 
 /**
  * A plain `Error` here crashes with a raw stack trace instead of the
@@ -60,4 +60,16 @@ export function formatSnapshotList(snapshots: SnapshotInfo[]): string {
     return "no snapshots\n";
   }
   return snapshots.map(formatSnapshotLine).join("\n") + "\n";
+}
+
+function formatImageLine(info: ImageInfo): string {
+  const inUseBy = info.inUseBy ?? "not in use";
+  return `${info.id}  ${info.sizeMib}MiB  ${info.createdAt.toISOString()}  ${inUseBy}`;
+}
+
+export function formatImageList(images: ImageInfo[]): string {
+  if (images.length === 0) {
+    return "no images\n";
+  }
+  return images.map(formatImageLine).join("\n") + "\n";
 }
