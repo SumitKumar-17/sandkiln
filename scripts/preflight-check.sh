@@ -20,8 +20,18 @@
 # the guest agent's systemd unit is actually baked in — the single most
 # common way a "healthy-looking" setup still fails at sandbox creation.
 #
-# Usage: scripts/preflight-check.sh [--daemon-bin <path>] [--root-checks]
+# Pass --rootfs-image <path> to check a candidate image file at <path>
+# instead of SANDKILN_BASE_ROOTFS in the "images" section — this is how
+# to verify a custom/managed image (see `POST /images`, `kiln image
+# create`) is guest-agent-ready *before* registering it: the daemon
+# itself cannot do this check (it runs unprivileged, with no way to
+# loop-mount a file as root on demand), so this script is the only way to
+# get that confirmation, and it needs to run against the exact file
+# before it's handed to `kiln image create <id> <path>`.
+#
+# Usage: scripts/preflight-check.sh [--daemon-bin <path>] [--root-checks] [--rootfs-image <path>]
 # Example: sudo -E scripts/preflight-check.sh --root-checks
+# Example: sudo -E scripts/preflight-check.sh --root-checks --rootfs-image ~/images/python-3.12-custom.ext4
 # Exit code: 0 if every check passed, 1 if anything failed.
 
 set -uo pipefail
@@ -33,10 +43,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 DAEMON_BIN=""
 ROOT_CHECKS=0
+ROOTFS_IMAGE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --daemon-bin) DAEMON_BIN="${2:?--daemon-bin needs a path}"; shift 2 ;;
     --root-checks) ROOT_CHECKS=1; shift ;;
+    --rootfs-image) ROOTFS_IMAGE="${2:?--rootfs-image needs a path}"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -69,6 +81,17 @@ TAP_POOL_PREFIX="${SANDKILN_TAP_POOL_PREFIX:-sktap}"
 TAP_POOL_SIZE="${SANDKILN_TAP_POOL_SIZE:-32}"
 DRIVES_DIR="$(expand_home "${SANDKILN_DRIVES_DIR:-~/sandkiln-tools/drives}")"
 AUTH_TOKEN="${SANDKILN_AUTH_TOKEN:-}"
+
+# When --rootfs-image is given, the "images" section's guest-agent-baked-in
+# check runs against that candidate file instead of SANDKILN_BASE_ROOTFS —
+# everything else still checks the daemon's actually-configured environment.
+if [ -n "$ROOTFS_IMAGE" ]; then
+  IMAGE_TO_CHECK="$(expand_home "$ROOTFS_IMAGE")"
+  IMAGE_LABEL="candidate image ($IMAGE_TO_CHECK)"
+else
+  IMAGE_TO_CHECK="$BASE_ROOTFS"
+  IMAGE_LABEL="base rootfs ($BASE_ROOTFS)"
+fi
 
 echo "sandkiln preflight check"
 echo "(reading the same SANDKILN_* env vars and defaults the daemon itself uses)"
@@ -117,20 +140,22 @@ else
   bad "kernel image not found at $KERNEL_PATH — run images/fetch-test-image.sh, or set SANDKILN_KERNEL_PATH"
 fi
 
-if [ -f "$BASE_ROOTFS" ]; then
-  size_bytes="$(stat -c%s "$BASE_ROOTFS" 2>/dev/null || stat -f%z "$BASE_ROOTFS" 2>/dev/null || echo 0)"
+if [ -f "$IMAGE_TO_CHECK" ]; then
+  size_bytes="$(stat -c%s "$IMAGE_TO_CHECK" 2>/dev/null || stat -f%z "$IMAGE_TO_CHECK" 2>/dev/null || echo 0)"
   size_mib=$((size_bytes / 1024 / 1024))
-  ok "base rootfs present: $BASE_ROOTFS (${size_mib} MiB)"
+  ok "$IMAGE_LABEL present (${size_mib} MiB)"
 
   # The unmodified Firecracker CI test image (images/fetch-test-image.sh's
   # output) is ~300MiB and missing ca-certificates/Node/Python — never
   # meant to back real sandboxes (see images/build-universal-image.sh's
-  # header comment). It's also SANDKILN_BASE_ROOTFS's compiled-in default,
-  # which is exactly the trap this check exists to catch: a fresh install
-  # that never overrides the env var silently boots every sandbox from a
-  # test image, not a production one.
+  # header comment). SANDKILN_BASE_ROOTFS's compiled-in default is exactly
+  # that test image, which is exactly the trap this check exists to catch:
+  # a fresh install that never overrides the env var silently boots every
+  # sandbox from a test image, not a production one. The same size
+  # heuristic is still a reasonable smell test for an arbitrary
+  # --rootfs-image candidate too — a custom image under 1GiB is unusual.
   if [ "$size_mib" -lt 1024 ]; then
-    warn "$BASE_ROOTFS is under 1GiB — this looks like the raw CI test image, not a built production rootfs (images/build-universal-image.sh's default output is several GiB). If that's intentional (e.g. you're just testing the setup mechanics), ignore this; otherwise build a real image and point SANDKILN_BASE_ROOTFS at it."
+    warn "$IMAGE_LABEL is under 1GiB — this looks like the raw CI test image, not a built production rootfs (images/build-universal-image.sh's default output is several GiB). If that's intentional (e.g. you're just testing the setup mechanics), ignore this; otherwise build or point at a real image."
   fi
 
   if [ "$ROOT_CHECKS" -eq 1 ]; then
@@ -138,23 +163,27 @@ if [ -f "$BASE_ROOTFS" ]; then
       bad "--root-checks was passed but this isn't running as root — re-run with sudo to loop-mount and verify the guest agent is baked in"
     else
       mnt="$(mktemp -d)"
-      if mount -o loop,ro "$BASE_ROOTFS" "$mnt" 2>/dev/null; then
+      if mount -o loop,ro "$IMAGE_TO_CHECK" "$mnt" 2>/dev/null; then
         if [ -f "$mnt/usr/local/bin/sandkiln-agent" ] && [ -f "$mnt/etc/systemd/system/sandkiln-agent.service" ]; then
-          ok "guest agent is baked into $BASE_ROOTFS (binary + systemd unit both present)"
+          ok "guest agent is baked into $IMAGE_LABEL (binary + systemd unit both present)"
         else
-          bad "$BASE_ROOTFS has no guest agent baked in — sandboxes will boot but never respond to exec/read/write. Run images/inject-agent.sh <agent-binary> $BASE_ROOTFS"
+          bad "$IMAGE_LABEL has no guest agent baked in — sandboxes will boot but never respond to exec/read/write. Run images/inject-agent.sh <agent-binary> $IMAGE_TO_CHECK"
         fi
         umount "$mnt" 2>/dev/null || umount -l "$mnt" 2>/dev/null || true
       else
-        warn "could not loop-mount $BASE_ROOTFS to verify the guest agent — skipping that check"
+        warn "could not loop-mount $IMAGE_LABEL to verify the guest agent — skipping that check"
       fi
       rmdir "$mnt" 2>/dev/null || true
     fi
   else
-    warn "guest-agent-baked-in check skipped (needs root — re-run with sudo scripts/preflight-check.sh --root-checks)"
+    warn "guest-agent-baked-in check skipped (needs root — re-run with sudo scripts/preflight-check.sh --root-checks$([ -n "$ROOTFS_IMAGE" ] && echo " --rootfs-image $ROOTFS_IMAGE"))"
   fi
 else
-  bad "base rootfs not found at $BASE_ROOTFS — run images/fetch-test-image.sh for a quick test image, or images/build-universal-image.sh for a real one, then set SANDKILN_BASE_ROOTFS"
+  if [ -n "$ROOTFS_IMAGE" ]; then
+    bad "candidate image not found at $IMAGE_TO_CHECK — check the --rootfs-image path"
+  else
+    bad "base rootfs not found at $BASE_ROOTFS — run images/fetch-test-image.sh for a quick test image, or images/build-universal-image.sh for a real one, then set SANDKILN_BASE_ROOTFS"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
