@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
 import { Sandbox, SandkilnApiError } from "sandkiln";
-import { formatSandboxList, parsePositiveInt, parseTag } from "./format.js";
+import { formatSandboxList, formatSnapshotList, parsePositiveInt, parseTag } from "./format.js";
 
 interface GlobalOptions {
   baseUrl?: string;
@@ -148,6 +148,23 @@ sandbox
     try {
       const snapshotId = await attachSandbox(id, baseUrl, token).snapshot();
       process.stdout.write(`${snapshotId}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("snapshots")
+  .description(
+    "List snapshots. A sandbox can turn into one on its own (auto-suspend), not just via `kiln sandbox snapshot`" +
+      " — use --source to find the snapshot a given sandbox id became.",
+  )
+  .option("--source <sandbox-id>", "only the snapshot (if any) taken from this original sandbox id")
+  .action(async function (this: Command, opts: { source?: string }) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const snapshots = await Sandbox.listSnapshots({ baseUrl, authToken: token, sourceSandboxId: opts.source });
+      process.stdout.write(formatSnapshotList(snapshots));
     } catch (error) {
       await handleApiError(error);
     }

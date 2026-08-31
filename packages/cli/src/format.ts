@@ -1,5 +1,5 @@
 import { InvalidArgumentError } from "commander";
-import type { SandboxInfo } from "sandkiln";
+import type { SandboxInfo, SnapshotInfo } from "sandkiln";
 
 /**
  * A plain `Error` here crashes with a raw stack trace instead of the
@@ -45,4 +45,19 @@ export function formatSandboxList(sandboxes: SandboxInfo[]): string {
     return "no sandboxes\n";
   }
   return sandboxes.map(formatSandboxLine).join("\n") + "\n";
+}
+
+function formatSnapshotLine(info: SnapshotInfo): string {
+  const tags = Object.entries(info.tags)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(",");
+  const forked = info.forkedInto !== null ? `  forked_into=${info.forkedInto}` : "";
+  return `${info.id}  source=${info.sourceSandboxId}  ${info.createdAt.toISOString()}  ${tags}${forked}`;
+}
+
+export function formatSnapshotList(snapshots: SnapshotInfo[]): string {
+  if (snapshots.length === 0) {
+    return "no snapshots\n";
+  }
+  return snapshots.map(formatSnapshotLine).join("\n") + "\n";
 }
