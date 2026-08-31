@@ -155,12 +155,27 @@ outbound HTTP both still work.
   disk, started a fresh instance, resumed it, data intact. Not durable
   across a host *reboot* by default — snapshot storage lives under
   `$TMPDIR`, see `SELF_HOSTING.md`'s persistent-state section.
-- **Persistent-by-default sandboxes**: auto-snapshot on stop, so "stop and
-  come back later" is the default behavior, not something the caller has
-  to manage.
-- **Named sandboxes**: create/resume by a caller-given name (unique per
-  daemon) instead of only an opaque id, so `get-or-create` is possible
-  without the caller tracking ids itself.
+- **Done: persistent-by-default sandboxes.** `DELETE /sandboxes/:id`
+  auto-snapshots on stop by default (`stop_sandbox_by_id(..., keep: true)`
+  via the shared `snapshot_and_stop`/`resume_snapshot_by_id` path in
+  `routes_snapshot.rs`) instead of destroying — "stop and come back later"
+  is now the default, not something the caller has to manage. An explicit
+  `?keep=false` (CLI: `kiln sandbox rm --destroy`) opts back into a full
+  destroy; a sandbox that structurally can't be preserved (jailed) falls
+  back to destroy automatically rather than leaking. The idle reaper's
+  destroy pass uses the same default.
+- **Done: named sandboxes.** Create/resume by a caller-given name (unique
+  among live sandboxes, `1-64` chars, `[A-Za-z0-9_-]`) instead of only an
+  opaque id — `name` on `POST /sandboxes`, `GET /sandboxes/by-name/:name`
+  (live only — 409 pointing at get-or-create if the name currently
+  resolves to a held snapshot instead), and `POST /sandboxes/get-or-create`
+  (return-if-live / resume-if-snapshotted / create-if-neither, race-safe
+  under a per-name lock so two concurrent callers claiming the same new
+  name can't both win). A name carries through `snapshot`/`resume`/`fork`
+  when re-specified. Exposed as `Sandbox.getOrCreate()`/`Sandbox.byName()`
+  in both SDKs (plus `name` on `create`/`resume`/`fork`) and
+  `kiln sandbox get-or-create|get`, `--name` on `create`/`ls`/`resume`/
+  `fork`.
 - **Done: auto-suspend on idle.** `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`
   pauses and snapshots (not destroys) a sandbox that's gone quiet for a
   configurable window — the same pause+snapshot path the manual snapshot

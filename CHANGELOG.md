@@ -20,6 +20,15 @@ most of it is now live — check the published packages if you need to
 know exactly what's on npm right now versus what's only in this repo.
 
 ### Added
+- Named sandboxes and persistent-by-default stop: `DELETE /sandboxes/:id`
+  now auto-snapshots on stop by default instead of destroying (`?keep=false`
+  or `kiln sandbox rm --destroy` opts back into the old hard-destroy
+  behavior); sandboxes can carry a caller-given `name` (unique among live
+  sandboxes) via `POST /sandboxes`, resolved with `GET
+  /sandboxes/by-name/:name` (live only) or resumed/created in one
+  race-safe call with `POST /sandboxes/get-or-create`. Both SDKs and the
+  CLI (`--name`, `sandbox get-or-create`, `sandbox get`, `rm --destroy`)
+  are updated to match.
 - Auto-suspend on idle (`SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`): an idle
   sandbox is paused and snapshotted instead of destroyed, freeing its
   VM/network while keeping it resumable. `SANDKILN_IDLE_TIMEOUT_SECS`
