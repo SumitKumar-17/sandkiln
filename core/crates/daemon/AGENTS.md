@@ -48,12 +48,23 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   `lock_name` hands out a per-name `tokio::sync::Mutex` (with best-effort
   cleanup once nothing references it) that every code path claiming or
   resolving a name serializes on, so two concurrent callers can't both
-  win a race for the same brand-new name.
+  win a race for the same brand-new name. Also owns `drives`/`images`
+  (the `DriveStore`/`ImageStore` from `sandkiln-vmm`) and the
+  ownership-tracking helpers that answer "who currently holds this
+  resource" across live sandboxes and held snapshots in one place —
+  `drive_holder()`/`image_holder()` — plus `reserve_pending_image_boot`/
+  `release_pending_image_boot`, which extend that tracking to cover an
+  image referenced by a boot that's still in flight (not yet a `Sandbox`
+  in the map), closing the race where `DELETE /images/:id` could
+  otherwise remove a file an in-progress rootfs copy is still reading.
 - `sandbox.rs` — the `Sandbox` struct the daemon tracks per running VM
   (id, `Vm` handle, network `Lease`, rootfs path, tags, created-at,
-  `last_activity`, `jail_id` — the leased uid/gid if this sandbox booted
-  jailed, released back to `state.jailer_ids` on stop — and `name`, the
-  caller-given identity carried across the sandbox<->snapshot boundary).
+  `last_activity`, `image_id` — the registered image this sandbox's
+  rootfs was cloned from, if any, `None` meaning the daemon-wide
+  `SANDKILN_BASE_ROOTFS` default — `jail_id`, the leased uid/gid if this
+  sandbox booted jailed, released back to `state.jailer_ids` on stop —
+  and `name`, the caller-given identity carried across the
+  sandbox<->snapshot boundary).
 - `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop.
   `stop_sandbox_by_id()` is the shared stop entry point used by both the
   `DELETE` route and `idle_reaper`; it defaults to preserving state
@@ -65,8 +76,13 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   snapshotted, surfaces as an error instead of silently discarding
   state). `create_sandbox_core()` is the actual boot logic, shared with
   `routes_sandbox_name::get_or_create_sandbox`'s create-fresh path — the
-  `create_sandbox` handler itself only adds the name-uniqueness check
-  under `AppState::lock_name` before calling it.
+  `create_sandbox` handler itself adds the name-uniqueness check under
+  `AppState::lock_name` and resolves which rootfs to clone from
+  (`state.config.base_rootfs_path` by default, or a registered image's
+  path when the request gives an `image_id`, via `AppState::images`,
+  reserving/releasing a pending-boot claim on that image id around the
+  whole boot with `PendingImageBootGuard` so a concurrent image deletion
+  can't race an in-flight clone) before calling it.
 - `routes_sandbox_name.rs` — name-based lookup and get-or-create:
   `GET /sandboxes/by-name/:name` (live sandboxes only — a name currently
   held by a snapshot is a `409` pointing at get-or-create, not a silent
@@ -74,6 +90,16 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   resume-if-snapshotted / create-if-neither, race-safe under
   `AppState::lock_name`). Split out from `routes_sandbox.rs` since it
   crosses into snapshot territory (`routes_snapshot::resume_snapshot_by_id`).
+- `routes_images.rs` — registered-image handlers: `POST /images`
+  (register an already-built ext4 rootfs from a host path, copying it
+  into `SANDKILN_IMAGES_DIR` via `sandkiln_vmm::image::ImageStore`),
+  `GET /images`, `DELETE /images/:id` (refuses via `AppState::image_holder`
+  while any live sandbox, in-flight boot, or held snapshot references
+  it — same pattern as `routes_drives::delete_drive`). Every response
+  says `guest_agent_verified: false` — the daemon runs unprivileged and
+  cannot loop-mount a candidate image to check the agent is baked in;
+  `scripts/preflight-check.sh --root-checks --rootfs-image <path>` is
+  the only way to get that confirmation, out of band, before registering.
 - `routes_exec.rs` — exec/read-file/write-file handlers. `call_agent()`
   is the shared helper all three use — extend it, don't duplicate its
   pattern. It's also what bumps a sandbox's `last_activity`.
