@@ -79,53 +79,99 @@ pub struct SnapshotSandboxResponse {
     snapshot_id: String,
 }
 
-/// Pauses the sandbox's microVM, snapshots it to disk, and stops the VM
+/// Why a sandbox can't be snapshotted right now — the two structural
+/// (not transient) reasons `check_snapshottable` can refuse. Split out
+/// from `SnapshotStopError` so each caller of `snapshot_and_stop` can
+/// react differently: `snapshot_sandbox` (a direct, explicit ask) always
+/// turns either into an error, while `routes_sandbox::stop_sandbox_by_id`
+/// (an implicit "preserve by default" ask) treats `ForkedFrom` as
+/// harmless — see that function's doc comment for why — and only
+/// `Jailed` as a real conflict there too.
+pub(crate) enum SnapshotBlocked {
+    /// Firecracker's own snapshot/device state bakes in the in-jail paths
+    /// (e.g. "/rootfs.ext4") a jailed sandbox's chroot used, and
+    /// `Vm::resume` only ever spawns directly — resuming such a snapshot
+    /// would try to open those paths against the *host's* real root
+    /// filesystem and fail (or, worse, coincidentally resolve to an
+    /// unrelated file). See `sandkiln_vmm::jailer`'s module doc comment.
+    Jailed,
+    /// This sandbox was forked from the named snapshot and shares its
+    /// rootfs file rather than owning a private copy (see the module doc
+    /// comment) — snapshotting it would produce a second `Snapshot`
+    /// record pointing at that same shared file, cascading the exact
+    /// resume-time conflict `forked_into` exists to prevent.
+    ForkedFrom(String),
+}
+
+/// Pure precondition behind `snapshot_and_stop`: can this sandbox be
+/// snapshotted at all? Pulled out for direct unit testing, mirroring
+/// `check_no_live_fork` below.
+fn check_snapshottable(is_jailed: bool, source_snapshot_id: Option<&str>) -> Result<(), SnapshotBlocked> {
+    if is_jailed {
+        return Err(SnapshotBlocked::Jailed);
+    }
+    if let Some(source) = source_snapshot_id {
+        return Err(SnapshotBlocked::ForkedFrom(source.to_string()));
+    }
+    Ok(())
+}
+
+/// Every way `snapshot_and_stop` can fail to produce a `Snapshot`.
+pub(crate) enum SnapshotStopError {
+    NotFound,
+    Blocked(SnapshotBlocked),
+    Io(std::io::Error),
+}
+
+impl From<SnapshotStopError> for AppError {
+    /// Default mapping used by `snapshot_sandbox` (`POST .../snapshot`) —
+    /// a direct, explicit ask that has no fallback, so both `Blocked`
+    /// reasons become real errors. `routes_sandbox::stop_sandbox_by_id`
+    /// does **not** use this: it treats `ForkedFrom` as a non-error (see
+    /// its doc comment) and only maps `Jailed` to its own
+    /// `?keep=false`-mentioning message, so it matches on
+    /// `SnapshotStopError` directly instead of going through this.
+    fn from(e: SnapshotStopError) -> Self {
+        match e {
+            SnapshotStopError::NotFound => AppError::NotFound(String::new()),
+            SnapshotStopError::Blocked(SnapshotBlocked::Jailed) => {
+                AppError::BadRequest("snapshotting a jailed sandbox is not supported yet".to_string())
+            }
+            SnapshotStopError::Blocked(SnapshotBlocked::ForkedFrom(source)) => AppError::Conflict(format!(
+                "this sandbox was forked from snapshot {source} and shares its rootfs file — stop it and fork \
+                 {source} again instead of snapshotting it directly"
+            )),
+            SnapshotStopError::Io(e) => AppError::from(e),
+        }
+    }
+}
+
+/// Pauses a sandbox's microVM, snapshots it to disk, and stops the VM
 /// process — the sandbox stops existing as a live `Sandbox`, and a
-/// `Snapshot` record takes its place. The network lease and rootfs image
-/// aren't released/removed the way `stop_sandbox` does it: both are held
-/// by the `Snapshot` so `resume_snapshot`/`fork_snapshot` can hand them
-/// straight to the new sandbox.
-#[tracing::instrument(skip(state))]
-pub async fn snapshot_sandbox(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<SnapshotSandboxResponse>, AppError> {
+/// `Snapshot` record (with the same `name`, if any — see `Sandbox::name`)
+/// takes its place in `AppState`. The network lease and rootfs image
+/// aren't released/removed the way a full destroy does it: both are held
+/// by the `Snapshot` so `resume_snapshot_by_id`/`fork_snapshot` can hand
+/// them straight to the new sandbox.
+///
+/// Shared by `snapshot_sandbox` (`POST /sandboxes/:id/snapshot`, explicit)
+/// and `routes_sandbox::stop_sandbox_by_id` (`DELETE /sandboxes/:id`'s
+/// default "preserve by stopping" behavior) — the actual pause/snapshot/
+/// stop mechanics live in exactly one place so the two routes can't drift
+/// apart on what "snapshot this sandbox" means.
+pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Result<String, SnapshotStopError> {
     // Checked before removing the sandbox from the map, so a rejected
     // request leaves it exactly as it was (still running, still listed)
     // rather than needing to be put back.
     {
         let sandboxes = state.sandboxes.lock().unwrap();
-        let sandbox = sandboxes.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
-        if sandbox.vm.is_jailed() {
-            // Firecracker's own snapshot/device state bakes in the
-            // in-jail paths (e.g. "/rootfs.ext4") the sandbox's own
-            // chroot used, and `Vm::resume` only ever spawns directly —
-            // resuming such a snapshot would try to open those paths
-            // against the *host's* real root filesystem and fail (or,
-            // worse, coincidentally resolve to an unrelated file). Rather
-            // than produce a snapshot that can never be resumed
-            // correctly, refuse up front. See `sandkiln_vmm::jailer`'s
-            // module doc comment.
-            return Err(AppError::BadRequest(
-                "snapshotting a jailed sandbox is not supported yet".to_string(),
-            ));
-        }
-        // A forked descendant shares its rootfs file with the snapshot it
-        // came from rather than owning a private copy (see the module doc
-        // comment) — snapshotting it would produce a second `Snapshot`
-        // record pointing at that same shared file, cascading the exact
-        // resume-time conflict `forked_into` exists to prevent. Stop it
-        // and fork the original snapshot again instead.
-        if let Some(source) = &sandbox.source_snapshot_id {
-            return Err(AppError::Conflict(format!(
-                "sandbox {id} was forked from snapshot {source} and shares its rootfs file — stop it and fork \
-                 {source} again instead of snapshotting {id} directly"
-            )));
-        }
+        let sandbox = sandboxes.get(&id).ok_or(SnapshotStopError::NotFound)?;
+        check_snapshottable(sandbox.vm.is_jailed(), sandbox.source_snapshot_id.as_deref())
+            .map_err(SnapshotStopError::Blocked)?;
     }
 
-    let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
-    let Sandbox { vm, network, rootfs_path, attached_drives, tags, .. } = sandbox;
+    let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or(SnapshotStopError::NotFound)?;
+    let Sandbox { vm, network, rootfs_path, attached_drives, tags, name, .. } = sandbox;
     // Only a forked descendant (rejected above) ever has `network: None`.
     let network = network.expect("non-fork sandboxes always hold a network lease");
 
@@ -159,7 +205,7 @@ pub async fn snapshot_sandbox(
             let _ = std::fs::remove_file(&rootfs_path);
         })
         .await;
-        return Err(AppError::from(e));
+        return Err(SnapshotStopError::Io(e));
     }
 
     let snapshot = Snapshot {
@@ -172,6 +218,7 @@ pub async fn snapshot_sandbox(
         attached_drives,
         tags,
         created_at: SystemTime::now(),
+        name,
         forked_into: None,
     };
 
@@ -198,11 +245,27 @@ pub async fn snapshot_sandbox(
         })
         .await
         .expect("cleanup task panicked");
-        return Err(AppError::from(e));
+        return Err(SnapshotStopError::Io(e));
     }
 
     state.snapshots.lock().unwrap().insert(snapshot_id.clone(), snapshot);
 
+    Ok(snapshot_id)
+}
+
+/// Pauses the sandbox's microVM, snapshots it to disk, and stops the VM
+/// process — the sandbox stops existing as a live `Sandbox`, and a
+/// `Snapshot` record takes its place. Thin HTTP wrapper around
+/// `snapshot_and_stop`; see that function's doc comment for the mechanics.
+#[tracing::instrument(skip(state))]
+pub async fn snapshot_sandbox(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<SnapshotSandboxResponse>, AppError> {
+    let snapshot_id = snapshot_and_stop(state, id.clone()).await.map_err(|e| match e {
+        SnapshotStopError::NotFound => AppError::NotFound(id),
+        other => AppError::from(other),
+    })?;
     Ok(Json(SnapshotSandboxResponse { snapshot_id }))
 }
 
@@ -216,6 +279,11 @@ pub struct SnapshotSummary {
     /// — see `Snapshot::forked_into`. While set, `/fork`, `/resume`, and
     /// `DELETE` on this snapshot are all rejected with a 409.
     forked_into: Option<String>,
+    /// Carried over from the sandbox this was taken from — see
+    /// `Sandbox::name`'s doc comment. `GET /sandboxes/by-name/:name` and
+    /// `POST /sandboxes/get-or-create` are how a caller finds this
+    /// snapshot again by it.
+    name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -235,6 +303,7 @@ pub async fn list_snapshots(State(state): State<Arc<AppState>>) -> Json<ListSnap
             created_at_unix: s.created_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
             tags: s.tags.clone(),
             forked_into: s.forked_into.clone(),
+            name: s.name.clone(),
         })
         .collect();
     Json(ListSnapshotsResponse { snapshots })
@@ -245,21 +314,22 @@ pub struct ResumeSnapshotResponse {
     id: String,
 }
 
-/// Boots a brand-new sandbox by loading a snapshot instead of cloning the
-/// base rootfs and booting fresh. This consumes the snapshot: on success
-/// its record and on-disk state/memory files are removed (the resumed
-/// sandbox now owns the rootfs and network lease, and can be snapshotted
-/// again itself for a new save point), and on failure the record is put
-/// back so the caller can retry rather than silently losing it. Removing
-/// the record up front — before the resume attempt — also means a second
-/// concurrent resume of the same snapshot 404s instead of racing two VMs
-/// onto the same rootfs file. Refuses (409) while a fork of this snapshot
-/// is still alive, for the same reason: see the module doc comment.
-#[tracing::instrument(skip(state))]
-pub async fn resume_snapshot(
-    State(state): State<Arc<AppState>>,
-    Path(snapshot_id): Path<String>,
-) -> Result<Json<ResumeSnapshotResponse>, AppError> {
+/// Consumes a held snapshot and boots a new sandbox from it: on success
+/// the snapshot's record and on-disk state/memory files are removed (the
+/// resumed sandbox now owns the rootfs and network lease, and can be
+/// snapshotted again itself for a new save point), and on failure the
+/// record is put back so the caller can retry rather than silently
+/// losing it. Removing the record up front — before the resume attempt —
+/// is also what makes a second concurrent resume of the same snapshot
+/// 404 instead of racing two VMs onto the same rootfs file. Refuses
+/// (409) while a fork of this snapshot is still alive, for the same
+/// reason: see the module doc comment.
+///
+/// Shared by `resume_snapshot` (`POST /snapshots/:id/resume`, by id) and
+/// `routes_sandbox_name::get_or_create_sandbox` (by name, once resolved
+/// to a snapshot id) — same reasoning as `snapshot_and_stop` above: one
+/// place owns "what resuming a snapshot means."
+pub(crate) async fn resume_snapshot_by_id(state: Arc<AppState>, snapshot_id: String) -> Result<String, AppError> {
     let snapshot = {
         let mut snapshots = state.snapshots.lock().unwrap();
         let existing = snapshots.get(&snapshot_id).ok_or_else(|| AppError::NotFound(snapshot_id.clone()))?;
@@ -291,6 +361,7 @@ pub async fn resume_snapshot(
         created_at: SystemTime::now(),
         last_activity: std::sync::Mutex::new(std::time::Instant::now()),
         source_snapshot_id: None,
+        name: snapshot.name,
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
 
@@ -299,7 +370,19 @@ pub async fn resume_snapshot(
     // itself can be snapshotted anew for a fresh save point.
     let _ = std::fs::remove_dir_all(snapshot_dir(&snapshot_id));
 
-    Ok(Json(ResumeSnapshotResponse { id: new_id }))
+    Ok(new_id)
+}
+
+/// Boots a brand-new sandbox by loading a snapshot instead of cloning the
+/// base rootfs and booting fresh. Thin HTTP wrapper around
+/// `resume_snapshot_by_id`; see that function's doc comment.
+#[tracing::instrument(skip(state))]
+pub async fn resume_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path(snapshot_id): Path<String>,
+) -> Result<Json<ResumeSnapshotResponse>, AppError> {
+    let id = resume_snapshot_by_id(state, snapshot_id).await?;
+    Ok(Json(ResumeSnapshotResponse { id }))
 }
 
 #[derive(Serialize)]
@@ -369,6 +452,10 @@ pub async fn fork_snapshot(
             created_at: SystemTime::now(),
             last_activity: std::sync::Mutex::new(std::time::Instant::now()),
             source_snapshot_id: Some(snapshot_id.clone()),
+            // Both this live fork and the snapshot it came from carry the
+            // same name at once, deliberately — see `Sandbox::name`'s doc
+            // comment and `AppState::resolve_name`'s live-wins priority.
+            name: snapshot.name.clone(),
         }
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
@@ -446,5 +533,47 @@ mod tests {
     fn a_live_fork_blocks_resuming_and_deleting_too() {
         assert!(check_no_live_fork(Some("sbx-9"), "snap-1", "resuming").is_err());
         assert!(check_no_live_fork(Some("sbx-9"), "snap-1", "deleting").is_err());
+    }
+
+    #[test]
+    fn check_snapshottable_allows_an_unjailed_non_fork_sandbox() {
+        assert!(check_snapshottable(false, None).is_ok());
+    }
+
+    #[test]
+    fn check_snapshottable_blocks_a_jailed_sandbox() {
+        let err = check_snapshottable(true, None).unwrap_err();
+        assert!(matches!(err, SnapshotBlocked::Jailed));
+    }
+
+    #[test]
+    fn check_snapshottable_blocks_a_forked_sandbox_and_names_its_source() {
+        let err = check_snapshottable(false, Some("snap-parent")).unwrap_err();
+        let SnapshotBlocked::ForkedFrom(source) = err else { panic!("expected ForkedFrom") };
+        assert_eq!(source, "snap-parent");
+    }
+
+    #[test]
+    fn check_snapshottable_prefers_the_jailed_reason_when_both_apply() {
+        // Can't actually happen (a jailed boot never sets
+        // `source_snapshot_id`, and `Vm::resume`/`fork` never jail), but
+        // pins a deterministic precedence rather than leaving it
+        // unspecified if that ever changed.
+        let err = check_snapshottable(true, Some("snap-parent")).unwrap_err();
+        assert!(matches!(err, SnapshotBlocked::Jailed));
+    }
+
+    #[test]
+    fn snapshot_stop_error_jailed_maps_to_bad_request_mentioning_unsupported() {
+        let app_err: AppError = SnapshotStopError::Blocked(SnapshotBlocked::Jailed).into();
+        let AppError::BadRequest(message) = app_err else { panic!("expected BadRequest") };
+        assert!(message.contains("jailed"), "message was: {message}");
+    }
+
+    #[test]
+    fn snapshot_stop_error_forked_from_maps_to_conflict_naming_the_source() {
+        let app_err: AppError = SnapshotStopError::Blocked(SnapshotBlocked::ForkedFrom("snap-1".to_string())).into();
+        let AppError::Conflict(message) = app_err else { panic!("expected Conflict") };
+        assert!(message.contains("snap-1"), "message was: {message}");
     }
 }
