@@ -60,7 +60,10 @@ await sandbox.stop();
   `Uint8Array`.
 - `sandbox.stop()` — stops the sandbox and releases its resources.
 - `sandbox.snapshot()` — saves the sandbox's full state to disk and stops
-  it; returns a snapshot id.
+  it; returns a snapshot id. The daemon can also do this on its own, for
+  an idle sandbox, if the operator has `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`
+  configured — see `Sandbox.listSnapshots` below for how to notice it and
+  find the resulting snapshot.
 - `Sandbox.resume(snapshotId, options?)` — boots a new sandbox from a
   snapshot, **consuming** it (the snapshot is gone afterward).
 - `Sandbox.fork(snapshotId, options?)` — boots a new sandbox from a
@@ -69,6 +72,12 @@ await sandbox.stop();
   second concurrent `fork()` rejects with a 409 until the first is
   stopped; see `ROADMAP.md`'s "Persistence and snapshotting" section for
   why.
+- `Sandbox.listSnapshots(options?)` — lists snapshots.
+  `options.sourceSandboxId` narrows this to the (at most one) snapshot
+  taken from that original sandbox id — the way to find out whether a
+  sandbox id that dropped out of `Sandbox.list()` turned into a snapshot
+  (via a manual `snapshot()` or the daemon's auto-suspend) and what its
+  new id is.
 
 ## Status
 

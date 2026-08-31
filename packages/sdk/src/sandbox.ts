@@ -11,12 +11,15 @@ import type {
   ForkSnapshotResponseBody,
   ListSandboxesOptions,
   ListSandboxesResponseBody,
+  ListSnapshotsOptions,
+  ListSnapshotsResponseBody,
   PreviewUrlOptions,
   ReadFileRequestBody,
   ReadFileResponseBody,
   ResumeSnapshotResponseBody,
   SandboxInfo,
   SandboxOptions,
+  SnapshotInfo,
   SnapshotSandboxResponseBody,
   WriteFileRequestBody,
 } from "./types.js";
@@ -58,6 +61,15 @@ export class Sandbox {
     return new Sandbox(id, resolveClient(options));
   }
 
+  /**
+   * A sandbox can drop out of this list on its own, not just from an
+   * explicit `stop()`/`snapshot()` call: if the daemon has
+   * `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS` configured, it pauses and
+   * snapshots an idle sandbox automatically — same effect as a manual
+   * `snapshot()`. Use `Sandbox.listSnapshots({ sourceSandboxId })` to find
+   * out whether a sandbox id that's no longer listed here turned into a
+   * snapshot, and its resulting snapshot id.
+   */
   static async list(options: ListSandboxesOptions = {}): Promise<SandboxInfo[]> {
     const client = resolveClient(options);
     const query = new URLSearchParams();
@@ -153,6 +165,10 @@ export class Sandbox {
    * returning a snapshot id. The sandbox itself stops existing — call
    * `Sandbox.resume` or `Sandbox.fork` on the returned id to boot from it
    * again.
+   *
+   * The daemon can also do this on its own, without a caller ever calling
+   * this method, if `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS` is configured and
+   * this sandbox goes idle past that timeout — see `Sandbox.listSnapshots`.
    */
   async snapshot(): Promise<string> {
     const body = await request<SnapshotSandboxResponseBody>({
@@ -202,6 +218,35 @@ export class Sandbox {
       path: `/snapshots/${encodeURIComponent(snapshotId)}/fork`,
     });
     return new Sandbox(body.id, client);
+  }
+
+  /**
+   * Lists snapshots. `options.sourceSandboxId` narrows this to the (at
+   * most one) snapshot taken from that original sandbox id — the way to
+   * go from "the sandbox id I had" to "the snapshot it became" after a
+   * manual `snapshot()` or the daemon's auto-suspend made it disappear
+   * from `Sandbox.list()`. Omitting it lists every snapshot.
+   */
+  static async listSnapshots(options: ListSnapshotsOptions = {}): Promise<SnapshotInfo[]> {
+    const client = resolveClient(options);
+    const query = new URLSearchParams();
+    if (options.sourceSandboxId !== undefined) {
+      query.set("source_sandbox_id", options.sourceSandboxId);
+    }
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+
+    const body = await request<ListSnapshotsResponseBody>({
+      ...client,
+      method: "GET",
+      path: `/snapshots${suffix}`,
+    });
+    return body.snapshots.map((summary) => ({
+      id: summary.id,
+      sourceSandboxId: summary.source_sandbox_id,
+      createdAt: new Date(summary.created_at_unix * 1000),
+      tags: summary.tags,
+      forkedInto: summary.forked_into,
+    }));
   }
 }
 

@@ -352,7 +352,8 @@ source):
 | `SANDKILN_TAP_POOL_SIZE` | `32` | must match what `create-tap-pool.sh` was run with |
 | `SANDKILN_AUTH_TOKEN` | unset (auth disabled) | bearer token required on `/sandboxes*`, `/drives*`, `/snapshots*` — **unset means the API is completely open, see section 9** |
 | `SANDKILN_DRIVES_DIR` | `~/sandkiln-tools/drives` | where persistent drives are stored |
-| `SANDKILN_IDLE_TIMEOUT_SECS` | unset (disabled) | auto-stop a sandbox after this many idle seconds (no exec/read/write activity); `0` also disables it |
+| `SANDKILN_IDLE_TIMEOUT_SECS` | unset (disabled) | auto-**destroy** a sandbox after this many idle seconds (no exec/read/write activity) — VM killed, network released, rootfs deleted, state gone for good; `0` also disables it |
+| `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS` | unset (disabled) | auto-**suspend** an idle sandbox instead: pause + snapshot it (same as `POST /sandboxes/:id/snapshot`) and free its VM/vcpu/memory, keeping it resumable; `0` also disables it. If both this and `SANDKILN_IDLE_TIMEOUT_SECS` are set, this must be strictly smaller — auto-suspend always gets first crack at an idle sandbox, and the destroy timeout becomes a backstop for a sandbox whose auto-suspend keeps failing (see `core/crates/daemon/src/config.rs`'s `auto_suspend_timeout` doc comment) |
 | `SANDKILN_LOG_FORMAT` | `pretty` | set to `json` for one JSON object per log line, for log pipelines that parse fields |
 | `SANDKILN_PREVIEW_TIMEOUT_SECS` | `30` | how long a dev-server preview proxy request waits for the guest to respond before a `504` |
 | `SANDKILN_JAILER_ENABLED` | unset (disabled) | boot sandboxes via Firecracker's jailer instead of a direct spawn — see "Optional: jailer-based sandbox boot" above |
@@ -618,8 +619,20 @@ trusting the result — that's exactly what it exists for.
   (`400`).
 - **No per-sandbox resource ceiling enforcement yet** — `vcpu_count`/
   `mem_size_mib` apply uniformly to every sandbox via daemon config;
-  nothing today stops a caller from running a sandbox indefinitely
-  except the optional `SANDKILN_IDLE_TIMEOUT_SECS`.
+  nothing today stops a caller from running a sandbox indefinitely except
+  the optional `SANDKILN_IDLE_TIMEOUT_SECS` (destroy) and
+  `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS` (suspend).
+- **A sandbox can disappear on its own, not just via an explicit `stop()`
+  or `snapshot()`** — with `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS` set, an
+  idle sandbox is paused and snapshotted automatically, the same as a
+  manual `snapshot()` call: it vanishes from `GET /sandboxes` and a new
+  `Snapshot` takes its place. Look it up via `GET
+  /snapshots?source_sandbox_id=<the sandbox id you had>` to find the
+  resulting snapshot id and `resume()`/`fork()` it. If auto-suspend itself
+  fails partway through (out of disk, a Firecracker error), the sandbox is
+  stopped and its resources released as a fallback rather than left
+  half-paused — it will not appear as a snapshot in that case, since
+  there's nothing valid on disk to represent.
 - **Persistent state and where it lives**: persistent drives live under
   `SANDKILN_DRIVES_DIR`. Snapshots (state + memory + metadata) live under
   `$TMPDIR/sandkiln-snapshots` (`std::env::temp_dir()` joined with a

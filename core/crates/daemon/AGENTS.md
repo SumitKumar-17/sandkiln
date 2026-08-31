@@ -53,9 +53,17 @@ should mostly be: parse a request, call into `vmm`, shape a response.
 - `routes_exec.rs` — exec/read-file/write-file handlers. `call_agent()`
   is the shared helper all three use — extend it, don't duplicate its
   pattern. It's also what bumps a sandbox's `last_activity`.
-- `idle_reaper.rs` — background task (spawned from `main.rs` only when
-  `SANDKILN_IDLE_TIMEOUT_SECS` is set) that stops sandboxes idle past the
-  configured timeout, via `routes_sandbox::stop_sandbox_by_id`.
+- `idle_reaper.rs` — background task (spawned from `main.rs` whenever
+  `SANDKILN_IDLE_TIMEOUT_SECS` and/or `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`
+  is set) that reclaims idle sandboxes two ways: auto-suspend (pause +
+  snapshot, via `routes_snapshot::snapshot_sandbox_by_id`) past
+  `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`, and destroy (via
+  `routes_sandbox::stop_sandbox_by_id`) past `SANDKILN_IDLE_TIMEOUT_SECS`.
+  Each tick runs auto-suspend first, then destroy against whatever's still
+  running — see `config::Config::auto_suspend_timeout`'s doc comment for
+  why `auto_suspend_timeout` is required to be strictly shorter than
+  `idle_timeout` when both are set (destroy is a backstop for a
+  persistently-failing auto-suspend, not a competing timer).
 - `snapshot.rs` — the `Snapshot` type (`state.snapshots`'s value type)
   plus everything that makes it durable across a daemon restart: on-disk
   metadata (`meta.json`, alongside `state.snap`/`mem.bin` under
@@ -72,10 +80,14 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   the HTTP listener starts accepting connections.
 - `routes_drives.rs` / `routes_snapshot.rs` — drives and snapshot/resume
   handlers, each in their own file for the same reason as above.
-  `snapshot_sandbox` refuses to snapshot a jailed sandbox (`Vm::is_jailed`)
-  — `Vm::resume` only ever spawns directly, so a jailed sandbox's snapshot
-  could never be resumed correctly; see `sandkiln_vmm::jailer`'s module
-  doc comment before changing this.
+  `snapshot_sandbox_by_id` (the plain function the `POST
+  /sandboxes/:id/snapshot` handler and `idle_reaper`'s auto-suspend both
+  call) refuses to snapshot a jailed sandbox (`Vm::is_jailed`) — `Vm::resume`
+  only ever spawns directly, so a jailed sandbox's snapshot could never be
+  resumed correctly; see `sandkiln_vmm::jailer`'s module doc comment before
+  changing this. `list_snapshots` takes an optional `?source_sandbox_id=`
+  filter — how a caller looks up whether a sandbox id it had turned into a
+  snapshot (via auto-suspend or a manual snapshot).
 - `routes_metrics.rs` — the `/metrics` handler. Unauthenticated like
   `/healthz` (wired directly on `app` in `main.rs`, not through either
   auth-gated router) since it's operational data about the daemon, not

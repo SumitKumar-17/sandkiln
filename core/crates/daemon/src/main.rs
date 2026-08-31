@@ -95,11 +95,17 @@ async fn async_main() {
 
     let auth_enabled = config.auth_token.is_some();
     let idle_timeout = config.idle_timeout;
+    let auto_suspend_timeout = config.auto_suspend_timeout;
     let state = Arc::new(AppState::new(config, net_manager, drives, reconciled_snapshots));
 
-    if let Some(idle_timeout) = idle_timeout {
-        tracing::info!(idle_timeout_secs = idle_timeout.as_secs(), "idle sandbox reaper enabled");
-        tokio::spawn(idle_reaper::run(state.clone(), idle_timeout));
+    if idle_timeout.is_some() || auto_suspend_timeout.is_some() {
+        if let Some(auto_suspend_timeout) = auto_suspend_timeout {
+            tracing::info!(auto_suspend_timeout_secs = auto_suspend_timeout.as_secs(), "idle sandbox auto-suspend enabled");
+        }
+        if let Some(idle_timeout) = idle_timeout {
+            tracing::info!(idle_timeout_secs = idle_timeout.as_secs(), "idle sandbox destroy reaper enabled");
+        }
+        tokio::spawn(idle_reaper::run(state.clone(), idle_timeout, auto_suspend_timeout));
     }
 
     let sandbox_routes = Router::new()

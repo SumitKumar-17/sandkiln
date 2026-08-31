@@ -97,3 +97,35 @@ export interface ResumeSnapshotResponseBody {
 export interface ForkSnapshotResponseBody {
   id: string;
 }
+
+export interface ListSnapshotsOptions extends SandboxOptions {
+  /** Only snapshots taken from this original sandbox id — the mechanism
+   * for finding out whether a sandbox id you had turned into a snapshot
+   * (via `Sandbox.snapshot()` or the daemon's auto-suspend), and what its
+   * new snapshot id is. At most one snapshot can ever match, since a
+   * sandbox id is retired the moment it's snapshotted. */
+  sourceSandboxId?: string;
+}
+
+export interface SnapshotSummaryBody {
+  id: string;
+  source_sandbox_id: string;
+  created_at_unix: number;
+  tags: Record<string, string>;
+  forked_into: string | null;
+}
+
+export interface ListSnapshotsResponseBody {
+  snapshots: SnapshotSummaryBody[];
+}
+
+export interface SnapshotInfo {
+  id: string;
+  sourceSandboxId: string;
+  createdAt: Date;
+  tags: Record<string, string>;
+  /** Id of the live sandbox currently forked from this snapshot, if any —
+   * see `Sandbox.fork()`. While set, `Sandbox.fork()`/`Sandbox.resume()`
+   * on this snapshot id both reject with a 409. */
+  forkedInto: string | null;
+}

@@ -1,45 +1,125 @@
-//! Background task that stops sandboxes that have gone idle longer than
-//! `SANDKILN_IDLE_TIMEOUT_SECS` (see `config::Config::idle_timeout`). Only
-//! spawned by `main` when that's configured — otherwise sandboxes keep
-//! running until explicitly stopped, same as before this existed.
+//! Background task that reclaims sandboxes that have gone idle: auto-
+//! suspends them (pause + snapshot, keeping state resumable — see
+//! `crate::routes_snapshot::snapshot_sandbox_by_id`) past
+//! `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`, and/or destroys them outright
+//! (VM killed, network lease released, rootfs deleted — see
+//! `crate::routes_sandbox::stop_sandbox_by_id`) past
+//! `SANDKILN_IDLE_TIMEOUT_SECS` (see `config::Config`'s doc comments on
+//! both fields for how the two interact when both are configured). Only
+//! spawned by `main` when at least one of the two is configured —
+//! otherwise sandboxes run until explicitly stopped, same as before either
+//! existed.
 
+use crate::error::AppError;
 use crate::routes_sandbox::stop_sandbox_by_id;
+use crate::routes_snapshot::snapshot_sandbox_by_id;
 use crate::state::AppState;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Checking more often than the configured timeout wastes work; checking
-/// only once per timeout risks a sandbox running up to ~2x the configured
-/// window before being caught. Splitting the difference, capped so a huge
-/// configured timeout doesn't make the loop check absurdly rarely.
+/// Checking more often than the shortest configured timeout wastes work;
+/// checking only once per timeout risks a sandbox running up to ~2x the
+/// configured window before being caught. Splitting the difference, capped
+/// so a huge configured timeout doesn't make the loop check absurdly
+/// rarely.
 const MAX_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
-pub async fn run(state: Arc<AppState>, timeout: Duration) {
-    let check_interval = (timeout / 2).clamp(Duration::from_secs(1), MAX_CHECK_INTERVAL);
+pub async fn run(state: Arc<AppState>, idle_timeout: Option<Duration>, auto_suspend_timeout: Option<Duration>) {
+    let configured_timeouts: Vec<Duration> = [idle_timeout, auto_suspend_timeout].into_iter().flatten().collect();
+    let check_interval = compute_check_interval(&configured_timeouts);
     loop {
         tokio::time::sleep(check_interval).await;
-        reap_once(&state, timeout, Instant::now()).await;
+        reap_once(&state, idle_timeout, auto_suspend_timeout, Instant::now()).await;
     }
 }
 
-async fn reap_once(state: &Arc<AppState>, timeout: Duration, now: Instant) {
-    let idle_ids: Vec<String> = {
-        let sandboxes = state.sandboxes.lock().unwrap();
-        sandboxes
-            .iter()
-            .filter(|(_, sandbox)| is_idle(*sandbox.last_activity.lock().unwrap(), now, timeout))
-            .map(|(id, _)| id.clone())
-            .collect()
-    };
+/// One reaper tick. Auto-suspend runs first: a sandbox it successfully
+/// suspends leaves `AppState::sandboxes` entirely (it's a `Snapshot` now),
+/// so the destroy pass below naturally never sees it again — see
+/// `config::Config::auto_suspend_timeout`'s doc comment for why this
+/// ordering, plus the required `auto_suspend_timeout < idle_timeout`
+/// invariant enforced at startup, is what makes destroy a backstop rather
+/// than a race.
+async fn reap_once(state: &Arc<AppState>, idle_timeout: Option<Duration>, auto_suspend_timeout: Option<Duration>, now: Instant) {
+    if let Some(suspend_timeout) = auto_suspend_timeout {
+        suspend_idle_sandboxes(state, suspend_timeout, now).await;
+    }
+    if let Some(destroy_timeout) = idle_timeout {
+        destroy_idle_sandboxes(state, destroy_timeout, now).await;
+    }
+}
 
-    for id in idle_ids {
+async fn suspend_idle_sandboxes(state: &Arc<AppState>, timeout: Duration, now: Instant) {
+    for id in idle_sandbox_ids(state, timeout, now) {
+        tracing::info!(sandbox_id = %id, "auto-suspending idle sandbox");
+        match snapshot_sandbox_by_id(state.clone(), id.clone()).await {
+            Ok(snapshot_id) => {
+                tracing::info!(sandbox_id = %id, snapshot_id = %snapshot_id, "auto-suspended idle sandbox");
+            }
+            Err(AppError::NotFound(_)) => {
+                // Only realistic cause: it was already removed (raced with
+                // a concurrent explicit stop/snapshot) between the scan
+                // above and here — same tolerance `destroy_idle_sandboxes`
+                // already has for the destroy path.
+                tracing::warn!(sandbox_id = %id, "idle sandbox was already gone by the time the reaper tried to auto-suspend it");
+            }
+            Err(e @ (AppError::BadRequest(_) | AppError::Conflict(_))) => {
+                // Structurally ineligible for suspend (booted jailed, or
+                // forked from a snapshot and sharing its rootfs — see
+                // `snapshot_sandbox_by_id`'s own precondition checks), not
+                // an operational failure. Left running: it'll be scanned
+                // again next tick and log this again until either it goes
+                // idle-active again or `SANDKILN_IDLE_TIMEOUT_SECS`, if
+                // configured, eventually destroys it instead. `debug`
+                // rather than `warn` specifically because this can repeat
+                // every tick for as long as such a sandbox stays idle.
+                tracing::debug!(sandbox_id = %id, reason = %e, "sandbox is idle but not eligible for auto-suspend — leaving it running");
+            }
+            Err(e) => {
+                // A real failure partway through pause/snapshot (disk
+                // full, a Firecracker API error, a metadata-persist
+                // failure) — `snapshot_sandbox_by_id` itself already
+                // degrades this the same way the manual `POST
+                // .../snapshot` route does: stop the VM and release its
+                // resources rather than hand back something claiming to
+                // still be a live, running sandbox. There's no primitive
+                // to un-pause a VM once Firecracker's `/vm` PATCH to
+                // `Paused` has taken effect, so "leave it running and
+                // retry" isn't actually available once pause has
+                // succeeded — the sandbox is gone either way by the time
+                // this arm runs, same net effect as an idle-destroy, just
+                // logged distinctly so an operator can tell the difference
+                // between "reclaimed on purpose" and "auto-suspend broke".
+                tracing::warn!(
+                    sandbox_id = %id,
+                    error = %e,
+                    "auto-suspend failed for idle sandbox — it was stopped and its resources released as a fallback \
+                     rather than left half-paused; it will not be retried"
+                );
+            }
+        }
+    }
+}
+
+async fn destroy_idle_sandboxes(state: &Arc<AppState>, timeout: Duration, now: Instant) {
+    for id in idle_sandbox_ids(state, timeout, now) {
         tracing::info!(sandbox_id = %id, "stopping idle sandbox");
         if stop_sandbox_by_id(state.clone(), id.clone()).await.is_err() {
             // Only realistic cause: it was already removed (raced with a
-            // concurrent explicit stop) between the scan above and here.
+            // concurrent explicit stop, or already auto-suspended above in
+            // this same tick) between the scan above and here.
             tracing::warn!(sandbox_id = %id, "idle sandbox was already gone by the time the reaper tried to stop it");
         }
     }
+}
+
+fn idle_sandbox_ids(state: &Arc<AppState>, timeout: Duration, now: Instant) -> Vec<String> {
+    let sandboxes = state.sandboxes.lock().unwrap();
+    sandboxes
+        .iter()
+        .filter(|(_, sandbox)| is_idle(*sandbox.last_activity.lock().unwrap(), now, timeout))
+        .map(|(id, _)| id.clone())
+        .collect()
 }
 
 /// Pure decision logic, pulled out of the scan/stop plumbing above so it's
@@ -47,6 +127,20 @@ async fn reap_once(state: &Arc<AppState>, timeout: Duration, now: Instant) {
 /// `auth::token_matches`.
 fn is_idle(last_activity: Instant, now: Instant, timeout: Duration) -> bool {
     now.saturating_duration_since(last_activity) >= timeout
+}
+
+/// Picks how often the reaper wakes to scan, based on the shortest of
+/// whichever timeouts are actually configured — same halve-and-clamp
+/// reasoning as when there was only ever one timeout to consider, just
+/// generalized to more than one independent threshold. `run` only ever
+/// calls this with at least one configured timeout (`main` only spawns
+/// the reaper at all when that holds), so the empty case here only matters
+/// for this function's own testability in isolation.
+fn compute_check_interval(configured_timeouts: &[Duration]) -> Duration {
+    match configured_timeouts.iter().copied().min() {
+        Some(shortest) => (shortest / 2).clamp(Duration::from_secs(1), MAX_CHECK_INTERVAL),
+        None => MAX_CHECK_INTERVAL,
+    }
 }
 
 #[cfg(test)]
@@ -78,5 +172,28 @@ mod tests {
     fn not_idle_immediately_after_activity() {
         let now = Instant::now();
         assert!(!is_idle(now, now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn check_interval_halves_the_single_configured_timeout() {
+        assert_eq!(compute_check_interval(&[Duration::from_secs(10)]), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn check_interval_uses_the_shortest_of_multiple_configured_timeouts() {
+        assert_eq!(
+            compute_check_interval(&[Duration::from_secs(600), Duration::from_secs(20)]),
+            Duration::from_secs(10)
+        );
+    }
+
+    #[test]
+    fn check_interval_is_clamped_to_at_least_one_second() {
+        assert_eq!(compute_check_interval(&[Duration::from_millis(500)]), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn check_interval_is_clamped_to_the_maximum() {
+        assert_eq!(compute_check_interval(&[Duration::from_secs(3600)]), MAX_CHECK_INTERVAL);
     }
 }

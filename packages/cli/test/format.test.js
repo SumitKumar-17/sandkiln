@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InvalidArgumentError } from "commander";
-import { formatSandboxList, parseTag } from "../dist/format.js";
+import { formatSandboxList, formatSnapshotList, parseTag } from "../dist/format.js";
 
 test("parseTag splits on the first = and accumulates into the previous object", () => {
   const acc = parseTag("env=prod", {});
@@ -40,4 +40,28 @@ test("formatSandboxList renders id, ISO timestamp, and comma-joined tags per lin
     formatSandboxList(sandboxes),
     "sb-1  2026-01-01T00:00:00.000Z  env=prod,owner=sumit\n" + "sb-2  2026-01-02T00:00:00.000Z  \n",
   );
+});
+
+test("formatSnapshotList reports an empty list distinctly", () => {
+  assert.equal(formatSnapshotList([]), "no snapshots\n");
+});
+
+test("formatSnapshotList renders id, source sandbox id, timestamp, and tags per line", () => {
+  const snapshots = [
+    {
+      id: "snap-1",
+      sourceSandboxId: "sb-1",
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      tags: { env: "prod" },
+      forkedInto: null,
+    },
+  ];
+  assert.equal(formatSnapshotList(snapshots), "snap-1  source=sb-1  2026-01-01T00:00:00.000Z  env=prod\n");
+});
+
+test("formatSnapshotList appends forked_into only when a live fork exists", () => {
+  const snapshots = [
+    { id: "snap-1", sourceSandboxId: "sb-1", createdAt: new Date("2026-01-01T00:00:00.000Z"), tags: {}, forkedInto: "sb-2" },
+  ];
+  assert.equal(formatSnapshotList(snapshots), "snap-1  source=sb-1  2026-01-01T00:00:00.000Z    forked_into=sb-2\n");
 });

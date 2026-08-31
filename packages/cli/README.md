@@ -26,10 +26,17 @@ kiln sandbox read <id> /tmp/result.txt
 kiln sandbox write <id> /tmp/input.json ./local-input.json
 kiln sandbox preview <id> 3000
 kiln sandbox snapshot <id>
+kiln sandbox snapshots --source <id>
 kiln sandbox resume <snapshot-id>
 kiln sandbox fork <snapshot-id>
 kiln sandbox rm <id>
 ```
+
+A sandbox can turn into a snapshot on its own, not just via `kiln sandbox
+snapshot` — if the daemon operator has `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`
+configured, an idle sandbox is paused and snapshotted automatically. Run
+`kiln sandbox snapshots --source <id>` to check whether a sandbox id that
+dropped out of `kiln sandbox ls` turned into a snapshot, and find its id.
 
 `--base-url`/`--token` default to the `SANDKILN_DAEMON_URL`/
 `SANDKILN_AUTH_TOKEN` environment variables when omitted, same as the
