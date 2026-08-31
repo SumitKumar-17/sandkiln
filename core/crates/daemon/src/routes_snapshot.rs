@@ -53,7 +53,7 @@ use crate::sandbox::Sandbox;
 use crate::snapshot::{snapshot_dir, Snapshot};
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -90,6 +90,17 @@ pub async fn snapshot_sandbox(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<SnapshotSandboxResponse>, AppError> {
+    let snapshot_id = snapshot_sandbox_by_id(state, id).await?;
+    Ok(Json(SnapshotSandboxResponse { snapshot_id }))
+}
+
+/// The actual pause+snapshot logic behind the `POST /sandboxes/:id/snapshot`
+/// route above, factored out into a plain function so `idle_reaper` can
+/// drive the exact same path for auto-suspend without going through axum's
+/// `State`/`Path` extractors — the same reason `stop_sandbox_by_id` exists
+/// in `routes_sandbox.rs` for the idle-destroy reaper to share with the
+/// `DELETE` route.
+pub(crate) async fn snapshot_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<String, AppError> {
     // Checked before removing the sandbox from the map, so a rejected
     // request leaves it exactly as it was (still running, still listed)
     // rather than needing to be put back.
@@ -203,7 +214,7 @@ pub async fn snapshot_sandbox(
 
     state.snapshots.lock().unwrap().insert(snapshot_id.clone(), snapshot);
 
-    Ok(Json(SnapshotSandboxResponse { snapshot_id }))
+    Ok(snapshot_id)
 }
 
 #[derive(Serialize)]
@@ -223,12 +234,30 @@ pub struct ListSnapshotsResponse {
     snapshots: Vec<SnapshotSummary>,
 }
 
-pub async fn list_snapshots(State(state): State<Arc<AppState>>) -> Json<ListSnapshotsResponse> {
+/// Optional `?source_sandbox_id=<id>` narrows the listing to snapshots
+/// taken from that one original sandbox id — the mechanism a caller uses
+/// to go from "the sandbox id I had" to "the snapshot it became" after an
+/// auto-suspend (or a manual `POST /sandboxes/:id/snapshot`) makes that
+/// sandbox disappear from `GET /sandboxes`. At most one snapshot can ever
+/// match, since a sandbox id is retired the moment it's snapshotted and
+/// never reused, but this stays a filter on the plural listing (mirroring
+/// `list_sandboxes`'s `?tag.<key>=` filtering) rather than a separate
+/// single-result endpoint, since "no match" (still running, or genuinely
+/// gone) and "one match" both need to be representable without a 404
+/// forcing every poller to treat "not found yet" as an error to retry
+/// around.
+pub async fn list_snapshots(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Json<ListSnapshotsResponse> {
+    let source_sandbox_id_filter = query.get("source_sandbox_id").map(String::as_str);
+
     let snapshots = state
         .snapshots
         .lock()
         .unwrap()
         .values()
+        .filter(|s| source_sandbox_id_filter.is_none_or(|wanted| s.source_sandbox_id == wanted))
         .map(|s| SnapshotSummary {
             id: s.id.clone(),
             source_sandbox_id: s.source_sandbox_id.clone(),
