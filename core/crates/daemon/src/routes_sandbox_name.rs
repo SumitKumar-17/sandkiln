@@ -80,6 +80,11 @@ pub async fn get_sandbox_by_name(
 
 #[derive(Deserialize)]
 pub struct GetOrCreateSandboxRequest {
+    /// `#[serde(default)]` so a request body with no `name` field at all
+    /// deserializes as an empty string and reaches `validate_name`'s own
+    /// clean `400` below, instead of failing during JSON deserialization
+    /// itself and surfacing as axum's raw, undocumented `422`.
+    #[serde(default)]
     name: String,
     #[serde(default)]
     tags: HashMap<String, String>,

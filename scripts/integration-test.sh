@@ -322,7 +322,7 @@ else
   status="$(req POST "/sandboxes/$SBX_SEED/exec" '{"command":"sh","args":["-c","mkdir -p /mnt && mkfs.ext4 -F /dev/vdb && mount /dev/vdb /mnt && echo shared-read-only-data > /mnt/marker.txt && umount /mnt"]}')"
   assert_status "format, mount, and seed the drive before read-only sharing" 200 "$status"
 
-  status="$(req DELETE "/sandboxes/$SBX_SEED")"
+  status="$(req DELETE "/sandboxes/$SBX_SEED?keep=false")"
   assert_status "stop the seeding sandbox" 204 "$status"
   CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_SEED}")
 
@@ -352,7 +352,7 @@ else
   status="$(req POST /sandboxes "{\"drives\":[{\"id\":\"$DRV_RO\"}]}")"
   assert_status "a read-write attach is rejected while two read-only holders are live" 409 "$status"
 
-  status="$(req DELETE "/sandboxes/$SBX_RO1")"
+  status="$(req DELETE "/sandboxes/$SBX_RO1?keep=false")"
   assert_status "stop the first read-only holder" 204 "$status"
   CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_RO1}")
 
@@ -368,11 +368,11 @@ else
   SBX_RO3="$(extract id < "$WORKDIR/resp.json")"
   CREATED_SANDBOXES+=("$SBX_RO3")
 
-  status="$(req DELETE "/sandboxes/$SBX_RO2")"
+  status="$(req DELETE "/sandboxes/$SBX_RO2?keep=false")"
   assert_status "stop the second read-only holder" 204 "$status"
   CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_RO2}")
 
-  status="$(req DELETE "/sandboxes/$SBX_RO3")"
+  status="$(req DELETE "/sandboxes/$SBX_RO3?keep=false")"
   assert_status "stop the third read-only holder" 204 "$status"
   CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_RO3}")
 
@@ -384,7 +384,7 @@ else
   SBX_RO4="$(extract id < "$WORKDIR/resp.json")"
   CREATED_SANDBOXES+=("$SBX_RO4")
 
-  status="$(req DELETE "/sandboxes/$SBX_RO4")"
+  status="$(req DELETE "/sandboxes/$SBX_RO4?keep=false")"
   assert_status "stop the final read-only holder" 204 "$status"
   CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_RO4}")
 
@@ -448,7 +448,7 @@ else
       status="$(req DELETE "/images/$IMG_ID")"
       assert_status "deleting an image while a sandbox references it is a conflict" 409 "$status"
 
-      status="$(req DELETE "/sandboxes/$SBX_IMG")"
+      status="$(req DELETE "/sandboxes/$SBX_IMG?keep=false")"
       assert_status "stop the image-booted sandbox" 204 "$status"
       CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_IMG}")
 
