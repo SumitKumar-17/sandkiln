@@ -161,11 +161,18 @@ outbound HTTP both still work.
 - **Named sandboxes**: create/resume by a caller-given name (unique per
   daemon) instead of only an opaque id, so `get-or-create` is possible
   without the caller tracking ids itself.
-- Explicit snapshot API for the SDK/CLI to trigger a save point on demand.
-- **Auto-suspend on idle**: pause (not destroy) a sandbox that's gone
-  quiet for a configurable window, freeing its VM/network resources while
-  keeping its state resumable — cheaper than staying booted, faster than
-  a cold boot from scratch.
+- **Done: auto-suspend on idle.** `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`
+  pauses and snapshots (not destroys) a sandbox that's gone quiet for a
+  configurable window — the same pause+snapshot path the manual snapshot
+  route uses, composed into the idle reaper rather than built as a new
+  mechanism. Frees the VM/network resources it held while keeping state
+  resumable; if it's also configured, `SANDKILN_IDLE_TIMEOUT_SECS` (plain
+  destroy) must be strictly longer and acts as a backstop for a sandbox
+  whose auto-suspend keeps failing, not a competing timer. Discoverability
+  (a sandbox vanishing into a snapshot on its own): `GET /snapshots
+  ?source_sandbox_id=<id>` finds what a given sandbox became —
+  `Sandbox.listSnapshots()`/`list_snapshots()` in both SDKs,
+  `kiln sandbox snapshots --source <id>`.
 - **Done (partial): non-consuming snapshot fork.** `POST /snapshots/:id/fork`
   boots a new sandbox from a snapshot without consuming it, so the same
   prepared state can be resumed from repeatedly — `Sandbox.fork()` in both

@@ -20,6 +20,13 @@ most of it is now live — check the published packages if you need to
 know exactly what's on npm right now versus what's only in this repo.
 
 ### Added
+- Auto-suspend on idle (`SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`): an idle
+  sandbox is paused and snapshotted instead of destroyed, freeing its
+  VM/network while keeping it resumable. `SANDKILN_IDLE_TIMEOUT_SECS`
+  (plain destroy) still works as before and now acts as a backstop when
+  both are set (must be strictly longer). `GET /snapshots
+  ?source_sandbox_id=<id>` and matching SDK/CLI methods find what a
+  vanished sandbox turned into.
 - Read-only shared drives: a drive attached read-only may now be attached
   to arbitrarily many sandboxes (and held snapshots) concurrently; any
   read-write attachment, existing or requested, still needs exclusive
