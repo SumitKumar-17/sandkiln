@@ -41,21 +41,48 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   optional `JailerIdPool` (`Some` only when `config.jailer` is set), and
   in-memory sandbox map (`Mutex<HashMap<String, Sandbox>>`). This map
   *is* the daemon's entire notion of sandbox state — it doesn't survive a
-  restart (see `ROADMAP.md`'s sqlite-backed-state item).
+  restart (see `ROADMAP.md`'s sqlite-backed-state item). Also owns naming:
+  `name_holder`/`resolve_name` find whichever of a live sandbox or a held
+  snapshot currently carries a given name (live wins if both do — see
+  `Sandbox::name`'s doc comment on why that's not a conflict), and
+  `lock_name` hands out a per-name `tokio::sync::Mutex` (with best-effort
+  cleanup once nothing references it) that every code path claiming or
+  resolving a name serializes on, so two concurrent callers can't both
+  win a race for the same brand-new name.
 - `sandbox.rs` — the `Sandbox` struct the daemon tracks per running VM
   (id, `Vm` handle, network `Lease`, rootfs path, tags, created-at,
-  `last_activity`, and `jail_id` — the leased uid/gid if this sandbox
-  booted jailed, released back to `state.jailer_ids` on stop).
+  `last_activity`, `jail_id` — the leased uid/gid if this sandbox booted
+  jailed, released back to `state.jailer_ids` on stop — and `name`, the
+  caller-given identity carried across the sandbox<->snapshot boundary).
 - `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop.
-  `stop_sandbox_by_id()` is the shared teardown helper (VM stop, network
-  release, rootfs cleanup) used by both the `DELETE` route and
-  `idle_reaper`.
+  `stop_sandbox_by_id()` is the shared stop entry point used by both the
+  `DELETE` route and `idle_reaper`; it defaults to preserving state
+  (snapshot-then-stop, via `routes_snapshot::snapshot_and_stop`) rather
+  than destroying it, with `destroy_sandbox_by_id()` — the original
+  teardown (VM stop, network release, rootfs cleanup) — reached via the
+  `?keep=false` opt-out or as the correct silent fallback for a forked
+  sandbox (nothing new to preserve) or a jailed one (can't be
+  snapshotted, surfaces as an error instead of silently discarding
+  state). `create_sandbox_core()` is the actual boot logic, shared with
+  `routes_sandbox_name::get_or_create_sandbox`'s create-fresh path — the
+  `create_sandbox` handler itself only adds the name-uniqueness check
+  under `AppState::lock_name` before calling it.
+- `routes_sandbox_name.rs` — name-based lookup and get-or-create:
+  `GET /sandboxes/by-name/:name` (live sandboxes only — a name currently
+  held by a snapshot is a `409` pointing at get-or-create, not a silent
+  resume) and `POST /sandboxes/get-or-create` (return-if-live /
+  resume-if-snapshotted / create-if-neither, race-safe under
+  `AppState::lock_name`). Split out from `routes_sandbox.rs` since it
+  crosses into snapshot territory (`routes_snapshot::resume_snapshot_by_id`).
 - `routes_exec.rs` — exec/read-file/write-file handlers. `call_agent()`
   is the shared helper all three use — extend it, don't duplicate its
   pattern. It's also what bumps a sandbox's `last_activity`.
 - `idle_reaper.rs` — background task (spawned from `main.rs` only when
   `SANDKILN_IDLE_TIMEOUT_SECS` is set) that stops sandboxes idle past the
-  configured timeout, via `routes_sandbox::stop_sandbox_by_id`.
+  configured timeout, via `routes_sandbox::stop_sandbox_by_id` (same
+  preserve-by-default behavior as an explicit stop — see above — with a
+  fallback to a real destroy only when preservation is structurally
+  impossible, so an unpreservable idle sandbox doesn't leak forever).
 - `snapshot.rs` — the `Snapshot` type (`state.snapshots`'s value type)
   plus everything that makes it durable across a daemon restart: on-disk
   metadata (`meta.json`, alongside `state.snap`/`mem.bin` under
@@ -71,11 +98,18 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   same tap to a second sandbox — see `main.rs`, which runs this before
   the HTTP listener starts accepting connections.
 - `routes_drives.rs` / `routes_snapshot.rs` — drives and snapshot/resume
-  handlers, each in their own file for the same reason as above.
-  `snapshot_sandbox` refuses to snapshot a jailed sandbox (`Vm::is_jailed`)
-  — `Vm::resume` only ever spawns directly, so a jailed sandbox's snapshot
-  could never be resumed correctly; see `sandkiln_vmm::jailer`'s module
-  doc comment before changing this.
+  handlers, each in their own file for the same reason as above. The
+  actual pause/snapshot/stop mechanics live in `snapshot_and_stop()` and
+  the actual resume mechanics in `resume_snapshot_by_id()` — both
+  `pub(crate)`, both reused by `routes_sandbox`'s persistent-by-default
+  stop and `routes_sandbox_name`'s get-or-create so there's exactly one
+  place that knows what "snapshot this sandbox" / "resume this snapshot"
+  means. `check_snapshottable`/`SnapshotBlocked` refuses to snapshot a
+  jailed sandbox (`Vm::is_jailed`) — `Vm::resume` only ever spawns
+  directly, so a jailed sandbox's snapshot could never be resumed
+  correctly; see `sandkiln_vmm::jailer`'s module doc comment before
+  changing this — or a sandbox forked from another snapshot (shares its
+  rootfs file, would corrupt on resume).
 - `routes_metrics.rs` — the `/metrics` handler. Unauthenticated like
   `/healthz` (wired directly on `app` in `main.rs`, not through either
   auth-gated router) since it's operational data about the daemon, not
