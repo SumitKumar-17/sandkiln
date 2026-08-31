@@ -38,20 +38,63 @@ const sandbox = program.command("sandbox").description("Create, inspect, and man
 sandbox
   .command("create")
   .description("Boot a new sandbox.")
+  .option("--name <name>", "caller-given identity, unique among live sandboxes and held snapshots")
   .addOption(tagOption())
   .option("--vcpu <count>", "vCPU count override (daemon default if omitted)", parsePositiveInt("--vcpu"))
   .option("--mem <mib>", "memory size override in MiB (daemon default if omitted)", parsePositiveInt("--mem"))
-  .action(async function (this: Command, opts: { tag: Record<string, string>; vcpu?: number; mem?: number }) {
+  .action(async function (this: Command, opts: { name?: string; tag: Record<string, string>; vcpu?: number; mem?: number }) {
     const { baseUrl, token } = clientOptions(this);
     try {
       const created = await Sandbox.create({
         baseUrl,
         authToken: token,
+        name: opts.name,
         tags: opts.tag,
         vcpuCount: opts.vcpu,
         memSizeMib: opts.mem,
       });
       process.stdout.write(`${created.id}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("get-or-create")
+  .description(
+    "Resolve --name to a sandbox in one call, creating it if it doesn't exist yet: a live sandbox with this " +
+      "name is returned as-is, a stopped one is resumed, otherwise a fresh one is created and named. Prints the " +
+      "sandbox id, plus whether it was freshly created.",
+  )
+  .requiredOption("--name <name>", "name to resolve or claim")
+  .addOption(tagOption())
+  .option("--vcpu <count>", "vCPU count override, used only if a fresh sandbox is created", parsePositiveInt("--vcpu"))
+  .option("--mem <mib>", "memory size override in MiB, used only if a fresh sandbox is created", parsePositiveInt("--mem"))
+  .action(async function (this: Command, opts: { name: string; tag: Record<string, string>; vcpu?: number; mem?: number }) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const { sandbox: resolved, created } = await Sandbox.getOrCreate({
+        baseUrl,
+        authToken: token,
+        name: opts.name,
+        tags: opts.tag,
+        vcpuCount: opts.vcpu,
+        memSizeMib: opts.mem,
+      });
+      process.stdout.write(`${resolved.id}  ${created ? "created" : "existing"}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("by-name <name>")
+  .description("Resolve a name to a live sandbox's id.")
+  .action(async function (this: Command, name: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const resolved = await Sandbox.byName(name, { baseUrl, authToken: token });
+      process.stdout.write(`${resolved.id}\n`);
     } catch (error) {
       await handleApiError(error);
     }
@@ -73,12 +116,20 @@ sandbox
 
 sandbox
   .command("rm <id>")
-  .description("Stop a sandbox and release its resources.")
-  .action(async function (this: Command, id: string) {
+  .description(
+    "Stop a sandbox. By default this preserves its state as a resumable snapshot (the daemon's default " +
+      "'stop and come back later' behavior) rather than releasing everything outright.",
+  )
+  .option("--destroy", "fully destroy the sandbox instead — no snapshot, nothing left to resume")
+  .action(async function (this: Command, id: string, opts: { destroy?: boolean }) {
     const { baseUrl, token } = clientOptions(this);
     try {
-      await attachSandbox(id, baseUrl, token).stop();
-      process.stdout.write(`${id} stopped\n`);
+      const result = await attachSandbox(id, baseUrl, token).stop({ keep: !opts.destroy });
+      if (result.kept) {
+        process.stdout.write(`${id} stopped and preserved as snapshot ${result.snapshotId}\n`);
+      } else {
+        process.stdout.write(`${id} stopped and destroyed\n`);
+      }
     } catch (error) {
       await handleApiError(error);
     }

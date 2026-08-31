@@ -21,6 +21,18 @@ class SandboxInfo:
     id: str
     created_at: datetime
     tags: dict[str, str] = field(default_factory=dict)
+    name: str | None = None
+
+
+@dataclass(frozen=True)
+class StopResult:
+    """Result of `Sandbox.stop()`. `kept` is `False` either because the
+    caller explicitly asked for full destruction (`keep=False`) or because
+    this particular sandbox had nothing new to preserve (a fork of a
+    snapshot — its state already lives in the snapshot it came from)."""
+
+    kept: bool
+    snapshot_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +45,9 @@ class SnapshotInfo:
     # see `Sandbox.fork`. While set, `Sandbox.fork`/`Sandbox.resume` on
     # this snapshot id both raise `SandkilnApiError` with status 409.
     forked_into: str | None = None
+    # Carried over from the sandbox this was taken from, if any — see
+    # `CreateSandboxOptions`'s `name`.
+    name: str | None = None
 
 
 class Sandbox:
@@ -47,13 +62,20 @@ class Sandbox:
     @classmethod
     def create(
         cls,
+        name: str | None = None,
         tags: dict[str, str] | None = None,
         base_url: str | None = None,
         auth_token: str | None = None,
         vcpu_count: int | None = None,
         mem_size_mib: int | None = None,
     ) -> "Sandbox":
-        """`vcpu_count`/`mem_size_mib` override the daemon's configured
+        """`name` is a caller-given identity, unique among live sandboxes
+        and held snapshots at the moment it's claimed — the daemon rejects
+        a taken name with a 409. Optional; omit for an anonymous sandbox,
+        same as before this existed. See `Sandbox.by_name`/
+        `Sandbox.get_or_create` for finding a named sandbox again later.
+
+        `vcpu_count`/`mem_size_mib` override the daemon's configured
         defaults for this one sandbox; omitted (the default) uses them
         unchanged. The daemon rejects a value of `0` or anything above its
         configured ceiling (`SANDKILN_MAX_VCPU_COUNT`/
@@ -61,6 +83,8 @@ class Sandbox:
         resolved_base_url = resolve_base_url(base_url)
         resolved_token = resolve_auth_token(auth_token)
         body: dict[str, object] = {}
+        if name is not None:
+            body["name"] = name
         if tags is not None:
             body["tags"] = tags
         if vcpu_count is not None:
@@ -76,6 +100,56 @@ class Sandbox:
         round-trip — for a process that only has an id from elsewhere and
         needs a handle to call instance methods on."""
         return cls(id, resolve_base_url(base_url), resolve_auth_token(auth_token))
+
+    @classmethod
+    def by_name(cls, name: str, base_url: str | None = None, auth_token: str | None = None) -> "Sandbox":
+        """Resolves a name to a live sandbox and returns a handle to it —
+        a network round-trip, unlike `attach`, since the id isn't known up
+        front. Only resolves a *live* sandbox: if this name currently
+        belongs to a stopped (snapshotted) sandbox instead, the daemon
+        raises `SandkilnApiError` with status 409 rather than silently
+        resuming it — use `Sandbox.get_or_create` if that's what you
+        want."""
+        resolved_base_url = resolve_base_url(base_url)
+        resolved_token = resolve_auth_token(auth_token)
+        response = request(resolved_base_url, "GET", f"/sandboxes/by-name/{name}", resolved_token)
+        return cls(response["id"], resolved_base_url, resolved_token)
+
+    @classmethod
+    def get_or_create(
+        cls,
+        name: str,
+        tags: dict[str, str] | None = None,
+        base_url: str | None = None,
+        auth_token: str | None = None,
+        vcpu_count: int | None = None,
+        mem_size_mib: int | None = None,
+    ) -> tuple["Sandbox", bool]:
+        """Resolves `name` to a sandbox in one call, creating it if it
+        doesn't exist yet: a live sandbox with this name is returned
+        as-is, a stopped (snapshotted) one is resumed, and otherwise a
+        fresh sandbox is created and given this name. `tags`/
+        `vcpu_count`/`mem_size_mib` only apply to the create-fresh case —
+        resuming an existing snapshot uses what was recorded on it when it
+        was taken, same as `Sandbox.resume`.
+
+        Returns `(sandbox, created)` — `created` is `True` only when this
+        call actually booted a brand-new sandbox from the base rootfs.
+
+        Race-safe on the daemon side: two concurrent calls for the same
+        brand-new name can't both create a sandbox — the second sees the
+        first's result instead."""
+        resolved_base_url = resolve_base_url(base_url)
+        resolved_token = resolve_auth_token(auth_token)
+        body: dict[str, object] = {"name": name}
+        if tags is not None:
+            body["tags"] = tags
+        if vcpu_count is not None:
+            body["vcpu_count"] = vcpu_count
+        if mem_size_mib is not None:
+            body["mem_size_mib"] = mem_size_mib
+        response = request(resolved_base_url, "POST", "/sandboxes/get-or-create", resolved_token, body)
+        return cls(response["id"], resolved_base_url, resolved_token), response["created"]
 
     @classmethod
     def list(
@@ -101,6 +175,7 @@ class Sandbox:
                 id=summary["id"],
                 created_at=datetime.fromtimestamp(summary["created_at_unix"], tz=timezone.utc),
                 tags=summary["tags"],
+                name=summary.get("name"),
             )
             for summary in response["sandboxes"]
         ]
@@ -119,8 +194,29 @@ class Sandbox:
         body = {"path": path, "content_base64": base64.b64encode(raw).decode("ascii")}
         self._request("POST", f"/sandboxes/{self.id}/write-file", body)
 
-    def stop(self) -> None:
-        self._request("DELETE", f"/sandboxes/{self.id}")
+    def stop(self, keep: bool | None = None) -> StopResult:
+        """Stops this sandbox. By default (`keep` omitted, or `True`) this
+        *preserves* its state: internally the daemon does what
+        `Sandbox.snapshot()` does (pause, snapshot to disk, stop the VM)
+        and reports the resulting snapshot id — "stop and come back
+        later" is the default, not something you have to manage yourself.
+        Resume it with `Sandbox.resume(snapshot_id)`, or find it again by
+        name with `Sandbox.get_or_create(name=...)` if this sandbox had
+        one.
+
+        Pass `keep=False` for the old "just destroy it" behavior — no
+        snapshot, nothing left behind — for a sandbox you genuinely never
+        want back (e.g. a short-lived CI run)."""
+        path = f"/sandboxes/{self.id}"
+        if keep is not None:
+            path += f"?{urlencode({'keep': 'true' if keep else 'false'})}"
+        # `keep=False` gets a bare 204 back (no body) — `_http.request`
+        # decodes that as `None`. Normalized here so callers get one
+        # consistent return type regardless of which path the daemon took.
+        response = self._request("DELETE", path)
+        if response is None:
+            return StopResult(kept=False, snapshot_id=None)
+        return StopResult(kept=response["kept"], snapshot_id=response["snapshot_id"])
 
     def preview_url(self, port: int, path: str = "/") -> str:
         """URL a browser can open directly to reach a server listening on
@@ -213,6 +309,7 @@ class Sandbox:
                 created_at=datetime.fromtimestamp(summary["created_at_unix"], tz=timezone.utc),
                 tags=summary["tags"],
                 forked_into=summary["forked_into"],
+                name=summary.get("name"),
             )
             for summary in response["snapshots"]
         ]

@@ -3,9 +3,13 @@
 # the full API surface in one repeatable run — sandbox lifecycle, tags,
 # per-sandbox resource overrides and their ceiling, drives (including
 # persistence across sandboxes and conflict detection), snapshot/resume/
-# fork (including the one-live-fork-at-a-time conflict rules), request id
-# correlation, auth, metrics, and error cases — instead of re-deriving
-# the same manual curl session by hand every time a feature is touched.
+# fork (including the one-live-fork-at-a-time conflict rules), named
+# sandboxes and persistent-by-default stop (name-conflict rejection,
+# stop-preserves-by-default verified via read-file after a stop+resume-
+# by-name cycle, the explicit ?keep=false destroy opt-out, and
+# get-or-create-by-name idempotency), request id correlation, auth,
+# metrics, and error cases — instead of re-deriving the same manual curl
+# session by hand every time a feature is touched.
 #
 # This does not replace `cargo test` (pure logic, no KVM needed) or
 # `scripts/load-test.sh` (concurrency/latency under load) — it's the third
@@ -46,8 +50,13 @@ CREATED_DRIVES=()
 CREATED_SNAPSHOTS=()
 
 cleanup() {
+  # ?keep=false: cleanup means "get rid of everything this run created",
+  # not "leave a snapshot behind" — DELETE now preserves state by
+  # default (see the "named sandboxes and persistent stop" section
+  # below), which would otherwise leak an untracked snapshot on every
+  # run of this script.
   for id in "${CREATED_SANDBOXES[@]:-}"; do
-    [ -n "$id" ] && curl -s -o /dev/null -X DELETE "$BASE_URL/sandboxes/$id" "${AUTH_HEADER[@]}"
+    [ -n "$id" ] && curl -s -o /dev/null -X DELETE "$BASE_URL/sandboxes/$id?keep=false" "${AUTH_HEADER[@]}"
   done
   for id in "${CREATED_SNAPSHOTS[@]:-}"; do
     [ -n "$id" ] && curl -s -o /dev/null -X DELETE "$BASE_URL/snapshots/$id" "${AUTH_HEADER[@]}"
@@ -184,8 +193,8 @@ else
   assert_status "exec of a failing command still returns 200" 200 "$status"
   assert_contains "exec reports the real non-zero exit code" "$body" '"exit_code":1'
 
-  status="$(req DELETE "/sandboxes/$SBX1")"
-  assert_status "stop sandbox" 204 "$status"
+  status="$(req DELETE "/sandboxes/$SBX1?keep=false")"
+  assert_status "stop sandbox (explicit ?keep=false, unrelated to persistence — see below)" 204 "$status"
   CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX1}")
 
   status="$(req GET /sandboxes)"
@@ -206,7 +215,7 @@ else
   assert_status "exec in resource-overridden sandbox" 200 "$status"
   assert_contains "overridden vcpu_count of 1 is visible inside the guest" "$(cat "$WORKDIR/resp.json")" '"stdout":"1'
 
-  status="$(req DELETE "/sandboxes/$SBX_RES")"
+  status="$(req DELETE "/sandboxes/$SBX_RES?keep=false")"
   assert_status "stop resource-overridden sandbox" 204 "$status"
   CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_RES}")
 fi
@@ -263,7 +272,7 @@ else
   status="$(req POST /sandboxes "{\"drives\":[{\"id\":\"$DRV\"}]}")"
   assert_status "attaching an already-attached drive to a second sandbox is a conflict" 409 "$status"
 
-  status="$(req DELETE "/sandboxes/$SBX2")"
+  status="$(req DELETE "/sandboxes/$SBX2?keep=false")"
   assert_status "stop the sandbox holding the drive" 204 "$status"
   CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX2}")
 
@@ -276,7 +285,7 @@ else
   assert_status "mount the reattached drive" 200 "$status"
   assert_contains "data written earlier is still there" "$(cat "$WORKDIR/resp.json")" "persisted-via-drive"
 
-  status="$(req DELETE "/sandboxes/$SBX3")"
+  status="$(req DELETE "/sandboxes/$SBX3?keep=false")"
   assert_status "stop the sandbox" 204 "$status"
   CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX3}")
 
@@ -429,7 +438,7 @@ else
       status="$(req POST "/sandboxes/$SBX5/exec" '{"command":"echo","args":["post-resume-exec-ok"]}')"
       assert_status "exec still works after resume" 200 "$status"
 
-      status="$(req DELETE "/sandboxes/$SBX5")"
+      status="$(req DELETE "/sandboxes/$SBX5?keep=false")"
       assert_status "stop the resumed sandbox" 204 "$status"
       CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX5}")
     fi
@@ -472,7 +481,7 @@ else
     echo "  skip - SANDKILN_AUTH_TOKEN not set, preview auth checks skipped (see the 'auth' section below)"
   fi
 
-  status="$(req DELETE "/sandboxes/$SBXP")"
+  status="$(req DELETE "/sandboxes/$SBXP?keep=false")"
   assert_status "stop the preview sandbox" 204 "$status"
   CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBXP}")
 fi
@@ -498,7 +507,11 @@ else
     assert_status "snapshotting a jailed sandbox is rejected" 400 "$status"
 
     status="$(req DELETE "/sandboxes/$SBX_JAIL")"
-    assert_status "stop the jailed sandbox" 204 "$status"
+    assert_status "stopping a jailed sandbox with the persist-by-default behavior is a conflict (can't be snapshotted)" 409 "$status"
+    assert_contains "the conflict message points at the ?keep=false opt-out" "$(cat "$WORKDIR/resp.json")" "keep=false"
+
+    status="$(req DELETE "/sandboxes/$SBX_JAIL?keep=false")"
+    assert_status "stop the jailed sandbox with the explicit destroy opt-out" 204 "$status"
     CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_JAIL}")
   fi
 fi
@@ -559,7 +572,8 @@ else
       assert_status "snapshotting a forked sandbox directly is a conflict" 409 "$status"
 
       status="$(req DELETE "/sandboxes/$FORK1")"
-      assert_status "stop the forked sandbox" 204 "$status"
+      assert_status "stopping a forked sandbox with the default (persist) behavior still succeeds" 200 "$status"
+      assert_contains "a fork has nothing new to preserve, so it's silently destroyed rather than erroring" "$(cat "$WORKDIR/resp.json")" '"kept":false'
       CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$FORK1}")
 
       status="$(req POST "/snapshots/$FSNAP/fork")"
@@ -577,7 +591,7 @@ else
         decoded="$(extract content_base64 < "$WORKDIR/resp.json" | base64 -d 2>/dev/null || true)"
         assert_contains "second fork starts from the same pristine snapshot state" "$decoded" "$FORK_MARKER"
 
-        status="$(req DELETE "/sandboxes/$FORK2")"
+        status="$(req DELETE "/sandboxes/$FORK2?keep=false")"
         assert_status "stop the second forked sandbox" 204 "$status"
         CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$FORK2}")
       fi
@@ -589,7 +603,7 @@ else
 
       if [ -n "$FORK3" ]; then
         CREATED_SANDBOXES+=("$FORK3")
-        status="$(req DELETE "/sandboxes/$FORK3")"
+        status="$(req DELETE "/sandboxes/$FORK3?keep=false")"
         assert_status "stop the finally-resumed sandbox" 204 "$status"
         CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$FORK3}")
       fi
@@ -599,6 +613,111 @@ fi
 
 status="$(req POST /snapshots/not-a-real-snapshot/fork)"
 assert_status "forking a nonexistent snapshot is 404" 404 "$status"
+
+section "named sandboxes and persistent stop by default"
+NAME1="it-name-$$-1"
+
+status="$(req POST /sandboxes "{\"tags\":{\"suite\":\"integration\",\"case\":\"name\"},\"name\":\"$NAME1\"}")"
+assert_status "create sandbox with a name" 200 "$status"
+SBXN1="$(extract id < "$WORKDIR/resp.json")"
+if [ -z "$SBXN1" ]; then
+  fail "create sandbox with a name returned no id — aborting naming checks"
+else
+  CREATED_SANDBOXES+=("$SBXN1")
+  pass "create sandbox with a name returned an id ($SBXN1)"
+
+  status="$(req POST /sandboxes "{\"name\":\"$NAME1\"}")"
+  assert_status "creating a second sandbox with an already-taken name is a conflict" 409 "$status"
+
+  status="$(req GET "/sandboxes/by-name/$NAME1")"
+  assert_status "resolve a live sandbox by name" 200 "$status"
+  assert_eq "by-name resolves to the sandbox's real id" "$SBXN1" "$(extract id < "$WORKDIR/resp.json")"
+
+  NAME_MARKER="name-marker-$SBXN1"
+  status="$(req POST "/sandboxes/$SBXN1/exec" "{\"command\":\"sh\",\"args\":[\"-c\",\"echo $NAME_MARKER > /tmp/name-marker.txt\"]}")"
+  assert_status "write pre-stop marker in the named sandbox" 200 "$status"
+
+  status="$(req DELETE "/sandboxes/$SBXN1")"
+  assert_status "stopping a named sandbox with the default behavior preserves it (200, not 204)" 200 "$status"
+  body="$(cat "$WORKDIR/resp.json")"
+  assert_contains "the default stop reports kept:true" "$body" '"kept":true'
+  NAME_SNAP="$(extract snapshot_id < "$WORKDIR/resp.json")"
+  CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBXN1}")
+
+  if [ -z "$NAME_SNAP" ]; then
+    fail "default stop returned no snapshot_id — aborting resume-by-name checks"
+  else
+    CREATED_SNAPSHOTS+=("$NAME_SNAP")
+    pass "default stop returned a snapshot id ($NAME_SNAP)"
+
+    status="$(req GET "/sandboxes/by-name/$NAME1")"
+    assert_status "by-name no longer resolves live once stopped (state preserved, not destroyed)" 409 "$status"
+
+    status="$(req POST /sandboxes/get-or-create "{\"name\":\"$NAME1\"}")"
+    assert_status "get-or-create resumes a stopped sandbox found by name" 200 "$status"
+    body="$(cat "$WORKDIR/resp.json")"
+    assert_contains "get-or-create reports created:false when resuming" "$body" '"created":false'
+    SBXN1B="$(extract id < "$WORKDIR/resp.json")"
+    CREATED_SNAPSHOTS=("${CREATED_SNAPSHOTS[@]/$NAME_SNAP}")  # resuming consumes the snapshot
+
+    if [ -z "$SBXN1B" ]; then
+      fail "get-or-create resume returned no sandbox id — aborting remaining naming checks"
+    else
+      CREATED_SANDBOXES+=("$SBXN1B")
+      pass "get-or-create resume returned a sandbox id ($SBXN1B)"
+
+      status="$(req POST "/sandboxes/$SBXN1B/read-file" '{"path":"/tmp/name-marker.txt"}')"
+      assert_status "read marker file from the name-resumed sandbox" 200 "$status"
+      decoded="$(extract content_base64 < "$WORKDIR/resp.json" | base64 -d 2>/dev/null || true)"
+      assert_contains "marker file content survived a stop-then-resume-by-name cycle" "$decoded" "$NAME_MARKER"
+
+      status="$(req POST /sandboxes/get-or-create "{\"name\":\"$NAME1\"}")"
+      assert_status "get-or-create on a now-live name succeeds" 200 "$status"
+      body="$(cat "$WORKDIR/resp.json")"
+      assert_contains "get-or-create on an already-live name reports created:false" "$body" '"created":false'
+      assert_eq "get-or-create is idempotent: same id for an already-live name" "$SBXN1B" "$(extract id < "$WORKDIR/resp.json")"
+
+      status="$(req DELETE "/sandboxes/$SBXN1B?keep=false")"
+      assert_status "the explicit ?keep=false opt-out actually destroys" 204 "$status"
+      CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBXN1B}")
+
+      status="$(req GET "/sandboxes/by-name/$NAME1")"
+      assert_status "the name resolves to nothing at all after an explicit destroy" 404 "$status"
+    fi
+  fi
+fi
+
+NAME2="it-name-$$-2"
+status="$(req POST /sandboxes/get-or-create "{\"name\":\"$NAME2\"}")"
+assert_status "get-or-create on a brand-new name creates fresh" 200 "$status"
+body="$(cat "$WORKDIR/resp.json")"
+assert_contains "get-or-create on a brand-new name reports created:true" "$body" '"created":true'
+SBXN2="$(extract id < "$WORKDIR/resp.json")"
+if [ -z "$SBXN2" ]; then
+  fail "get-or-create on a brand-new name returned no id — aborting idempotency check"
+else
+  CREATED_SANDBOXES+=("$SBXN2")
+  pass "get-or-create on a brand-new name returned an id ($SBXN2)"
+
+  status="$(req POST /sandboxes/get-or-create "{\"name\":\"$NAME2\"}")"
+  assert_status "get-or-create is idempotent for an already-live name (second call)" 200 "$status"
+  body="$(cat "$WORKDIR/resp.json")"
+  assert_contains "the repeat call reports created:false" "$body" '"created":false'
+  assert_eq "the repeat call returns the same sandbox id" "$SBXN2" "$(extract id < "$WORKDIR/resp.json")"
+
+  status="$(req DELETE "/sandboxes/$SBXN2?keep=false")"
+  assert_status "clean up the get-or-create sandbox" 204 "$status"
+  CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBXN2}")
+fi
+
+status="$(req GET "/sandboxes/by-name/not-a-real-name-ever-used")"
+assert_status "by-name for a name that was never used is 404" 404 "$status"
+
+status="$(req POST /sandboxes '{"name":""}')"
+assert_status "an empty name is rejected" 400 "$status"
+
+status="$(req POST /sandboxes/get-or-create '{}')"
+assert_status "get-or-create with no name is rejected" 400 "$status"
 
 section "auth"
 if [ -z "$AUTH_TOKEN" ]; then

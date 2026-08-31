@@ -31,15 +31,25 @@ test("formatSandboxList reports an empty list distinctly", () => {
   assert.equal(formatSandboxList([]), "no sandboxes\n");
 });
 
-test("formatSandboxList renders id, ISO timestamp, and comma-joined tags per line", () => {
+test("formatSandboxList renders id, ISO timestamp, name, and comma-joined tags per line", () => {
   const sandboxes = [
-    { id: "sb-1", createdAt: new Date("2026-01-01T00:00:00.000Z"), tags: { env: "prod", owner: "sumit" } },
+    {
+      id: "sb-1",
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      tags: { env: "prod", owner: "sumit" },
+      name: "web-server",
+    },
     { id: "sb-2", createdAt: new Date("2026-01-02T00:00:00.000Z"), tags: {} },
   ];
   assert.equal(
     formatSandboxList(sandboxes),
-    "sb-1  2026-01-01T00:00:00.000Z  env=prod,owner=sumit\n" + "sb-2  2026-01-02T00:00:00.000Z  \n",
+    "sb-1  2026-01-01T00:00:00.000Z  web-server  env=prod,owner=sumit\n" + "sb-2  2026-01-02T00:00:00.000Z  -  \n",
   );
+});
+
+test("formatSandboxList shows a dash for an unnamed sandbox", () => {
+  const sandboxes = [{ id: "sb-3", createdAt: new Date("2026-01-03T00:00:00.000Z"), tags: {} }];
+  assert.equal(formatSandboxList(sandboxes), "sb-3  2026-01-03T00:00:00.000Z  -  \n");
 });
 
 test("formatSnapshotList reports an empty list distinctly", () => {

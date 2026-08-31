@@ -10,9 +10,8 @@
 //! otherwise sandboxes run until explicitly stopped, same as before either
 //! existed.
 
-use crate::error::AppError;
-use crate::routes_sandbox::stop_sandbox_by_id;
-use crate::routes_snapshot::snapshot_sandbox_by_id;
+use crate::routes_sandbox::{stop_sandbox_by_id, StopError};
+use crate::routes_snapshot::{snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
 use crate::state::AppState;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -52,44 +51,48 @@ async fn reap_once(state: &Arc<AppState>, idle_timeout: Option<Duration>, auto_s
 async fn suspend_idle_sandboxes(state: &Arc<AppState>, timeout: Duration, now: Instant) {
     for id in idle_sandbox_ids(state, timeout, now) {
         tracing::info!(sandbox_id = %id, "auto-suspending idle sandbox");
-        match snapshot_sandbox_by_id(state.clone(), id.clone()).await {
+        match snapshot_and_stop(state.clone(), id.clone()).await {
             Ok(snapshot_id) => {
                 tracing::info!(sandbox_id = %id, snapshot_id = %snapshot_id, "auto-suspended idle sandbox");
             }
-            Err(AppError::NotFound(_)) => {
+            Err(SnapshotStopError::NotFound) => {
                 // Only realistic cause: it was already removed (raced with
                 // a concurrent explicit stop/snapshot) between the scan
                 // above and here — same tolerance `destroy_idle_sandboxes`
                 // already has for the destroy path.
                 tracing::warn!(sandbox_id = %id, "idle sandbox was already gone by the time the reaper tried to auto-suspend it");
             }
-            Err(e @ (AppError::BadRequest(_) | AppError::Conflict(_))) => {
+            Err(SnapshotStopError::Blocked(reason)) => {
                 // Structurally ineligible for suspend (booted jailed, or
                 // forked from a snapshot and sharing its rootfs — see
-                // `snapshot_sandbox_by_id`'s own precondition checks), not
-                // an operational failure. Left running: it'll be scanned
+                // `snapshot_and_stop`'s own precondition checks), not an
+                // operational failure. Left running: it'll be scanned
                 // again next tick and log this again until either it goes
                 // idle-active again or `SANDKILN_IDLE_TIMEOUT_SECS`, if
                 // configured, eventually destroys it instead. `debug`
                 // rather than `warn` specifically because this can repeat
                 // every tick for as long as such a sandbox stays idle.
-                tracing::debug!(sandbox_id = %id, reason = %e, "sandbox is idle but not eligible for auto-suspend — leaving it running");
+                let reason: &str = match reason {
+                    SnapshotBlocked::Jailed => "jailed",
+                    SnapshotBlocked::ForkedFrom(_) => "forked from another snapshot",
+                };
+                tracing::debug!(sandbox_id = %id, reason, "sandbox is idle but not eligible for auto-suspend — leaving it running");
             }
-            Err(e) => {
+            Err(SnapshotStopError::Io(e)) => {
                 // A real failure partway through pause/snapshot (disk
                 // full, a Firecracker API error, a metadata-persist
-                // failure) — `snapshot_sandbox_by_id` itself already
-                // degrades this the same way the manual `POST
-                // .../snapshot` route does: stop the VM and release its
-                // resources rather than hand back something claiming to
-                // still be a live, running sandbox. There's no primitive
-                // to un-pause a VM once Firecracker's `/vm` PATCH to
-                // `Paused` has taken effect, so "leave it running and
-                // retry" isn't actually available once pause has
-                // succeeded — the sandbox is gone either way by the time
-                // this arm runs, same net effect as an idle-destroy, just
-                // logged distinctly so an operator can tell the difference
-                // between "reclaimed on purpose" and "auto-suspend broke".
+                // failure) — `snapshot_and_stop` itself already degrades
+                // this the same way the manual `POST .../snapshot` route
+                // does: stop the VM and release its resources rather than
+                // hand back something claiming to still be a live,
+                // running sandbox. There's no primitive to un-pause a VM
+                // once Firecracker's `/vm` PATCH to `Paused` has taken
+                // effect, so "leave it running and retry" isn't actually
+                // available once pause has succeeded — the sandbox is
+                // gone either way by the time this arm runs, same net
+                // effect as an idle-destroy, just logged distinctly so an
+                // operator can tell the difference between "reclaimed on
+                // purpose" and "auto-suspend broke".
                 tracing::warn!(
                     sandbox_id = %id,
                     error = %e,
@@ -104,11 +107,41 @@ async fn suspend_idle_sandboxes(state: &Arc<AppState>, timeout: Duration, now: I
 async fn destroy_idle_sandboxes(state: &Arc<AppState>, timeout: Duration, now: Instant) {
     for id in idle_sandbox_ids(state, timeout, now) {
         tracing::info!(sandbox_id = %id, "stopping idle sandbox");
-        if stop_sandbox_by_id(state.clone(), id.clone()).await.is_err() {
-            // Only realistic cause: it was already removed (raced with a
-            // concurrent explicit stop, or already auto-suspended above in
-            // this same tick) between the scan above and here.
-            tracing::warn!(sandbox_id = %id, "idle sandbox was already gone by the time the reaper tried to stop it");
+        // `keep: true` — same "preserve by default" behavior as an
+        // explicit `DELETE /sandboxes/:id`, via the exact same shared
+        // path (see `stop_sandbox_by_id`'s doc comment): an idle-timeout
+        // stop shouldn't discard state a caller would keep if they'd
+        // stopped it themselves.
+        match stop_sandbox_by_id(state.clone(), id.clone(), true).await {
+            Ok(_) => {}
+            Err(StopError::NotFound) => {
+                // Only realistic cause: it was already removed (raced with
+                // a concurrent explicit stop, or already auto-suspended
+                // above in this same tick) between the scan above and here.
+                tracing::warn!(sandbox_id = %id, "idle sandbox was already gone by the time the reaper tried to stop it");
+            }
+            Err(StopError::CannotPreserve(_)) => {
+                // Preservation is structurally impossible for this
+                // sandbox (jailed — see `SnapshotBlocked`), and unlike the
+                // `DELETE` route there's no caller here to redirect
+                // toward `?keep=false`: leaving it running forever would
+                // just leak its VM/network resources. Free them instead,
+                // same as an explicit destroy would.
+                tracing::warn!(
+                    sandbox_id = %id,
+                    "idle sandbox cannot be preserved on stop (unsupported for this sandbox) — destroying it instead to free its resources"
+                );
+                if let Err(_e) = stop_sandbox_by_id(state.clone(), id.clone(), false).await {
+                    tracing::warn!(sandbox_id = %id, "fallback destroy of an unpreservable idle sandbox also failed");
+                }
+            }
+            Err(StopError::Io(e)) => {
+                // `snapshot_and_stop` already tore the VM down on this
+                // path (see its doc comment: "whether or not the snapshot
+                // succeeded, this VM is done") — nothing further to clean
+                // up here, just a data-loss signal worth logging loudly.
+                tracing::warn!(sandbox_id = %id, error = %e, "idle sandbox's snapshot-on-stop failed — its state was not preserved");
+            }
         }
     }
 }

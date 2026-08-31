@@ -37,7 +37,7 @@ function formatSandboxLine(info: SandboxInfo): string {
   const tags = Object.entries(info.tags)
     .map(([k, v]) => `${k}=${v}`)
     .join(",");
-  return `${info.id}  ${info.createdAt.toISOString()}  ${tags}`;
+  return `${info.id}  ${info.createdAt.toISOString()}  ${info.name ?? "-"}  ${tags}`;
 }
 
 export function formatSandboxList(sandboxes: SandboxInfo[]): string {
