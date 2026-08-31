@@ -309,6 +309,14 @@ else
     CREATED_SNAPSHOTS+=("$SNAP")
     pass "snapshot returned an id ($SNAP)"
 
+    status="$(req GET "/snapshots?source_sandbox_id=$SBX4")"
+    assert_status "list snapshots filtered by source_sandbox_id" 200 "$status"
+    assert_contains "source_sandbox_id filter finds the snapshot the sandbox became" "$(cat "$WORKDIR/resp.json")" "$SNAP"
+
+    status="$(req GET "/snapshots?source_sandbox_id=not-a-real-sandbox-id")"
+    assert_status "list snapshots with a non-matching source_sandbox_id" 200 "$status"
+    assert_contains "non-matching source_sandbox_id filter returns an empty list" "$(cat "$WORKDIR/resp.json")" '"snapshots":[]'
+
     status="$(req POST "/snapshots/$SNAP/resume")"
     assert_status "resume from snapshot" 200 "$status"
     SBX5="$(extract id < "$WORKDIR/resp.json")"
