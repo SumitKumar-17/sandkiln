@@ -5,7 +5,7 @@
 use crate::error::AppError;
 use crate::routes_drives::DriveAttachment;
 use crate::sandbox::Sandbox;
-use crate::state::AppState;
+use crate::state::{can_attach_read_only, describe_drive_holders, AppState, AttachedDrive};
 use crate::tracing_util::spawn_blocking_in_current_span;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -68,8 +68,15 @@ pub async fn create_sandbox(
         }
     }
     for drive in &request.drives {
-        if let Some(holder) = state.drive_holder(&drive.id) {
-            return Err(AppError::Conflict(format!("drive {} is already attached to {holder}", drive.id)));
+        let holders = state.drive_holders(&drive.id);
+        let existing_read_only: Vec<bool> = holders.iter().map(|h| h.read_only).collect();
+        if !can_attach_read_only(&existing_read_only, drive.read_only) {
+            return Err(AppError::Conflict(format!(
+                "drive {} is already attached to {} — a read-write attachment needs exclusive access; \
+                 only simultaneous read-only attachments are allowed",
+                drive.id,
+                describe_drive_holders(&holders)
+            )));
         }
     }
 
@@ -81,7 +88,8 @@ pub async fn create_sandbox(
 
     let id = Uuid::new_v4().to_string();
     let rootfs_path = std::env::temp_dir().join(format!("sandkiln-rootfs-{id}.ext4"));
-    let attached_drive_ids: Vec<String> = request.drives.iter().map(|d| d.id.clone()).collect();
+    let attached_drives: Vec<AttachedDrive> =
+        request.drives.iter().map(|d| AttachedDrive { drive_id: d.id.clone(), read_only: d.read_only }).collect();
     // Firecracker's own drive_id namespace is per-VM, but prefix these
     // anyway to keep them unambiguously distinct from the reserved
     // "rootfs" id regardless of what a drive's storage id looks like.
@@ -175,7 +183,7 @@ pub async fn create_sandbox(
         vm,
         network: Some(network),
         rootfs_path,
-        attached_drives: attached_drive_ids,
+        attached_drives,
         jail_id,
         tags: request.tags,
         created_at: SystemTime::now(),
