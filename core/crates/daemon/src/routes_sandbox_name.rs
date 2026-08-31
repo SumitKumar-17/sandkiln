@@ -138,6 +138,7 @@ pub async fn get_or_create_sandbox(
                 drives: request.drives,
                 vcpu_count: request.vcpu_count,
                 mem_size_mib: request.mem_size_mib,
+                image_id: None,
             };
             let id = create_sandbox_core(&state, create_request).await?;
             Ok(Json(GetOrCreateSandboxResponse { id, created: true }))
