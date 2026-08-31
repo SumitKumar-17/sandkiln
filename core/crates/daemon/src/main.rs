@@ -9,6 +9,7 @@ mod routes_exec;
 mod routes_metrics;
 mod routes_preview;
 mod routes_sandbox;
+mod routes_sandbox_name;
 mod routes_snapshot;
 mod sandbox;
 mod snapshot;
@@ -104,6 +105,8 @@ async fn async_main() {
 
     let sandbox_routes = Router::new()
         .route("/sandboxes", post(routes_sandbox::create_sandbox).get(routes_sandbox::list_sandboxes))
+        .route("/sandboxes/get-or-create", post(routes_sandbox_name::get_or_create_sandbox))
+        .route("/sandboxes/by-name/:name", get(routes_sandbox_name::get_sandbox_by_name))
         .route("/sandboxes/:id", delete(routes_sandbox::stop_sandbox))
         .route("/sandboxes/:id/exec", post(routes_exec::exec))
         .route("/sandboxes/:id/read-file", post(routes_exec::read_file))

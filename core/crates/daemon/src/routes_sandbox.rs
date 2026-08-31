@@ -1,15 +1,21 @@
 //! Sandbox lifecycle: create, list, stop. Exec and file operations live in
 //! `routes_exec` — split out because they share a `call_agent` helper that
-//! has nothing to do with lifecycle management.
+//! has nothing to do with lifecycle management. Name-based lookup/
+//! get-or-create lives in `routes_sandbox_name` — a distinct enough
+//! concern (crosses into snapshot territory, needs the per-name lock)
+//! that folding it in here would blow well past this file's existing
+//! ~300-line-ish shape for no structural reason.
 
 use crate::error::AppError;
 use crate::routes_drives::DriveAttachment;
+use crate::routes_snapshot::{snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
 use crate::sandbox::Sandbox;
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
 use sandkiln_vmm::jailer::JailLaunch;
 use sandkiln_vmm::network::Lease;
@@ -22,24 +28,30 @@ use uuid::Uuid;
 
 #[derive(Deserialize, Default)]
 pub struct CreateSandboxRequest {
+    /// Caller-given identity, unique among live sandboxes and held
+    /// snapshots at the moment it's claimed (`409` if already taken).
+    /// Optional — naming is opt-in. See `Sandbox::name`'s doc comment and
+    /// `routes_sandbox_name` for looking a sandbox up by name later.
     #[serde(default)]
-    tags: HashMap<String, String>,
+    pub(crate) name: Option<String>,
+    #[serde(default)]
+    pub(crate) tags: HashMap<String, String>,
     /// Existing persistent drives (see `POST /drives`) to attach at boot,
     /// each becoming its own block device inside the guest.
     #[serde(default)]
-    drives: Vec<DriveAttachment>,
+    pub(crate) drives: Vec<DriveAttachment>,
     /// Overrides the daemon's configured default vCPU count
     /// (`SANDKILN_VCPU_COUNT`) for this one sandbox. Omitted means "use
     /// the default" — today's behavior, unchanged. Rejected outright
     /// (`400`) rather than clamped if it's `0` or exceeds the configured
     /// ceiling (`SANDKILN_MAX_VCPU_COUNT`) — see `resolve_resource_override`.
     #[serde(default)]
-    vcpu_count: Option<u8>,
+    pub(crate) vcpu_count: Option<u8>,
     /// Overrides the daemon's configured default memory size in MiB
     /// (`SANDKILN_MEM_SIZE_MIB`) for this one sandbox. Same semantics as
     /// `vcpu_count` above, checked against `SANDKILN_MAX_MEM_SIZE_MIB`.
     #[serde(default)]
-    mem_size_mib: Option<u32>,
+    pub(crate) mem_size_mib: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -59,6 +71,35 @@ pub async fn create_sandbox(
             .map_err(|e| AppError::BadRequest(format!("invalid request body: {e}")))?
     };
 
+    // Held for the rest of this function whenever a name was given —
+    // serializes this call against any other concurrent claim of the
+    // same name (another named `create_sandbox`, or
+    // `routes_sandbox_name::get_or_create_sandbox`) so two callers racing
+    // on a brand-new name can't both pass the uniqueness check below and
+    // both create a sandbox. See `AppState::lock_name`.
+    let _name_guard = match &request.name {
+        Some(name) => {
+            crate::routes_sandbox_name::validate_name(name).map_err(AppError::BadRequest)?;
+            let guard = state.lock_name(name).await;
+            if let Some(holder) = state.name_holder(name) {
+                return Err(AppError::Conflict(format!("name '{name}' is already used by {holder}")));
+            }
+            Some(guard)
+        }
+        None => None,
+    };
+
+    let id = create_sandbox_core(&state, request).await?;
+    Ok(Json(CreateSandboxResponse { id }))
+}
+
+/// The actual "boot a sandbox" mechanics, shared by `create_sandbox`
+/// (`POST /sandboxes`) and `routes_sandbox_name::get_or_create_sandbox`'s
+/// create-fresh path. Does **not** check name uniqueness itself — both
+/// callers already did that under `AppState::lock_name` before reaching
+/// here, and re-checking would just be redundant work under the same
+/// lock they're still holding.
+pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSandboxRequest) -> Result<String, AppError> {
     if let Some(dup) = first_duplicate(request.drives.iter().map(|d| d.id.as_str())) {
         return Err(AppError::BadRequest(format!("drive listed more than once: {dup}")));
     }
@@ -181,11 +222,12 @@ pub async fn create_sandbox(
         created_at: SystemTime::now(),
         last_activity: std::sync::Mutex::new(std::time::Instant::now()),
         source_snapshot_id: None,
+        name: request.name,
     };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
     state.metrics.record_sandbox_created();
 
-    Ok(Json(CreateSandboxResponse { id }))
+    Ok(id)
 }
 
 #[derive(Serialize)]
@@ -193,6 +235,7 @@ pub struct SandboxSummary {
     id: String,
     created_at_unix: u64,
     tags: HashMap<String, String>,
+    name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -221,24 +264,167 @@ pub async fn list_sandboxes(
             id: s.id.clone(),
             created_at_unix: s.created_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
             tags: s.tags.clone(),
+            name: s.name.clone(),
         })
         .collect();
     Json(ListSandboxesResponse { sandboxes })
 }
 
+/// Whether stopping preserves this sandbox's state (the default) or
+/// destroys it outright — the query-string form of `DELETE
+/// /sandboxes/:id?keep=false`. Pulled out as a pure parser for direct
+/// unit testing, mirroring `resolve_resource_override` above.
+fn parse_keep(params: &HashMap<String, String>) -> Result<bool, String> {
+    match params.get("keep").map(String::as_str) {
+        None | Some("true") => Ok(true),
+        Some("false") => Ok(false),
+        Some(other) => Err(format!("invalid 'keep' query parameter '{other}': expected 'true' or 'false'")),
+    }
+}
+
+#[derive(Serialize)]
+pub struct StopSandboxResponse {
+    /// Whether this stop actually produced a new `Snapshot` this sandbox
+    /// can be resumed from. `false` either because the caller explicitly
+    /// asked for full destruction (`?keep=false`) or because this
+    /// particular sandbox had nothing new to preserve (a fork — see
+    /// `stop_sandbox_by_id`'s doc comment).
+    kept: bool,
+    snapshot_id: Option<String>,
+}
+
+/// `DELETE /sandboxes/:id` — stops a sandbox. As of the "persistent by
+/// default" behavior (see `stop_sandbox_by_id`'s doc comment), the
+/// default response is `200` with a JSON body reporting what happened,
+/// not the old bare `204`: there is now new information worth returning
+/// (a snapshot id) that wasn't there when this only ever destroyed. The
+/// explicit-destroy path (`?keep=false`) keeps the original `204`
+/// contract exactly — nothing new to report, unchanged from before this
+/// feature existed.
 #[tracing::instrument(skip(state))]
 pub async fn stop_sandbox(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> Result<StatusCode, AppError> {
-    stop_sandbox_by_id(state, id).await?;
-    Ok(StatusCode::NO_CONTENT)
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<axum::response::Response, AppError> {
+    let keep = parse_keep(&params).map_err(AppError::BadRequest)?;
+
+    let outcome = stop_sandbox_by_id(state, id.clone(), keep).await.map_err(|e| match e {
+        StopError::NotFound => AppError::NotFound(id),
+        StopError::CannotPreserve(reason) => cannot_preserve_error(reason),
+        StopError::Io(e) => AppError::from(e),
+    })?;
+
+    if !keep {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
+    let (kept, snapshot_id) = match outcome {
+        StopOutcome::Snapshotted(snapshot_id) => (true, Some(snapshot_id)),
+        StopOutcome::Destroyed => (false, None),
+    };
+    Ok(Json(StopSandboxResponse { kept, snapshot_id }).into_response())
 }
 
-/// Removes a sandbox from the map and tears it down: VM stop, network
-/// release, rootfs cleanup. Shared by the `DELETE` route above and the
-/// idle reaper (`idle_reaper::run`) — both need the exact same teardown,
-/// just triggered differently.
+/// What `stop_sandbox_by_id` actually did — used to shape `DELETE`'s
+/// response body; the idle reaper (`idle_reaper::run`) only cares whether
+/// it succeeded at all.
+pub(crate) enum StopOutcome {
+    Snapshotted(String),
+    Destroyed,
+}
+
+/// Every way `stop_sandbox_by_id` can fail. Distinct from `AppError` so
+/// callers other than the HTTP route (namely `idle_reaper`) can react to
+/// `CannotPreserve` without going through an HTTP-status-shaped type —
+/// see `idle_reaper::reap_once`, which falls back to a full destroy on
+/// exactly this variant instead of leaking the sandbox forever.
+pub(crate) enum StopError {
+    NotFound,
+    /// `keep=true` was requested (explicitly or by default) but this
+    /// particular sandbox structurally can't be snapshotted right now —
+    /// see `SnapshotBlocked`. Note a *forked* sandbox never produces this:
+    /// `stop_sandbox_by_id` treats that case as a silent, correct destroy
+    /// rather than an error (see its doc comment), since a fork has
+    /// nothing new to preserve. Only a jailed sandbox reaches here.
+    CannotPreserve(SnapshotBlocked),
+    Io(std::io::Error),
+}
+
+fn cannot_preserve_error(reason: SnapshotBlocked) -> AppError {
+    match reason {
+        SnapshotBlocked::Jailed => AppError::Conflict(
+            "this sandbox is jailed, and snapshotting a jailed sandbox is not supported yet — it can't be \
+             stopped-and-preserved by default; retry with ?keep=false to destroy it instead"
+                .to_string(),
+        ),
+        // Unreachable via `stop_sandbox_by_id` today (forks are handled
+        // as a silent destroy, not this error) — kept exhaustive rather
+        // than `unreachable!()` so a future change to that logic fails to
+        // compile loudly instead of panicking at runtime if it ever does
+        // start reaching here.
+        SnapshotBlocked::ForkedFrom(source) => AppError::Conflict(format!(
+            "this sandbox was forked from snapshot {source} and can't be independently snapshotted — retry with \
+             ?keep=false to destroy it instead"
+        )),
+    }
+}
+
+/// Stops a sandbox. `keep=true` (the default — both `DELETE
+/// /sandboxes/:id` with no query param and `idle_reaper`'s automatic
+/// stop) is the ROADMAP's "persistent by default" behavior: this
+/// internally does what `POST /sandboxes/:id/snapshot` does (pause,
+/// snapshot to disk, stop the VM), landing the sandbox as a `Snapshot`
+/// record — including its `name`, if it had one — instead of deleting
+/// its rootfs and releasing its network lease for good. `keep=false` is
+/// the explicit opt-out, for a caller who genuinely wants full
+/// destruction with nothing left behind (e.g. a short-lived CI sandbox
+/// that will never come back) — it does exactly what stopping a sandbox
+/// always used to do.
+///
+/// A forked sandbox (`source_snapshot_id.is_some()`) is a special case
+/// under `keep=true`: it shares its rootfs file with the snapshot it came
+/// from rather than owning a private copy, so it structurally can't be
+/// snapshotted again on its own (see `SnapshotBlocked::ForkedFrom`) — but
+/// that's fine, not an error, because that shared snapshot *already is*
+/// this identity's durable state, untouched by the fork's ephemeral VM.
+/// There's nothing new to preserve, so `keep=true`'s intent is already
+/// satisfied by destroying just the fork (which, per
+/// `destroy_sandbox_by_id`'s own doc comment, never touches a fork's
+/// shared rootfs/network anyway). A jailed sandbox has no such fallback —
+/// Firecracker's jailed snapshot/resume path genuinely isn't supported —
+/// so that case surfaces as `StopError::CannotPreserve` instead of
+/// silently destroying state a caller's default expectation says should
+/// have survived.
+///
+/// Shared by the `DELETE` route above and the idle reaper
+/// (`idle_reaper::run`) — both go through this one path rather than a
+/// second, drifted copy of stop logic, and both get the same
+/// preserve-by-default behavior for the same reason: consistency between
+/// an explicit stop and an automatic idle-timeout stop.
+pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String, keep: bool) -> Result<StopOutcome, StopError> {
+    if keep {
+        match snapshot_and_stop(state.clone(), id.clone()).await {
+            Ok(snapshot_id) => return Ok(StopOutcome::Snapshotted(snapshot_id)),
+            Err(SnapshotStopError::NotFound) => return Err(StopError::NotFound),
+            Err(SnapshotStopError::Io(e)) => return Err(StopError::Io(e)),
+            Err(SnapshotStopError::Blocked(SnapshotBlocked::ForkedFrom(_))) => {
+                // Falls through to the destroy below — see this
+                // function's doc comment for why that's correct, not a
+                // silent downgrade.
+            }
+            Err(SnapshotStopError::Blocked(reason @ SnapshotBlocked::Jailed)) => {
+                return Err(StopError::CannotPreserve(reason));
+            }
+        }
+    }
+    destroy_sandbox_by_id(state, id).await
+}
+
+/// Removes a sandbox from the map and tears it down outright: VM stop,
+/// network release, rootfs cleanup. The original (pre-naming-feature)
+/// "stop a sandbox" behavior — now reached via `keep=false`, or
+/// internally when `keep=true` has nothing new to preserve for a forked
+/// sandbox (see `stop_sandbox_by_id`'s doc comment).
 ///
 /// A sandbox forked from a snapshot (`source_snapshot_id.is_some()`,
 /// see `routes_snapshot::fork_snapshot`) doesn't own its rootfs file or
@@ -249,8 +435,8 @@ pub async fn stop_sandbox(
 /// and waits on the Firecracker process: clearing the lock any earlier
 /// would let a new fork start writing the shared rootfs file before the
 /// old one has actually stopped touching it.
-pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<(), AppError> {
-    let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
+async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopOutcome, StopError> {
+    let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or(StopError::NotFound)?;
     let source_snapshot_id = sandbox.source_snapshot_id.clone();
     let owns_rootfs = source_snapshot_id.is_none();
 
@@ -280,7 +466,7 @@ pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String) -> Resu
         }
     }
 
-    Ok(())
+    Ok(StopOutcome::Destroyed)
 }
 
 /// Resolves a per-request resource override (`vcpu_count`/`mem_size_mib`
@@ -328,6 +514,31 @@ fn clone_rootfs(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_keep_defaults_to_true_when_absent() {
+        assert_eq!(parse_keep(&HashMap::new()), Ok(true));
+    }
+
+    #[test]
+    fn parse_keep_accepts_explicit_true_and_false() {
+        assert_eq!(parse_keep(&HashMap::from([("keep".to_string(), "true".to_string())])), Ok(true));
+        assert_eq!(parse_keep(&HashMap::from([("keep".to_string(), "false".to_string())])), Ok(false));
+    }
+
+    #[test]
+    fn parse_keep_rejects_anything_else() {
+        let err = parse_keep(&HashMap::from([("keep".to_string(), "yes".to_string())])).unwrap_err();
+        assert!(err.contains("yes"), "message was: {err}");
+    }
+
+    #[test]
+    fn cannot_preserve_error_for_jailed_mentions_the_opt_out() {
+        let AppError::Conflict(message) = cannot_preserve_error(SnapshotBlocked::Jailed) else {
+            panic!("expected Conflict")
+        };
+        assert!(message.contains("keep=false"), "message was: {message}");
+    }
 
     #[test]
     fn resolve_resource_override_uses_the_default_when_omitted() {
