@@ -28,17 +28,34 @@ impl From<std::io::Error> for AppError {
     }
 }
 
-impl IntoResponse for AppError {
-    fn into_response(self) -> Response {
-        let (status, message) = match self {
+impl AppError {
+    /// Shared by `IntoResponse` (paired with the status code) and
+    /// `Display` (message alone, for `tracing::warn!(error = %e, ...)` call
+    /// sites like `idle_reaper`'s auto-suspend-failure logging, which has
+    /// no HTTP response to shape) — one place defining what each variant's
+    /// message text actually is, rather than two copies drifting apart.
+    fn status_and_message(&self) -> (StatusCode, String) {
+        match self {
             AppError::NotFound(id) => (StatusCode::NOT_FOUND, format!("sandbox not found: {id}")),
             AppError::DriveNotFound(id) => (StatusCode::NOT_FOUND, format!("drive not found: {id}")),
-            AppError::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
-            AppError::Conflict(message) => (StatusCode::CONFLICT, message),
-            AppError::BadGateway(message) => (StatusCode::BAD_GATEWAY, message),
-            AppError::GatewayTimeout(message) => (StatusCode::GATEWAY_TIMEOUT, message),
+            AppError::BadRequest(message) => (StatusCode::BAD_REQUEST, message.clone()),
+            AppError::Conflict(message) => (StatusCode::CONFLICT, message.clone()),
+            AppError::BadGateway(message) => (StatusCode::BAD_GATEWAY, message.clone()),
+            AppError::GatewayTimeout(message) => (StatusCode::GATEWAY_TIMEOUT, message.clone()),
             AppError::Internal(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-        };
+        }
+    }
+}
+
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.status_and_message().1)
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = self.status_and_message();
         (status, Json(json!({ "error": message }))).into_response()
     }
 }
