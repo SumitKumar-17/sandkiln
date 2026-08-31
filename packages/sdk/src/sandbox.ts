@@ -9,15 +9,20 @@ import type {
   ExecResponseBody,
   ExecResult,
   ForkSnapshotResponseBody,
+  GetOrCreateSandboxOptions,
+  GetOrCreateSandboxRequestBody,
+  GetOrCreateSandboxResponseBody,
   ListSandboxesOptions,
   ListSandboxesResponseBody,
   PreviewUrlOptions,
   ReadFileRequestBody,
   ReadFileResponseBody,
   ResumeSnapshotResponseBody,
+  SandboxByNameResponseBody,
   SandboxInfo,
   SandboxOptions,
   SnapshotSandboxResponseBody,
+  StopSandboxResponseBody,
   WriteFileRequestBody,
 } from "./types.js";
 
@@ -75,7 +80,54 @@ export class Sandbox {
       id: summary.id,
       createdAt: new Date(summary.created_at_unix * 1000),
       tags: summary.tags,
+      name: summary.name ?? undefined,
     }));
+  }
+
+  /**
+   * Resolves a name to a live sandbox and returns a handle to it — a
+   * network round-trip, unlike `attach`, since the id isn't known up
+   * front. Only resolves a *live* sandbox: if this name currently
+   * belongs to a stopped (snapshotted) sandbox instead, the daemon
+   * rejects with a 409 rather than silently resuming it — use
+   * `Sandbox.getOrCreate` if that's what you want.
+   */
+  static async byName(name: string, options: SandboxOptions = {}): Promise<Sandbox> {
+    const client = resolveClient(options);
+    const body = await request<SandboxByNameResponseBody>({
+      ...client,
+      method: "GET",
+      path: `/sandboxes/by-name/${encodeURIComponent(name)}`,
+    });
+    return new Sandbox(body.id, client);
+  }
+
+  /**
+   * Resolves a name to a sandbox in one call, creating it if it doesn't
+   * exist yet: a live sandbox with this name is returned as-is, a
+   * stopped (snapshotted) one is resumed, and otherwise a fresh sandbox
+   * is created and given this name. `tags`/`vcpuCount`/`memSizeMib` only
+   * apply to the create-fresh case — resuming an existing snapshot uses
+   * what was recorded on it when it was taken, same as `Sandbox.resume`.
+   *
+   * Race-safe on the daemon side: two concurrent calls for the same
+   * brand-new name can't both create a sandbox — the second sees the
+   * first's result instead.
+   */
+  static async getOrCreate(options: GetOrCreateSandboxOptions): Promise<{ sandbox: Sandbox; created: boolean }> {
+    const client = resolveClient(options);
+    const requestBody: GetOrCreateSandboxRequestBody = { name: options.name };
+    if (options.tags !== undefined) requestBody.tags = options.tags;
+    if (options.vcpuCount !== undefined) requestBody.vcpu_count = options.vcpuCount;
+    if (options.memSizeMib !== undefined) requestBody.mem_size_mib = options.memSizeMib;
+
+    const body = await request<GetOrCreateSandboxResponseBody>({
+      ...client,
+      method: "POST",
+      path: "/sandboxes/get-or-create",
+      body: requestBody,
+    });
+    return { sandbox: new Sandbox(body.id, client), created: body.created };
   }
 
   async runCommand(command: string, args: string[] = []): Promise<ExecResult> {
@@ -110,12 +162,38 @@ export class Sandbox {
     });
   }
 
-  async stop(): Promise<void> {
-    await request<void>({
+  /**
+   * Stops this sandbox. By default this *preserves* its state: internally
+   * the daemon does what `Sandbox.snapshot()` does (pause, snapshot to
+   * disk, stop the VM) and returns the resulting snapshot id — "stop and
+   * come back later" is the default, not something you have to manage
+   * yourself. Resume it with `Sandbox.resume(snapshotId)`, or find it
+   * again by name with `Sandbox.getOrCreate({ name })` if this sandbox
+   * had one.
+   *
+   * Pass `{ keep: false }` for the old "just destroy it" behavior — no
+   * snapshot, nothing left behind — for a sandbox you genuinely never
+   * want back (e.g. a short-lived CI run).
+   */
+  async stop(options: { keep?: boolean } = {}): Promise<{ kept: boolean; snapshotId: string | null }> {
+    const query = new URLSearchParams();
+    if (options.keep !== undefined) {
+      query.set("keep", String(options.keep));
+    }
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+
+    // `keep: false` gets a bare 204 back (no body) — `request` decodes
+    // that as `undefined`. Normalized here so callers get one consistent
+    // shape regardless of which path the daemon took.
+    const body = await request<StopSandboxResponseBody | undefined>({
       ...this.client,
       method: "DELETE",
-      path: `/sandboxes/${encodeURIComponent(this.id)}`,
+      path: `/sandboxes/${encodeURIComponent(this.id)}${suffix}`,
     });
+    if (body === undefined) {
+      return { kept: false, snapshotId: null };
+    }
+    return { kept: body.kept, snapshotId: body.snapshot_id };
   }
 
   /**
@@ -214,6 +292,7 @@ function resolveClient(options: { baseUrl?: string; authToken?: string }): Clien
  * this SDK's existing convention for an all-default `POST /sandboxes`. */
 function buildCreateSandboxRequestBody(options: CreateSandboxOptions): CreateSandboxRequestBody | undefined {
   const body: CreateSandboxRequestBody = {};
+  if (options.name !== undefined) body.name = options.name;
   if (options.tags !== undefined) body.tags = options.tags;
   if (options.vcpuCount !== undefined) body.vcpu_count = options.vcpuCount;
   if (options.memSizeMib !== undefined) body.mem_size_mib = options.memSizeMib;
