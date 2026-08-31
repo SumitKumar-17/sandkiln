@@ -59,11 +59,44 @@ pub struct Config {
     /// Drives are meant to outlive that, so they get their own directory.
     pub drives_dir: PathBuf,
     /// How long a sandbox can go without any exec/read-file/write-file
-    /// activity before the daemon stops it automatically (see
+    /// activity before the daemon stops it automatically — VM killed,
+    /// network lease released, rootfs deleted, state gone for good (see
     /// `idle_reaper`). `None` — the env var unset, or set to `0` — disables
     /// this entirely: sandboxes run until explicitly stopped, today's
     /// behavior, unchanged unless a self-hosted instance opts in.
+    ///
+    /// See `auto_suspend_timeout`'s doc comment for how the two interact
+    /// when both are configured.
     pub idle_timeout: Option<Duration>,
+    /// How long a sandbox can go without activity before the daemon
+    /// auto-suspends it instead of destroying it: pauses the microVM,
+    /// snapshots it to disk (the same pause+snapshot path
+    /// `POST /sandboxes/:id/snapshot` uses), and releases the VM process
+    /// and its vcpu/memory — cheaper than staying booted, and resumable
+    /// without a cold boot. The sandbox disappears from `GET /sandboxes`
+    /// and reappears as a `Snapshot` (`Snapshot::source_sandbox_id` still
+    /// points at the original sandbox id — see
+    /// `routes_snapshot::list_snapshots`'s `?source_sandbox_id=` filter for
+    /// how a caller finds the resulting snapshot). `None` — the env var
+    /// unset, or set to `0` — disables this entirely, matching
+    /// `idle_timeout`'s opt-in, no-silent-behavior-change pattern.
+    ///
+    /// When both this and `idle_timeout` are configured, this must be
+    /// strictly less than `idle_timeout` (enforced in `from_env`, below).
+    /// The policy: auto-suspend always gets first crack at an idle
+    /// sandbox, and `idle_timeout` becomes a backstop rather than a
+    /// competing timer — a sandbox that suspends successfully leaves
+    /// `AppState::sandboxes` entirely (it's a `Snapshot` now), so
+    /// `idle_timeout` never runs against it again; a sandbox whose
+    /// auto-suspend keeps failing (e.g. a full disk, see
+    /// `idle_reaper::reap_once`) keeps accruing idle time as an ordinary
+    /// running sandbox and is eventually reclaimed by `idle_timeout`
+    /// instead of running forever because its cheaper suspend path is
+    /// broken. Requiring the strict ordering at startup, rather than
+    /// letting an operator configure them the other way around, rules out
+    /// a configuration where destroy would race ahead of suspend and make
+    /// this setting silently pointless.
+    pub auto_suspend_timeout: Option<Duration>,
     /// `SANDKILN_LOG_FORMAT=json` switches structured logging to one
     /// JSON object per line, for production log pipelines that expect to
     /// parse fields rather than a human-readable terminal format.
@@ -122,6 +155,12 @@ impl Config {
             "SANDKILN_MEM_SIZE_MIB ({mem_size_mib}) exceeds SANDKILN_MAX_MEM_SIZE_MIB ({max_mem_size_mib}) — the daemon's own default would be rejected"
         );
 
+        let idle_timeout = parse_timeout_secs_env("SANDKILN_IDLE_TIMEOUT_SECS");
+        let auto_suspend_timeout = parse_timeout_secs_env("SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS");
+        if let Err(message) = check_suspend_precedes_destroy(auto_suspend_timeout, idle_timeout) {
+            panic!("{message}");
+        }
+
         Self {
             listen_addr: env_or("SANDKILN_LISTEN_ADDR", "127.0.0.1:7777"),
             firecracker_bin: expand_home(&env_or("SANDKILN_FIRECRACKER_BIN", "~/sandkiln-tools/bin/firecracker")),
@@ -140,11 +179,8 @@ impl Config {
             tap_pool_size: env_or("SANDKILN_TAP_POOL_SIZE", "32").parse().expect("SANDKILN_TAP_POOL_SIZE must be a number"),
             auth_token: std::env::var("SANDKILN_AUTH_TOKEN").ok(),
             drives_dir: expand_home(&env_or("SANDKILN_DRIVES_DIR", "~/sandkiln-tools/drives")),
-            idle_timeout: std::env::var("SANDKILN_IDLE_TIMEOUT_SECS")
-                .ok()
-                .map(|v| v.parse::<u64>().expect("SANDKILN_IDLE_TIMEOUT_SECS must be a number"))
-                .filter(|secs| *secs > 0)
-                .map(Duration::from_secs),
+            idle_timeout,
+            auto_suspend_timeout,
             log_format: LogFormat::from_env(),
             preview_timeout: Duration::from_secs(
                 env_or("SANDKILN_PREVIEW_TIMEOUT_SECS", "30").parse().expect("SANDKILN_PREVIEW_TIMEOUT_SECS must be a number"),
@@ -156,6 +192,19 @@ impl Config {
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// Shared parsing for `SANDKILN_IDLE_TIMEOUT_SECS` and
+/// `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`: unset or `0` both mean "disabled"
+/// rather than the env var needing to be entirely absent to opt out, so a
+/// self-hoster can flip one off in a shared `.env` file by setting it to
+/// `0` instead of deleting the line.
+fn parse_timeout_secs_env(key: &str) -> Option<Duration> {
+    std::env::var(key)
+        .ok()
+        .map(|v| v.parse::<u64>().unwrap_or_else(|_| panic!("{key} must be a number")))
+        .filter(|secs| *secs > 0)
+        .map(Duration::from_secs)
 }
 
 fn parse_bool_env(value: Option<&str>) -> bool {
@@ -184,6 +233,28 @@ fn jailer_config_from_env() -> Option<JailerHostConfig> {
         chroot_base_dir: expand_home(&env_or("SANDKILN_JAILER_CHROOT_BASE_DIR", "~/sandkiln-tools/jail")),
         uid_gid_range: jailer_uid_gid_range(uid_gid_base, pool_size),
     })
+}
+
+/// Pure validation behind the `auto_suspend_timeout`/`idle_timeout`
+/// interaction documented on `Config::auto_suspend_timeout` — pulled out
+/// of `from_env` so the policy is directly testable without going through
+/// process-global env vars, same as `jailer_uid_gid_range` above. Passing
+/// (both unset, only one set, or `auto_suspend_timeout < idle_timeout`)
+/// returns `Ok`; the one invalid combination — auto-suspend configured at
+/// or past the destroy threshold, which would make it a race `idle_timeout`
+/// can win instead of a guaranteed-first backstop relationship — returns an
+/// `Err` describing why.
+fn check_suspend_precedes_destroy(auto_suspend_timeout: Option<Duration>, idle_timeout: Option<Duration>) -> Result<(), String> {
+    match (auto_suspend_timeout, idle_timeout) {
+        (Some(suspend), Some(destroy)) if suspend >= destroy => Err(format!(
+            "SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS ({}) must be strictly less than SANDKILN_IDLE_TIMEOUT_SECS ({}) when both \
+             are set — auto-suspend needs to reach every idle sandbox before the destroy timeout would tear it down instead \
+             of suspending it; see `Config::auto_suspend_timeout`'s doc comment",
+            suspend.as_secs(),
+            destroy.as_secs()
+        )),
+        _ => Ok(()),
+    }
 }
 
 fn expand_home(path: &str) -> PathBuf {
@@ -246,5 +317,33 @@ mod tests {
         let range = jailer_uid_gid_range(700000, 1);
         assert_eq!(*range.start(), 700000);
         assert_eq!(*range.end(), 700000);
+    }
+
+    #[test]
+    fn suspend_precedes_destroy_ok_when_neither_is_set() {
+        assert!(check_suspend_precedes_destroy(None, None).is_ok());
+    }
+
+    #[test]
+    fn suspend_precedes_destroy_ok_when_only_one_is_set() {
+        assert!(check_suspend_precedes_destroy(Some(Duration::from_secs(60)), None).is_ok());
+        assert!(check_suspend_precedes_destroy(None, Some(Duration::from_secs(60))).is_ok());
+    }
+
+    #[test]
+    fn suspend_precedes_destroy_ok_when_suspend_is_strictly_shorter() {
+        assert!(check_suspend_precedes_destroy(Some(Duration::from_secs(60)), Some(Duration::from_secs(300))).is_ok());
+    }
+
+    #[test]
+    fn suspend_precedes_destroy_rejects_suspend_equal_to_destroy() {
+        let err = check_suspend_precedes_destroy(Some(Duration::from_secs(60)), Some(Duration::from_secs(60))).unwrap_err();
+        assert!(err.contains("SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS"));
+        assert!(err.contains("SANDKILN_IDLE_TIMEOUT_SECS"));
+    }
+
+    #[test]
+    fn suspend_precedes_destroy_rejects_suspend_longer_than_destroy() {
+        assert!(check_suspend_precedes_destroy(Some(Duration::from_secs(600)), Some(Duration::from_secs(60))).is_err());
     }
 }
