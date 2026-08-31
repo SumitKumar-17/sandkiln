@@ -126,9 +126,23 @@ outbound HTTP both still work.
   common CLI tooling, and full root access inside the sandbox — the
   default every sandbox boots from unless told otherwise.
 - A small catalog of **managed images** for common language runtimes.
-- **Custom images**: accept a user-provided rootfs (or convert an OCI
-  image into one) so teams can bake their own tooling in and reuse it
-  across sandboxes.
+- **Done (partial): custom/managed images.** `POST /images` registers an
+  already-built ext4 rootfs from a host path into a daemon-managed
+  directory (`SANDKILN_IMAGES_DIR`) under a caller-given id; `GET /images`
+  lists them (`in_use_by`, always-`false` `guest_agent_verified` plus a
+  `verification_hint`, since the unprivileged daemon can never loop-mount
+  a candidate image to confirm the agent is baked in — use
+  `scripts/preflight-check.sh --root-checks --rootfs-image <path>` out of
+  band first); `DELETE /images/:id` refuses (409) while any live sandbox,
+  in-flight boot, or held snapshot still references it. `POST /sandboxes`
+  takes an optional `image_id` to boot from a registered image instead of
+  `SANDKILN_BASE_ROOTFS`; carried through `snapshot`/`resume`/`fork` like
+  `name`/`tags`. Exposed as `Image.register/list/delete` in both SDKs
+  (plus `imageId`/`image_id` on `Sandbox.create`) and `kiln image
+  ls|create|rm`, `kiln sandbox create --image`. **Not done:** OCI-image
+  conversion — still accepts only an already-built ext4 file, not an OCI
+  image reference — and there's no way yet to boot from an image by name
+  through `get-or-create`.
 - Image build tooling lives in `images/` — reproducible, scripted builds,
   not hand-built blobs.
 

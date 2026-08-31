@@ -20,6 +20,15 @@ most of it is now live — check the published packages if you need to
 know exactly what's on npm right now versus what's only in this repo.
 
 ### Added
+- Custom/managed base images: `POST /images` registers an already-built
+  ext4 rootfs from a host path (`GET /images` to list, `DELETE /images/:id`
+  refused while anything still references it); `POST /sandboxes` accepts
+  an `image_id` to boot from one instead of the daemon's default rootfs.
+  The daemon can't verify the guest agent is baked in (runs unprivileged,
+  no loop-mount) — `scripts/preflight-check.sh --root-checks --rootfs-image
+  <path>` does that check out of band. Both SDKs (`Image.register/list/
+  delete`, `imageId`/`image_id` on `create`) and the CLI (`kiln image
+  ls|create|rm`, `kiln sandbox create --image`) are updated to match.
 - Named sandboxes and persistent-by-default stop: `DELETE /sandboxes/:id`
   now auto-snapshots on stop by default instead of destroying (`?keep=false`
   or `kiln sandbox rm --destroy` opts back into the old hard-destroy
