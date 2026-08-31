@@ -58,6 +58,15 @@ pub struct Config {
     /// per-sandbox rootfs copies, which get deleted on sandbox stop.
     /// Drives are meant to outlive that, so they get their own directory.
     pub drives_dir: PathBuf,
+    /// Where registered images live (see `sandkiln_vmm::image::ImageStore`
+    /// and `routes_images`) — a caller-named, daemon-tracked rootfs a
+    /// `POST /sandboxes` request can boot from instead of
+    /// `base_rootfs_path`. Deliberately its own directory rather than
+    /// reusing `drives_dir`: images and drives are different resource
+    /// kinds (bootable rootfs vs. attachable block device) that happen to
+    /// share a storage shape, and keeping them apart avoids an `<id>.ext4`
+    /// collision between the two id namespaces.
+    pub images_dir: PathBuf,
     /// How long a sandbox can go without any exec/read-file/write-file
     /// activity before the daemon stops it automatically — VM killed,
     /// network lease released, rootfs deleted, state gone for good (see
@@ -179,6 +188,7 @@ impl Config {
             tap_pool_size: env_or("SANDKILN_TAP_POOL_SIZE", "32").parse().expect("SANDKILN_TAP_POOL_SIZE must be a number"),
             auth_token: std::env::var("SANDKILN_AUTH_TOKEN").ok(),
             drives_dir: expand_home(&env_or("SANDKILN_DRIVES_DIR", "~/sandkiln-tools/drives")),
+            images_dir: expand_home(&env_or("SANDKILN_IMAGES_DIR", "~/sandkiln-tools/images-registered")),
             idle_timeout,
             auto_suspend_timeout,
             log_format: LogFormat::from_env(),

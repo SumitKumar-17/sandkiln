@@ -6,6 +6,7 @@ use serde_json::json;
 pub enum AppError {
     NotFound(String),
     DriveNotFound(String),
+    ImageNotFound(String),
     BadRequest(String),
     /// The request is well-formed but conflicts with current state — e.g.
     /// deleting or attaching a drive that's already attached elsewhere.
@@ -38,6 +39,7 @@ impl AppError {
         match self {
             AppError::NotFound(id) => (StatusCode::NOT_FOUND, format!("sandbox not found: {id}")),
             AppError::DriveNotFound(id) => (StatusCode::NOT_FOUND, format!("drive not found: {id}")),
+            AppError::ImageNotFound(id) => (StatusCode::NOT_FOUND, format!("image not found: {id}")),
             AppError::BadRequest(message) => (StatusCode::BAD_REQUEST, message.clone()),
             AppError::Conflict(message) => (StatusCode::CONFLICT, message.clone()),
             AppError::BadGateway(message) => (StatusCode::BAD_GATEWAY, message.clone()),
@@ -87,6 +89,13 @@ mod tests {
         let (status, message) = status_and_message(AppError::DriveNotFound("d1".to_string()).into_response()).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(message, "drive not found: d1");
+    }
+
+    #[tokio::test]
+    async fn image_not_found_is_404_with_image_wording() {
+        let (status, message) = status_and_message(AppError::ImageNotFound("img1".to_string()).into_response()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(message, "image not found: img1");
     }
 
     #[tokio::test]

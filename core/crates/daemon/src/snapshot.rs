@@ -45,6 +45,11 @@ pub struct Snapshot {
     /// a read-write copy of a drive this snapshot still holds read-write
     /// and corrupt it via two VMs writing to one file.
     pub attached_drives: Vec<AttachedDrive>,
+    /// Carried over from the source sandbox's `image_id` — see
+    /// `crate::sandbox::Sandbox::image_id`. `None` means the source
+    /// sandbox booted from the daemon-wide default rootfs, same meaning
+    /// as on `Sandbox`.
+    pub image_id: Option<String>,
     pub tags: HashMap<String, String>,
     pub created_at: SystemTime,
     /// Carried over from the source sandbox's `Sandbox::name`, if it had
@@ -92,6 +97,11 @@ struct SnapshotMeta {
     guest_mac: String,
     host_octet: u8,
     attached_drives: Vec<AttachedDrive>,
+    /// Absent (defaulted to `None`) in metadata written before this field
+    /// existed — same "still reconcilable after an upgrade" reasoning as
+    /// `name` below.
+    #[serde(default)]
+    image_id: Option<String>,
     tags: HashMap<String, String>,
     created_at_unix: u64,
     /// `#[serde(default)]` so a snapshot written to disk before naming
@@ -119,6 +129,7 @@ impl Snapshot {
             guest_mac: self.network.config.guest_mac.clone(),
             host_octet: self.network.host_octet(),
             attached_drives: self.attached_drives.clone(),
+            image_id: self.image_id.clone(),
             tags: self.tags.clone(),
             created_at_unix: self.created_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
             name: self.name.clone(),
@@ -323,6 +334,7 @@ fn load_one(dir: &Path, id: &str, network: &NetworkManager) -> Option<Snapshot> 
         rootfs_path: meta.rootfs_path,
         network: lease,
         attached_drives: meta.attached_drives,
+        image_id: meta.image_id,
         tags: meta.tags,
         created_at: UNIX_EPOCH + Duration::from_secs(meta.created_at_unix),
         name: meta.name,
@@ -381,6 +393,7 @@ mod tests {
             guest_mac: "AA:FC:00:00:05:05".to_string(),
             host_octet: 5,
             attached_drives: vec![AttachedDrive { drive_id: "d1".to_string(), read_only: true }],
+            image_id: Some("base-image".to_string()),
             tags: HashMap::from([("env".to_string(), "test".to_string())]),
             created_at_unix: 1_700_000_000,
             name: Some("sample-snapshot".to_string()),
@@ -469,6 +482,7 @@ mod tests {
                 AttachedDrive { drive_id: "d1".to_string(), read_only: false },
                 AttachedDrive { drive_id: "d2".to_string(), read_only: true },
             ],
+            image_id: Some("custom-image-1".to_string()),
             tags: HashMap::from([("owner".to_string(), "sumit".to_string())]),
             created_at: UNIX_EPOCH + Duration::from_secs(1_700_000_123),
             name: Some("round-trip-name".to_string()),
@@ -492,6 +506,7 @@ mod tests {
                 AttachedDrive { drive_id: "d2".to_string(), read_only: true },
             ]
         );
+        assert_eq!(loaded.image_id, Some("custom-image-1".to_string()));
         assert_eq!(loaded.tags.get("owner"), Some(&"sumit".to_string()));
         assert_eq!(loaded.created_at.duration_since(UNIX_EPOCH).unwrap().as_secs(), 1_700_000_123);
         assert_eq!(loaded.name.as_deref(), Some("round-trip-name"));
@@ -590,6 +605,38 @@ mod tests {
 
         let network = test_network(["tapA".to_string()]);
         assert!(load_one(&dir, "dir-name", &network).is_none());
+    }
+
+    /// A snapshot written by a daemon build from before `image_id` existed
+    /// has no such field in its `meta.json` at all — `#[serde(default)]`
+    /// on `SnapshotMeta::image_id` is what keeps that file reconcilable
+    /// after an upgrade instead of getting skipped as "corrupt metadata".
+    #[test]
+    fn load_one_treats_metadata_with_no_image_id_field_as_the_pre_image_default_rootfs() {
+        let t = TempDir::new("pre-image-field-meta");
+        let dir = t.path.join("snap-legacy");
+        fs::create_dir_all(&dir).unwrap();
+
+        let legacy_json = serde_json::json!({
+            "id": "snap-legacy",
+            "source_sandbox_id": "sandbox-1",
+            "rootfs_path": "/tmp/sandkiln-rootfs-1.ext4",
+            "tap_device": "tapA",
+            "guest_ip": "172.16.0.5",
+            "gateway_ip": "172.16.0.1",
+            "guest_mac": "AA:FC:00:00:05:05",
+            "host_octet": 5,
+            "attached_drives": [{"drive_id": "d1", "read_only": false}],
+            "tags": {"env": "test"},
+            "created_at_unix": 1_700_000_000_u64,
+        });
+        fs::write(meta_path(&dir), serde_json::to_vec(&legacy_json).unwrap()).unwrap();
+        fs::write(state_path(&dir), b"state").unwrap();
+        fs::write(mem_path(&dir), b"mem").unwrap();
+
+        let network = test_network(["tapA".to_string()]);
+        let loaded = load_one(&dir, "snap-legacy", &network).expect("pre-image_id metadata must still reconcile");
+        assert_eq!(loaded.image_id, None);
     }
 
     #[test]
