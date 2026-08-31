@@ -58,7 +58,10 @@ sandbox.stop()
 - `sandbox.write_file(path, content)` — `content` is `str` or `bytes`.
 - `sandbox.stop()` — stops the sandbox and releases its resources.
 - `sandbox.snapshot()` — saves the sandbox's full state to disk and stops
-  it; returns a snapshot id.
+  it; returns a snapshot id. The daemon can also do this on its own, for
+  an idle sandbox, if the operator has `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`
+  configured — see `Sandbox.list_snapshots` below for how to notice it and
+  find the resulting snapshot.
 - `Sandbox.resume(snapshot_id, base_url=None, auth_token=None)` — boots a
   new sandbox from a snapshot, **consuming** it (the snapshot is gone
   afterward).
@@ -68,6 +71,12 @@ sandbox.stop()
   may run at a time — a second concurrent `fork()` raises
   `SandkilnApiError` with status 409 until the first is stopped; see
   `ROADMAP.md`'s "Persistence and snapshotting" section for why.
+- `Sandbox.list_snapshots(source_sandbox_id=None, base_url=None, auth_token=None)`
+  — lists snapshots. `source_sandbox_id` narrows this to the (at most one)
+  snapshot taken from that original sandbox id — the way to find out
+  whether a sandbox id that dropped out of `Sandbox.list()` turned into a
+  snapshot (via a manual `snapshot()` or the daemon's auto-suspend) and
+  what its new id is.
 
 This mirrors the [JS/TS SDK](https://www.npmjs.com/package/sandkiln)
 exactly — same daemon, same operations, Python-idiomatic naming
