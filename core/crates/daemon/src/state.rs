@@ -8,9 +8,21 @@ use hyper_util::rt::TokioExecutor;
 use sandkiln_vmm::drive::DriveStore;
 use sandkiln_vmm::jailer::JailerIdPool;
 use sandkiln_vmm::network::NetworkManager;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
+
+/// One drive attached to a sandbox or a held snapshot, and whether it was
+/// attached read-only. `Sandbox::attached_drives` and
+/// `Snapshot::attached_drives` both carry this rather than a bare drive
+/// id, because whether a *new* attach may coexist with the existing ones
+/// depends on both pieces of information — see `can_attach_read_only`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachedDrive {
+    pub drive_id: String,
+    pub read_only: bool,
+}
 
 pub struct AppState {
     pub config: Config,
@@ -53,25 +65,70 @@ impl AppState {
         }
     }
 
-    /// Where a drive id is currently held, if anywhere — a running
-    /// sandbox, or a snapshot with it frozen into saved state (Firecracker
-    /// bakes a drive's host path into the snapshot the same way it does
-    /// network config, so a snapshotted drive is still "in use" even
-    /// though no `Vm` is running). Checked wherever an operation would
-    /// conflict with the drive still being held: attaching it to another
-    /// sandbox, or deleting it outright.
-    pub fn drive_holder(&self, drive_id: &str) -> Option<String> {
-        if let Some(sandbox) = self.sandboxes.lock().unwrap().values().find(|s| s.attached_drives.iter().any(|d| d == drive_id))
-        {
-            return Some(format!("sandbox {}", sandbox.id));
-        }
-        if let Some(snapshot) =
-            self.snapshots.lock().unwrap().values().find(|s| s.attached_drives.iter().any(|d| d == drive_id))
-        {
-            return Some(format!("snapshot {}", snapshot.id));
-        }
-        None
+    /// Every current holder of `drive_id` — running sandboxes and held
+    /// snapshots with it frozen into saved state (Firecracker bakes a
+    /// drive's host path into the snapshot the same way it does network
+    /// config, so a snapshotted drive is still "in use" even though no
+    /// `Vm` is running) — each labeled and marked with whether that
+    /// particular attachment is read-only. Empty means nothing holds it.
+    ///
+    /// Checked wherever an operation would conflict with the drive still
+    /// being held: attaching it to another sandbox (via
+    /// `can_attach_read_only`, since many simultaneous read-only holders
+    /// are fine) or deleting it outright (never fine while this is
+    /// non-empty, regardless of read-only status).
+    pub fn drive_holders(&self, drive_id: &str) -> Vec<DriveHold> {
+        let mut holders: Vec<DriveHold> = self
+            .sandboxes
+            .lock()
+            .unwrap()
+            .values()
+            .filter_map(|s| {
+                s.attached_drives
+                    .iter()
+                    .find(|d| d.drive_id == drive_id)
+                    .map(|d| DriveHold { holder: format!("sandbox {}", s.id), read_only: d.read_only })
+            })
+            .collect();
+        holders.extend(self.snapshots.lock().unwrap().values().filter_map(|s| {
+            s.attached_drives
+                .iter()
+                .find(|d| d.drive_id == drive_id)
+                .map(|d| DriveHold { holder: format!("snapshot {}", s.id), read_only: d.read_only })
+        }));
+        holders
     }
+}
+
+/// One thing currently holding a drive (a running sandbox or a held
+/// snapshot), and whether it holds it read-only. See `AppState::drive_holders`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DriveHold {
+    pub holder: String,
+    pub read_only: bool,
+}
+
+/// The multi-holder rule at the heart of this feature: a drive may be
+/// attached to arbitrarily many holders at once, but only if every
+/// existing holder *and* the new attach being requested are all
+/// read-only. A single read-write attachment — existing or requested —
+/// needs exclusive, single-holder access, exactly like every attachment
+/// did before read-only sharing existed. Pulled out of
+/// `AppState::drive_holders`'s callers so it's directly testable without
+/// `AppState`, a mutex, or axum.
+pub fn can_attach_read_only(existing: &[bool], requesting_read_only: bool) -> bool {
+    existing.is_empty() || (requesting_read_only && existing.iter().all(|ro| *ro))
+}
+
+/// Renders a list of `DriveHold`s into the human-readable form used in
+/// `AppError::Conflict` messages and nowhere else — kept next to
+/// `DriveHold` rather than duplicated at each call site.
+pub fn describe_drive_holders(holders: &[DriveHold]) -> String {
+    holders
+        .iter()
+        .map(|h| if h.read_only { format!("{} (read-only)", h.holder) } else { h.holder.clone() })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// A short connect timeout is what actually turns "guest port isn't
@@ -84,4 +141,54 @@ fn build_preview_client() -> PreviewClient {
     let mut connector = HttpConnector::new();
     connector.set_connect_timeout(Some(Duration::from_secs(5)));
     hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build(connector)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn can_attach_read_only_allows_the_first_attach_regardless_of_mode() {
+        assert!(can_attach_read_only(&[], true));
+        assert!(can_attach_read_only(&[], false));
+    }
+
+    #[test]
+    fn can_attach_read_only_allows_stacking_more_read_only_holders() {
+        assert!(can_attach_read_only(&[true], true));
+        assert!(can_attach_read_only(&[true, true], true));
+    }
+
+    #[test]
+    fn can_attach_read_only_rejects_a_read_write_request_while_anything_holds_it() {
+        assert!(!can_attach_read_only(&[true], false));
+        assert!(!can_attach_read_only(&[true, true], false));
+    }
+
+    #[test]
+    fn can_attach_read_only_rejects_a_read_only_request_while_any_holder_is_read_write() {
+        assert!(!can_attach_read_only(&[false], true));
+        // Mixed existing holders: one read-only, one read-write — the
+        // read-write one alone is enough to force exclusivity.
+        assert!(!can_attach_read_only(&[true, false], true));
+    }
+
+    #[test]
+    fn can_attach_read_only_rejects_read_write_onto_a_read_write_holder() {
+        assert!(!can_attach_read_only(&[false], false));
+    }
+
+    #[test]
+    fn describe_drive_holders_marks_read_only_holders_and_leaves_read_write_ones_bare() {
+        let holders = vec![
+            DriveHold { holder: "sandbox a".to_string(), read_only: true },
+            DriveHold { holder: "sandbox b".to_string(), read_only: false },
+        ];
+        assert_eq!(describe_drive_holders(&holders), "sandbox a (read-only), sandbox b");
+    }
+
+    #[test]
+    fn describe_drive_holders_of_an_empty_list_is_an_empty_string() {
+        assert_eq!(describe_drive_holders(&[]), "");
+    }
 }
