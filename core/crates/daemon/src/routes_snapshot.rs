@@ -208,11 +208,6 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
         return Err(SnapshotStopError::Io(e));
     }
 
-    // `network` (a `Lease`) already carries whatever egress rules were
-    // applied to it at boot (`NetworkManager::apply_egress_policy`) —
-    // moved into this snapshot as-is, no separate tracking needed here;
-    // `Snapshot::persist` reads them straight off `self.network` when it
-    // writes `SnapshotMeta` to disk.
     let snapshot = Snapshot {
         id: snapshot_id.clone(),
         source_sandbox_id: id,
