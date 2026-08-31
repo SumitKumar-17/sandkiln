@@ -1,3 +1,4 @@
+use crate::state::AttachedDrive;
 use sandkiln_vmm::network::Lease;
 use sandkiln_vmm::vm::Vm;
 use std::collections::HashMap;
@@ -21,12 +22,14 @@ pub struct Sandbox {
     /// the snapshot's shared rootfs file, not this sandbox's own, and
     /// must survive so the snapshot can be forked/resumed again.
     pub rootfs_path: PathBuf,
-    /// Ids of persistent drives attached at creation (see
-    /// `sandkiln_vmm::drive::DriveStore`) — not touched on stop, unlike
-    /// `rootfs_path`, since drives are meant to outlive this sandbox.
-    /// Removing this sandbox from `AppState::sandboxes` is what "detaches"
-    /// them: they become eligible for attaching to a later sandbox again.
-    pub attached_drives: Vec<String>,
+    /// Persistent drives attached at creation (see
+    /// `sandkiln_vmm::drive::DriveStore`), each with whether it was
+    /// attached read-only — not touched on stop, unlike `rootfs_path`,
+    /// since drives are meant to outlive this sandbox. Removing this
+    /// sandbox from `AppState::sandboxes` is what "detaches" them: they
+    /// become eligible for attaching to a later sandbox again, subject to
+    /// `crate::state::can_attach_read_only`'s multi-holder rule.
+    pub attached_drives: Vec<AttachedDrive>,
     /// The uid/gid leased from `AppState::jailer_ids` for this sandbox's
     /// VM, if it was booted jailed — `None` for a direct (unjailed) boot.
     /// Released back to the pool in `stop_sandbox_by_id`; `Vm::stop`

@@ -1,3 +1,4 @@
+use crate::state::AttachedDrive;
 use sandkiln_vmm::network::{Lease, NetworkManager};
 use sandkiln_vmm::vm::NetworkConfig;
 use serde::{Deserialize, Serialize};
@@ -36,12 +37,14 @@ pub struct Snapshot {
     /// reattach the exact same tap device rather than get a fresh lease.
     /// See `sandkiln_vmm::vm::Vm::resume`'s doc comment for why.
     pub network: Lease,
-    /// Carried over from the source sandbox's `attached_drives` — a
-    /// drive's data lives inside the snapshotted memory/rootfs state the
-    /// same way the network config does, so it must stay marked attached
-    /// while this snapshot exists, or a caller could attach it to a
-    /// second sandbox and corrupt it via two VMs writing to one file.
-    pub attached_drives: Vec<String>,
+    /// Carried over from the source sandbox's `attached_drives`, read-only
+    /// flag included — a drive's data lives inside the snapshotted
+    /// memory/rootfs state the same way the network config does, so it
+    /// must stay marked attached while this snapshot exists, with the
+    /// same read-only flag it was attached with, or a caller could attach
+    /// a read-write copy of a drive this snapshot still holds read-write
+    /// and corrupt it via two VMs writing to one file.
+    pub attached_drives: Vec<AttachedDrive>,
     pub tags: HashMap<String, String>,
     pub created_at: SystemTime,
     /// Id of the live sandbox currently forked from this snapshot without
@@ -82,7 +85,7 @@ struct SnapshotMeta {
     gateway_ip: Ipv4Addr,
     guest_mac: String,
     host_octet: u8,
-    attached_drives: Vec<String>,
+    attached_drives: Vec<AttachedDrive>,
     tags: HashMap<String, String>,
     created_at_unix: u64,
 }
@@ -363,7 +366,7 @@ mod tests {
             gateway_ip: "172.16.0.1".parse::<Addr>().unwrap(),
             guest_mac: "AA:FC:00:00:05:05".to_string(),
             host_octet: 5,
-            attached_drives: vec!["d1".to_string()],
+            attached_drives: vec![AttachedDrive { drive_id: "d1".to_string(), read_only: true }],
             tags: HashMap::from([("env".to_string(), "test".to_string())]),
             created_at_unix: 1_700_000_000,
         }
@@ -447,7 +450,10 @@ mod tests {
                 },
                 9,
             ),
-            attached_drives: vec!["d1".to_string(), "d2".to_string()],
+            attached_drives: vec![
+                AttachedDrive { drive_id: "d1".to_string(), read_only: false },
+                AttachedDrive { drive_id: "d2".to_string(), read_only: true },
+            ],
             tags: HashMap::from([("owner".to_string(), "sumit".to_string())]),
             created_at: UNIX_EPOCH + Duration::from_secs(1_700_000_123),
             forked_into: None,
@@ -463,7 +469,13 @@ mod tests {
         assert_eq!(loaded.rootfs_path, PathBuf::from("/tmp/sandkiln-rootfs-9.ext4"));
         assert_eq!(loaded.network.config.tap_device, "tapA");
         assert_eq!(loaded.network.host_octet(), 9);
-        assert_eq!(loaded.attached_drives, vec!["d1".to_string(), "d2".to_string()]);
+        assert_eq!(
+            loaded.attached_drives,
+            vec![
+                AttachedDrive { drive_id: "d1".to_string(), read_only: false },
+                AttachedDrive { drive_id: "d2".to_string(), read_only: true },
+            ]
+        );
         assert_eq!(loaded.tags.get("owner"), Some(&"sumit".to_string()));
         assert_eq!(loaded.created_at.duration_since(UNIX_EPOCH).unwrap().as_secs(), 1_700_000_123);
 
