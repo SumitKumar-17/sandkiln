@@ -1,6 +1,6 @@
 {
   "name": "sandkiln-cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "CLI for sandkiln — manual testing, agentic workflows, and debugging for microVM sandboxes. Installs the `kiln` command.",
   "license": "MIT",
   "author": "Sumit Kumar",
@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "commander": "^12.1.0",
-    "sandkiln": "0.2.0"
+    "sandkiln": "0.3.0"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",

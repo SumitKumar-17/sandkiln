@@ -8,16 +8,16 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
-**Published:** `sandkiln@0.2.0` (minor bump from 0.1.0 —
-`resume`/`fork`/`snapshot`/`previewUrl` and `vcpuCount`/`memSizeMib`
-overrides are all new, backward-compatible additions, nothing removed or
-changed) and `sandkiln-cli@0.2.0` (first publish — `kiln`, the obvious
-name, is a pre-existing unrelated package on npm, so the CLI publishes
-under `sandkiln-cli` instead; `npm install -g sandkiln-cli` still gives
-you the `kiln` command). Both on npm with signed provenance. Everything
-below this line has landed in the repo since the SDK's 0.1.0 publish;
-most of it is now live — check the published packages if you need to
-know exactly what's on npm right now versus what's only in this repo.
+**Published:** `sandkiln@0.3.0` and `sandkiln-cli@0.3.0` (minor bump
+from 0.2.0 — custom/managed images, named sandboxes,
+persistent-by-default stop, read-only shared drives, and auto-suspend on
+idle are all new, backward-compatible additions, nothing removed or
+changed). `sandkiln-cli` publishes under that name rather than `kiln`
+— `kiln`, the obvious name, is a pre-existing unrelated package on npm —
+but `npm install -g sandkiln-cli` still gives you the `kiln` command.
+Both on npm with signed provenance. The Python SDK (`packages/python`)
+and the daemon/CLI's own crates are not published anywhere yet — build
+from source, see `SELF_HOSTING.md`.
 
 ### Added
 - Custom/managed base images: `POST /images` registers an already-built

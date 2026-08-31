@@ -1,6 +1,6 @@
 {
   "name": "sandkiln",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Client SDK for sandkiln: hardware-isolated Firecracker microVM sandboxes for running untrusted code.",
   "license": "MIT",
   "author": "Sumit Kumar",
