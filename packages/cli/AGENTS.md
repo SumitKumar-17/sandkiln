@@ -13,11 +13,17 @@ straight to the SDK.
 
 ## Files
 
-- `src/index.ts` — the CLI. `sandbox create|ls|rm|exec|read|write|preview|
-  snapshot|resume|fork` subcommands, each a thin call into
-  `Sandbox`/`Sandbox.attach()`. `resume`/`fork` call the SDK's static
-  `Sandbox.resume`/`Sandbox.fork` directly (they take a snapshot id, not
-  a sandbox id, so there's no existing handle to attach to).
+- `src/index.ts` — the CLI. `sandbox create|get-or-create|by-name|ls|rm|
+  exec|read|write|preview|snapshot|resume|fork` subcommands, each a thin
+  call into `Sandbox`/`Sandbox.attach()`. `resume`/`fork`/`get-or-create`/
+  `by-name` call the SDK's static `Sandbox.resume`/`Sandbox.fork`/
+  `Sandbox.getOrCreate`/`Sandbox.byName` directly (none acts on an
+  already-existing handle — `resume`/`fork` take a snapshot id, `by-name`/
+  `get-or-create` a name, not a sandbox id, so there's no existing handle
+  to attach to). `rm` defaults to the SDK's `stop()` persist-by-default
+  behavior and reports whether the sandbox was preserved (with its
+  snapshot id) or destroyed; `--destroy` opts into full destruction
+  (`stop({ keep: false })`).
   `--base-url`/`--token` are global options that fall through to the
   SDK's own env var resolution when unset — don't reimplement that
   resolution here, just pass `undefined` through. Every action handler
