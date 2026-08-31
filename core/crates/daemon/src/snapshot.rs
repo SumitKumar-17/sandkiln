@@ -44,6 +44,12 @@ pub struct Snapshot {
     pub attached_drives: Vec<String>,
     pub tags: HashMap<String, String>,
     pub created_at: SystemTime,
+    /// Carried over from the source sandbox's `Sandbox::name`, if it had
+    /// one — see that field's doc comment. Lets a caller find this
+    /// snapshot again by the same name it created the sandbox with,
+    /// whether via `GET /sandboxes/by-name/:name` (once resumed) or
+    /// `POST /sandboxes/get-or-create`.
+    pub name: Option<String>,
     /// Id of the live sandbox currently forked from this snapshot without
     /// consuming it (`POST /snapshots/:id/fork`), if any. `Vm::resume`'s
     /// `/snapshot/load` reopens the exact rootfs file this snapshot
@@ -85,6 +91,12 @@ struct SnapshotMeta {
     attached_drives: Vec<String>,
     tags: HashMap<String, String>,
     created_at_unix: u64,
+    /// `#[serde(default)]` so a snapshot written to disk before naming
+    /// existed still reconciles cleanly on a daemon upgrade — its
+    /// `meta.json` simply has no `name` key, and that must deserialize as
+    /// `None`, not fail `reconcile()` outright.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 impl Snapshot {
@@ -106,6 +118,7 @@ impl Snapshot {
             attached_drives: self.attached_drives.clone(),
             tags: self.tags.clone(),
             created_at_unix: self.created_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
+            name: self.name.clone(),
         };
         let json = serde_json::to_vec_pretty(&meta).map_err(|e| io::Error::other(format!("serializing snapshot metadata: {e}")))?;
         write_atomically(&meta_path(&snapshot_dir(&self.id)), &json)
@@ -309,6 +322,7 @@ fn load_one(dir: &Path, id: &str, network: &NetworkManager) -> Option<Snapshot> 
         attached_drives: meta.attached_drives,
         tags: meta.tags,
         created_at: UNIX_EPOCH + Duration::from_secs(meta.created_at_unix),
+        name: meta.name,
         // Any fork that was live before a restart died with the daemon
         // along with every other live sandbox — there's no on-disk record
         // of a fork to resurrect (see `routes_snapshot`'s module doc
@@ -366,6 +380,7 @@ mod tests {
             attached_drives: vec!["d1".to_string()],
             tags: HashMap::from([("env".to_string(), "test".to_string())]),
             created_at_unix: 1_700_000_000,
+            name: Some("sample-snapshot".to_string()),
         }
     }
 
@@ -450,6 +465,7 @@ mod tests {
             attached_drives: vec!["d1".to_string(), "d2".to_string()],
             tags: HashMap::from([("owner".to_string(), "sumit".to_string())]),
             created_at: UNIX_EPOCH + Duration::from_secs(1_700_000_123),
+            name: Some("round-trip-name".to_string()),
             forked_into: None,
         };
 
@@ -466,11 +482,43 @@ mod tests {
         assert_eq!(loaded.attached_drives, vec!["d1".to_string(), "d2".to_string()]);
         assert_eq!(loaded.tags.get("owner"), Some(&"sumit".to_string()));
         assert_eq!(loaded.created_at.duration_since(UNIX_EPOCH).unwrap().as_secs(), 1_700_000_123);
+        assert_eq!(loaded.name.as_deref(), Some("round-trip-name"));
 
         // The reconciled snapshot's tap must be pulled out of the fresh
         // manager's free pool — the actual double-lease-prevention
         // property under test here.
         assert!(!fresh_network.free_tap_devices().contains(&"tapA".to_string()));
+    }
+
+    #[test]
+    fn load_one_defaults_name_to_none_for_metadata_written_before_naming_existed() {
+        // A snapshot taken before this daemon supported naming has no
+        // `name` key in its meta.json at all — `#[serde(default)]` on
+        // `SnapshotMeta::name` is what keeps that a normal reconcile
+        // instead of a parse failure across an upgrade.
+        let t = TempDir::new("no-name-key");
+        let dir = t.path.join("snap-no-name");
+        fs::create_dir_all(&dir).unwrap();
+        let meta_without_name = serde_json::json!({
+            "id": "snap-no-name",
+            "source_sandbox_id": "sandbox-1",
+            "rootfs_path": "/tmp/sandkiln-rootfs-1.ext4",
+            "tap_device": "tapA",
+            "guest_ip": "172.16.0.5",
+            "gateway_ip": "172.16.0.1",
+            "guest_mac": "AA:FC:00:00:05:05",
+            "host_octet": 5,
+            "attached_drives": ["d1"],
+            "tags": {},
+            "created_at_unix": 1_700_000_000u64,
+        });
+        fs::write(meta_path(&dir), serde_json::to_vec(&meta_without_name).unwrap()).unwrap();
+        fs::write(state_path(&dir), b"state").unwrap();
+        fs::write(mem_path(&dir), b"mem").unwrap();
+
+        let network = test_network(["tapA".to_string()]);
+        let loaded = load_one(&dir, "snap-no-name", &network).expect("must reconcile despite the missing name key");
+        assert_eq!(loaded.name, None);
     }
 
     #[test]

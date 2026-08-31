@@ -50,4 +50,15 @@ pub struct Sandbox {
     /// and skips deleting `rootfs_path` / releasing `network` here since
     /// neither is owned by this sandbox.
     pub source_snapshot_id: Option<String>,
+    /// Caller-given identity, unique among live sandboxes and held
+    /// snapshots at the moment it was claimed (see
+    /// `AppState::name_holder`/`AppState::lock_name`). `None` for a
+    /// sandbox created without one — naming is opt-in, not required.
+    /// Carried forward onto the `Snapshot` record this sandbox becomes on
+    /// stop (`routes_snapshot::snapshot_and_stop`) and back onto a new
+    /// `Sandbox` on resume/fork, so the same name keeps resolving to
+    /// whichever record currently represents this identity — see
+    /// `ROADMAP.md`'s "Sandbox vs. session" note: the name identifies the
+    /// persistent thing, not any one running instance of it.
+    pub name: Option<String>,
 }
