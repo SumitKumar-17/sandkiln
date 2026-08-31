@@ -20,6 +20,14 @@ most of it is now live — check the published packages if you need to
 know exactly what's on npm right now versus what's only in this repo.
 
 ### Added
+- Read-only shared drives: a drive attached read-only may now be attached
+  to arbitrarily many sandboxes (and held snapshots) concurrently; any
+  read-write attachment, existing or requested, still needs exclusive
+  access. **API shape change**: `GET /drives`/`POST /drives`'s
+  `attached_to` field changed from `Option<String>` to a list of holders
+  (each with a `read_only` flag) — not yet published to any SDK, so no
+  external break, but worth knowing if you're consuming the daemon's raw
+  HTTP API directly.
 - Core execution primitive: Firecracker microVM boot, a guest agent
   (vsock exec / read_file / write_file / list_dir), and a host-side
   vsock client, all proven end to end on real hardware.

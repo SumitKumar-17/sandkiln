@@ -188,9 +188,15 @@ outbound HTTP both still work.
 - **Drives**: attachable persistent filesystem storage that outlives a
   single sandbox and can be reattached to a new one — for state that
   should survive well past any one VM's lifetime.
-- **Read-only shared drives**: one drive mounted read-only across many
-  sandboxes at once, for data or a common base layer that doesn't need
-  per-sandbox copies — distinct from a per-sandbox writable drive.
+- **Done: read-only shared drives.** A drive attached read-only may be
+  attached to arbitrarily many sandboxes at once — for data or a common
+  base layer that doesn't need per-sandbox copies — while a read-write
+  attachment (existing or requested) still needs exclusive, single-holder
+  access, exactly like before this existed. `AppState::drive_holders()`
+  tracks every current holder plus whether each holds it read-only;
+  `can_attach_read_only()` is the pure rule deciding whether a new attach
+  may coexist with what's already there. Covers snapshots holding a drive
+  too, not just live sandboxes.
 - **Remote storage mounts**: mount an external object store (S3-compatible)
   into a sandbox via FUSE, so a sandbox can read/write remote files through
   its normal filesystem interface.
