@@ -490,18 +490,21 @@ curl -X DELETE http://127.0.0.1:7777/sandboxes/<id> \
 SANDKILN_AUTH_TOKEN=<your-token> scripts/integration-test.sh
 ```
 This exercises the complete API end to end — sandbox lifecycle, tags,
-drives (including persistence across sandboxes and conflict detection),
-snapshot/resume, auth, `/metrics`, and error cases — and cleans up
-everything it creates whether it passes or fails. This is exactly the
-process used to validate this guide itself; see `AGENTS.md`'s
-"Integration testing" section for more.
+drives (including persistence across sandboxes, read-only sharing, and
+conflict detection), snapshot/resume/fork, named sandboxes and
+persistent-by-default stop, registered images, auth, `/metrics`, and
+error cases — and cleans up everything it creates whether it passes or
+fails. This is exactly the process used to validate this guide itself;
+see `AGENTS.md`'s "Integration testing" section for more.
 
 Or point a real client at it instead of `curl`:
 ```
 npm install sandkiln
 ```
+The Python SDK mirrors it exactly but isn't published to PyPI yet —
+install it from the repo instead:
 ```
-pip install sandkiln
+pip install ./packages/python
 ```
 
 The CLI installs as `sandkiln-cli` (the bare name `kiln` was already

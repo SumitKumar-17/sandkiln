@@ -34,23 +34,28 @@ console.log(result.stdout, result.exitCode);
 await sandbox.stop();
 ```
 
-Python and a CLI ship the same operations:
+A CLI ships the same operations:
 
 ```
-pip install sandkiln
 npm install -g sandkiln-cli   # installs the `kiln` command
 ```
+
+Python mirrors the JS/TS SDK exactly too, but isn't published to PyPI
+yet — install it from this repo (`pip install ./packages/python`) or
+just track the source there directly.
 
 See [`packages/python`](packages/python) and [`packages/cli`](packages/cli).
 
 ## Status
 
 Active development. The core primitive, networking, auth, tags, file ops,
-and all three clients (JS/TS, Python, CLI) work and are verified against
-real hardware — see [CHANGELOG.md](CHANGELOG.md) for what shipped and
-[ROADMAP.md](ROADMAP.md) for what's still open (snapshots/persistence,
-managed images, drives, streamed output). The plan is a direction, not a
-spec, and keeps changing as the project gets built.
+snapshot/resume/fork, named sandboxes, persistent-by-default stop,
+read-only shared drives, auto-suspend on idle, custom/managed images, and
+all three clients (JS/TS, Python, CLI) work and are verified against real
+hardware — see [CHANGELOG.md](CHANGELOG.md) for what shipped and
+[ROADMAP.md](ROADMAP.md) for what's still open (streamed log output,
+OCI-image conversion, firewall/egress policy, multi-node). The plan is a
+direction, not a spec, and keeps changing as the project gets built.
 
 Picking this up as a contributor (human or agent)? Read
 [AGENTS.md](AGENTS.md) first — it covers non-obvious things this project
