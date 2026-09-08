@@ -112,6 +112,16 @@ retrying a vsock connection nothing is listening on). This applies
 **regardless of which rootfs you use** and is easy to miss, since nothing
 stops you from booting a sandbox from an image that's missing this step.
 
+`scripts/dev.sh inject-agent [rootfs-path]` does the two steps below in
+one command (build for the musl target, then inject into `rootfs-path` —
+defaulting to `SANDKILN_BASE_ROOTFS` if set, else the daemon's own
+default, `~/sandkiln-tools/images/ubuntu-22.04.ext4`) — still needs sudo
+interactively for the injection half, but removes the most common
+mistake in this section: injecting into a different `.ext4` file than
+the one the daemon is actually configured to boot from. The two steps
+spelled out separately, for either the quick test path or the production
+path below:
+
 First, build the agent binary for the guest's target:
 
 ```
@@ -133,7 +143,9 @@ images/inject-agent.sh \
   ~/sandkiln-tools/images/ubuntu-22.04.ext4
 ```
 
-(`inject-agent.sh` needs sudo — it loop-mounts the image.)
+(`inject-agent.sh` needs sudo — it loop-mounts the image. Or just
+`scripts/dev.sh inject-agent` with no arguments, since this is exactly
+its own default path.)
 
 ### Production path
 
@@ -152,7 +164,8 @@ it, see the script's header for every argument and env override it
 accepts). This also runs `setup-multi-agent-users.sh` as its last step
 automatically.
 
-Then inject the agent into it, same as the quick path:
+Then inject the agent into it, same as the quick path (or
+`scripts/dev.sh inject-agent ~/sandkiln-tools/images/universal.ext4`):
 
 ```
 images/inject-agent.sh \
@@ -563,7 +576,7 @@ The DNS proxy (section 5) isn't wired into this unit yet — start
 | You changed... | You must also... |
 |---|---|
 | daemon/vmm/protocol Rust source | `cargo build --release --workspace`. Under the systemd unit: nothing else. Running manually: re-run `scripts/host-setup/grant-net-admin.sh` (section 6). |
-| the guest agent (`core/crates/guest-agent`) | rebuild it for the musl target, then **re-inject it into every rootfs image currently in use** (`images/inject-agent.sh`) — a rebuilt agent binary sitting on the host does nothing until it's baked into the image `SANDKILN_BASE_ROOTFS` actually points at. |
+| the guest agent (`core/crates/guest-agent`) | rebuild it for the musl target, then **re-inject it into every rootfs image currently in use** (`images/inject-agent.sh`, or `scripts/dev.sh inject-agent [rootfs-path]` for both steps in one command) — a rebuilt agent binary sitting on the host does nothing until it's baked into the image `SANDKILN_BASE_ROOTFS` actually points at. |
 | the base image / added packages to it | rebuild it (`images/build-universal-image.sh`), re-inject the agent, and repoint `SANDKILN_BASE_ROOTFS` if you built it under a new path. Sandboxes already running keep using whatever image they booted from; only new sandboxes pick up the change. |
 | `SANDKILN_TAP_POOL_SIZE` upward | re-run `scripts/host-setup/create-tap-pool.sh` with the new count (it's idempotent — existing devices are left alone, only missing ones are created) before raising the env var, or the daemon's own startup `ensure_ready()` check fails loudly rather than silently under-provisioning. |
 | Firecracker itself | re-run `scripts/host-setup/install-firecracker.sh`, optionally pinning `FIRECRACKER_VERSION`. |

@@ -29,6 +29,19 @@
 #   integration-test [base-url]                       scripts/integration-test.sh
 #   load-test [concurrency] [iterations] [base-url]    scripts/load-test.sh
 #
+# Guest agent (after any protocol/guest-agent/vmm change):
+#   inject-agent [rootfs-path]   builds sandkiln-guest-agent for the musl
+#                                 target, then `sudo images/inject-agent.sh`
+#                                 into rootfs-path (default: $SANDKILN_BASE_ROOTFS
+#                                 if set, else the daemon's own configured
+#                                 default, ~/sandkiln-tools/images/ubuntu-22.04.ext4)
+#                                 -- one command instead of remembering both
+#                                 the exact target triple and which image
+#                                 file the daemon is actually configured to
+#                                 boot from (a real, previously-made mistake:
+#                                 injecting into a different, unrelated
+#                                 .ext4 file that happened to also exist).
+#
 # Everything else is intentionally NOT wrapped here — one-time or
 # narrowly-scoped steps `setup.sh` already calls in the right order; run
 # them directly if you need one in isolation:
@@ -93,6 +106,15 @@ case "$subcommand" in
     ;;
   load-test)
     exec "$SCRIPT_DIR/load-test.sh" "$@"
+    ;;
+  inject-agent)
+    rootfs="${1:-${SANDKILN_BASE_ROOTFS:-$HOME/sandkiln-tools/images/ubuntu-22.04.ext4}}"
+    echo "==> building sandkiln-guest-agent for x86_64-unknown-linux-musl"
+    cargo build --release --manifest-path "$REPO_ROOT/core/Cargo.toml" \
+      -p sandkiln-guest-agent --target x86_64-unknown-linux-musl
+    agent_bin="$REPO_ROOT/core/target/x86_64-unknown-linux-musl/release/sandkiln-agent"
+    echo "==> injecting into $rootfs (needs sudo)"
+    exec sudo "$REPO_ROOT/images/inject-agent.sh" "$agent_bin" "$rootfs"
     ;;
   help | -h | --help)
     usage

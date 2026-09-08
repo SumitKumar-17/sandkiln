@@ -63,7 +63,13 @@ x86_64-unknown-linux-musl` + `apt install musl-tools` if starting fresh).
 ## Getting a change into a real microVM
 
 Building the binary isn't enough — it has to be baked into a rootfs
-image before it does anything:
+image before it does anything. `scripts/dev.sh inject-agent
+[rootfs-path]` does the build-then-inject sequence below in one command
+(defaulting `rootfs-path` to the daemon's own configured
+`SANDKILN_BASE_ROOTFS` default) — worth using over the two steps
+separately specifically because it can't inject into the wrong image
+file, a real mistake made at least once during this crate's own
+development:
 ```
 sudo bash images/inject-agent.sh \
   core/target/x86_64-unknown-linux-musl/release/sandkiln-agent \
