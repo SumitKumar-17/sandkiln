@@ -14,8 +14,8 @@ sandkiln is a compute primitive for safely running untrusted or AI-generated cod
 
 ## Where to go from here
 
-- New to sandkiln? Start with [Self-hosting quickstart](/docs/getting-started/self-hosting/) to get a daemon running, then pick your language: [JS/TS](/docs/getting-started/js/), [Python](/docs/getting-started/python/), or the [CLI](/docs/getting-started/cli/).
-- Want to understand a specific capability before using it? See [Core Concepts](/docs/concepts/sandbox-lifecycle/).
-- Have a specific task in mind? See [Guides](/docs/guides/run-untrusted-code/).
-- Looking for exact method signatures or HTTP routes? See [Reference](/docs/reference/http-api/).
-- Curious how it's built, or why it's shaped this way? See [Architecture](/docs/architecture/overview/).
+- New to sandkiln? Start with [Self-hosting quickstart](self-hosting/) to get a daemon running, then pick your language: [JS/TS](js/), [Python](python/), or the [CLI](cli/).
+- Want to understand a specific capability before using it? See [Core Concepts](../concepts/sandbox-lifecycle/).
+- Have a specific task in mind? See [Guides](../guides/run-untrusted-code/).
+- Looking for exact method signatures or HTTP routes? See [Reference](../reference/http-api/).
+- Curious how it's built, or why it's shaped this way? See [Architecture](../architecture/overview/).

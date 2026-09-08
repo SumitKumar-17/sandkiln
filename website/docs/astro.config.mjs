@@ -1,12 +1,17 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 
-// Deployed as a /docs subpath of the same site as website/ (see that
-// project's astro.config.mjs for why base is env-driven — GitHub Pages
-// serves a project subpath, Vercel serves the domain root). This site's
-// own base is always the website's base plus "/docs".
-const websiteBase = (process.env.ASTRO_BASE || "/").replace(/\/$/, "");
-const base = `${websiteBase}/docs`;
+// Deployed two ways: as a /docs subpath of the main site (see
+// website/astro.config.mjs for why base is env-driven — GitHub Pages
+// serves a project subpath, Vercel serves the domain root there), or as
+// its own standalone deployment at its own domain root (a separate
+// Vercel project building only this directory, aliased to
+// sandkiln-docs.vercel.app) — set ASTRO_DOCS_STANDALONE=true for that
+// second case so this site's own links resolve at "/" instead of
+// expecting the merged /docs prefix.
+const base = process.env.ASTRO_DOCS_STANDALONE
+  ? "/"
+  : `${(process.env.ASTRO_BASE || "/").replace(/\/$/, "")}/docs`;
 
 export default defineConfig({
   base,

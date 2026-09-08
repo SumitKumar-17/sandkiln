@@ -28,4 +28,4 @@ scripts/preflight-check.sh --root-checks --rootfs-image /home/t1000/images/node-
 const sandbox = await Sandbox.create({ imageId: "node-lts-custom" });
 ```
 
-A nonexistent `imageId` fails fast with a `404`, checked before the slow boot ever starts. See [Custom & managed images](/docs/concepts/images/) for the full mechanics, including deletion and what's genuinely not done yet (OCI/Docker conversion).
+A nonexistent `imageId` fails fast with a `404`, checked before the slow boot ever starts. See [Custom & managed images](../concepts/images/) for the full mechanics, including deletion and what's genuinely not done yet (OCI/Docker conversion).

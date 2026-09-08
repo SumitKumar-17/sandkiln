@@ -11,11 +11,11 @@ Sandboxes NAT outbound through the bridge and resolve DNS through a host-local D
 
 ## Sandbox-to-sandbox isolation
 
-Bridge port isolation means sandboxes can't reach each other directly — verified live: two sandboxes on the same bridge, neither can open a connection to the other, while both can still reach the gateway and the outbound internet. This is the network-layer half of isolation; the kernel/hardware half is the microVM boundary itself (see [Privilege model](/docs/architecture/privilege-model/)).
+Bridge port isolation means sandboxes can't reach each other directly — verified live: two sandboxes on the same bridge, neither can open a connection to the other, while both can still reach the gateway and the outbound internet. This is the network-layer half of isolation; the kernel/hardware half is the microVM boundary itself (see [Privilege model](../architecture/privilege-model/)).
 
 ## Why a pre-created tap pool
 
-The daemon runs unprivileged, with exactly one Linux capability raised — `CAP_NET_ADMIN`, ambient, not full root. That capability covers netlink operations (attaching a tap device to the bridge, bringing a link up or down) but **not** creating a brand-new tap device, which goes through a different kernel path (`TUNSETIFF` on `/dev/net/tun`) that doesn't honor ambient `CAP_NET_ADMIN` the way netlink calls do. So tap devices are pre-created once, as real root, by a one-time setup script (`scripts/create-tap-pool.sh`, or `scripts/setup.sh` end to end) — the daemon only ever leases an existing device from that pool. See [Privilege model](/docs/architecture/privilege-model/) for the full reasoning, including the trade-off this creates (a fixed pool size caps concurrent sandboxes until it's grown).
+The daemon runs unprivileged, with exactly one Linux capability raised — `CAP_NET_ADMIN`, ambient, not full root. That capability covers netlink operations (attaching a tap device to the bridge, bringing a link up or down) but **not** creating a brand-new tap device, which goes through a different kernel path (`TUNSETIFF` on `/dev/net/tun`) that doesn't honor ambient `CAP_NET_ADMIN` the way netlink calls do. So tap devices are pre-created once, as real root, by a one-time setup script (`scripts/create-tap-pool.sh`, or `scripts/setup.sh` end to end) — the daemon only ever leases an existing device from that pool. See [Privilege model](../architecture/privilege-model/) for the full reasoning, including the trade-off this creates (a fixed pool size caps concurrent sandboxes until it's grown).
 
 ## What's not done yet
 

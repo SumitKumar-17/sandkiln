@@ -18,9 +18,9 @@ print(result.stdout, result.exit_code)
 sandbox.stop()  # preserved as a resumable snapshot by default
 ```
 
-Mirrors the JS/TS SDK exactly — same operations, Python-idiomatic naming (`run_command` not `runCommand`, snake_case fields), zero runtime dependencies (stdlib `urllib` only). Full method reference: [Python SDK](/docs/reference/python-sdk/).
+Mirrors the JS/TS SDK exactly — same operations, Python-idiomatic naming (`run_command` not `runCommand`, snake_case fields), zero runtime dependencies (stdlib `urllib` only). Full method reference: [Python SDK](../reference/python-sdk/).
 
 ## Next
 
-- Give the sandbox a name so you can find it again later: [Named sandboxes & persistent stop](/docs/concepts/named-sandboxes/).
-- Boot from your own image instead of the daemon's default: [Boot from a custom image](/docs/guides/custom-image/).
+- Give the sandbox a name so you can find it again later: [Named sandboxes & persistent stop](../concepts/named-sandboxes/).
+- Boot from your own image instead of the daemon's default: [Boot from a custom image](../guides/custom-image/).

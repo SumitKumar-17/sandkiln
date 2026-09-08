@@ -3,7 +3,7 @@ title: Daemon HTTP API
 description: Every route sandkilnd exposes.
 ---
 
-Base URL defaults to `http://127.0.0.1:7777`. Every route below except `/healthz` and `/metrics` requires `Authorization: Bearer <token>` when `SANDKILN_AUTH_TOKEN` is set — see [Auth](/docs/concepts/auth/).
+Base URL defaults to `http://127.0.0.1:7777`. Every route below except `/healthz` and `/metrics` requires `Authorization: Bearer <token>` when `SANDKILN_AUTH_TOKEN` is set — see [Auth](../concepts/auth/).
 
 ## Sandboxes
 
@@ -13,7 +13,7 @@ Base URL defaults to `http://127.0.0.1:7777`. Every route below except `/healthz
 | `GET /sandboxes` | List sandboxes. `?tag.<key>=<value>` filters (repeatable, all must match). |
 | `GET /sandboxes/by-name/:name` | Resolve a name to a *live* sandbox's id. `409` if the name currently belongs to a held snapshot instead. |
 | `POST /sandboxes/get-or-create` | Resolve-or-create by name in one call. Body: `name` (required), `tags?`, `vcpu_count?`, `mem_size_mib?`. |
-| `DELETE /sandboxes/:id` | Stop a sandbox. Preserves state as a snapshot by default (`200`, `{"kept": true, "snapshot_id": "..."}`); `?keep=false` fully destroys instead (`204`). See [Sandbox lifecycle](/docs/concepts/sandbox-lifecycle/). |
+| `DELETE /sandboxes/:id` | Stop a sandbox. Preserves state as a snapshot by default (`200`, `{"kept": true, "snapshot_id": "..."}`); `?keep=false` fully destroys instead (`204`). See [Sandbox lifecycle](../concepts/sandbox-lifecycle/). |
 | `POST /sandboxes/:id/exec` | Run a command. Body: `{"command": "...", "args": [...]}`. Returns `stdout`/`stderr`/`exit_code`. |
 | `POST /sandboxes/:id/read-file` | Body: `{"path": "..."}`. Returns `{"content_base64": "..."}`. |
 | `POST /sandboxes/:id/write-file` | Body: `{"path": "...", "content_base64": "..."}`. |
@@ -41,7 +41,7 @@ Base URL defaults to `http://127.0.0.1:7777`. Every route below except `/healthz
 | Route | What it does |
 |---|---|
 | `POST /images` | Body: `{"id": "...", "path": "..."}`. Registers an already-built ext4 rootfs from a host path. |
-| `GET /images` | List registered images (`guest_agent_verified` is always `false`, see [Custom & managed images](/docs/concepts/images/)). |
+| `GET /images` | List registered images (`guest_agent_verified` is always `false`, see [Custom & managed images](../concepts/images/)). |
 | `DELETE /images/:id` | Delete an image. `409` while any live sandbox, in-flight boot, or held snapshot references it. |
 
 ## Preview

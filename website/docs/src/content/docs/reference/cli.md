@@ -31,7 +31,7 @@ Global options, available on every subcommand: `--base-url <url>` (default: `SAN
 
 | Command | What it does |
 |---|---|
-| `create <id> <path>` | Register an already-built ext4 rootfs at `<path>` (a path on the daemon's own host, not a file upload) under `<id>`. Prints a warning that the guest agent can't be verified without root — see [Custom & managed images](/docs/concepts/images/). |
+| `create <id> <path>` | Register an already-built ext4 rootfs at `<path>` (a path on the daemon's own host, not a file upload) under `<id>`. Prints a warning that the guest agent can't be verified without root — see [Custom & managed images](../concepts/images/). |
 | `ls` | List registered images. |
 | `rm <id>` | Delete a registered image. Refused while any sandbox, in-flight boot, or snapshot still references it. |
 

@@ -123,6 +123,33 @@ makes the same merged build deployable on any platform that imports
 this repo and reads that file. A second live mirror is up at
 https://sandkiln.vercel.app, auto-deployed on every push to `main` via
 that platform's own GitHub integration (not a workflow file in this
-repo). Same content as Pages; if the two ever visibly disagree, Pages
-is the source of truth (`deploy-pages.yml` is the one deploy this repo
-directly controls and verifies).
+repo — the Vercel project's own Root Directory/Build/Output/Install
+Command settings are auto-detect, so `vercel.json` stays the single
+source of truth; they drifted to a stale `Root Directory: website`
+leftover from the old single-file site once, silently breaking every
+deploy until caught by actually inspecting the deployment logs, not
+just the dashboard's green checkmark). Same content as Pages; if the
+two ever visibly disagree, Pages is the source of truth
+(`deploy-pages.yml` is the one deploy this repo directly controls and
+verifies).
+
+`website/docs/` is **also** deployed a third way: standalone, at its
+own domain root, as a separate Vercel project ("sandkiln-docs", not
+"sandkiln") aliased to https://sandkiln-docs.vercel.app — for anyone
+who wants a clean docs-only link instead of the merged site's `/docs`
+subpath. That project's Root Directory is `website/docs` and it sets
+`ASTRO_DOCS_STANDALONE=true` (a production environment variable
+configured on the project, not in any committed file), which
+`website/docs/astro.config.mjs` reads to serve at base `"/"` instead of
+computing `${ASTRO_BASE}/docs` — every internal link in this site's own
+content is written as a path relative to the current page for exactly
+this reason, so the same markdown works unmodified under both base
+values; verify a content change against **both** builds
+(`npm run build` and `ASTRO_DOCS_STANDALONE=true npm run build`), not
+just one, before calling it done. `docs.sandkiln.vercel.app` (a
+subdomain of the main site's own `*.vercel.app` alias) is **not**
+available — Vercel only grants an account `*.vercel.app` and
+`*.<team>.vercel.app`, not arbitrary subdomains of another alias it
+already owns — that's why this one is `sandkiln-docs.vercel.app`
+instead. This project auto-deploys on push same as the main one
+(`vercel git connect`, done once from the CLI).

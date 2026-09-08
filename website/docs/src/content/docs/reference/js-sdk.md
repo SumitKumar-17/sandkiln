@@ -31,7 +31,7 @@ npm install sandkiln
 
 ## `Image`
 
-- **`Image.register(id, path, options?)`** — registers an already-built ext4 rootfs file at `path` on the daemon's own host filesystem, for `Sandbox.create({ imageId })` to boot from. Not a file upload. `guestAgentVerified` on the response is always `false` — see [Custom & managed images](/docs/concepts/images/).
+- **`Image.register(id, path, options?)`** — registers an already-built ext4 rootfs file at `path` on the daemon's own host filesystem, for `Sandbox.create({ imageId })` to boot from. Not a file upload. `guestAgentVerified` on the response is always `false` — see [Custom & managed images](../concepts/images/).
 - **`Image.list(options?)`** / **`Image.delete(id, options?)`** — list registered images, or delete one (`409` while anything references it).
 
 ## Not yet in this SDK
