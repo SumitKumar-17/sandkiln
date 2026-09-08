@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Boots a single Firecracker microVM by hand, driving it purely through its
 # API socket — useful for manual testing outside the daemon. Networking is
-# optional: pass a tap device name (set up via setup-tap-network.sh) to
+# optional: pass a tap device name (set up via dev-tools/setup-tap-network.sh) to
 # give the guest outbound internet at a fixed static IP. Blocks with the
 # console attached; the guest logs in as root automatically. Stop the VM
 # from another shell with `kill <firecracker pid>` or SendCtrlAltDel over
@@ -12,8 +12,8 @@
 # needs to be running on the host side first). A production rootfs bakes
 # this in at build time instead.
 #
-# Usage: scripts/boot-test-vm.sh [images-dir] [tap-device]
-# Example: scripts/boot-test-vm.sh ~/sandkiln-tools/images fc-tap0
+# Usage: scripts/dev-tools/boot-test-vm.sh [images-dir] [tap-device]
+# Example: scripts/dev-tools/boot-test-vm.sh ~/sandkiln-tools/images fc-tap0
 
 set -euo pipefail
 

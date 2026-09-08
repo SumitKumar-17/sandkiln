@@ -1,0 +1,8 @@
+---
+title: Privilege model
+description: Ambient CAP_NET_ADMIN, a static tap pool, and a root that stays out of the hot path.
+---
+
+The daemon never runs as root. It runs as an ordinary user with a single Linux capability, `CAP_NET_ADMIN`, raised into its ambient set — enough to manage network devices, nothing else. The reasoning is blast radius: this daemon's entire job is booting VMs to run code nobody vouched for. If a bug in that path ever let an attacker influence what the daemon itself does, the difference between "can mess with network interfaces" and "can do anything root can" is the difference between an incident and a full host compromise.
+
+That capability covers netlink operations — attaching a tap device to the bridge, bringing a link up or down, creating the bridge itself — but not creating a *new* tap device. That goes through a different kernel path, the `TUNSETIFF` ioctl on `/dev/net/tun`, and in practice that specific check doesn't honor ambient `CAP_NET_ADMIN` the way netlink calls do — it wants a genuinely privileged process. That's not a theoretical distinction, it's why tap devices here are pre-created once, as real root, by a one-time setup script, and the daemon only ever leases an existing device from that pool and attaches or detaches it — netlink operations its ambient capability actually covers. The trade-off is a fixed ceiling: pool size caps concurrent sandboxes until it's grown, and growing it is a deliberate, root-requiring step outside the daemon's own runtime, not something it can do for itself. That's the correct shape for this constraint, not a workaround waiting to be routed around later.

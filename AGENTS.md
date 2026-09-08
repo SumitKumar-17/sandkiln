@@ -19,13 +19,14 @@ benchmarks:
 core/crates/protocol/    wire format shared by host and guest
 core/crates/guest-agent/ static musl binary, runs inside the VM
 core/crates/vmm/         drives Firecracker + networking (host side)
+core/crates/store/       durable sandbox-lifecycle history (sqlite)
 core/crates/daemon/      axum HTTP API (sandkilnd)
 packages/sdk/            sandkiln npm package (TypeScript)
 packages/python/         sandkiln PyPI package (Python)
 packages/cli/            kiln CLI, wraps the JS/TS SDK
 images/                  rootfs/kernel build + agent-injection scripts
 scripts/                 one-command dev-box bootstrap + daemon lifecycle control, plus tap pool, network bridge, DNS proxy, sync, integration/load tests, preflight checks, systemd install
-website/                 the project site, deployed via GitHub Pages (and a live mirror)
+website/                 the project site (GitHub Pages + a live mirror) and, in website/docs/, the full docs site
 examples/                runnable reference projects (code playground, agent runner)
 ```
 
@@ -123,9 +124,10 @@ If asked to improve or add substantial website functionality: inspect the
 complete website architecture, identify the actual limitation, implement
 the appropriate solution — including restructuring, changing the build
 approach, or rewriting major portions if that's genuinely the best
-engineering solution. `website/AGENTS.md` has this page's specific
-constraints (single static file, no build step, design-rationale content
-belongs here rather than in new root-level `.md` files).
+engineering solution. `website/AGENTS.md` has this project's specific
+structure (a multi-page Astro marketing site plus an Astro+Starlight
+docs site in `website/docs/`, the two-deploy-target base-path handling,
+and where content belongs on which site).
 
 ### Performance / optimization
 
@@ -258,17 +260,36 @@ Concretely, in this repo:
 - **`scripts/integration-test.sh [base-url]`** — the full daemon API
   exercised end to end against a real running `sandkilnd`: sandbox
   lifecycle, tag filtering, drives (persistence across sandboxes,
-  conflict detection), snapshot/resume, auth, `/metrics`, error cases.
-  Tracks and tears down everything it creates on exit, pass or fail. Run
-  with `SANDKILN_AUTH_TOKEN` set to also exercise auth-rejection cases.
-  **Every new HTTP-facing feature should add a case here** — that's the
-  entire point of it existing instead of staying tribal knowledge in a
-  chat transcript.
+  conflict detection), snapshot/resume/fork, named sandboxes, images,
+  rate limiting, auth, `/metrics`, error cases. Tracks and tears down
+  everything it creates on exit, pass or fail. Run with
+  `SANDKILN_AUTH_TOKEN` set to also exercise auth-rejection cases. This
+  file itself is just the runner (healthz check, cleanup trap, prints the
+  final pass/fail count) — shared `req`/`assert_*`/`section` helpers live
+  in `scripts/lib/integration-test-helpers.sh`, and each topic (lifecycle,
+  drives, snapshots, fork, named sandboxes, images, rate limiting, auth,
+  ...) is its own numbered file under `scripts/integration-tests/`,
+  sourced in order into the same shell process — splitting it up is
+  purely organizational, every helper and global is visible in every
+  topic file exactly as if it were still one script. **Every new
+  HTTP-facing feature should add a case in the topic file it belongs to
+  (or a new numbered file if it doesn't fit an existing one)** — that's
+  the entire point of it existing instead of staying tribal knowledge in
+  a chat transcript.
 - **`scripts/load-test.sh [concurrency] [iterations] [base-url]`** —
   concurrency/latency under load, min/max/mean/p95 per phase.
-- **`cargo bench -p sandkiln-vmm --bench vm_lifecycle`** — boot time and
-  exec latency, against the real Firecracker binary. See `ROADMAP.md`'s
-  Benchmarking section for the env vars needed and the current numbers.
+- **`cargo bench -p sandkiln-vmm --bench vm_lifecycle`** — boot time,
+  exec latency, snapshot-take, and resume-from-snapshot, against the real
+  Firecracker binary. See `ROADMAP.md`'s Benchmarking section for the env
+  vars needed and the current numbers.
+- **`scripts/dev.sh <subcommand>`** — a thin dispatcher in front of the
+  scripts above (`build`/`unit-test`/`bench`/`integration-test`/
+  `load-test`/`preflight`/`setup`/`start`/`stop`/`restart`/`status`/
+  `logs`), each just exec'ing the real script with whatever args follow —
+  run `scripts/dev.sh help` for the full list. Saves remembering which
+  file does what during a normal edit/rebuild/test loop; every script
+  still works standalone with its own full flag set, this doesn't replace
+  any of them.
 
 For behavior involving Firecracker, KVM, networking, or the real daemon,
 use the actual environment (the remote dev box) — "it compiles" is not
@@ -378,7 +399,7 @@ reintroduce them:
 
 - **`setcap` does not survive a rebuild.** The daemon binary loses its
   `CAP_NET_ADMIN` grant every time `cargo build --release` produces a new
-  binary. Re-run `scripts/grant-net-admin.sh <binary>` after every
+  binary. Re-run `scripts/host-setup/grant-net-admin.sh <binary>` after every
   rebuild before starting the daemon, or every network operation fails
   with "Operation not permitted."
 - **`#[tokio::main]` starts the runtime before your function body runs.**
@@ -392,14 +413,14 @@ reintroduce them:
   ambient `CAP_NET_ADMIN`.** Ambient `CAP_NET_ADMIN` covers netlink
   operations (attach/detach/up on an *existing* interface, bridge
   creation) but not the `TUNSETIFF` ioctl that creates a device. That's
-  why tap devices are pre-created once via `scripts/create-tap-pool.sh`
+  why tap devices are pre-created once via `scripts/host-setup/create-tap-pool.sh`
   (needs sudo) and the daemon only ever leases/releases from that pool.
 - **Use exact process names, not pattern matching, for process control.**
   `pkill -f` can match its own command line and kill the wrong thing —
   including the SSH session running it. Use `pkill -x <exact-process-name>`.
 - **DNS on the dev box's network is unusual**: direct queries to public
   resolvers don't work reliably, but resolution through the host's own
-  `systemd-resolved` stub does. `scripts/start-dns-proxy.sh` forwards to
+  `systemd-resolved` stub does. `scripts/host-setup/start-dns-proxy.sh` forwards to
   that for exactly this reason.
 - **Prefer real readiness checks over sleeps.** Where a fixed sleep is
   unavoidable (e.g. waiting on a fresh SSH connection to reflect state
@@ -413,8 +434,20 @@ reintroduce them:
   system-installed v12, not the real v20 the project targets. Source
   `$HOME/.cargo/env` / `$HOME/.nvm/nvm.sh` explicitly before running
   `cargo`/`npm`/`node` this way — `scripts/sandkilnd-ctl.sh` and
-  `scripts/setup.sh` already do this for cargo; do the equivalent for nvm
-  when scripting a JS/TS build over SSH.
+  `scripts/setup.sh` already do this for cargo, and `scripts/remote.sh`
+  (`run`/`ssh`) sources both automatically before every command, so
+  driving a build over `scripts/remote.sh run ...` doesn't need this
+  worked around by hand. Do the equivalent yourself only if you're
+  scripting a *new* SSH entry point that bypasses `remote.sh`.
+- **A non-interactive SSH shell also can't prompt for a sudo password at
+  all**, which matters specifically for `scripts/sandkilnd-ctl.sh
+  restart`'s CAP_NET_ADMIN re-grant (setcap doesn't survive a binary
+  rebuild, so this runs after every build): over `scripts/remote.sh run`
+  it fails outright instead of prompting. Run `sudo
+  scripts/host-setup/allow-passwordless-cap-grant.sh` once, interactively, to add a
+  narrowly-scoped NOPASSWD rule (only `grant-net-admin.sh` against the
+  daemon's own binary path) so every future rebuild-then-restart over SSH
+  just works.
 - **A near-full disk can silently truncate a file mid-write, not just
   fail loudly.** Hit this for real: `@rollup/rollup-linux-x64-gnu`'s
   native `.node` binary got written at ~354KB instead of its real ~2.1MB

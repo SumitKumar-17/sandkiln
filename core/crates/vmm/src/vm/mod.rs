@@ -1,23 +1,27 @@
 //! A single Firecracker microVM's lifecycle: boot, talk to its guest
 //! agent, tear down. This is the Rust equivalent of what
-//! `scripts/boot-test-vm.sh` does by hand — the daemon drives this
+//! `scripts/dev-tools/boot-test-vm.sh` does by hand — the daemon drives this
 //! directly instead of shelling out.
 //!
 //! Snapshot/resume (`pause`, `snapshot`, `resume`, `ResumeConfig`) lives in
 //! [`snapshot`] — split out because it's a distinct capability with its
-//! own long gotchas, not because `Vm` itself is two structs.
+//! own long gotchas, not because `Vm` itself is two structs. Boot
+//! mechanics (process spawning, the Firecracker API PUT sequence) live in
+//! [`boot`] for the same reason — this file is the public API surface
+//! only.
 
+mod boot;
 mod snapshot;
 
 use crate::firecracker_api::ApiClient;
-use crate::jailer::{self, JailLaunch};
+use crate::jailer::JailLaunch;
 use crate::vsock_client;
-use sandkiln_protocol::{Request, Response, AGENT_PORT};
-use serde_json::json;
+use sandkiln_protocol::{Request, Response, AGENT_PORT, PTY_PORT};
 use std::io;
 use std::net::Ipv4Addr;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -47,6 +51,35 @@ pub struct DriveConfig {
     pub read_only: bool,
 }
 
+/// Firecracker's own token-bucket rate limiter — a maximum capacity
+/// (`size`), replenished at a constant rate derived from `size` and
+/// `refill_time` (ms), with an optional initial burst
+/// (`one_time_burst`) consumed before the refill rate applies. Field
+/// names match Firecracker's wire format exactly (see its `TokenBucket`
+/// schema) since this is serialized directly into the PUT body.
+#[derive(Clone, Copy, serde::Serialize)]
+pub struct TokenBucket {
+    pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub one_time_burst: Option<u64>,
+    pub refill_time: u64,
+}
+
+/// Independent bandwidth (bytes/s) and ops (operations/s) limits — either
+/// or both may be set. Applied uniformly to the rootfs drive, every extra
+/// drive, and both directions of the network interface (Firecracker
+/// itself limits ingress/egress independently via `rx_rate_limiter`/
+/// `tx_rate_limiter`, but sandkiln exposes one combined sandbox-level
+/// knob rather than four independent ones — a deliberately simpler
+/// surface than Firecracker's own, not a limitation of the device model).
+#[derive(Clone, Copy, serde::Serialize)]
+pub struct RateLimiter {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bandwidth: Option<TokenBucket>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ops: Option<TokenBucket>,
+}
+
 pub struct VmConfig {
     pub firecracker_bin: PathBuf,
     pub kernel_path: PathBuf,
@@ -63,6 +96,25 @@ pub struct VmConfig {
     /// limits, a dedicated unprivileged uid/gid) instead of the direct
     /// process spawn used when this is `None`. See `crate::jailer`.
     pub jail: Option<JailLaunch>,
+    /// When set, applied to the rootfs drive, every entry in
+    /// `extra_drives`, and both directions of the network interface.
+    /// `None` (the default) means unlimited host I/O, unchanged from
+    /// before this existed.
+    pub rate_limit: Option<RateLimiter>,
+    /// Arbitrary JSON served to the guest via Firecracker's own MMDS
+    /// (Microvm Metadata Service) at `http://169.254.169.254/` — a
+    /// link-local HTTP endpoint Firecracker's device model answers
+    /// directly, no vsock/guest-agent involvement at all. Configured
+    /// V2 (token-gated: the guest must `PUT .../latest/api/token` for a
+    /// session token before `GET`ting anything) rather than V1's plain
+    /// unauthenticated GET, since a sandbox may run untrusted or
+    /// AI-generated code that could otherwise SSRF an unauthenticated
+    /// metadata endpoint. Requires `network` to also be set — MMDS
+    /// intercepts requests via a configured network interface, so
+    /// there's nothing for it to intercept without one. `None` (the
+    /// default) configures no MMDS at all, unchanged from before this
+    /// existed.
+    pub metadata: Option<serde_json::Value>,
 }
 
 pub struct Vm {
@@ -85,52 +137,7 @@ impl Vm {
     pub fn boot(config: &VmConfig) -> io::Result<Self> {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let log_path = console_log_path(id);
-        Self::boot_inner(config, id, &log_path).map_err(|e| annotate_with_console_log(e, &log_path))
-    }
-
-    fn boot_inner(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<Self> {
-        let started = Instant::now();
-
-        let mut target = match &config.jail {
-            None => spawn_direct(config, id, log_path)?,
-            Some(jail) => spawn_jailed(config, jail, id, log_path)?,
-        };
-
-        if let Err(e) = configure_and_start(config, &mut target) {
-            // A boot that fails partway through the API PUT sequence
-            // still has a live child process (jailer, or firecracker
-            // directly) holding the console log fds and — for a jailed
-            // boot — a real chroot directory with hard-linked copies of
-            // the kernel/rootfs/drives. Leaving either behind is a
-            // resource leak (an orphaned process for a direct boot) or a
-            // real information-disclosure surface (a leftover
-            // world-readable chroot for a jailed one), not just untidy
-            // state — clean up exactly like `snapshot::resume` already
-            // does for the equivalent failure.
-            let _ = target.child.kill();
-            let _ = target.child.wait();
-            let _ = std::fs::remove_file(&target.api_socket);
-            let _ = std::fs::remove_file(&target.vsock_socket);
-            if let Some(dir) = &target.jail_instance_dir {
-                let _ = std::fs::remove_dir_all(dir);
-            }
-            return Err(e);
-        }
-
-        tracing::info!(
-            vm_id = id,
-            pid = target.child.id(),
-            jailed = config.jail.is_some(),
-            boot_ms = started.elapsed().as_millis(),
-            "vm booted"
-        );
-        Ok(Self {
-            id,
-            child: target.child,
-            api_socket: target.api_socket,
-            vsock_socket: target.vsock_socket,
-            jail_instance_dir: target.jail_instance_dir,
-        })
+        boot::boot(config, id, &log_path).map_err(|e| annotate_with_console_log(e, &log_path))
     }
 
     /// Whether this VM is running under Firecracker's jailer (chroot,
@@ -164,15 +171,85 @@ impl Vm {
         }
     }
 
-    pub fn stop(mut self) -> io::Result<()> {
+    /// Opens a new interactive PTY session inside this VM, sized to
+    /// `cols`x`rows` — a fundamentally different call shape from
+    /// `call()` above: this returns a raw, still-open stream the caller
+    /// shovels bytes through for as long as the session lasts, rather
+    /// than one request answered by one response. Retries briefly like
+    /// `call()` does, for the same reason (the agent may not be
+    /// listening yet immediately after boot) even though in practice a
+    /// PTY is usually opened well after a sandbox is already responsive.
+    pub fn open_pty(&self, cols: u16, rows: u16) -> io::Result<UnixStream> {
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(5);
+        loop {
+            match vsock_client::open_pty(&self.vsock_socket, PTY_PORT, cols, rows) {
+                Ok(stream) => {
+                    tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "pty session opened");
+                    return Ok(stream);
+                }
+                Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+                Err(e) => {
+                    tracing::warn!(vm_id = self.id, error = %e, "opening pty session failed");
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    /// Updates this VM's MMDS content in place, without a reboot or
+    /// fresh boot — for when a sandbox's real identity (id/name/tags) is
+    /// only known *after* it's already running, e.g. one resumed from a
+    /// pre-warmed pool snapshot (see `sandkiln-daemon`'s `pool` module):
+    /// the snapshot's own frozen MMDS content still reflects whatever was
+    /// set when the *warm* instance was originally booted, not the
+    /// caller's actual request.
+    ///
+    /// Redoes the full `PUT /mmds/config` + `PUT /mmds` sequence (exactly
+    /// what a fresh boot's own `configure_and_start` does) rather than a
+    /// bare `PATCH /mmds` — confirmed live that a resumed VM's MMDS data
+    /// store comes back **uninitialized** even though the VM was
+    /// networked and had MMDS configured before being snapshotted
+    /// (`PATCH /mmds` alone fails with "MMDS data store is not
+    /// initialized" after a resume, a real Firecracker snapshot/restore
+    /// gap this works around rather than assumes away). Redoing the full
+    /// sequence is correct either way, whether this VM already had MMDS
+    /// content or never did. Fails if this VM has no network interface at
+    /// all — `/mmds/config` needs one — which should never happen for a
+    /// sandbox that reached this call, since every sandbox is networked.
+    pub fn update_metadata(&self, metadata: &serde_json::Value) -> io::Result<()> {
+        let mut api = ApiClient::connect(&self.api_socket)?;
+        put_checked(&mut api, "/mmds/config", &serde_json::json!({ "network_interfaces": ["eth0"], "version": "V2" }))?;
+        put_checked(&mut api, "/mmds", metadata)
+    }
+
+    pub fn stop(self) -> io::Result<()> {
+        self.stop_inner(true)
+    }
+
+    /// Like `stop`, but skips the optimistic "sync before kill" call
+    /// entirely — for tearing down a VM already known to be dead or
+    /// unresponsive (see `sandkiln-daemon`'s `destroy_unhealthy_claim`,
+    /// used after a pool claim's own post-resume health check already
+    /// failed), where that call would just retry for its own separate
+    /// ~5-second timeout for nothing: there's no guest write to protect
+    /// on a VM that never did any real work, and the health check already
+    /// proved it isn't listening.
+    pub fn force_stop(self) -> io::Result<()> {
+        self.stop_inner(false)
+    }
+
+    fn stop_inner(mut self, sync_first: bool) -> io::Result<()> {
         // SIGKILL-ing Firecracker directly loses anything the guest
         // hasn't flushed from its page cache to the virtio-blk backing
         // file yet — this was silently losing recent writes to attached
         // drives (rootfs copies don't care, they're discarded anyway).
         // Best-effort: if the agent isn't reachable for any reason, fall
         // through to the kill rather than hang shutdown on it.
-        if let Err(e) = self.call(&Request::Exec { command: "sync".to_string(), args: vec![] }) {
-            tracing::warn!(vm_id = self.id, error = %e, "sync before stop failed, proceeding anyway");
+        if sync_first {
+            if let Err(e) = self.call(&Request::Exec { command: "sync".to_string(), args: vec![] }) {
+                tracing::warn!(vm_id = self.id, error = %e, "sync before stop failed, proceeding anyway");
+            }
         }
 
         let _ = self.child.kill();
@@ -193,198 +270,6 @@ impl Vm {
         tracing::info!(vm_id = self.id, jailed = self.jail_instance_dir.is_some(), "vm stopped");
         Ok(())
     }
-}
-
-/// Everything `boot_inner` needs after spawning the child process
-/// (direct or jailed), gathered in one place so the API-configuration
-/// sequence that follows doesn't need to branch on jail-vs-direct at all —
-/// only the paths differ, not the sequence of calls.
-struct BootTarget {
-    child: Child,
-    /// Host-visible path to Firecracker's API socket — always a real
-    /// host path, even for a jailed boot (`<chroot_root>/api.sock`),
-    /// since the host process (this one) never enters the chroot itself.
-    api_socket: PathBuf,
-    /// Host-visible path to the vsock UDS, for `Vm::call`'s own
-    /// connections after boot.
-    vsock_socket: PathBuf,
-    /// The value to send Firecracker's API for `kernel_image_path` — a
-    /// plain host path for a direct boot, an in-jail path (e.g.
-    /// `/kernel`) for a jailed one, since Firecracker itself can only see
-    /// the latter once jailer has called `chroot()`.
-    kernel_image_path: PathBuf,
-    rootfs_path: PathBuf,
-    /// Parallel to `VmConfig::extra_drives`, by index.
-    drive_paths: Vec<PathBuf>,
-    /// The value to send Firecracker's API for `/vsock`'s `uds_path` —
-    /// same host/in-jail distinction as `kernel_image_path`.
-    vsock_uds_path: PathBuf,
-    jail_instance_dir: Option<PathBuf>,
-}
-
-fn spawn_direct(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<BootTarget> {
-    let api_socket = PathBuf::from(format!("/tmp/sandkiln-fc-{id}.sock"));
-    let vsock_socket = PathBuf::from(format!("/tmp/sandkiln-vsock-{id}.sock"));
-    let _ = std::fs::remove_file(&api_socket);
-    let _ = std::fs::remove_file(&vsock_socket);
-
-    let (stdout, stderr) = console_log_stdio(log_path)?;
-    let child = Command::new(&config.firecracker_bin).arg("--api-sock").arg(&api_socket).stdout(stdout).stderr(stderr).spawn()?;
-
-    Ok(BootTarget {
-        child,
-        api_socket,
-        kernel_image_path: config.kernel_path.clone(),
-        rootfs_path: config.rootfs_path.clone(),
-        drive_paths: config.extra_drives.iter().map(|d| d.path_on_host.clone()).collect(),
-        vsock_uds_path: vsock_socket.clone(),
-        vsock_socket,
-        jail_instance_dir: None,
-    })
-}
-
-/// Spawns Firecracker via jailer instead of directly: builds the chroot,
-/// links every resource the VM config references into it, then execs
-/// jailer. If anything fails partway (a link fails, the spawn itself
-/// fails), the partially-built chroot directory is removed — a half-built
-/// jail with, say, only the kernel linked in is not a state worth leaving
-/// on disk.
-fn spawn_jailed(config: &VmConfig, jail: &JailLaunch, id: u64, log_path: &Path) -> io::Result<BootTarget> {
-    let jail_id = jailer::jail_instance_id(id);
-    let chroot_root = jailer::chroot_root(&jail.chroot_base_dir, &config.firecracker_bin, &jail_id);
-    let instance_dir = jailer::instance_dir(&chroot_root);
-
-    match spawn_jailed_inner(config, jail, &jail_id, &chroot_root, log_path) {
-        Ok(target) => Ok(target),
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&instance_dir);
-            Err(e)
-        }
-    }
-}
-
-fn spawn_jailed_inner(
-    config: &VmConfig,
-    jail: &JailLaunch,
-    jail_id: &str,
-    chroot_root: &Path,
-    log_path: &Path,
-) -> io::Result<BootTarget> {
-    jailer::prepare_chroot_dir(chroot_root)?;
-
-    let kernel = jailer::link_resource_into_jail(&config.kernel_path, chroot_root, "kernel", false)?;
-    let rootfs = jailer::link_resource_into_jail(&config.rootfs_path, chroot_root, "rootfs.ext4", true)?;
-
-    let mut drive_paths = Vec::with_capacity(config.extra_drives.len());
-    for drive in &config.extra_drives {
-        let jail_relative_name = format!("{}.ext4", drive.drive_id);
-        let linked = jailer::link_resource_into_jail(&drive.path_on_host, chroot_root, &jail_relative_name, !drive.read_only)?;
-        drive_paths.push(linked.in_jail_path);
-    }
-
-    let api_socket = chroot_root.join("api.sock");
-    let vsock_socket = chroot_root.join("vsock.sock");
-    let _ = std::fs::remove_file(&api_socket);
-    let _ = std::fs::remove_file(&vsock_socket);
-
-    let cgroup_limits = jailer::cgroup_limits(config.mem_size_mib, config.vcpu_count);
-    let jailer_args = jailer::build_jailer_args(jail, jail_id, &config.firecracker_bin, &cgroup_limits, Path::new("/api.sock"));
-
-    let (stdout, stderr) = console_log_stdio(log_path)?;
-    let child = Command::new(&jail.jailer_bin).args(&jailer_args).stdout(stdout).stderr(stderr).spawn()?;
-
-    Ok(BootTarget {
-        child,
-        api_socket,
-        kernel_image_path: kernel.in_jail_path,
-        rootfs_path: rootfs.in_jail_path,
-        drive_paths,
-        vsock_uds_path: PathBuf::from("/vsock.sock"),
-        vsock_socket,
-        jail_instance_dir: Some(jailer::instance_dir(chroot_root)),
-    })
-}
-
-/// The Firecracker API PUT sequence that turns a freshly spawned (direct
-/// or jailed) process into a running VM. Identical for both boot modes —
-/// only the paths in `target` differ, already resolved by
-/// `spawn_direct`/`spawn_jailed` into whatever Firecracker itself needs
-/// to see them as.
-fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result<()> {
-    wait_for_socket(&target.api_socket, Duration::from_secs(2))?;
-    let mut api = ApiClient::connect(&target.api_socket)?;
-
-    let mut boot_args = "console=ttyS0 reboot=k panic=1 pci=off".to_string();
-    if let Some(net) = &config.network {
-        boot_args.push_str(&format!(" ip={}::{}:255.255.255.0::eth0:off", net.guest_ip, net.gateway_ip));
-    }
-
-    put_checked(
-        &mut api,
-        "/boot-source",
-        &json!({
-            "kernel_image_path": path_str(&target.kernel_image_path),
-            "boot_args": boot_args,
-        }),
-    )?;
-
-    put_checked(
-        &mut api,
-        "/drives/rootfs",
-        &json!({
-            "drive_id": "rootfs",
-            "path_on_host": path_str(&target.rootfs_path),
-            "is_root_device": true,
-            "is_read_only": false,
-        }),
-    )?;
-
-    for (drive, path) in config.extra_drives.iter().zip(target.drive_paths.iter()) {
-        put_checked(
-            &mut api,
-            &format!("/drives/{}", drive.drive_id),
-            &json!({
-                "drive_id": drive.drive_id,
-                "path_on_host": path_str(path),
-                "is_root_device": false,
-                "is_read_only": drive.read_only,
-            }),
-        )?;
-    }
-
-    put_checked(
-        &mut api,
-        "/machine-config",
-        &json!({
-            "vcpu_count": config.vcpu_count,
-            "mem_size_mib": config.mem_size_mib,
-        }),
-    )?;
-
-    if let Some(net) = &config.network {
-        put_checked(
-            &mut api,
-            "/network-interfaces/eth0",
-            &json!({
-                "iface_id": "eth0",
-                "guest_mac": net.guest_mac,
-                "host_dev_name": net.tap_device,
-            }),
-        )?;
-    }
-
-    put_checked(
-        &mut api,
-        "/vsock",
-        &json!({
-            "vsock_id": "vsock0",
-            "guest_cid": 3,
-            "uds_path": path_str(&target.vsock_uds_path),
-        }),
-    )?;
-
-    put_checked(&mut api, "/actions", &json!({"action_type": "InstanceStart"}))?;
-    Ok(())
 }
 
 fn put_checked(api: &mut ApiClient, path: &str, body: &serde_json::Value) -> io::Result<()> {

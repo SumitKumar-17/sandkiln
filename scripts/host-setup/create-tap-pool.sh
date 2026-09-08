@@ -12,8 +12,8 @@
 # create them once as root, and the daemon only ever attaches/detaches
 # existing devices, which is a plain netlink operation.
 #
-# Usage: sudo scripts/create-tap-pool.sh <count> <owner-user> [name-prefix]
-# Example: sudo scripts/create-tap-pool.sh 32 t1000 sktap
+# Usage: sudo scripts/host-setup/create-tap-pool.sh <count> <owner-user> [name-prefix]
+# Example: sudo scripts/host-setup/create-tap-pool.sh 32 t1000 sktap
 
 set -euo pipefail
 

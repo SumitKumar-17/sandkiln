@@ -40,8 +40,14 @@ should mostly be: parse a request, call into `vmm`, shape a response.
 - `state.rs` — `AppState`: the daemon's config, `NetworkManager`, an
   optional `JailerIdPool` (`Some` only when `config.jailer` is set), and
   in-memory sandbox map (`Mutex<HashMap<String, Sandbox>>`). This map
-  *is* the daemon's entire notion of sandbox state — it doesn't survive a
-  restart (see `ROADMAP.md`'s sqlite-backed-state item). Also owns naming:
+  *is* the daemon's entire notion of *live* sandbox state — it doesn't
+  survive a restart, and per `sandkiln-store`'s own module doc comment
+  there's no way it realistically ever could (a live `Sandbox` owns a
+  real OS process with no re-adoption mechanism). `AppState::history`
+  (a `sandkiln_store::HistoryStore`) is the separate, durable answer to
+  a related but different question — not "is this sandbox still
+  running" but "did this sandbox exist, and how did it end" — see
+  `ROADMAP.md`'s "Tags and sandbox metadata" section. Also owns naming:
   `name_holder`/`resolve_name` find whichever of a live sandbox or a held
   snapshot currently carries a given name (live wins if both do — see
   `Sandbox::name`'s doc comment on why that's not a conflict), and
@@ -57,15 +63,31 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   image referenced by a boot that's still in flight (not yet a `Sandbox`
   in the map), closing the race where `DELETE /images/:id` could
   otherwise remove a file an in-progress rootfs copy is still reading.
+  Also owns `pools` (`Mutex<HashMap<String, crate::pool::Pool>>`) —
+  configured pre-warmed pools, in-memory only (unlike `snapshots`, not
+  reconciled from disk at startup — see `crate::pool`'s module doc
+  comment for why).
 - `sandbox.rs` — the `Sandbox` struct the daemon tracks per running VM
   (id, `Vm` handle, network `Lease`, rootfs path, tags, created-at,
   `last_activity`, `image_id` — the registered image this sandbox's
   rootfs was cloned from, if any, `None` meaning the daemon-wide
   `SANDKILN_BASE_ROOTFS` default — `jail_id`, the leased uid/gid if this
   sandbox booted jailed, released back to `state.jailer_ids` on stop —
-  and `name`, the caller-given identity carried across the
-  sandbox<->snapshot boundary).
-- `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop.
+  `name`, the caller-given identity carried across the sandbox<->snapshot
+  boundary — and `pty_session_count`, an `Arc<AtomicU32>` so a
+  `PtySessionGuard` (see `routes_pty.rs`) can outlive the `state.sandboxes`
+  lock it was incremented under and still decrement the right counter on
+  drop).
+- `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop/
+  history (`GET /sandboxes/history`, reading `AppState::history` — the
+  only read path for it; every write happens as a side effect of
+  create/destroy/snapshot, not a caller action of its own).
+  `create_sandbox_core` calls `state.history.record_created` right
+  after a boot actually succeeds, and `destroy_sandbox_by_id` calls
+  `state.history.record_ended` (`routes_snapshot::snapshot_and_stop`
+  calls the equivalent for the snapshotted case) — both best-effort
+  (a warning log, not a failed request, if the history write itself
+  fails; the sandbox operation already succeeded by that point).
   `stop_sandbox_by_id()` is the shared stop entry point used by both the
   `DELETE` route and `idle_reaper`; it defaults to preserving state
   (snapshot-then-stop, via `routes_snapshot::snapshot_and_stop`) rather
@@ -83,6 +105,16 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   reserving/releasing a pending-boot claim on that image id around the
   whole boot with `PendingImageBootGuard` so a concurrent image deletion
   can't race an in-flight clone) before calling it.
+  `create_sandbox_core` also tries a pre-warmed pool claim first (see
+  `crate::pool`) whenever the request has no `drives`/`rate_limit` and a
+  configured pool's key matches — `claim_from_pool` resumes the warm
+  snapshot, runs a real post-resume health check (`exec true`) before
+  trusting it, and falls back to the normal cold-create path below on
+  either an outright resume failure or a failed health check (via
+  `destroy_unhealthy_claim`), rather than ever handing back a sandbox id
+  that's secretly a corpse — see `crate::pool`'s own module doc comment
+  for the real Firecracker/KVM finding that made this check load-bearing,
+  not defensive theater.
 - `routes_sandbox_name.rs` — name-based lookup and get-or-create:
   `GET /sandboxes/by-name/:name` (live sandboxes only — a name currently
   held by a snapshot is a `409` pointing at get-or-create, not a silent
@@ -100,9 +132,41 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   cannot loop-mount a candidate image to check the agent is baked in;
   `scripts/preflight-check.sh --root-checks --rootfs-image <path>` is
   the only way to get that confirmation, out of band, before registering.
-- `routes_exec.rs` — exec/read-file/write-file handlers. `call_agent()`
-  is the shared helper all three use — extend it, don't duplicate its
-  pattern. It's also what bumps a sandbox's `last_activity`.
+- `routes_exec.rs` — exec/read-file/write-file handlers. `pub(crate) async fn
+  call_agent()` is the shared helper every route in both this file and
+  `routes_fs.rs` uses — extend it, don't duplicate its pattern. It's
+  also what bumps a sandbox's `last_activity`.
+- `routes_fs.rs` — filesystem metadata/structure handlers: chmod, chown,
+  mkdir, rename, copy, symlink, readlink, truncate, directory listing.
+  Split out of `routes_exec.rs` (2026-09-08) once adding all of these
+  there would have pushed it well past this crate's usual size range —
+  data transfer (`routes_exec`) vs. filesystem structure (`routes_fs`)
+  is the seam. No path validation on any handler here, same as
+  `routes_exec::read_file`/`write_file` already have none — see this
+  file's own module doc comment for why that's a deliberate consistency
+  choice, not an oversight.
+- `pool.rs` — `Pool`/`PoolConfig`/`PoolKey`: the pure state a configured
+  pre-warmed pool tracks (its resolved image/resource key and a FIFO
+  queue of warm snapshot ids) and the pure matching logic
+  (`PoolConfig::key`) a `POST /sandboxes` request is checked against. No
+  networking, no `AppState` — see this file's own module doc comment for
+  the feature's full shape and what's deliberately not built yet (a
+  `max_count` ceiling with queueing).
+- `pool_replenisher.rs` — the background task (spawned unconditionally
+  from `main.rs`, unlike `idle_reaper` below, since an idle tick with no
+  pools configured is cheap) that keeps every pool topped up: boots a
+  warm instance via `routes_sandbox::create_sandbox_core` (tagged
+  `sandkiln.pool` for identifiability, nothing more), immediately
+  `snapshot_and_stop`s it, and pushes the resulting snapshot id onto that
+  pool's warm queue. One slot per pool per 2-second tick, not all at
+  once, so a large `warm_count` fills in gradually rather than spiking
+  boot load.
+- `routes_pool.rs` — `POST/GET /pools`, `DELETE /pools/:id`: pool
+  *configuration* only — replenishment lives in `pool_replenisher`,
+  claiming lives in `routes_sandbox::create_sandbox_core`. `DELETE`
+  destroys whatever the pool still has warm (via
+  `routes_snapshot::delete_snapshot_by_id`) rather than leaking it as an
+  orphaned, untracked snapshot.
 - `idle_reaper.rs` — background task (spawned from `main.rs` whenever
   `SANDKILN_IDLE_TIMEOUT_SECS` and/or `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`
   is set) that reclaims idle sandboxes two ways: auto-suspend (pause +
@@ -133,12 +197,17 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   the HTTP listener starts accepting connections.
 - `routes_drives.rs` / `routes_snapshot.rs` — drives and snapshot/resume
   handlers, each in their own file for the same reason as above. The
-  actual pause/snapshot/stop mechanics live in `snapshot_and_stop()` and
-  the actual resume mechanics in `resume_snapshot_by_id()` — both
-  `pub(crate)`, both reused by `routes_sandbox`'s persistent-by-default
-  stop, `routes_sandbox_name`'s get-or-create, and `idle_reaper`'s
-  auto-suspend so there's exactly one place that knows what "snapshot this
-  sandbox" / "resume this snapshot" means. `check_snapshottable`/
+  actual pause/snapshot/stop mechanics live in `snapshot_and_stop()`, the
+  actual resume mechanics in `resume_snapshot_by_id()`, and the actual
+  delete mechanics in `delete_snapshot_by_id()` — all three `pub(crate)`,
+  all reused elsewhere in this crate (`snapshot_and_stop`/
+  `resume_snapshot_by_id` by `routes_sandbox`'s persistent-by-default
+  stop, `routes_sandbox_name`'s get-or-create, `idle_reaper`'s
+  auto-suspend, and now `pool`/`pool_replenisher`/`routes_sandbox`'s
+  claim path; `delete_snapshot_by_id` by `routes_pool::delete_pool`'s
+  warm-snapshot cleanup) so there's exactly one place that knows what
+  "snapshot this sandbox" / "resume this snapshot" / "delete this
+  snapshot" means. `check_snapshottable`/
   `SnapshotBlocked` refuses to snapshot a jailed sandbox (`Vm::is_jailed`)
   — `Vm::resume` only ever spawns directly, so a jailed sandbox's snapshot
   could never be resumed correctly; see `sandkiln_vmm::jailer`'s module doc
@@ -168,6 +237,23 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   this API's credential). Connection-refused/unreachable maps to
   `AppError::BadGateway` (502); no response within `Config::preview_timeout`
   maps to `AppError::GatewayTimeout` (504) — see `error.rs`.
+- `routes_pty.rs` — `GET /sandboxes/:id/pty[?cols=&rows=]`: upgrades to a
+  WebSocket and proxies raw bytes to a shell running inside the sandbox,
+  via `sandkiln_vmm::vm::Vm::open_pty` — a fundamentally different shape
+  from every other route in this crate (all one-request-one-response;
+  this is a live, long-lived, bidirectional session). Its own router in
+  `main.rs`, guarded by `auth::require_preview_token` for exactly the
+  same reason as `routes_preview.rs` above: neither a browser's nor
+  Node.js's native `WebSocket` constructor can set custom headers, so
+  header-only `require_bearer_token` auth can't work here. Enforces
+  `MAX_PTY_SESSIONS_PER_SANDBOX` (64) via `Sandbox::pty_session_count`
+  and a `PtySessionGuard` whose `Drop` decrements it on every exit path
+  (clean close, error, or the task simply being dropped). See
+  `sandkiln-guest-agent`'s `pty.rs` for the other end of the connection
+  and the real hangup-handling bug found and fixed there — this route's
+  own `proxy_pty` just needs both `tokio::select!` arms to end the
+  session as soon as either side does, which was already correct; the
+  bug was entirely guest-side.
 - `error.rs` — `AppError`, the one error type every handler returns.
   Add a variant here rather than inventing a new ad hoc error shape.
 

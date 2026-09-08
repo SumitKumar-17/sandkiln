@@ -20,22 +20,63 @@ not in `daemon`.
   JSON PUT/PATCH requests, not worth pulling in `hyper` or similar for.
   If you need a new Firecracker API call, add a method here following
   the existing `put`/`patch` pattern.
-- `vm/mod.rs` — `Vm`/`VmConfig`: boot a microVM (spawn the Firecracker
-  process — directly, or via jailer when `VmConfig::jail` is set —
-  configure it over its API socket, start it), talk to its guest agent
-  (`vm.call()`, retries briefly since the agent isn't listening the
-  instant `InstanceStart` returns), stop it. `spawn_direct`/`spawn_jailed`
-  resolve the process to spawn and the paths Firecracker's API calls
-  should use (host paths for a direct boot, in-jail paths like `/kernel`
-  for a jailed one — see `jailer.rs`); `configure_and_start` runs the same
-  API PUT sequence either way. The spawned process's stdout/stderr (the
-  guest's `console=ttyS0` serial output) is captured to
-  `/tmp/sandkiln-fc-<id>.log` rather than discarded — see
-  `console_log_path`/`console_log_stdio` — and `annotate_with_console_log`
-  appends that path to a boot failure's error message, since a guest
-  kernel panic or agent crash before vsock comes up would otherwise be
-  invisible from the host. `snapshot::resume` uses the same three helpers
-  for the fresh Firecracker process it spawns.
+- `vm/mod.rs` — `Vm`/`VmConfig`: the public API surface only —
+  `Vm::boot`/`is_jailed`/`call`/`open_pty`/`update_metadata`/`stop`/
+  `force_stop`, plus the shared helpers both submodules below depend on
+  (`console_log_path`/`console_log_stdio`/`annotate_with_console_log`/
+  `wait_for_socket`/`path_str`/`put_checked`). The spawned process's
+  stdout/stderr (the guest's `console=ttyS0` serial output) is captured
+  to `/tmp/sandkiln-fc-<id>.log` rather than discarded —
+  `annotate_with_console_log` appends that path to a boot failure's error
+  message, since a guest kernel panic or agent crash before vsock comes
+  up would otherwise be invisible from the host. This is exactly what
+  caught a real Firecracker/KVM bug while building `sandkiln-daemon`'s
+  `pool` module: a resumed guest kernel can panic early in boot (a
+  divide-by-zero trap in the console driver, restored CPU/timer state
+  interacting badly with timing-sensitive init code) and Firecracker
+  exits shortly after — confirmed by reading exactly this console log,
+  not guessed at. **Not a rare edge case** — measured directly at roughly
+  1-in-3 to 2-in-3 resumes across repeated clean, isolated test runs on
+  this dev box; see `crate::pool`'s daemon-side doc comment and
+  `ROADMAP.md`'s "Persistence and snapshotting" section for how this is
+  handled (a real post-resume health check, not just documentation of a
+  known gap). `snapshot::resume` uses the same shared helpers for the
+  fresh Firecracker process it spawns.
+  `update_metadata` redoes the full `PUT /mmds/config` + `PUT /mmds`
+  sequence rather than a bare `PATCH /mmds`, for a real reason found
+  live: a resumed VM's MMDS data store comes back **uninitialized** even
+  though the VM had MMDS configured before being snapshotted — `PATCH
+  /mmds` alone fails with "MMDS data store is not initialized" after a
+  resume. This is the mechanism `sandkiln-daemon`'s pool-claim path uses
+  to refresh a resumed sandbox's guest-visible identity away from
+  whatever placeholder it had as a warm instance.
+  `force_stop` is `stop` minus its optimistic "sync before kill" call —
+  for tearing down a VM already known to be dead (e.g. one that just
+  failed the health check above), where that call would otherwise burn
+  its own separate ~5-second retry timeout for nothing. Found live too:
+  without this, `sandkiln-daemon`'s pool-claim fallback paid two
+  independent 5-second timeouts back to back (~10.3s) instead of one
+  (~5.4s) every time a claim's health check failed.
+- `vm/boot.rs` — the actual boot mechanics, as a submodule of `vm` (not a
+  sibling) specifically so it can still see `Vm`'s private fields to
+  construct one. Split out of `vm/mod.rs` (2026-09-08, evidence-based
+  crate audit) once that file mixed ~200 lines of boot-orchestration
+  internals into what should be pure public API surface — same
+  reasoning `vm/snapshot.rs` already gives for itself. `spawn_direct`/
+  `spawn_jailed` resolve the process to spawn and the paths Firecracker's
+  API calls should use (host paths for a direct boot, in-jail paths like
+  `/kernel` for a jailed one — see `jailer.rs`); `configure_and_start`
+  runs the same API PUT sequence either way, including inserting
+  `rate_limit` (see `insert_rate_limiter`) into the drive/network-
+  interface bodies when set. Also configures `VmConfig::metadata` (if
+  set) via Firecracker's own MMDS — `PUT /mmds/config` then `PUT /mmds`,
+  right after `/network-interfaces/eth0` (MMDS needs that interface
+  already configured) and before `/vsock`/`InstanceStart`. This is a
+  completely separate mechanism from everything else in this file — no
+  vsock, no guest agent; Firecracker's device model answers
+  `http://169.254.169.254/` requests from the guest directly. Errors
+  loudly (`io::Error`) if `metadata` is set without `network` also being
+  set, rather than silently doing nothing.
 - `vm/snapshot.rs` — `Vm::pause`/`snapshot`/`resume` and `ResumeConfig`,
   as a submodule of `vm` (not a sibling) specifically so it can still see
   `Vm`'s private fields. Split out once `vm.rs` passed ~350 lines.
@@ -50,9 +91,15 @@ not in `daemon`.
   copy across filesystems) and reports the in-jail path Firecracker must
   use instead; `build_jailer_args`/`cgroup_limits` are pure and unit
   tested directly. Read its module doc comment before touching
-  `vm/mod.rs`'s `spawn_jailed`/`spawn_jailed_inner` — the chroot
+  `vm/boot.rs`'s `spawn_jailed`/`spawn_jailed_inner` — the chroot
   path-rewriting is the part most likely to look right and be subtly
-  wrong.
+  wrong. **Not yet proven on real hardware**: enabling
+  `SANDKILN_JAILER_ENABLED` breaks every sandbox create unless the
+  `jailer` binary itself has been made setuid-root first (a separate,
+  documented one-time step — see `SELF_HOSTING.md`'s "Optional:
+  jailer-based sandbox boot") — confirmed live 2026-09-08 via the actual
+  failure (`jailer` itself hits `Operation not permitted` trying to
+  chown a hard-linked file into the chroot before that step is done).
 - `network.rs` — `NetworkManager`/`Lease`: the tap-device pool, bridge
   attachment, IP allocation, and bridge port isolation. Read the module
   doc comment at the top — it explains *why* a pool of pre-created tap
@@ -60,7 +107,16 @@ not in `daemon`.
   `CAP_NET_ADMIN` doesn't cover the `TUNSETIFF` ioctl, only netlink ops).
 - `vsock_client.rs` — the host-side vsock connection, mediated through
   Firecracker's Unix-socket vsock bridging (`CONNECT <port>\n` handshake,
-  then the connection is a raw byte stream to the guest agent).
+  then the connection is a raw byte stream to the guest agent). Also
+  `open_pty` — the same `CONNECT`-handshake dance against
+  `sandkiln_protocol::PTY_PORT` instead of `AGENT_PORT`, followed by one
+  framed `PtyHandshake` instead of a `Request`, after which the returned
+  `UnixStream` is raw passthrough for its whole life (read/write timeouts
+  are explicitly cleared before returning it, unlike every other call on
+  this connection, since a PTY session is meant to sit idle between
+  keystrokes). `Vm::open_pty` (in `vm/mod.rs`) wraps this the same way
+  `Vm::call` wraps the request/response path — retrying for up to 5s
+  while the guest agent's second listener comes up.
 
 ## Building and testing
 

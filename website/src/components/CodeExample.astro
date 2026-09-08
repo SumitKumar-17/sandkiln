@@ -1,0 +1,30 @@
+<section id="code">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">SDK</div>
+      <h2>A thin, fully-typed client. Nothing more.</h2>
+      <p>The daemon's HTTP API is the source of truth — every SDK method is a thin wrapper over it, verified against a live daemon, not designed in isolation.</p>
+    </div>
+
+    <div class="code-block"><pre><span class="kw">import</span> {'{'} Sandbox {'}'} <span class="kw">from</span> <span class="str">"sandkiln"</span>;
+
+<span class="c1">// Boots a real Firecracker microVM — ~33ms, own kernel, own network.</span>
+<span class="kw">const</span> sandbox = <span class="kw">await</span> Sandbox.create({'{'}
+  tags: {'{'} env: <span class="str">"ci"</span>, owner: <span class="str">"pipeline"</span> {'}'},
+{'}'});
+
+<span class="kw">const</span> result = <span class="kw">await</span> sandbox.runCommand(<span class="str">"python3"</span>, [<span class="str">"analyze.py"</span>]);
+console.log(result.stdout, result.exitCode);
+
+<span class="kw">const</span> running = <span class="kw">await</span> Sandbox.list();
+<span class="c1">// → [{'{'} id, createdAt, name, tags: {'{'} env: "ci", owner: "pipeline" {'}'} {'}'}]</span>
+
+<span class="kw">await</span> sandbox.stop(); <span class="c1">// preserved as a resumable snapshot by default</span></pre></div>
+
+    <p style="margin-top:20px;font-size:13.5px;color:var(--text-faint);">
+      Same operations in <a href="docs/getting-started/python/" style="color:var(--accent);">Python</a> and the
+      <a href="docs/getting-started/cli/" style="color:var(--accent);">kiln CLI</a> — see the
+      <a href="docs/" style="color:var(--accent);">full docs</a> for every method.
+    </p>
+  </div>
+</section>

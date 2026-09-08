@@ -1,6 +1,8 @@
+from .drive import Drive, DriveHolder, DriveInfo
 from .errors import SandkilnApiError
 from .image import Image, ImageInfo
-from .sandbox import ExecResult, Sandbox, SandboxInfo, SnapshotInfo, StopResult
+from .pool import Pool, PoolInfo
+from .sandbox import DirEntry, DriveAttachment, ExecResult, Sandbox, SandboxInfo, SnapshotInfo, StopResult
 
 __all__ = [
     "Sandbox",
@@ -8,7 +10,14 @@ __all__ = [
     "SnapshotInfo",
     "ExecResult",
     "StopResult",
+    "DirEntry",
+    "DriveAttachment",
     "Image",
     "ImageInfo",
+    "Drive",
+    "DriveInfo",
+    "DriveHolder",
+    "Pool",
+    "PoolInfo",
     "SandkilnApiError",
 ]

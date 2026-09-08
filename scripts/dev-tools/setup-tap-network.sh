@@ -3,8 +3,8 @@
 # guest gets outbound internet. Point-to-point, no bridge — matches
 # Firecracker's own quickstart networking model. Needs sudo.
 #
-# Usage: sudo scripts/setup-tap-network.sh <tap-name> <host-ip>/<prefix> <uplink-iface>
-# Example: sudo scripts/setup-tap-network.sh fc-tap0 172.16.0.1/24 enp0s31f6
+# Usage: sudo scripts/dev-tools/setup-tap-network.sh <tap-name> <host-ip>/<prefix> <uplink-iface>
+# Example: sudo scripts/dev-tools/setup-tap-network.sh fc-tap0 172.16.0.1/24 enp0s31f6
 
 set -euo pipefail
 
@@ -30,4 +30,4 @@ iptables -C FORWARD -i "$UPLINK" -o "$TAP" -m state --state RELATED,ESTABLISHED 
   iptables -A FORWARD -i "$UPLINK" -o "$TAP" -m state --state RELATED,ESTABLISHED -j ACCEPT
 
 echo "tap device $TAP ready, host side $HOST_CIDR, NAT via $UPLINK"
-echo "for guest DNS, also run start-dns-proxy.sh"
+echo "for guest DNS, also run scripts/host-setup/start-dns-proxy.sh"

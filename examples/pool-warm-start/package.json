@@ -1,0 +1,17 @@
+{
+  "name": "sandkiln-example-pool-warm-start",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Reference pool-warm-start example: configure a pre-warmed pool with Pool.create() and measure a claimed sandbox's create latency against a cold one.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "sandkiln": "^0.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

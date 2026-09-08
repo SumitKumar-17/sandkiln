@@ -210,7 +210,9 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
 
     let snapshot = Snapshot {
         id: snapshot_id.clone(),
-        source_sandbox_id: id,
+        // Cloned rather than moved -- `id` is still needed below to
+        // record this sandbox's ended-by-snapshot history entry.
+        source_sandbox_id: id.clone(),
         snapshot_path,
         mem_file_path,
         rootfs_path,
@@ -250,6 +252,10 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
     }
 
     state.snapshots.lock().unwrap().insert(snapshot_id.clone(), snapshot);
+
+    if let Err(e) = state.history.record_ended(&id, SystemTime::now(), sandkiln_store::EndReason::Snapshotted, Some(&snapshot_id)) {
+        tracing::warn!(error = %e, sandbox_id = %id, "failed to record sandbox snapshot in history store");
+    }
 
     Ok(snapshot_id)
 }
@@ -382,6 +388,7 @@ pub(crate) async fn resume_snapshot_by_id(state: Arc<AppState>, snapshot_id: Str
         last_activity: std::sync::Mutex::new(std::time::Instant::now()),
         source_snapshot_id: None,
         name: snapshot.name,
+        pty_session_count: Default::default(),
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
 
@@ -477,6 +484,7 @@ pub async fn fork_snapshot(
             // same name at once, deliberately — see `Sandbox::name`'s doc
             // comment and `AppState::resolve_name`'s live-wins priority.
             name: snapshot.name.clone(),
+            pty_session_count: Default::default(),
         }
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
@@ -512,6 +520,15 @@ fn check_no_live_fork(forked_into: Option<&str>, snapshot_id: &str, action: &str
 /// still alive, for the same reason `resume_snapshot` does.
 #[tracing::instrument(skip(state))]
 pub async fn delete_snapshot(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<StatusCode, AppError> {
+    delete_snapshot_by_id(state, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The actual teardown, shared by `delete_snapshot` (`DELETE
+/// /snapshots/:id`) and `crate::pool`'s pool-deletion path, which needs
+/// to tear down whatever a pool still has warm the same way — same
+/// `_by_id` split as `resume_snapshot_by_id`/`stop_sandbox_by_id`.
+pub(crate) async fn delete_snapshot_by_id(state: Arc<AppState>, id: String) -> Result<(), AppError> {
     let snapshot = {
         let mut snapshots = state.snapshots.lock().unwrap();
         let existing = snapshots.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
@@ -529,7 +546,7 @@ pub async fn delete_snapshot(State(state): State<Arc<AppState>>, Path(id): Path<
     })
     .await;
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
 #[cfg(test)]

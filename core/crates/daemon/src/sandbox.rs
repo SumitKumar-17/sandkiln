@@ -3,7 +3,8 @@ use sandkiln_vmm::network::Lease;
 use sandkiln_vmm::vm::Vm;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicU32;
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
 pub struct Sandbox {
@@ -72,4 +73,14 @@ pub struct Sandbox {
     /// `ROADMAP.md`'s "Sandbox vs. session" note: the name identifies the
     /// persistent thing, not any one running instance of it.
     pub name: Option<String>,
+    /// How many `GET /sandboxes/:id/pty` sessions are currently open
+    /// against this sandbox — checked and incremented under
+    /// `AppState::sandboxes`'s lock in `routes_pty::pty_session` (see
+    /// `routes_pty::MAX_PTY_SESSIONS_PER_SANDBOX`), then cloned out and
+    /// decremented via an RAII guard once the session (which can run for
+    /// a long time, well after that lock is released) ends. An `Arc`
+    /// rather than a plain field for exactly that reason — the guard
+    /// needs to reach it long after `Sandbox` itself may no longer be
+    /// reachable through the map at all.
+    pub pty_session_count: Arc<AtomicU32>,
 }

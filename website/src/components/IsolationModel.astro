@@ -1,0 +1,23 @@
+<section id="thesis">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">Why a microVM</div>
+      <h2>Containers share a kernel. Sandboxes can't afford to.</h2>
+      <p>Running code you didn't write — agent output, user uploads, third-party scripts — next to your own systems is a bad idea if the isolation boundary is a namespace. A compromised container can still be a compromised kernel. A compromised microVM is a compromised microVM.</p>
+    </div>
+
+    <div class="table-scroll">
+      <table class="cmp">
+        <thead><tr><th></th><th>Containers</th><th>sandkiln</th></tr></thead>
+        <tbody>
+          <tr><td>Kernel</td><td>Shared with the host</td><td class="win">Dedicated per sandbox</td></tr>
+          <tr><td>Isolation boundary</td><td>Namespaces + cgroups</td><td class="win">Hardware virtualization (KVM)</td></tr>
+          <tr><td>Cold start</td><td>~100ms–1s+</td><td class="win">32.7ms, measured</td></tr>
+          <tr><td>Escape surface</td><td>Shared syscall table</td><td class="win">microVM boundary</td></tr>
+          <tr><td>Filesystem</td><td>Overlay on host FS</td><td class="win">Dedicated virtio-blk device</td></tr>
+          <tr><td>Good for</td><td>Packaging trusted code</td><td class="win">Running code you don't trust</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>

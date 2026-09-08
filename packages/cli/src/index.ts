@@ -1,7 +1,19 @@
 import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
-import { Image, Sandbox, SandkilnApiError } from "sandkiln";
-import { formatImageList, formatSandboxList, formatSnapshotList, parsePositiveInt, parseTag } from "./format.js";
+import { Drive, Image, Pool, Sandbox, SandkilnApiError } from "sandkiln";
+import {
+  formatDirEntryList,
+  formatDriveList,
+  formatImageList,
+  formatPoolList,
+  formatSandboxList,
+  formatSnapshotList,
+  parseDriveAttachment,
+  parseNonNegativeInt,
+  parseOctalMode,
+  parsePositiveInt,
+  parseTag,
+} from "./format.js";
 
 interface GlobalOptions {
   baseUrl?: string;
@@ -43,9 +55,26 @@ sandbox
   .option("--vcpu <count>", "vCPU count override (daemon default if omitted)", parsePositiveInt("--vcpu"))
   .option("--mem <mib>", "memory size override in MiB (daemon default if omitted)", parsePositiveInt("--mem"))
   .option("--image <id>", "boot from a registered image instead of the daemon's default rootfs (see 'kiln image ls')")
+  .option("--rate-bandwidth <bytes-per-sec>", "cap host I/O bandwidth (bytes/sec) via Firecracker's rate limiter", parsePositiveInt("--rate-bandwidth"))
+  .option("--rate-ops <ops-per-sec>", "cap host I/O operations/sec via Firecracker's rate limiter", parsePositiveInt("--rate-ops"))
+  .option(
+    "--drive <id[:ro]>",
+    "attach an existing drive (see 'kiln drive ls'); repeatable; append :ro for a read-only attachment",
+    parseDriveAttachment,
+    [] as { id: string; readOnly?: boolean }[],
+  )
   .action(async function (
     this: Command,
-    opts: { name?: string; tag: Record<string, string>; vcpu?: number; mem?: number; image?: string },
+    opts: {
+      name?: string;
+      tag: Record<string, string>;
+      vcpu?: number;
+      mem?: number;
+      image?: string;
+      rateBandwidth?: number;
+      rateOps?: number;
+      drive: { id: string; readOnly?: boolean }[];
+    },
   ) {
     const { baseUrl, token } = clientOptions(this);
     try {
@@ -57,6 +86,11 @@ sandbox
         vcpuCount: opts.vcpu,
         memSizeMib: opts.mem,
         imageId: opts.image,
+        rateLimit:
+          opts.rateBandwidth === undefined && opts.rateOps === undefined
+            ? undefined
+            : { bandwidthBytesPerSec: opts.rateBandwidth, opsPerSec: opts.rateOps },
+        drives: opts.drive.length > 0 ? opts.drive : undefined,
       });
       process.stdout.write(`${created.id}\n`);
     } catch (error) {
@@ -75,7 +109,34 @@ sandbox
   .addOption(tagOption())
   .option("--vcpu <count>", "vCPU count override, used only if a fresh sandbox is created", parsePositiveInt("--vcpu"))
   .option("--mem <mib>", "memory size override in MiB, used only if a fresh sandbox is created", parsePositiveInt("--mem"))
-  .action(async function (this: Command, opts: { name: string; tag: Record<string, string>; vcpu?: number; mem?: number }) {
+  .option(
+    "--rate-bandwidth <bytes-per-sec>",
+    "I/O bandwidth cap (bytes/sec), used only if a fresh sandbox is created",
+    parsePositiveInt("--rate-bandwidth"),
+  )
+  .option(
+    "--rate-ops <ops-per-sec>",
+    "I/O operations/sec cap, used only if a fresh sandbox is created",
+    parsePositiveInt("--rate-ops"),
+  )
+  .option(
+    "--drive <id[:ro]>",
+    "attach an existing drive, used only if a fresh sandbox is created; repeatable; append :ro for read-only",
+    parseDriveAttachment,
+    [] as { id: string; readOnly?: boolean }[],
+  )
+  .action(async function (
+    this: Command,
+    opts: {
+      name: string;
+      tag: Record<string, string>;
+      vcpu?: number;
+      mem?: number;
+      rateBandwidth?: number;
+      rateOps?: number;
+      drive: { id: string; readOnly?: boolean }[];
+    },
+  ) {
     const { baseUrl, token } = clientOptions(this);
     try {
       const { sandbox: resolved, created } = await Sandbox.getOrCreate({
@@ -85,6 +146,11 @@ sandbox
         tags: opts.tag,
         vcpuCount: opts.vcpu,
         memSizeMib: opts.mem,
+        rateLimit:
+          opts.rateBandwidth === undefined && opts.rateOps === undefined
+            ? undefined
+            : { bandwidthBytesPerSec: opts.rateBandwidth, opsPerSec: opts.rateOps },
+        drives: opts.drive.length > 0 ? opts.drive : undefined,
       });
       process.stdout.write(`${resolved.id}  ${created ? "created" : "existing"}\n`);
     } catch (error) {
@@ -180,6 +246,179 @@ sandbox
     } catch (error) {
       await handleApiError(error);
     }
+  });
+
+sandbox
+  .command("chmod <id> <path> <mode>")
+  .description("Change a file's permission bits. <mode> is octal digits (e.g. 644), same as the chmod shell command.")
+  .action(async function (this: Command, id: string, path: string, mode: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).chmod(path, parseOctalMode(mode));
+      process.stdout.write(`chmod ${mode} ${id}:${path}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("chown <id> <path> <uid> <gid>")
+  .description("Change a file's owning uid/gid.")
+  .action(async function (this: Command, id: string, path: string, uid: string, gid: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).chown(path, parsePositiveInt("<uid>")(uid), parsePositiveInt("<gid>")(gid));
+      process.stdout.write(`chown ${uid}:${gid} ${id}:${path}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("mkdir <id> <path>")
+  .description("Create a directory inside a sandbox.")
+  .option("-p, --parents", "create missing parent directories, like mkdir -p; succeed if the target already exists")
+  .action(async function (this: Command, id: string, path: string, opts: { parents?: boolean }) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).mkdir(path, { parents: opts.parents });
+      process.stdout.write(`${id}:${path}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("rename <id> <from> <to>")
+  .description("Rename/move a file or directory inside a sandbox.")
+  .action(async function (this: Command, id: string, from: string, to: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).rename(from, to);
+      process.stdout.write(`${id}:${from} -> ${id}:${to}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("cp <id> <from> <to>")
+  .description("Copy a file to a new path inside a sandbox, leaving the original in place.")
+  .action(async function (this: Command, id: string, from: string, to: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).copy(from, to);
+      process.stdout.write(`${id}:${from} -> ${id}:${to}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("symlink <id> <target> <link-path>")
+  .description("Create a symlink at <link-path> pointing at <target>, both inside the sandbox.")
+  .action(async function (this: Command, id: string, target: string, linkPath: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).symlink(target, linkPath);
+      process.stdout.write(`${id}:${linkPath} -> ${target}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("readlink <id> <path>")
+  .description("Print the target a symlink points at, exactly as stored (not resolved).")
+  .action(async function (this: Command, id: string, path: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const target = await attachSandbox(id, baseUrl, token).readlink(path);
+      process.stdout.write(`${target}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("truncate <id> <path> <size>")
+  .description("Resize a file to exactly <size> bytes, padding with zeros or discarding trailing data as needed.")
+  .action(async function (this: Command, id: string, path: string, size: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).truncate(path, parseNonNegativeInt("<size>")(size));
+      process.stdout.write(`${id}:${path} -> ${size} bytes\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("ls-dir <id> <path>")
+  .description("List a directory's contents inside a sandbox, with size/permissions/mtime.")
+  .action(async function (this: Command, id: string, path: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const entries = await attachSandbox(id, baseUrl, token).listDir(path);
+      process.stdout.write(formatDirEntryList(entries));
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("pty <id>")
+  .description("Open a live, interactive shell session inside a sandbox. Exit the remote shell (or Ctrl+D) to end the session.")
+  .action(async function (this: Command, id: string) {
+    const { baseUrl, token } = clientOptions(this);
+    const cols = process.stdout.columns || 80;
+    const rows = process.stdout.rows || 24;
+
+    let ws: WebSocket;
+    try {
+      ws = attachSandbox(id, baseUrl, token).pty({ cols, rows });
+    } catch (error) {
+      await handleApiError(error);
+      return;
+    }
+    ws.binaryType = "arraybuffer";
+
+    const wasRaw = process.stdin.isTTY ? process.stdin.isRaw : undefined;
+    const restoreTerminal = () => {
+      if (process.stdin.isTTY && wasRaw !== undefined) {
+        process.stdin.setRawMode(wasRaw);
+      }
+      process.stdin.pause();
+      process.stdin.removeAllListeners("data");
+    };
+
+    await new Promise<void>((resolve) => {
+      ws.addEventListener("open", () => {
+        if (process.stdin.isTTY) {
+          process.stdin.setRawMode(true);
+        }
+        process.stdin.resume();
+        // Every keystroke goes straight to the remote shell, including
+        // Ctrl+C -- raw mode means Node never intercepts it as SIGINT,
+        // the same way a real terminal/SSH client leaves Ctrl+C to
+        // whatever's running remotely rather than killing the local
+        // process.
+        process.stdin.on("data", (chunk: Buffer) => ws.send(chunk));
+      });
+
+      ws.addEventListener("message", (event) => {
+        const buf = event.data instanceof ArrayBuffer ? Buffer.from(event.data) : Buffer.from(String(event.data));
+        process.stdout.write(buf);
+      });
+
+      const end = () => {
+        restoreTerminal();
+        resolve();
+      };
+      ws.addEventListener("close", end);
+      ws.addEventListener("error", end);
+    });
+
   });
 
 sandbox
@@ -305,6 +544,103 @@ image
     const { baseUrl, token } = clientOptions(this);
     try {
       await Image.delete(id, { baseUrl, authToken: token });
+      process.stdout.write(`${id} deleted\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+const drive = program.command("drive").description("Create, inspect, and manage persistent drives sandboxes can attach.");
+
+drive
+  .command("create <size-mib>")
+  .description("Create a new empty drive of <size-mib> MiB, ready to attach via 'kiln sandbox create --drive'.")
+  .action(async function (this: Command, sizeMib: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const created = await Drive.create(parsePositiveInt("<size-mib>")(sizeMib), { baseUrl, authToken: token });
+      process.stdout.write(`${created.id}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+drive
+  .command("ls")
+  .description("List persistent drives.")
+  .action(async function (this: Command) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const drives = await Drive.list({ baseUrl, authToken: token });
+      process.stdout.write(formatDriveList(drives));
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+drive
+  .command("rm <id>")
+  .description("Delete a drive and its backing file. Refused while any sandbox or held snapshot still attaches it.")
+  .action(async function (this: Command, id: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await Drive.delete(id, { baseUrl, authToken: token });
+      process.stdout.write(`${id} deleted\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+const pool = program.command("pool").description("Configure pre-warmed pools -- ready-to-resume snapshots claimed automatically by a matching 'kiln sandbox create'.");
+
+pool
+  .command("create <id>")
+  .description(
+    "Configure a pool under <id>. A plain 'kiln sandbox create' (no --drive, no rate limit) matching this pool's " +
+      "image/resources resumes a warm snapshot automatically instead of cold-booting, once one is ready -- there's " +
+      "no separate 'create from pool' command.",
+  )
+  .option("--image <id>", "boot warm instances from a registered image instead of the daemon's default rootfs")
+  .option("--vcpu <count>", "vCPU count for warm instances (daemon default if omitted)", parsePositiveInt("--vcpu"))
+  .option("--mem <mib>", "memory size in MiB for warm instances (daemon default if omitted)", parsePositiveInt("--mem"))
+  .option("--warm-count <n>", "how many resumable snapshots to keep ready at once", parseNonNegativeInt("--warm-count"), 0)
+  .action(async function (this: Command, id: string, options: { image?: string; vcpu?: number; mem?: number; warmCount: number }) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const created = await Pool.create(id, {
+        baseUrl,
+        authToken: token,
+        imageId: options.image,
+        vcpuCount: options.vcpu,
+        memSizeMib: options.mem,
+        warmCount: options.warmCount,
+      });
+      process.stdout.write(`${created.id}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+pool
+  .command("ls")
+  .description("List configured pools.")
+  .action(async function (this: Command) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const pools = await Pool.list({ baseUrl, authToken: token });
+      process.stdout.write(formatPoolList(pools));
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+pool
+  .command("rm <id>")
+  .description("Remove a pool's configuration and destroy whatever it currently has warm.")
+  .action(async function (this: Command, id: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await Pool.delete(id, { baseUrl, authToken: token });
       process.stdout.write(`${id} deleted\n`);
     } catch (error) {
       await handleApiError(error);

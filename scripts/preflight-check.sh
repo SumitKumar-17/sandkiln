@@ -128,7 +128,7 @@ if [ -x "$FIRECRACKER_BIN" ]; then
   ver="$("$FIRECRACKER_BIN" --version 2>&1 | head -n1 || true)"
   ok "firecracker binary present and executable: $FIRECRACKER_BIN ($ver)"
 else
-  bad "firecracker binary not found or not executable at $FIRECRACKER_BIN — run scripts/install-firecracker.sh, or set SANDKILN_FIRECRACKER_BIN"
+  bad "firecracker binary not found or not executable at $FIRECRACKER_BIN — run scripts/host-setup/install-firecracker.sh, or set SANDKILN_FIRECRACKER_BIN"
 fi
 
 # ---------------------------------------------------------------------------
@@ -203,7 +203,7 @@ if command -v ip >/dev/null 2>&1; then
   if [ "$present" -eq "$TAP_POOL_SIZE" ]; then
     ok "all $TAP_POOL_SIZE tap devices present ($TAP_POOL_PREFIX*, matching SANDKILN_TAP_POOL_SIZE)"
   elif [ "$present" -eq 0 ]; then
-    bad "no tap devices found matching ${TAP_POOL_PREFIX}0..${TAP_POOL_PREFIX}$((TAP_POOL_SIZE - 1)) — run: sudo scripts/create-tap-pool.sh $TAP_POOL_SIZE \$(whoami) $TAP_POOL_PREFIX"
+    bad "no tap devices found matching ${TAP_POOL_PREFIX}0..${TAP_POOL_PREFIX}$((TAP_POOL_SIZE - 1)) — run: sudo scripts/host-setup/create-tap-pool.sh $TAP_POOL_SIZE \$(whoami) $TAP_POOL_PREFIX"
   else
     bad "only $present of $TAP_POOL_SIZE expected tap devices exist — missing: ${missing[*]:0:5}$([ "${#missing[@]}" -gt 5 ] && echo " ...")"
   fi
@@ -225,7 +225,7 @@ if [ -n "$DAEMON_BIN" ]; then
       if echo "$cap_out" | grep -q cap_net_admin; then
         ok "$DAEMON_BIN has CAP_NET_ADMIN: $cap_out"
       else
-        warn "$DAEMON_BIN has no CAP_NET_ADMIN file capability. If you're running it under the provided systemd unit (scripts/sandkilnd.service), this is fine — it grants the capability per-start instead. Otherwise: sudo scripts/grant-net-admin.sh $DAEMON_BIN"
+        warn "$DAEMON_BIN has no CAP_NET_ADMIN file capability. If you're running it under the provided systemd unit (scripts/sandkilnd.service), this is fine — it grants the capability per-start instead. Otherwise: sudo scripts/host-setup/grant-net-admin.sh $DAEMON_BIN"
       fi
     else
       warn "'getcap' not found (libcap2-bin) — can't verify capability, skipping"

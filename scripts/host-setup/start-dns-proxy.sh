@@ -10,8 +10,8 @@
 # place to add domain allowlisting later (see "Security hardening" in
 # ROADMAP.md).
 #
-# Usage: sudo scripts/start-dns-proxy.sh <tap-gateway-ip>
-# Example: sudo scripts/start-dns-proxy.sh 172.16.0.1
+# Usage: sudo scripts/host-setup/start-dns-proxy.sh <tap-gateway-ip>
+# Example: sudo scripts/host-setup/start-dns-proxy.sh 172.16.0.1
 
 set -euo pipefail
 

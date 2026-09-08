@@ -1,0 +1,21 @@
+---
+interface Props {
+  active?: "home" | "architecture" | "performance" | "roadmap";
+}
+const { active } = Astro.props as Props;
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const link = (path: string) => (path === "" ? `${base}/` : `${base}/${path}/`);
+---
+
+<header class="top">
+  <div class="topbar">
+    <a class="brand" href={link("")}><span>sandkiln</span><span class="dot">.</span></a>
+    <nav class="topnav">
+      <a href={link("")} aria-current={active === "home" ? "page" : undefined}>Home</a>
+      <a href={link("architecture")} aria-current={active === "architecture" ? "page" : undefined}>Architecture</a>
+      <a href={link("performance")} aria-current={active === "performance" ? "page" : undefined}>Performance</a>
+      <a href={link("roadmap")} aria-current={active === "roadmap" ? "page" : undefined}>Roadmap</a>
+      <a href={link("docs")}>Docs</a>
+    </nav>
+  </div>
+</header>

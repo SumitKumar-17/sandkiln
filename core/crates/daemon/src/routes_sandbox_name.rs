@@ -80,6 +80,11 @@ pub async fn get_sandbox_by_name(
 
 #[derive(Deserialize)]
 pub struct GetOrCreateSandboxRequest {
+    /// `#[serde(default)]` so a request body with no `name` field at all
+    /// deserializes as an empty string and reaches `validate_name`'s own
+    /// clean `400` below, instead of failing during JSON deserialization
+    /// itself and surfacing as axum's raw, undocumented `422`.
+    #[serde(default)]
     name: String,
     #[serde(default)]
     tags: HashMap<String, String>,
@@ -89,6 +94,8 @@ pub struct GetOrCreateSandboxRequest {
     vcpu_count: Option<u8>,
     #[serde(default)]
     mem_size_mib: Option<u32>,
+    #[serde(default)]
+    rate_limit: Option<crate::routes_sandbox::RateLimitRequest>,
 }
 
 #[derive(Serialize)]
@@ -139,6 +146,7 @@ pub async fn get_or_create_sandbox(
                 vcpu_count: request.vcpu_count,
                 mem_size_mib: request.mem_size_mib,
                 image_id: None,
+                rate_limit: request.rate_limit,
             };
             let id = create_sandbox_core(&state, create_request).await?;
             Ok(Json(GetOrCreateSandboxResponse { id, created: true }))

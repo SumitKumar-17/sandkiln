@@ -3,12 +3,17 @@ mod config;
 mod error;
 mod idle_reaper;
 mod metrics;
+mod pool;
+mod pool_replenisher;
 mod request_id;
 mod routes_drives;
 mod routes_exec;
+mod routes_fs;
 mod routes_images;
 mod routes_metrics;
+mod routes_pool;
 mod routes_preview;
+mod routes_pty;
 mod routes_sandbox;
 mod routes_sandbox_name;
 mod routes_snapshot;
@@ -21,6 +26,7 @@ use axum::middleware;
 use axum::routing::{any, delete, get, post};
 use axum::Router;
 use config::{Config, LogFormat};
+use sandkiln_store::HistoryStore;
 use sandkiln_vmm::drive::DriveStore;
 use sandkiln_vmm::image::ImageStore;
 use sandkiln_vmm::network::{self, NetworkManager};
@@ -55,7 +61,7 @@ async fn async_main() {
     };
     let tap_pool = (0..config.tap_pool_size).map(|i| format!("{}{i}", config.tap_pool_prefix));
     let net_manager = NetworkManager::new(config.bridge_name.clone(), config.bridge_gateway, uplink.clone(), tap_pool);
-    net_manager.ensure_ready().expect("set up sandbox network bridge (needs CAP_NET_ADMIN — see scripts/grant-net-admin.sh)");
+    net_manager.ensure_ready().expect("set up sandbox network bridge (needs CAP_NET_ADMIN — see scripts/host-setup/grant-net-admin.sh)");
     tracing::info!(bridge = %config.bridge_name, gateway = %config.bridge_gateway, %uplink, "sandbox network ready");
 
     let drives = DriveStore::new(&config.drives_dir)
@@ -75,13 +81,26 @@ async fn async_main() {
     let reconciled_snapshots = snapshot::reconcile(&net_manager);
     tracing::info!(count = reconciled_snapshots.len(), "reconciled snapshots from disk");
 
+    let history = HistoryStore::open(&config.history_db_path)
+        .expect("open/create the sandbox history database (SANDKILN_HISTORY_DB_PATH)");
+    // Same reasoning as reconciling snapshots above, before the listener
+    // binds: any record still marked "live" at this point belongs to a
+    // daemon process that is no longer running, and its Firecracker
+    // process (if it even still exists) is unconditionally orphaned —
+    // see sandkiln-store's own module doc comment for why this isn't a
+    // heuristic.
+    let orphaned_count = history
+        .mark_unended_as_orphaned_on_startup(std::time::SystemTime::now())
+        .expect("mark orphaned sandbox history records at startup");
+    tracing::info!(count = orphaned_count, "marked orphaned sandbox history records from a prior daemon run");
+
     match &config.jailer {
         Some(jailer_cfg) => {
             std::fs::create_dir_all(&jailer_cfg.chroot_base_dir)
                 .expect("create/verify the jailer chroot base dir (SANDKILN_JAILER_CHROOT_BASE_DIR)");
             assert!(
                 jailer_cfg.jailer_bin.is_file(),
-                "SANDKILN_JAILER_BIN does not point at a file: {} — run scripts/install-firecracker.sh first",
+                "SANDKILN_JAILER_BIN does not point at a file: {} — run scripts/host-setup/install-firecracker.sh first",
                 jailer_cfg.jailer_bin.display()
             );
             tracing::info!(
@@ -103,7 +122,7 @@ async fn async_main() {
     let auth_enabled = config.auth_token.is_some();
     let idle_timeout = config.idle_timeout;
     let auto_suspend_timeout = config.auto_suspend_timeout;
-    let state = Arc::new(AppState::new(config, net_manager, drives, images, reconciled_snapshots));
+    let state = Arc::new(AppState::new(config, net_manager, drives, images, reconciled_snapshots, history));
 
     if idle_timeout.is_some() || auto_suspend_timeout.is_some() {
         if let Some(auto_suspend_timeout) = auto_suspend_timeout {
@@ -114,16 +133,40 @@ async fn async_main() {
         }
         tokio::spawn(idle_reaper::run(state.clone(), idle_timeout, auto_suspend_timeout));
     }
+    // Unconditional, unlike the reaper above -- see `pool_replenisher`'s
+    // own doc comment for why an idle tick with no pools configured is
+    // cheap enough not to bother gating behind whether any exist yet.
+    tokio::spawn(pool_replenisher::run(state.clone()));
 
     let sandbox_routes = Router::new()
         .route("/sandboxes", post(routes_sandbox::create_sandbox).get(routes_sandbox::list_sandboxes))
+        .route("/sandboxes/history", get(routes_sandbox::sandbox_history))
         .route("/sandboxes/get-or-create", post(routes_sandbox_name::get_or_create_sandbox))
         .route("/sandboxes/by-name/:name", get(routes_sandbox_name::get_sandbox_by_name))
         .route("/sandboxes/:id", delete(routes_sandbox::stop_sandbox))
         .route("/sandboxes/:id/exec", post(routes_exec::exec))
         .route("/sandboxes/:id/read-file", post(routes_exec::read_file))
         .route("/sandboxes/:id/write-file", post(routes_exec::write_file))
+        .route("/sandboxes/:id/chmod", post(routes_fs::chmod))
+        .route("/sandboxes/:id/chown", post(routes_fs::chown))
+        .route("/sandboxes/:id/mkdir", post(routes_fs::mkdir))
+        .route("/sandboxes/:id/rename", post(routes_fs::rename))
+        .route("/sandboxes/:id/copy", post(routes_fs::copy))
+        .route("/sandboxes/:id/symlink", post(routes_fs::symlink))
+        .route("/sandboxes/:id/readlink", post(routes_fs::readlink))
+        .route("/sandboxes/:id/truncate", post(routes_fs::truncate))
+        .route("/sandboxes/:id/list-dir", post(routes_fs::list_dir))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
+
+    // Its own router, guarded by `auth::require_preview_token` rather than
+    // `auth::require_bearer_token` — for the same reason `preview_routes`
+    // below is: neither a browser's nor Node's native `WebSocket`
+    // constructor can set a custom `Authorization` header, so a PTY
+    // session needs the same `?token=` query-parameter fallback preview
+    // URLs already use.
+    let pty_routes = Router::new()
+        .route("/sandboxes/:id/pty", get(routes_pty::pty_session))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_preview_token));
 
     let drive_routes = Router::new()
         .route("/drives", post(routes_drives::create_drive).get(routes_drives::list_drives))
@@ -133,6 +176,11 @@ async fn async_main() {
     let image_routes = Router::new()
         .route("/images", post(routes_images::create_image).get(routes_images::list_images))
         .route("/images/:id", delete(routes_images::delete_image))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
+
+    let pool_routes = Router::new()
+        .route("/pools", post(routes_pool::create_pool).get(routes_pool::list_pools))
+        .route("/pools/:id", delete(routes_pool::delete_pool))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
     let snapshot_routes =
@@ -160,8 +208,10 @@ async fn async_main() {
         .merge(sandbox_routes)
         .merge(drive_routes)
         .merge(image_routes)
+        .merge(pool_routes)
         .merge(snapshot_routes)
         .merge(preview_routes)
+        .merge(pty_routes)
         .layer(TraceLayer::new_for_http())
         // Outermost: wraps everything above, including `TraceLayer`, so a
         // caller-supplied or freshly generated request id is already
@@ -193,7 +243,7 @@ fn init_tracing(log_format: LogFormat) {
 }
 
 /// The daemon needs CAP_NET_ADMIN itself (via `setcap ...+eip`, see
-/// scripts/grant-net-admin.sh) to manage tap devices and iptables rules —
+/// scripts/host-setup/grant-net-admin.sh) to manage tap devices and iptables rules —
 /// but that alone doesn't reach the `ip`/`iptables` child processes it
 /// shells out to. Raising the capability into the ambient set makes those
 /// children inherit it too.
@@ -205,7 +255,7 @@ fn raise_net_admin_ambient() {
     // empty) rather than set from the file — so it has to be added here,
     // which is allowed precisely because it's already in Permitted.
     caps::raise(None, CapSet::Inheritable, Capability::CAP_NET_ADMIN)
-        .expect("add CAP_NET_ADMIN to the inheritable set — grant the file capability first with scripts/grant-net-admin.sh");
+        .expect("add CAP_NET_ADMIN to the inheritable set — grant the file capability first with scripts/host-setup/grant-net-admin.sh");
     caps::raise(None, CapSet::Ambient, Capability::CAP_NET_ADMIN)
         .expect("raise CAP_NET_ADMIN into the ambient set");
 }

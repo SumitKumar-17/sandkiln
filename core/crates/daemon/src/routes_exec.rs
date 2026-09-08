@@ -1,6 +1,11 @@
-//! Exec and file operations against a running sandbox — everything that's
-//! just forwarding one request to the guest agent over vsock and reporting
-//! its response, via the shared `call_agent` helper.
+//! Exec and whole-file read/write against a running sandbox. Filesystem
+//! metadata/structure operations (chmod, chown, mkdir, rename, copy,
+//! symlink, readlink, truncate, directory listing) live in `routes_fs`
+//! instead — a real seam (data transfer vs. filesystem structure), split
+//! out once this file would otherwise have grown well past the ~300-line
+//! range adding all of them here. Both files share the `call_agent`
+//! helper below — everything on both sides is just forwarding one
+//! request to the guest agent over vsock and reporting its response.
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -87,8 +92,9 @@ pub async fn write_file(
 }
 
 /// Shared by every route that just forwards one request to the guest
-/// agent and reports its response — exec/read/write all fit this shape.
-async fn call_agent(state: Arc<AppState>, id: String, request: Request) -> Result<AgentResponse, AppError> {
+/// agent and reports its response — exec/read/write here and every
+/// `routes_fs` handler all fit this shape.
+pub(crate) async fn call_agent(state: Arc<AppState>, id: String, request: Request) -> Result<AgentResponse, AppError> {
     spawn_blocking_in_current_span("agent call task panicked", move || {
         let sandboxes = state.sandboxes.lock().unwrap();
         let sandbox = sandboxes.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;

@@ -10,10 +10,38 @@ from ._http import request
 
 
 @dataclass(frozen=True)
+class DriveAttachment:
+    """A persistent drive (see `Drive.create`) to attach at boot, each
+    becoming its own block device inside the guest. A read-write
+    attachment (the default, `read_only=False`) needs exclusive access -
+    the daemon rejects it with a 409 if the drive is already attached
+    anywhere; `read_only=True` may coexist with any number of other
+    read-only attachments of the same drive, but still conflicts with an
+    existing read-write one."""
+
+    id: str
+    read_only: bool = False
+
+
+@dataclass(frozen=True)
 class ExecResult:
     stdout: str
     stderr: str
     exit_code: int
+
+
+@dataclass(frozen=True)
+class DirEntry:
+    """One entry from `Sandbox.list_dir()` - `mode` is permission bits
+    only (e.g. `0o644`), the same shape `Sandbox.chmod()` takes, so an
+    entry's `mode` can be handed straight back to `chmod()`."""
+
+    name: str
+    is_dir: bool
+    is_symlink: bool
+    size: int
+    mode: int
+    mtime: datetime
 
 
 @dataclass(frozen=True)
@@ -50,6 +78,24 @@ class SnapshotInfo:
     name: str | None = None
 
 
+def _drive_attachment_to_dict(attachment: DriveAttachment) -> dict[str, object]:
+    return {"id": attachment.id, "read_only": attachment.read_only}
+
+
+def _build_rate_limit(bandwidth_bytes_per_sec: int | None, ops_per_sec: int | None) -> dict[str, int] | None:
+    """`None` when the caller didn't set either sub-field — only includes
+    the ones actually set, mirroring the daemon's own per-field
+    `#[serde(default)]` optionality rather than always sending both keys."""
+    if bandwidth_bytes_per_sec is None and ops_per_sec is None:
+        return None
+    body: dict[str, int] = {}
+    if bandwidth_bytes_per_sec is not None:
+        body["bandwidth_bytes_per_sec"] = bandwidth_bytes_per_sec
+    if ops_per_sec is not None:
+        body["ops_per_sec"] = ops_per_sec
+    return body
+
+
 class Sandbox:
     """A handle to one sandkiln sandbox. Construct via `Sandbox.create()`
     or `Sandbox.attach()`, not directly."""
@@ -69,6 +115,9 @@ class Sandbox:
         vcpu_count: int | None = None,
         mem_size_mib: int | None = None,
         image_id: str | None = None,
+        rate_limit_bandwidth_bytes_per_sec: int | None = None,
+        rate_limit_ops_per_sec: int | None = None,
+        drives: list[DriveAttachment] | None = None,
     ) -> "Sandbox":
         """`name` is a caller-given identity, unique among live sandboxes
         and held snapshots at the moment it's claimed — the daemon rejects
@@ -85,7 +134,19 @@ class Sandbox:
         `image_id` boots from a registered image (see `Image.register`)
         instead of the daemon's configured default rootfs; omitted keeps
         today's behavior unchanged. Raises `SandkilnApiError` with status
-        404 if no image with this id is currently registered."""
+        404 if no image with this id is currently registered.
+
+        `rate_limit_bandwidth_bytes_per_sec`/`rate_limit_ops_per_sec` cap
+        host I/O via Firecracker's own token-bucket rate limiter, applied
+        to the rootfs drive, every attached drive, and both directions of
+        the network interface. Both omitted (the default) means unlimited
+        host I/O, unchanged from before this existed. A `0` for either
+        raises `SandkilnApiError` with status 400 — meaningless, rejected
+        outright rather than silently treated as unlimited.
+
+        `drives` attaches existing persistent drives (see `Drive.create`)
+        at boot time. Omitted means no drives, unchanged from before this
+        existed."""
         resolved_base_url = resolve_base_url(base_url)
         resolved_token = resolve_auth_token(auth_token)
         body: dict[str, object] = {}
@@ -99,6 +160,11 @@ class Sandbox:
             body["mem_size_mib"] = mem_size_mib
         if image_id is not None:
             body["image_id"] = image_id
+        rate_limit = _build_rate_limit(rate_limit_bandwidth_bytes_per_sec, rate_limit_ops_per_sec)
+        if rate_limit is not None:
+            body["rate_limit"] = rate_limit
+        if drives is not None:
+            body["drives"] = [_drive_attachment_to_dict(d) for d in drives]
         response = request(resolved_base_url, "POST", "/sandboxes", resolved_token, body or None)
         return cls(response["id"], resolved_base_url, resolved_token)
 
@@ -132,14 +198,18 @@ class Sandbox:
         auth_token: str | None = None,
         vcpu_count: int | None = None,
         mem_size_mib: int | None = None,
+        rate_limit_bandwidth_bytes_per_sec: int | None = None,
+        rate_limit_ops_per_sec: int | None = None,
+        drives: list[DriveAttachment] | None = None,
     ) -> tuple["Sandbox", bool]:
         """Resolves `name` to a sandbox in one call, creating it if it
         doesn't exist yet: a live sandbox with this name is returned
         as-is, a stopped (snapshotted) one is resumed, and otherwise a
         fresh sandbox is created and given this name. `tags`/
-        `vcpu_count`/`mem_size_mib` only apply to the create-fresh case —
-        resuming an existing snapshot uses what was recorded on it when it
-        was taken, same as `Sandbox.resume`.
+        `vcpu_count`/`mem_size_mib`/rate limit options only apply to the
+        create-fresh case — resuming an existing snapshot uses what was
+        recorded on it when it was taken, same as `Sandbox.resume`. See
+        `Sandbox.create` for what the rate-limit options mean.
 
         Returns `(sandbox, created)` — `created` is `True` only when this
         call actually booted a brand-new sandbox from the base rootfs.
@@ -156,6 +226,11 @@ class Sandbox:
             body["vcpu_count"] = vcpu_count
         if mem_size_mib is not None:
             body["mem_size_mib"] = mem_size_mib
+        rate_limit = _build_rate_limit(rate_limit_bandwidth_bytes_per_sec, rate_limit_ops_per_sec)
+        if rate_limit is not None:
+            body["rate_limit"] = rate_limit
+        if drives is not None:
+            body["drives"] = [_drive_attachment_to_dict(d) for d in drives]
         response = request(resolved_base_url, "POST", "/sandboxes/get-or-create", resolved_token, body)
         return cls(response["id"], resolved_base_url, resolved_token), response["created"]
 
@@ -201,6 +276,56 @@ class Sandbox:
         raw = content.encode("utf-8") if isinstance(content, str) else content
         body = {"path": path, "content_base64": base64.b64encode(raw).decode("ascii")}
         self._request("POST", f"/sandboxes/{self.id}/write-file", body)
+
+    def chmod(self, path: str, mode: int) -> None:
+        """`mode` is raw permission bits (e.g. `0o644`), the same shape
+        POSIX `chmod(2)` takes - not a symbolic string like the `chmod`
+        shell command accepts."""
+        self._request("POST", f"/sandboxes/{self.id}/chmod", {"path": path, "mode": mode})
+
+    def chown(self, path: str, uid: int, gid: int) -> None:
+        self._request("POST", f"/sandboxes/{self.id}/chown", {"path": path, "uid": uid, "gid": gid})
+
+    def mkdir(self, path: str, parents: bool = False) -> None:
+        """`parents=True` behaves like `mkdir -p` (creates missing parent
+        directories, succeeds if the target already exists); `False`
+        (the default) behaves like plain `mkdir` - fails if the parent is
+        missing or the target already exists."""
+        self._request("POST", f"/sandboxes/{self.id}/mkdir", {"path": path, "parents": parents})
+
+    def rename(self, from_path: str, to_path: str) -> None:
+        self._request("POST", f"/sandboxes/{self.id}/rename", {"from": from_path, "to": to_path})
+
+    def copy(self, from_path: str, to_path: str) -> None:
+        """A full byte-for-byte copy to a new path - `from_path` is left
+        untouched, unlike `rename`."""
+        self._request("POST", f"/sandboxes/{self.id}/copy", {"from": from_path, "to": to_path})
+
+    def symlink(self, target: str, link_path: str) -> None:
+        self._request("POST", f"/sandboxes/{self.id}/symlink", {"target": target, "link_path": link_path})
+
+    def readlink(self, path: str) -> str:
+        """The target a symlink points at, exactly as stored - not
+        resolved/canonicalized."""
+        response = self._request("POST", f"/sandboxes/{self.id}/readlink", {"path": path})
+        return response["target"]
+
+    def truncate(self, path: str, size: int) -> None:
+        self._request("POST", f"/sandboxes/{self.id}/truncate", {"path": path, "size": size})
+
+    def list_dir(self, path: str) -> list[DirEntry]:
+        response = self._request("POST", f"/sandboxes/{self.id}/list-dir", {"path": path})
+        return [
+            DirEntry(
+                name=e["name"],
+                is_dir=e["is_dir"],
+                is_symlink=e["is_symlink"],
+                size=e["size"],
+                mode=e["mode"],
+                mtime=datetime.fromtimestamp(e["mtime_unix"], tz=timezone.utc),
+            )
+            for e in response["entries"]
+        ]
 
     def stop(self, keep: bool | None = None) -> StopResult:
         """Stops this sandbox. By default (`keep` omitted, or `True`) this

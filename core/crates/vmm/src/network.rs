@@ -1,7 +1,7 @@
 //! Per-sandbox networking: every VM gets a tap device leased from a
 //! pre-created pool, attached to a shared bridge, with a statically
 //! assigned IP. One bridge means the NAT/DNS setup proven in
-//! `scripts/setup-tap-network.sh` and `scripts/start-dns-proxy.sh` needs
+//! `scripts/dev-tools/setup-tap-network.sh` and `scripts/host-setup/start-dns-proxy.sh` needs
 //! no per-VM wildcarding — it already targets one interface and one
 //! gateway IP, which is exactly what the bridge is.
 //!
@@ -9,10 +9,10 @@
 //! ioctl on `/dev/net/tun`, and — unlike the netlink operations here
 //! (bridge/link management) — that specific ioctl did not work under this
 //! process's ambient `CAP_NET_ADMIN` in practice, only under full root.
-//! Persistent tap devices sidestep it: `scripts/create-tap-pool.sh`
+//! Persistent tap devices sidestep it: `scripts/host-setup/create-tap-pool.sh`
 //! creates them once (needs root), and this module only ever
 //! attaches/detaches existing devices, which is a plain netlink call and
-//! does work under ambient `CAP_NET_ADMIN` (see `scripts/grant-net-admin.sh`).
+//! does work under ambient `CAP_NET_ADMIN` (see `scripts/host-setup/grant-net-admin.sh`).
 
 use std::collections::VecDeque;
 use std::io;
@@ -97,7 +97,7 @@ impl NetworkManager {
         };
         if !missing.is_empty() {
             return Err(io::Error::other(format!(
-                "tap devices missing: {missing:?} — run scripts/create-tap-pool.sh first"
+                "tap devices missing: {missing:?} — run scripts/host-setup/create-tap-pool.sh first"
             )));
         }
         Ok(())
@@ -234,7 +234,7 @@ fn link_exists(name: &str) -> io::Result<bool> {
 }
 
 /// iptables has no idempotent "add if missing" — check first via `-C`,
-/// then add. Mirrors the same pattern `scripts/setup-tap-network.sh` uses.
+/// then add. Mirrors the same pattern `scripts/dev-tools/setup-tap-network.sh` uses.
 fn ensure_iptables_rule(args: &[&str]) -> io::Result<()> {
     let check_args: Vec<&str> = args.iter().map(|&a| if a == "-A" { "-C" } else { a }).collect();
     if Command::new("iptables").args(&check_args).output()?.status.success() {

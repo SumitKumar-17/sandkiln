@@ -11,8 +11,10 @@ agent sandboxes, code playgrounds, and untrusted-code execution services:
 isolate first, then run.
 
 **Website**: https://sumitkumar-17.github.io/sandkiln/ (architecture, real
-benchmark numbers, live feature status) — also mirrored at
-https://sandkiln.vercel.app
+benchmark numbers, live feature status, and startup-latency research) —
+also mirrored at https://sandkiln.vercel.app. Full docs (getting
+started, guides, API/SDK/CLI reference) at
+https://sumitkumar-17.github.io/sandkiln/docs/.
 
 ## Quickstart
 
@@ -34,23 +36,29 @@ console.log(result.stdout, result.exitCode);
 await sandbox.stop();
 ```
 
-Python and a CLI ship the same operations:
+A CLI ships the same operations:
 
 ```
-pip install sandkiln
 npm install -g sandkiln-cli   # installs the `kiln` command
 ```
+
+Python mirrors the JS/TS SDK exactly too, but isn't published to PyPI
+yet — install it from this repo (`pip install ./packages/python`) or
+just track the source there directly.
 
 See [`packages/python`](packages/python) and [`packages/cli`](packages/cli).
 
 ## Status
 
 Active development. The core primitive, networking, auth, tags, file ops,
-and all three clients (JS/TS, Python, CLI) work and are verified against
-real hardware — see [CHANGELOG.md](CHANGELOG.md) for what shipped and
-[ROADMAP.md](ROADMAP.md) for what's still open (snapshots/persistence,
-managed images, drives, streamed output). The plan is a direction, not a
-spec, and keeps changing as the project gets built.
+snapshot/resume/fork, named sandboxes, persistent-by-default stop,
+read-only shared drives, auto-suspend on idle, custom/managed images,
+per-sandbox I/O rate limiting, and all three clients (JS/TS, Python, CLI)
+work and are verified against real hardware — see
+[CHANGELOG.md](CHANGELOG.md) for what shipped and
+[ROADMAP.md](ROADMAP.md) for what's still open (streamed log output,
+OCI-image conversion, firewall/egress policy, multi-node). The plan is a
+direction, not a spec, and keeps changing as the project gets built.
 
 Picking this up as a contributor (human or agent)? Read
 [AGENTS.md](AGENTS.md) first — it covers non-obvious things this project
@@ -61,16 +69,21 @@ already hit and fixed once.
 - **`core/`** — Rust workspace: `sandkiln-protocol` (the wire format
   shared by host and guest), `sandkiln-guest-agent` (a static binary that
   runs inside each microVM), `sandkiln-vmm` (drives Firecracker and
-  networking), `sandkiln-daemon` (the HTTP API, `sandkilnd`).
+  networking), `sandkiln-store` (durable sandbox-lifecycle history,
+  sqlite), `sandkiln-daemon` (the HTTP API, `sandkilnd`).
 - **`packages/sdk`** — [`sandkiln`](https://www.npmjs.com/package/sandkiln)
   on npm, the JS/TS client.
 - **`packages/python`** — `sandkiln` on PyPI (not yet published), the
   Python client, mirroring the JS SDK exactly.
 - **`packages/cli`** — `kiln`, the command-line interface.
 - **`images/`** — kernel and rootfs build scripts for sandbox base images.
-- **`scripts/`** — dev-box setup: tap pool, network bridge, DNS proxy,
-  remote sync.
-- **`website/`** — the project site, deployed via GitHub Pages.
+- **`scripts/`** — dev-box setup and daily-use tooling (`dev.sh` is the
+  master dispatcher; one-time host provisioning lives under
+  `host-setup/`, narrow manual-debugging tools under `dev-tools/`).
+- **`website/`** — the project site (deployed via GitHub Pages) and, in
+  `website/docs/`, the full docs site (getting started, core concepts,
+  guides, API/SDK/CLI reference, architecture) — see
+  https://sumitkumar-17.github.io/sandkiln/docs/.
 
 ## License
 

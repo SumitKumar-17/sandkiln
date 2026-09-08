@@ -5,7 +5,8 @@
 //! See: <https://github.com/firecracker-microvm/firecracker/blob/main/docs/vsock.md>
 
 use sandkiln_protocol::{
-    decode_response, encode_request, read_message, write_message, CodecError, Request, Response,
+    decode_response, encode_pty_handshake, encode_request, read_message, write_message, CodecError, PtyHandshake, Request,
+    Response,
 };
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -34,6 +35,30 @@ pub fn call(uds_path: &Path, guest_port: u32, request: &Request) -> io::Result<R
 
     let raw = read_message(&mut stream)?;
     decode_response(&raw).map_err(to_io_err)
+}
+
+/// Opens a new, long-lived vsock connection for an interactive PTY
+/// session — a fundamentally different shape from `call` above: this
+/// returns the raw, still-open stream for the caller to shovel bytes
+/// through indefinitely, rather than reading exactly one response and
+/// closing. Deliberately does *not* leave `IO_TIMEOUT` set on the
+/// returned stream (unlike `call`, where every operation is a bounded
+/// one-shot) — a real interactive session can go quiet for a long time
+/// with nothing typed, and that's not a hung connection.
+pub fn open_pty(uds_path: &Path, pty_port: u32, cols: u16, rows: u16) -> io::Result<UnixStream> {
+    let mut stream = UnixStream::connect(uds_path)?;
+    // Timeouts apply only to the handshake below, not to the stream
+    // this function hands back — see the doc comment above.
+    stream.set_read_timeout(Some(IO_TIMEOUT))?;
+    stream.set_write_timeout(Some(IO_TIMEOUT))?;
+    connect_handshake(&mut stream, pty_port)?;
+
+    let payload = encode_pty_handshake(&PtyHandshake { cols, rows }).map_err(to_io_err)?;
+    write_message(&mut stream, &payload)?;
+
+    stream.set_read_timeout(None)?;
+    stream.set_write_timeout(None)?;
+    Ok(stream)
 }
 
 fn connect_handshake(stream: &mut UnixStream, guest_port: u32) -> io::Result<()> {

@@ -13,6 +13,15 @@ REMOTE_HOST="${SANDKILN_REMOTE_HOST:-t1000@10.5.31.157}"
 REMOTE_DIR="${SANDKILN_REMOTE_DIR:-~/sandkiln}"
 LOCAL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Neither cargo nor a current Node.js is on PATH in a non-interactive SSH
+# shell (both are wired up by lines sourced from .bashrc, which only a
+# login/interactive shell picks up) — see root AGENTS.md's "Development
+# Environment" gotchas. Every `run`/`ssh` command below is prefixed with
+# this so a plain `scripts/remote.sh run npm test` or `cargo build` just
+# works, instead of silently hitting a stale system Node or a missing
+# cargo.
+REMOTE_ENV_PRELUDE='[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"; export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"'
+
 sync() {
   ssh "$REMOTE_HOST" "mkdir -p $REMOTE_DIR"
   tar -C "$LOCAL_DIR" -czf - \
@@ -31,11 +40,11 @@ case "${1:-}" in
   run)
     shift
     sync
-    ssh "$REMOTE_HOST" "cd $REMOTE_DIR && $*"
+    ssh "$REMOTE_HOST" "$REMOTE_ENV_PRELUDE; cd $REMOTE_DIR && $*"
     ;;
   ssh)
     sync
-    ssh -t "$REMOTE_HOST" "cd $REMOTE_DIR && exec \$SHELL -l"
+    ssh -t "$REMOTE_HOST" "$REMOTE_ENV_PRELUDE; cd $REMOTE_DIR && exec \$SHELL -l"
     ;;
   *)
     echo "usage: $0 {sync|run <command...>|ssh}" >&2

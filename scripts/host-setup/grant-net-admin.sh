@@ -3,7 +3,7 @@
 # manage iptables rules without running as root. Needs sudo once, after
 # each rebuild (setcap doesn't survive a binary being replaced).
 #
-# Usage: sudo scripts/grant-net-admin.sh <path-to-sandkilnd-binary>
+# Usage: sudo scripts/host-setup/grant-net-admin.sh <path-to-sandkilnd-binary>
 
 set -euo pipefail
 

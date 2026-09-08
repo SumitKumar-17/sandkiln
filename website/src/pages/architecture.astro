@@ -1,0 +1,84 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+---
+
+<BaseLayout title="Architecture — sandkiln">
+  <Header active="architecture" />
+
+  <section class="page-hero">
+    <div class="wrap">
+      <h1>Four crates. No crate reaches into another's internals.</h1>
+      <p>The core is a Rust workspace, kept deliberately modular — the daemon can change without touching the guest agent, and the guest agent ships as its own static binary independent of everything that talks to it.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="arch">
+        <div class="crate">
+          <div class="n">01</div>
+          <h3>sandkiln-protocol</h3>
+          <p>The wire format shared by host and guest — length-prefixed JSON, kept dependency-light so neither side reaches into the other.</p>
+        </div>
+        <div class="crate">
+          <div class="n">02</div>
+          <h3>sandkiln-guest-agent</h3>
+          <p>Runs inside the microVM as a systemd service. Listens on vsock, answers exec / read / write / list — a static musl binary.</p>
+        </div>
+        <div class="crate">
+          <div class="n">03</div>
+          <h3>sandkiln-vmm</h3>
+          <p>Drives Firecracker directly: boot, snapshot/resume, network leasing, drives, the vsock client. A hand-rolled HTTP client talks to Firecracker's API socket.</p>
+        </div>
+        <div class="crate">
+          <div class="n">04</div>
+          <h3>sandkiln-daemon</h3>
+          <p>axum + tokio HTTP API wrapping the lifecycle — create, exec, list, stop, snapshot, images, drives — with auth, tags, and tracing built in from day one.</p>
+        </div>
+      </div>
+
+      <div class="section-head" style="margin-bottom:28px;">
+        <div class="eyebrow">Boot lifecycle</div>
+        <h2 style="font-size:24px;">What happens inside 33 milliseconds</h2>
+      </div>
+      <div class="lifecycle">
+        <div class="life-step"><div class="idx">01</div><h4>Lease</h4><p>A tap device and IP are leased from the pool, attached to the bridge.</p></div>
+        <div class="life-step"><div class="idx">02</div><h4>Boot</h4><p>Firecracker starts, boot-source/drive/machine-config/vsock are configured over its API socket.</p></div>
+        <div class="life-step"><div class="idx">03</div><h4>Agent up</h4><p>The guest kernel boots, systemd starts the guest agent, it binds its vsock port.</p></div>
+        <div class="life-step"><div class="idx">04</div><h4>Ready</h4><p>The host's vsock client connects — the sandbox can now run anything you send it.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">Design rationale</div>
+        <h2>Why it's built this way, and what broke before it was.</h2>
+        <p>The full essays — the privilege model behind ambient <code>CAP_NET_ADMIN</code>, the vsock wire protocol, why a snapshot points at paths instead of carrying values, and a real bug hunt (the vsock timeout that could hang a stop forever) — live in the docs site, where they belong alongside the API reference they explain.</p>
+      </div>
+      <div class="note-links">
+        <a href="../docs/architecture/privilege-model/">
+          <span><span class="tag">Privilege model</span><span class="name">Ambient CAP_NET_ADMIN, a static tap pool, and a root that stays out of the hot path</span></span>
+          <span class="arrow">→</span>
+        </a>
+        <a href="../docs/architecture/wire-protocol/">
+          <span><span class="tag">Wire protocol</span><span class="name">vsock, a length-prefixed JSON frame, and a client that doesn't reach for a full HTTP stack</span></span>
+          <span class="arrow">→</span>
+        </a>
+        <a href="../docs/architecture/persistence-model/">
+          <span><span class="tag">Persistence model</span><span class="name">Sandbox vs. session — and why a snapshot points at paths instead of carrying values</span></span>
+          <span class="arrow">→</span>
+        </a>
+        <a href="../docs/architecture/bug-hunt-vsock-timeout/">
+          <span><span class="tag">Bug hunt</span><span class="name">Case study: the vsock timeout that could hang a stop forever</span></span>
+          <span class="arrow">→</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <Footer />
+</BaseLayout>

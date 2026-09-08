@@ -2,9 +2,15 @@ import { decodeBase64, encodeBase64 } from "./base64.js";
 import { resolveClient, type ClientContext } from "./client.js";
 import { request } from "./http.js";
 import type {
+  ChmodRequestBody,
+  ChownRequestBody,
+  CopyRequestBody,
   CreateSandboxOptions,
   CreateSandboxRequestBody,
   CreateSandboxResponseBody,
+  DirEntry,
+  DriveAttachmentOptions,
+  DriveAttachmentRequestBody,
   ExecRequestBody,
   ExecResponseBody,
   ExecResult,
@@ -12,13 +18,22 @@ import type {
   GetOrCreateSandboxOptions,
   GetOrCreateSandboxRequestBody,
   GetOrCreateSandboxResponseBody,
+  ListDirRequestBody,
+  ListDirResponseBody,
   ListSandboxesOptions,
   ListSandboxesResponseBody,
   ListSnapshotsOptions,
   ListSnapshotsResponseBody,
+  MkdirRequestBody,
   PreviewUrlOptions,
+  PtyOptions,
+  RateLimitOptions,
+  RateLimitRequestBody,
   ReadFileRequestBody,
   ReadFileResponseBody,
+  ReadlinkRequestBody,
+  ReadlinkResponseBody,
+  RenameRequestBody,
   ResumeSnapshotResponseBody,
   SandboxByNameResponseBody,
   SandboxInfo,
@@ -26,6 +41,8 @@ import type {
   SnapshotInfo,
   SnapshotSandboxResponseBody,
   StopSandboxResponseBody,
+  SymlinkRequestBody,
+  TruncateRequestBody,
   WriteFileRequestBody,
 } from "./types.js";
 
@@ -127,6 +144,10 @@ export class Sandbox {
     if (options.tags !== undefined) requestBody.tags = options.tags;
     if (options.vcpuCount !== undefined) requestBody.vcpu_count = options.vcpuCount;
     if (options.memSizeMib !== undefined) requestBody.mem_size_mib = options.memSizeMib;
+    const rateLimit = buildRateLimitRequestBody(options.rateLimit);
+    if (rateLimit !== undefined) requestBody.rate_limit = rateLimit;
+    const drives = buildDrivesRequestBody(options.drives);
+    if (drives !== undefined) requestBody.drives = drives;
 
     const body = await request<GetOrCreateSandboxResponseBody>({
       ...client,
@@ -167,6 +188,122 @@ export class Sandbox {
       path: `/sandboxes/${encodeURIComponent(this.id)}/write-file`,
       body: requestBody,
     });
+  }
+
+  /** `mode` is raw permission bits (e.g. `0o644`), the same shape POSIX
+   * `chmod(2)` takes — not a symbolic string like the `chmod` shell
+   * command accepts. */
+  async chmod(path: string, mode: number): Promise<void> {
+    const requestBody: ChmodRequestBody = { path, mode };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/chmod`, body: requestBody });
+  }
+
+  async chown(path: string, uid: number, gid: number): Promise<void> {
+    const requestBody: ChownRequestBody = { path, uid, gid };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/chown`, body: requestBody });
+  }
+
+  /** `parents: true` behaves like `mkdir -p` (creates missing parent
+   * directories, succeeds if the target already exists); omitted/`false`
+   * behaves like plain `mkdir` — fails if the parent is missing or the
+   * target already exists. */
+  async mkdir(path: string, options: { parents?: boolean } = {}): Promise<void> {
+    const requestBody: MkdirRequestBody = { path, parents: options.parents };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/mkdir`, body: requestBody });
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    const requestBody: RenameRequestBody = { from, to };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/rename`, body: requestBody });
+  }
+
+  /** A full byte-for-byte copy to a new path — `from` is left untouched,
+   * unlike `rename`. */
+  async copy(from: string, to: string): Promise<void> {
+    const requestBody: CopyRequestBody = { from, to };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/copy`, body: requestBody });
+  }
+
+  async symlink(target: string, linkPath: string): Promise<void> {
+    const requestBody: SymlinkRequestBody = { target, link_path: linkPath };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/symlink`, body: requestBody });
+  }
+
+  /** The target a symlink points at, exactly as stored — not
+   * resolved/canonicalized. */
+  async readlink(path: string): Promise<string> {
+    const requestBody: ReadlinkRequestBody = { path };
+    const body = await request<ReadlinkResponseBody>({
+      ...this.client,
+      method: "POST",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/readlink`,
+      body: requestBody,
+    });
+    return body.target;
+  }
+
+  async truncate(path: string, size: number): Promise<void> {
+    const requestBody: TruncateRequestBody = { path, size };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/truncate`, body: requestBody });
+  }
+
+  async listDir(path: string): Promise<DirEntry[]> {
+    const requestBody: ListDirRequestBody = { path };
+    const body = await request<ListDirResponseBody>({
+      ...this.client,
+      method: "POST",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/list-dir`,
+      body: requestBody,
+    });
+    return body.entries.map((e) => ({
+      name: e.name,
+      isDir: e.is_dir,
+      isSymlink: e.is_symlink,
+      size: e.size,
+      mode: e.mode,
+      mtime: new Date(e.mtime_unix * 1000),
+    }));
+  }
+
+  /**
+   * Opens a live, interactive PTY session inside this sandbox — a real
+   * shell, not `runCommand`'s one-shot request/response. Returns the raw
+   * `WebSocket` connected to it: binary/text messages you send become
+   * the shell's stdin, and every message it emits is the shell's own
+   * stdout+stderr (interleaved, exactly as a real terminal would show
+   * it) — pipe them to/from a real terminal (see `examples/interactive-terminal`)
+   * or drive it programmatically however you like.
+   *
+   * Requires a runtime with a global `WebSocket` — any browser, or
+   * Node.js >= 22 (native `WebSocket`, no dependency). Every other
+   * method on this class works without one; this is the one exception,
+   * because a live bidirectional stream needs a fundamentally different
+   * transport than the plain HTTP `fetch` calls everything else makes.
+   *
+   * `cols`/`rows` size the terminal once, at session start — there is no
+   * live resize yet (a genuine, documented limitation, not an oversight;
+   * see `ROADMAP.md`'s "Dev servers and live preview" section). The auth
+   * token, if configured, is sent as a `?token=` query parameter rather
+   * than an `Authorization` header — neither a browser's nor Node's
+   * native `WebSocket` constructor can set custom headers, the same
+   * reason `previewUrl()` has the same fallback.
+   */
+  pty(options: PtyOptions = {}): WebSocket {
+    if (typeof WebSocket === "undefined") {
+      throw new Error(
+        "Sandbox.pty() requires a runtime with a global WebSocket implementation (Node.js >= 22, or any browser) — this runtime doesn't have one.",
+      );
+    }
+    const cols = options.cols ?? 80;
+    const rows = options.rows ?? 24;
+    const wsBaseUrl = this.client.baseUrl.replace(/^http/, "ws");
+    const url = new URL(`${wsBaseUrl}/sandboxes/${encodeURIComponent(this.id)}/pty`);
+    url.searchParams.set("cols", String(cols));
+    url.searchParams.set("rows", String(rows));
+    if (this.client.authToken !== undefined) {
+      url.searchParams.set("token", this.client.authToken);
+    }
+    return new WebSocket(url);
   }
 
   /**
@@ -324,6 +461,25 @@ export class Sandbox {
   }
 }
 
+/** `undefined` when the caller didn't attach any drives — matches every
+ * other optional-array-field convention in this SDK (`undefined`, not
+ * `[]`, means "the caller didn't ask for this"). */
+function buildDrivesRequestBody(drives: DriveAttachmentOptions[] | undefined): DriveAttachmentRequestBody[] | undefined {
+  if (drives === undefined) return undefined;
+  return drives.map((d) => ({ id: d.id, read_only: d.readOnly }));
+}
+
+/** Only includes the sub-fields the caller actually set — mirrors the
+ * daemon's own per-field `#[serde(default)]` optionality on
+ * `RateLimitRequest` rather than always sending both keys. */
+function buildRateLimitRequestBody(rateLimit: RateLimitOptions | undefined): RateLimitRequestBody | undefined {
+  if (rateLimit === undefined) return undefined;
+  const body: RateLimitRequestBody = {};
+  if (rateLimit.bandwidthBytesPerSec !== undefined) body.bandwidth_bytes_per_sec = rateLimit.bandwidthBytesPerSec;
+  if (rateLimit.opsPerSec !== undefined) body.ops_per_sec = rateLimit.opsPerSec;
+  return body;
+}
+
 /** `undefined` (rather than `{}`) when the caller didn't set anything,
  * matching the daemon's own "empty body means all defaults" handling and
  * this SDK's existing convention for an all-default `POST /sandboxes`. */
@@ -334,5 +490,9 @@ function buildCreateSandboxRequestBody(options: CreateSandboxOptions): CreateSan
   if (options.vcpuCount !== undefined) body.vcpu_count = options.vcpuCount;
   if (options.memSizeMib !== undefined) body.mem_size_mib = options.memSizeMib;
   if (options.imageId !== undefined) body.image_id = options.imageId;
+  const rateLimit = buildRateLimitRequestBody(options.rateLimit);
+  if (rateLimit !== undefined) body.rate_limit = rateLimit;
+  const drives = buildDrivesRequestBody(options.drives);
+  if (drives !== undefined) body.drives = drives;
   return Object.keys(body).length > 0 ? body : undefined;
 }

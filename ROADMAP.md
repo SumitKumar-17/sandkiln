@@ -9,6 +9,15 @@ hardware, not just code that compiles.
 - A Firecracker microVM boots under real KVM in ~30ms, with a guest agent
   running inside it that answers `exec` / `read_file` / `write_file` /
   `list_dir` over vsock.
+- **Current sandbox launch latency, measured, not estimated**: a full
+  `POST /sandboxes` create averages **211ms** (min 137ms, p95 577ms,
+  under concurrent load) — the ~30ms boot time above plus rootfs-copy
+  and network-lease overhead. The ~180ms gap between raw boot and full
+  create is the known, actively-tracked bottleneck (see Benchmarking and
+  Persistence and snapshotting below for the CoW-filesystem and
+  pre-warmed-pool plans to close it) — worth stating up front since it's
+  the number that actually matters for "how long until I can run code,"
+  not the boot time alone.
 - An HTTP daemon (`sandkilnd`) manages the full lifecycle — create, exec,
   list, stop — driving Firecracker directly from Rust rather than shelling
   out.
@@ -26,10 +35,15 @@ hardware, not just code that compiles.
   load-test script against the daemon's HTTP API.
 - Snapshot/resume/fork, durable across a daemon restart; a host-side
   reverse proxy for previewing a dev server running inside a sandbox;
-  per-sandbox resource overrides with enforced ceilings; request-id
-  correlation and a `/metrics` endpoint; opt-in Firecracker jailer
-  hardening. All exposed through both SDKs and the CLI, live-verified via
-  `scripts/integration-test.sh` (89 checks, 0 failing).
+  interactive PTY sessions over WebSocket; per-sandbox resource overrides
+  with enforced ceilings; request-id correlation and a `/metrics`
+  endpoint; opt-in Firecracker jailer hardening; full filesystem
+  operations; persistent drives with read-only sharing; a
+  guest-accessible metadata service; durable sandbox history. All exposed
+  through both SDKs and the CLI (interactive PTY: JS/TS SDK and CLI
+  only), live-verified via `scripts/integration-test.sh` (220 checks, 0
+  failing, with `SANDKILN_AUTH_TOKEN` set — see that script's own usage
+  comment for what's skipped without one).
 
 ## Engineering principles
 
@@ -53,9 +67,9 @@ box over SSH.
 ## Networking — done
 
 Every sandbox leases a tap device from a pre-created pool
-(`scripts/create-tap-pool.sh`) and attaches it to a shared bridge with a
+(`scripts/host-setup/create-tap-pool.sh`) and attaches it to a shared bridge with a
 statically assigned IP; the daemon runs unprivileged with `CAP_NET_ADMIN`
-raised into its ambient set (`scripts/grant-net-admin.sh`), not as root.
+raised into its ambient set (`scripts/host-setup/grant-net-admin.sh`), not as root.
 Verified: two sandboxes running concurrently, each with a distinct IP,
 both resolving DNS and reaching the real internet through the daemon's
 HTTP API.
@@ -79,7 +93,40 @@ outbound HTTP both still work.
   [npmjs.com/package/sandkiln](https://www.npmjs.com/package/sandkiln)
   (0.2.0, with signed provenance from the CI build — includes everything
   in this bullet). Still open: streamed logs, once the daemon can stream
-  them.
+  them — the shape worth copying when that's built is a replay-then-
+  live-tail model (reconnecting gets everything since the process
+  started, not just what's emitted from that point on), not just a bare
+  live tail.
+- **Done: full filesystem operations** — `chmod`/`chown`/`mkdir`
+  (with `-p`-style `parents`)/`rename`/`copy`/`symlink`/`readlink`/
+  `truncate`/directory listing with metadata (name, is-dir, is-symlink,
+  size, permission bits, mtime), as new vsock protocol commands
+  alongside `exec`/`read_file`/`write_file`. Also closes a
+  previously-undocumented gap: `list_dir` already existed in the
+  protocol and guest agent but was never wired up above that layer (no
+  daemon route, no SDK, no CLI) — it's now exposed too, with richer
+  metadata than its original bare-filename-list shape (nothing
+  depended on that shape yet, so it was widened in place rather than
+  adding a separate variant). Exposed as
+  `sandbox.chmod/chown/mkdir/rename/copy/symlink/readlink/truncate/listDir`
+  in both SDKs and `kiln sandbox chmod|chown|mkdir|rename|cp|symlink|
+  readlink|truncate|ls-dir` in the CLI. No path validation on any of
+  these (same as `read_file`/`write_file` already had none) — a
+  deliberate consistency choice, not an oversight: the guest agent is a
+  "dumb executor" by design (see its own `AGENTS.md`), and a path is
+  scoped to whatever it resolves to inside that one microVM's own
+  filesystem, not the real host. **Live-verified end to end** after
+  rebuilding and re-injecting the guest agent into the daemon's actual
+  base rootfs (`~/sandkiln-tools/images/ubuntu-22.04.ext4` —
+  `SANDKILN_BASE_ROOTFS`'s real default, not the differently-named test
+  image first (mistakenly) injected into): 21 new
+  `scripts/integration-test.sh` checks, 193/193 passing, covering
+  mkdir -p and its conflict case, chmod reflected in a later listing,
+  rename/copy both verified by content (copy leaves the original
+  intact, rename doesn't), symlink/readlink round-tripping the exact
+  target string, a listing correctly marking a symlink vs. a directory,
+  truncate verified byte-accurate by re-reading the file, chown, and
+  the chmod-on-nonexistent-path/readlink-on-non-symlink error cases.
 - **Python (`sandkiln` PyPI package) — working, mirrors the JS SDK
   exactly**, including `resume()`/`fork()`/`snapshot()`/`preview_url()`
   and resource overrides. Zero runtime dependencies (stdlib `urllib`,
@@ -218,6 +265,14 @@ outbound HTTP both still work.
 - **Time-travel restore**: keep more than just the latest snapshot per
   sandbox, so a caller can restore to an earlier point, not only the most
   recent stop.
+- **Tiered idle lifecycle**: extend today's binary auto-suspend
+  (running → snapshot) into named tiers with independently configurable
+  windows — e.g. suspend past one timeout, then archive (move snapshot
+  storage off hot local disk to cheaper/remote storage, ties into the
+  Drives and remote storage section) past a longer one, then delete past
+  a longer one still. Not started; auto-suspend's existing
+  `snapshot_and_stop` path is the natural base to extend rather than a
+  new mechanism.
 
 ## Drives and remote storage
 
@@ -233,6 +288,10 @@ outbound HTTP both still work.
   `can_attach_read_only()` is the pure rule deciding whether a new attach
   may coexist with what's already there. Covers snapshots holding a drive
   too, not just live sandboxes.
+- **Done: drives in both SDKs and the CLI.** `Drive.create/list/delete`
+  in the JS/TS and Python SDKs, `drives`/`DriveAttachment` on
+  `Sandbox.create()`/`create()` in both, and `kiln drive create|ls|rm`
+  plus `--drive <id[:ro]>` on `sandbox create`.
 - **Remote storage mounts**: mount an external object store (S3-compatible)
   into a sandbox via FUSE, so a sandbox can read/write remote files through
   its normal filesystem interface.
@@ -245,6 +304,15 @@ outbound HTTP both still work.
 - The DNS proxy (`start-dns-proxy.sh`) is the natural enforcement point
   for domain-level rules — it already sees every name a sandbox resolves,
   before any connection is made.
+- A richer shape worth designing toward from the start, since retrofitting
+  precedence rules later is worse than deciding it up front: a base mode
+  (allow-all/deny-all) plus a domain allowlist plus *separate* subnet
+  allow and deny lists where deny takes precedence over allow on overlap
+  — not just one flat allow list. Request-level matchers (path, method,
+  query, header) with a rule that either forwards or transforms the
+  request are a further-out stretch beyond that, useful for a proxy
+  sitting in front of a sandbox's own exposed port rather than the
+  sandbox's own outbound egress.
 - Consider a per-sandbox CA + TLS-terminating proxy for HTTPS
   inspection/transformation, mounted into the guest's trust store at
   boot — meaningfully more complex than DNS-level filtering, so it's a
@@ -252,14 +320,33 @@ outbound HTTP both still work.
 
 ## Security hardening
 
+- **Isolation model, stated explicitly**: every sandbox is a real
+  Firecracker microVM with its own kernel, not a shared-kernel
+  container/namespace sandbox with syscall interception. This is the
+  strongest isolation story available for running untrusted code and is
+  worth saying outright (in docs and on the website) rather than leaving
+  it implicit — it's the actual reason this project exists in this shape
+  rather than as a thinner container wrapper.
 - **Done (opt-in): Firecracker's jailer** — chroot, cgroup v2 resource
   limits, a dedicated unprivileged uid/gid per VM
   (`SANDKILN_JAILER_ENABLED`, see `SELF_HOSTING.md`'s "Optional:
   jailer-based sandbox boot"). Off by default; the daemon still boots
   every sandbox via a direct Firecracker spawn unless explicitly turned
-  on. Builds and passes unit tests, but the actual chroot/cgroup/uid-drop
-  behavior against a real installed jailer binary hasn't been proven on
-  real hardware yet — verify before relying on it for a genuinely
+  on. Builds and passes unit tests. **First real-hardware attempt this
+  session**: every `POST /sandboxes` failed (`500`,
+  `"<chroot>/root/api.sock" never appeared`) with
+  `SANDKILN_JAILER_ENABLED=1` on the dev box — root-caused via the guest
+  console log to jailer itself failing at
+  `Failed to change owner for .../firecracker: Operation not permitted`.
+  Not a code bug: `SELF_HOSTING.md` already documents that the `jailer`
+  *binary* needs `setuid-root` (`sudo chown root:root` +
+  `sudo chmod u+s` on it — a separate one-time step, not part of
+  `setup.sh`, since it needs an interactive root password) — that step
+  had simply never been applied on this box before this test, and
+  applying it needs a real interactive terminal this session didn't
+  have. **Still not verified on real hardware** — same caveat as
+  before, now with a concrete repro and root cause instead of just
+  "hasn't been tried yet." Verify before relying on it for a genuinely
   adversarial workload. Snapshotting a jailed sandbox isn't supported
   (`400`) — jailer support covers `Vm::boot` only, `Vm::resume` always
   spawns directly.
@@ -275,14 +362,37 @@ outbound HTTP both still work.
 - **Done:** network isolation between sandboxes on the shared bridge (see
   the Networking section) — bridge port isolation, no sandbox-to-sandbox
   traffic by default.
+- **Done: per-sandbox I/O rate limiting.** `POST /sandboxes` (and
+  `get-or-create`) takes an optional `rate_limit: {bandwidth_bytes_per_sec?,
+  ops_per_sec?}`, validated by the same "reject, don't silently no-op"
+  rule as `vcpu_count`/`mem_size_mib` (at least one sub-field required if
+  present at all, `0` rejected outright with `400`) and applied uniformly
+  to the rootfs drive, every attached drive, and both directions of the
+  network interface via Firecracker's own token-bucket rate limiter
+  (`rate_limiter` on each drive, `rx_rate_limiter`/`tx_rate_limiter` on
+  the NIC — confirmed against the real `firecracker_spec` swagger schema,
+  not assumed). Each bucket refills to its full size once per second, a
+  deliberately simple sandbox-level knob rather than exposing
+  Firecracker's own independent-burst/independent-direction granularity —
+  that's still available at the vmm-crate level (`VmConfig::rate_limit`,
+  `sandkiln_vmm::vm::{RateLimiter, TokenBucket}`) if a future need for
+  finer control shows up. `None` (the default) means unlimited host I/O,
+  unchanged from before this existed. Exposed in both SDKs (`rateLimit`/
+  `rate_limit_bandwidth_bytes_per_sec`+`rate_limit_ops_per_sec` on
+  `create`/`getOrCreate`) and the CLI (`--rate-bandwidth`/`--rate-ops` on
+  `kiln sandbox create`/`get-or-create`).
 
 ## Multi-agent isolation
 
-- Separate Linux users with private home directories within a single
-  sandbox, so multiple AI agents can share one VM without stepping on each
-  other.
-- Shared groups for deliberate, controlled file sharing between agents in
-  the same sandbox.
+- **Done: separate Linux users with private home directories, baked
+  into the base image.** `images/setup-multi-agent-users.sh` creates
+  per-agent users (private `$HOME`) plus a shared group for deliberate,
+  controlled file sharing between agents in the same sandbox — run as
+  part of `images/build-universal-image.sh`, not something a caller
+  configures at create time.
+- Runtime-configurable agent users (chosen per sandbox at `POST
+  /sandboxes` time, rather than fixed at image-build time) is still
+  open.
 
 ## System-privileged workloads
 
@@ -291,6 +401,12 @@ outbound HTTP both still work.
   compatible runtime), VPN clients, FUSE filesystem drivers.
 - This needs care in the base image (kernel config, cgroups setup inside
   the guest) more than in the host-side daemon.
+- **GPU passthrough/access inside a sandbox is explicitly not planned.**
+  Called out here deliberately rather than left silent — Firecracker
+  itself has no GPU device model, and adding one would be a different
+  project (a real hardware-passthrough VMM), not an extension of this
+  one. If a workload needs a GPU, it doesn't belong in a sandkiln
+  sandbox today.
 
 ## Dev servers and live preview
 
@@ -307,19 +423,108 @@ outbound HTTP both still work.
   owning one). WebSocket proxying (dev-server HMR/live-reload) is a real,
   explicitly-scoped-out follow-up, not silently broken — plain HTTP only
   for now.
+- **Alternative worth considering alongside the proxy**: today's
+  `/preview/:port` is a daemon-proxied *path*, not a real routable
+  domain. A dedicated public domain/subdomain per exposed port (the
+  guest reachable at its own URL rather than through a `/preview/:port`
+  path prefix) is a different, also-valid shape used elsewhere — would
+  need real DNS/routing infrastructure this project doesn't have today,
+  so it's a bigger lift than the existing proxy, not a drop-in
+  replacement for it.
 - Fast iterative file sync tuned for dev-server workflows — write many
   small files quickly, ideally with watch-mode support.
-- **Interactive terminal access**: a real PTY inside the sandbox, exposed
-  over a WebSocket — distinct from batch `exec` (request in, response
-  out); this is a live, bidirectional shell session, what `kiln`'s
-  eventual interactive mode and any web-based terminal UI would need.
+- **Done: interactive terminal access.** A real PTY inside the sandbox,
+  exposed over a WebSocket — distinct from batch `exec` (request in,
+  response out), this is a live, bidirectional shell session:
+  `GET /sandboxes/:id/pty[?cols=&rows=]` upgrades to a WebSocket and
+  proxies raw bytes to a shell forked (via `forkpty(2)`) inside the
+  guest, over a second, dedicated vsock port (`PTY_PORT`, separate from
+  the request/response `AGENT_PORT`) — `Sandbox.pty()` in the JS/TS SDK
+  (native `WebSocket`, no new runtime dependency), `kiln sandbox pty
+  <id>` in the CLI (raw terminal mode, keystrokes including Ctrl+C pass
+  straight through), an `examples/interactive-terminal` reference.
+  Live-verified end to end, including both hangup directions: the shell
+  exiting first cleanly ends the WebSocket session, and the WebSocket
+  closing first (a lost connection, a closed browser tab) sends the
+  shell's process group `SIGHUP` so it actually terminates instead of
+  running orphaned inside the guest. Also covered by
+  `scripts/integration-test.sh` itself now (`17-pty.sh`, via a small
+  Node WebSocket helper, `scripts/lib/pty-check.mjs`, since the rest of
+  that harness is bash+curl with no native way to drive a WebSocket) —
+  a real command's output round-tripping through a real shell, and the
+  SIGHUP cleanup itself (open a session, disconnect without exiting the
+  shell, `exec` a `ps` check confirming nothing orphaned survives).
+  - Auth: like `/preview/:port`, this accepts the token as a `?token=`
+    query parameter, not just a header — neither a browser's nor
+    Node.js's native `WebSocket` constructor can set custom headers.
+  - A per-sandbox concurrent-session cap (`MAX_PTY_SESSIONS_PER_SANDBOX
+    = 64`) is enforced daemon-side.
+  - No live terminal resize yet — `cols`/`rows` size the session once,
+    at open time, via the initial `PtyHandshake`; a real follow-up would
+    need a small control-message side-channel over the same WebSocket
+    (e.g. a JSON resize message multiplexed alongside the raw byte
+    stream) to change it mid-session.
 
 ## Tags and sandbox metadata
 
 - Key/value tags on sandboxes (environment, team, owner, whatever the
   caller wants) for filtering and listing.
-- Sqlite-backed sandbox state instead of the current in-memory map, so
-  tags, history, and listings survive a daemon restart.
+- **Done: durable sandbox history (sqlite), scoped honestly** — new
+  `sandkiln-store` crate (`rusqlite`, bundled), a `GET /sandboxes/history`
+  route, and `AppState::history: HistoryStore`. **This is not, and
+  cannot be, "the in-memory map becomes sqlite" in the sense of live
+  sandboxes surviving a restart** — a live `Sandbox` owns a real
+  Firecracker `Child` process with open API/vsock sockets, and there is
+  no re-adoption mechanism anywhere in this project (jailer included) to
+  reattach to one after the daemon that spawned it is gone. Confirmed
+  directly: today a daemon restart of any kind (kill, crash,
+  `systemctl restart`) orphans every live sandbox's process
+  unconditionally — `scripts/sandkilnd-ctl.sh` already does its own
+  best-effort orphan `pkill` for exactly this reason, and
+  `SELF_HOSTING.md`'s troubleshooting section already documented the
+  symptom before this existed. What sqlite actually buys, honestly: a
+  durable record of *every sandbox that ever existed* — id, name, tags,
+  image, created-at, and how it ended (`destroyed`, `snapshotted` with
+  the resulting snapshot id, or `orphaned_by_restart`) — queryable
+  (`?live_only=`, `?limit=`) across restarts, which the existing
+  in-memory map and even `Snapshot`'s own flat-file durability (which
+  only covers sandboxes that got that far) don't give you. At daemon
+  startup, any record still marked live is unconditionally marked
+  `orphaned_by_restart` — not a heuristic, since nothing can make it
+  genuinely still live at that point. **Live-verified end to end**,
+  including the actual restart case: created a sandbox, confirmed its
+  live history entry, restarted the real daemon, confirmed it flipped to
+  `orphaned_by_restart` with its tags intact, while separately-recorded
+  destroyed/snapshotted entries from before the restart were untouched.
+  15 new `scripts/integration-test.sh` checks (the create/destroy/
+  snapshot recording path — the restart case itself needs a real daemon
+  restart mid-test, verified manually instead), 209/209 passing overall.
+- **Done: guest-accessible metadata service**, via Firecracker's own
+  native MMDS (Microvm Metadata Service) rather than anything
+  sandkiln-built — every sandbox with a name and/or tags automatically
+  gets its own `{id, name, tags}` served at `http://169.254.169.254/`
+  inside the guest, a link-local HTTP endpoint Firecracker's device
+  model answers directly at the network layer. **No vsock/guest-agent
+  involvement at all** — this needed zero protocol or guest-agent
+  changes, and zero new daemon HTTP routes or SDK/CLI surface (nothing
+  outside the guest ever calls this; it's automatic from whatever
+  `tags`/`name` a caller already provides at create time). Configured
+  V2 (token-gated: the guest must `PUT
+  http://169.254.169.254/latest/api/token` for a session token before
+  it can `GET` anything) rather than V1's plain unauthenticated GET,
+  since a sandbox may run untrusted or AI-generated code that could
+  otherwise SSRF an unauthenticated metadata endpoint. **Live-verified**
+  by actually curling it from inside a real sandbox (5 new
+  `scripts/integration-test.sh` checks, 194/194 passing) — including a
+  real gotcha worth knowing: `GET /` with no `Accept` header returns an
+  AWS-IMDS-style newline-separated list of top-level key names (`id`,
+  `name`, `tags`), not the JSON value itself; `Accept: application/json`
+  is required to get the actual content back. Not yet wired: live
+  updates if tags ever become mutable after create (no such API exists
+  yet — `PATCH /mmds` is available in Firecracker whenever that's
+  needed) or exposing resource config (`vcpu_count`/`mem_size_mib`/etc.)
+  alongside `id`/`name`/`tags` (out of scope for what this item asked
+  for).
 
 ## Benchmarking
 
@@ -360,9 +565,127 @@ outbound HTTP both still work.
     (~180ms of real file-copy time) still needs either a CoW-capable
     filesystem for image storage or a device-mapper/thin-provisioning
     layer (ties into "Base and custom images").
-- Snapshot/resume timing once that exists — the whole point of persistence
-  is that resume should be dramatically faster than a cold boot; that
-  claim needs a number behind it.
+- **Done: snapshot/resume benchmarked** (`bench_snapshot_take`/
+  `bench_resume` in `core/crates/vmm/benches/vm_lifecycle.rs`, alongside
+  the existing `bench_cold_boot`/`bench_exec_roundtrip`). Real numbers,
+  same dev box as above:
+  - `snapshot_take` (pause + write memory/state to disk): **~322ms**
+    (309.6–335.0ms) — expensive, dominated by writing the guest's full
+    memory to disk synchronously; a real cost for auto-suspend and any
+    future tiered-idle-lifecycle work, not free.
+  - `resume_from_snapshot`: **~25.8ms** (25.5–26.2ms) — only **~19%
+    faster than `cold_boot`'s ~31.9ms** (31.5–32.4ms), not the dramatic
+    win the earlier framing below assumed. Both numbers are already
+    small on this base image (lightweight kernel, minimal guest-agent
+    init) — cold boot has little slack left for resume to undercut.
+  - **This changes what a pre-warmed pool actually buys**: the ~180ms
+    gap between a ~32ms boot and the measured 211ms full-create (see
+    "What works today" above) isn't in the boot/resume step at all —
+    both are ~25–32ms either way — it's in the surrounding per-create
+    setup (rootfs prep, network lease). A pre-warmed pool's real value
+    is pre-doing *that* setup ahead of a request, not shaving boot
+    latency itself, which was never the bottleneck. Worth re-measuring
+    once a pool exists, rather than assumed up front.
+- **Done: pre-warmed snapshot pool, a first honestly-scoped slice.** The
+  mechanism sandkiln already has (snapshot/resume, auto-suspend) is the
+  same one production Firecracker users document as their main cold-start
+  fix — restore an already-initialized VM instead of booting one from
+  scratch. This closes the gap identified above: `POST /pools`
+  (`{id, image_id?, vcpu_count?, mem_size_mib?, warm_count}`) configures a
+  pool; a background replenisher (`sandkiln-daemon`'s `pool_replenisher`
+  module, ticking every 2s) keeps `warm_count` resumable snapshots ready
+  per pool; a plain `POST /sandboxes` (no `drives`, no `rate_limit` — see
+  below) matching a pool's `image_id`/resolved `vcpu_count`/`mem_size_mib`
+  claims a warm snapshot automatically instead of cold-booting — entirely
+  transparent, no separate "create from pool" call. `Pool.create/list/delete`
+  in the JS/TS SDK, `kiln pool create|ls|rm` in the CLI.
+  Live-verified, including the actual latency win on real hardware — with
+  an important, honestly-measured caveat (see the finding right below
+  this): a **clean** claim (the resumed snapshot passes its health check)
+  measured at roughly **70–200ms** across repeated runs vs. a cold
+  create's own **~160–200ms** on the same box — a real but modest win at
+  this sample size (small-sample numbers on a shared, variable-load dev
+  box, not a controlled benchmark — see the Benchmarking section for the
+  underlying boot/resume/setup breakdown this is built on). That clean
+  win is **not** the reliable common case on this dev box today, though —
+  see the failure-rate finding immediately below, which affects a large
+  enough fraction of claims that "pools make creates faster" needs that
+  caveat attached, not stated as a clean, unconditional result.
+  - **A real Firecracker/KVM finding from building this, not a sandkiln
+    bug — and a significant one, not a rare edge case.** Resuming a
+    snapshot has a failure mode where the restored guest kernel panics
+    early in boot (confirmed via its captured console log — an
+    early-boot divide-by-zero trap in the console driver, restored
+    CPU/timer state interacting badly with timing-sensitive init code —
+    plausibly TSC/clock-source drift between snapshot-time and
+    restore-time, though that's an informed guess, not a confirmed root
+    cause) and the whole Firecracker process exits shortly after.
+    **Measured directly, repeatedly, on this dev box**: across several
+    clean, isolated, sequential single-claim test runs (no concurrent
+    load), the failure rate ranged from roughly **1 in 3 to 2 in 3**
+    resumes — not a rare one-off. `08-snapshots.sh`'s own single
+    resume-then-exec check still passes every run because one resume
+    isn't enough attempts to reliably hit it; a pool's whole purpose is
+    resuming far more often than a manual test ever would, which is
+    exactly what surfaced a failure rate that would otherwise have stayed
+    invisible. Whether this is specific to this dev box's kernel/KVM/CPU
+    combination, this project's own guest kernel build, or a broader
+    Firecracker snapshot/restore characteristic is genuinely open —
+    worth real investigation before assuming it generalizes, but not
+    worth blocking this feature on, given the fallback below makes it
+    safe either way.
+    Handled, not just noted: every claim runs a real post-resume health
+    check (`exec true`) before being handed to the caller — a claim that
+    fails it tears the broken sandbox down (via `Vm::force_stop`, which
+    skips `stop()`'s own optimistic "sync before kill" call entirely,
+    since a VM that just failed its health check was never going to
+    respond to that either — found live too: without this, a fallback
+    paid two independent ~5-second retry timeouts back to back, ~10.3s
+    total, instead of one, ~5.4s) and transparently falls back to a
+    normal cold create, so a caller never receives a dead sandbox id.
+    Confirmed live via repeated stress tests (0 caller-visible failures
+    across every run; the daemon log confirms the fallback path actually
+    firing at the rate described above).
+  - **A related, separately real finding**: Firecracker's snapshot/restore
+    does not preserve MMDS's initialized state — `PATCH /mmds` alone fails
+    with "MMDS data store is not initialized" after a resume, even though
+    the VM was networked and had MMDS configured before being snapshotted.
+    `sandkiln_vmm::vm::Vm::update_metadata` works around this by redoing
+    the full `PUT /mmds/config` + `PUT /mmds` sequence rather than a bare
+    `PATCH`, so a pool-claimed sandbox's guest-visible MMDS content
+    correctly reflects the caller's real identity, not the warm-boot
+    placeholder's.
+  - **Scoped honestly, matching the shape sketched above with one
+    deliberate cut**: pool identity is keyed by image + resolved
+    vcpu/mem config (not just image); `warm_count` of `0` is valid
+    (an inert pool); a request with `drives` or a custom `rate_limit`
+    never matches a pool, since both are baked into a VM's state at boot
+    time and a warm snapshot was booted with neither — falls through to
+    cold create rather than silently ignoring them. **Not yet built**: a
+    `max_count` ceiling with queueing past it (a claim past what's
+    currently warm just cold-creates instead, unbounded, same as no pool
+    existed) — a real follow-up, not implemented in this first slice. Pool
+    *configuration* is in-memory only, not durable across a daemon
+    restart (a caller re-`POST`s after one) — and a daemon restart can
+    orphan an already-warm snapshot that has no pool left to claim or
+    clean it up, a known, not-yet-solved edge of that same limitation.
+- **Snapshot lineage**: today a daemon only ever knows "the current
+  snapshot" a sandbox became — there's no way to ask "what snapshot did
+  *this* snapshot get forked from, and what else was forked from it."
+  Walking that ancestry (a tree, not just a single pointer) would need
+  `Snapshot` to record its own parent snapshot id when created via
+  `fork`/`resume`, not just `Sandbox::source_snapshot_id`'s current
+  one-hop pointer. Not started.
+- **Fan-out cloning**: cloning one snapshot into *several* new live
+  sandboxes at once (not just one) is a real, documented pattern
+  elsewhere, but it directly conflicts with the one-live-fork-per-snapshot
+  constraint above (`Snapshot::forked_into`) — that constraint exists
+  because Firecracker has no verified way to give two live descendants
+  of one snapshot independent rootfs backing files or guest IP/MAC (see
+  the fork bullet above). Genuine fan-out would need that same unsolved
+  problem solved first, not a new API layered on top of today's fork;
+  tracked here as a restatement of the existing gap in fan-out terms,
+  not a separate, independently-achievable item.
 - These numbers are from one manual run on one shared dev box, not
   isolated hardware — treat them as directionally useful, not authoritative.
   Automating re-runs so regressions are visible over time is still open.
@@ -432,8 +755,47 @@ The primitive is only as useful as what's built on top of it:
   workflow" — but it belongs in a separate project/library built against
   this one's API, not merged into the daemon.
 
+## Ideas explicitly not started, kept honest rather than silent
+
+Two capabilities other sandbox platforms document that sandkiln has
+zero coverage of — each closer to a separate product surface than a
+small extension of what exists, called out deliberately (same reasoning
+as the GPU-passthrough note above) rather than left as a silent gap:
+
+- **Desktop/GUI automation**: a managed desktop environment inside a
+  sandbox (a windowing environment plus a browser, reachable over VNC or
+  a browser-based remote-desktop client), with a screenshot-capture API
+  and a full keyboard/mouse input-control API, plus reconnecting to an
+  already-running desktop sandbox by id without killing the VM. Real,
+  documented use cases: browser-based agent automation, computer-use
+  agent evals. This is a meaningfully different product surface than
+  "run untrusted code and read/write files" — it needs its own base
+  image work (a desktop environment, a VNC server, input-injection
+  tooling inside the guest) well beyond today's universal image.
+- **Git-native sandbox filesystem**: version-controlled sandbox state as
+  a first-class concept — workspaces as private branches mounted as
+  POSIX directories, a snapshot doubling as a commit, merging by moving
+  a pointer rather than copying data, and read-only mounts for sharing
+  common tooling across many sandboxes either following a moving head or
+  pinned to one snapshot. A substantial new subsystem (a real git
+  server/object store this project doesn't have any of today), not a
+  small extension of `snapshot`/`resume`/`fork` — those stay path-based
+  and single-lineage; this would be a different persistence model
+  layered alongside them, not a replacement.
+
+Both are plausible future directions for this project specifically
+because it's a personal project without a fixed roadmap deadline, not
+because either is a small lift — treat this section as "worth doing
+eventually if there's appetite," not "next."
+
 ## Documentation and examples
 
-- A docs site with runnable examples covering both SDKs and the CLI.
+- **Done**: a full docs site (`website/docs/`, Astro + Starlight) —
+  Getting Started, Core Concepts, Guides, Reference (daemon HTTP API,
+  JS/TS SDK, Python SDK, CLI), and Architecture, covering both SDKs and
+  the CLI with runnable examples throughout. Deployed three ways: as a
+  `/docs` subpath of the main site (GitHub Pages and the merged Vercel
+  build) and standalone at its own domain root
+  (sandkiln-docs.vercel.app) — see `website/AGENTS.md`.
 - Example projects: **done** — code playground (JS/TS), AI-agent sandbox
   runner (Python), and dev-server preview (JS/TS), see `examples/`.

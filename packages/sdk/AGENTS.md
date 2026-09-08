@@ -16,7 +16,25 @@ this package only ever catches up to what the daemon actually does.
 
 - `sandbox.ts` — the `Sandbox` class: `create`/`attach`/`list`/`resume`/
   `fork`/`byName`/`getOrCreate` (static), `runCommand`/`readFile`/
-  `writeFile`/`stop`/`snapshot`/`previewUrl` (instance). Every instance
+  `writeFile`/`chmod`/`chown`/`mkdir`/`rename`/`copy`/`symlink`/
+  `readlink`/`truncate`/`listDir`/`stop`/`snapshot`/`previewUrl`/`pty`
+  (instance). `pty(options)` is the odd one out — every other instance
+  method is `fetch`-based request/response through `http.ts`; this one
+  returns a native `WebSocket` directly (constructed against
+  `core/crates/daemon/src/routes_pty.rs`'s route) instead of awaiting
+  anything, since a PTY session is a live, bidirectional stream, not a
+  single call. Throws a clear error instead of returning a broken object
+  if `typeof WebSocket === "undefined"` (older Node without a polyfill)
+  — deliberately no `ws` npm dependency added just for this, to keep this
+  package's "zero runtime dependencies" property intact; see
+  `ROADMAP.md`'s "Dev servers and live preview" section for the auth
+  (`?token=`, same reasoning as `previewUrl` below) and the no-live-resize
+  caveat. `chmod`/`chown`/.../`listDir` all follow the exact same
+  shape as `readFile`/`writeFile` — build a request body, `request<T>()`,
+  map any snake_case response fields back to camelCase — and forward
+  `path`/`from`/`to`/etc. completely unvalidated, same as `readFile`/
+  `writeFile` already do (validation, if ever added, belongs on the
+  daemon or guest-agent side, not duplicated here). Every instance
   method reuses the `baseUrl`/`authToken` the sandbox was created/attached
   with — see the `ClientContext` pattern. `resume`/`fork`/`byName` are
   static (not instance methods) because none acts on an already-existing
@@ -45,6 +63,21 @@ this package only ever catches up to what the daemon actually does.
   shape, including `guestAgentVerified`/`verificationHint` on every
   result (always `false` — the daemon can never verify this itself, see
   that file's module doc comment).
+- `drive.ts` — the `Drive` class: `create`/`list`/`delete`, all static —
+  same static-namespace shape as `image.ts` (a drive has no instance
+  behavior besides delete). Attach one at create time via
+  `CreateSandboxOptions.drives`, not through this class — `Drive` only
+  covers the drive resource itself (create/list/delete), not attachment.
+- `pool.ts` — the `Pool` class: `create`/`list`/`delete`, all static —
+  same static-namespace shape as `image.ts`/`drive.ts`. `Pool.create`
+  takes a caller-given `id` (like `Image.register`, not
+  `Drive.create`'s server-generated one) since a pool's id is purely a
+  configuration handle, never guest- or sandbox-visible. There is no
+  "claim from pool" method here at all — claiming is entirely
+  transparent, done server-side by a plain `Sandbox.create()` whose
+  image/resources match a configured pool (see
+  `core/crates/daemon/src/pool.rs`'s module doc comment) — this class
+  only ever manages pool *configuration*.
 - `client.ts` — `ClientContext`/`resolveClient`, pulled out of
   `sandbox.ts` once `image.ts` needed the exact same
   `baseUrl`/`authToken` resolution.
