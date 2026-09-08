@@ -339,9 +339,10 @@ outbound HTTP both still work.
   that's still available at the vmm-crate level (`VmConfig::rate_limit`,
   `sandkiln_vmm::vm::{RateLimiter, TokenBucket}`) if a future need for
   finer control shows up. `None` (the default) means unlimited host I/O,
-  unchanged from before this existed. **Not yet done:** exposed in either
-  SDK or the CLI — daemon-level only for now, same shape as the
-  drives-in-SDK gap below.
+  unchanged from before this existed. Exposed in both SDKs (`rateLimit`/
+  `rate_limit_bandwidth_bytes_per_sec`+`rate_limit_ops_per_sec` on
+  `create`/`getOrCreate`) and the CLI (`--rate-bandwidth`/`--rate-ops` on
+  `kiln sandbox create`/`get-or-create`).
 
 ## Multi-agent isolation
 

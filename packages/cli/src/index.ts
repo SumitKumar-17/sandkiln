@@ -43,9 +43,19 @@ sandbox
   .option("--vcpu <count>", "vCPU count override (daemon default if omitted)", parsePositiveInt("--vcpu"))
   .option("--mem <mib>", "memory size override in MiB (daemon default if omitted)", parsePositiveInt("--mem"))
   .option("--image <id>", "boot from a registered image instead of the daemon's default rootfs (see 'kiln image ls')")
+  .option("--rate-bandwidth <bytes-per-sec>", "cap host I/O bandwidth (bytes/sec) via Firecracker's rate limiter", parsePositiveInt("--rate-bandwidth"))
+  .option("--rate-ops <ops-per-sec>", "cap host I/O operations/sec via Firecracker's rate limiter", parsePositiveInt("--rate-ops"))
   .action(async function (
     this: Command,
-    opts: { name?: string; tag: Record<string, string>; vcpu?: number; mem?: number; image?: string },
+    opts: {
+      name?: string;
+      tag: Record<string, string>;
+      vcpu?: number;
+      mem?: number;
+      image?: string;
+      rateBandwidth?: number;
+      rateOps?: number;
+    },
   ) {
     const { baseUrl, token } = clientOptions(this);
     try {
@@ -57,6 +67,10 @@ sandbox
         vcpuCount: opts.vcpu,
         memSizeMib: opts.mem,
         imageId: opts.image,
+        rateLimit:
+          opts.rateBandwidth === undefined && opts.rateOps === undefined
+            ? undefined
+            : { bandwidthBytesPerSec: opts.rateBandwidth, opsPerSec: opts.rateOps },
       });
       process.stdout.write(`${created.id}\n`);
     } catch (error) {
@@ -75,7 +89,20 @@ sandbox
   .addOption(tagOption())
   .option("--vcpu <count>", "vCPU count override, used only if a fresh sandbox is created", parsePositiveInt("--vcpu"))
   .option("--mem <mib>", "memory size override in MiB, used only if a fresh sandbox is created", parsePositiveInt("--mem"))
-  .action(async function (this: Command, opts: { name: string; tag: Record<string, string>; vcpu?: number; mem?: number }) {
+  .option(
+    "--rate-bandwidth <bytes-per-sec>",
+    "I/O bandwidth cap (bytes/sec), used only if a fresh sandbox is created",
+    parsePositiveInt("--rate-bandwidth"),
+  )
+  .option(
+    "--rate-ops <ops-per-sec>",
+    "I/O operations/sec cap, used only if a fresh sandbox is created",
+    parsePositiveInt("--rate-ops"),
+  )
+  .action(async function (
+    this: Command,
+    opts: { name: string; tag: Record<string, string>; vcpu?: number; mem?: number; rateBandwidth?: number; rateOps?: number },
+  ) {
     const { baseUrl, token } = clientOptions(this);
     try {
       const { sandbox: resolved, created } = await Sandbox.getOrCreate({
@@ -85,6 +112,10 @@ sandbox
         tags: opts.tag,
         vcpuCount: opts.vcpu,
         memSizeMib: opts.mem,
+        rateLimit:
+          opts.rateBandwidth === undefined && opts.rateOps === undefined
+            ? undefined
+            : { bandwidthBytesPerSec: opts.rateBandwidth, opsPerSec: opts.rateOps },
       });
       process.stdout.write(`${resolved.id}  ${created ? "created" : "existing"}\n`);
     } catch (error) {

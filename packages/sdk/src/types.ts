@@ -3,6 +3,17 @@ export interface SandboxOptions {
   authToken?: string;
 }
 
+/** Caps host I/O for a sandbox via Firecracker's own token-bucket rate
+ * limiter, applied to the rootfs drive, every attached drive, and both
+ * directions of the network interface. At least one of the two fields
+ * must be set (and non-zero) if this is present at all — the daemon
+ * rejects an empty or all-zero `rateLimit` with a 400, the same
+ * "reject, don't silently no-op" convention as `vcpuCount`/`memSizeMib`. */
+export interface RateLimitOptions {
+  bandwidthBytesPerSec?: number;
+  opsPerSec?: number;
+}
+
 export interface CreateSandboxOptions extends SandboxOptions {
   /** Caller-given identity, unique among live sandboxes and held
    * snapshots at the moment it's claimed — the daemon rejects a taken
@@ -24,9 +35,11 @@ export interface CreateSandboxOptions extends SandboxOptions {
    * unchanged. Rejected if no image with this id is currently
    * registered. */
   imageId?: string;
+  /** Unlimited host I/O (the default) when omitted. See `RateLimitOptions`. */
+  rateLimit?: RateLimitOptions;
 }
 
-/** `tags`/`vcpuCount`/`memSizeMib` are used only when
+/** `tags`/`vcpuCount`/`memSizeMib`/`rateLimit` are used only when
  * `Sandbox.getOrCreate` actually creates a fresh sandbox — resuming an
  * existing snapshot under this name ignores them, using what was
  * recorded on it when it was taken, same as `Sandbox.resume`. */
@@ -35,6 +48,7 @@ export interface GetOrCreateSandboxOptions extends SandboxOptions {
   tags?: Record<string, string>;
   vcpuCount?: number;
   memSizeMib?: number;
+  rateLimit?: RateLimitOptions;
 }
 
 export interface ListSandboxesOptions extends SandboxOptions {
@@ -55,12 +69,18 @@ export interface ExecResult {
   exitCode: number;
 }
 
+export interface RateLimitRequestBody {
+  bandwidth_bytes_per_sec?: number;
+  ops_per_sec?: number;
+}
+
 export interface CreateSandboxRequestBody {
   name?: string;
   tags?: Record<string, string>;
   vcpu_count?: number;
   mem_size_mib?: number;
   image_id?: string;
+  rate_limit?: RateLimitRequestBody;
 }
 
 export interface CreateSandboxResponseBody {
@@ -178,6 +198,7 @@ export interface GetOrCreateSandboxRequestBody {
   tags?: Record<string, string>;
   vcpu_count?: number;
   mem_size_mib?: number;
+  rate_limit?: RateLimitRequestBody;
 }
 
 export interface GetOrCreateSandboxResponseBody {

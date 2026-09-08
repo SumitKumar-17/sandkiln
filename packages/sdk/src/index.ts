@@ -10,6 +10,7 @@ export type {
   ListSandboxesOptions,
   ListSnapshotsOptions,
   PreviewUrlOptions,
+  RateLimitOptions,
   SandboxInfo,
   SandboxOptions,
   SnapshotInfo,

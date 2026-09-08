@@ -50,6 +50,20 @@ class SnapshotInfo:
     name: str | None = None
 
 
+def _build_rate_limit(bandwidth_bytes_per_sec: int | None, ops_per_sec: int | None) -> dict[str, int] | None:
+    """`None` when the caller didn't set either sub-field — only includes
+    the ones actually set, mirroring the daemon's own per-field
+    `#[serde(default)]` optionality rather than always sending both keys."""
+    if bandwidth_bytes_per_sec is None and ops_per_sec is None:
+        return None
+    body: dict[str, int] = {}
+    if bandwidth_bytes_per_sec is not None:
+        body["bandwidth_bytes_per_sec"] = bandwidth_bytes_per_sec
+    if ops_per_sec is not None:
+        body["ops_per_sec"] = ops_per_sec
+    return body
+
+
 class Sandbox:
     """A handle to one sandkiln sandbox. Construct via `Sandbox.create()`
     or `Sandbox.attach()`, not directly."""
@@ -69,6 +83,8 @@ class Sandbox:
         vcpu_count: int | None = None,
         mem_size_mib: int | None = None,
         image_id: str | None = None,
+        rate_limit_bandwidth_bytes_per_sec: int | None = None,
+        rate_limit_ops_per_sec: int | None = None,
     ) -> "Sandbox":
         """`name` is a caller-given identity, unique among live sandboxes
         and held snapshots at the moment it's claimed — the daemon rejects
@@ -85,7 +101,15 @@ class Sandbox:
         `image_id` boots from a registered image (see `Image.register`)
         instead of the daemon's configured default rootfs; omitted keeps
         today's behavior unchanged. Raises `SandkilnApiError` with status
-        404 if no image with this id is currently registered."""
+        404 if no image with this id is currently registered.
+
+        `rate_limit_bandwidth_bytes_per_sec`/`rate_limit_ops_per_sec` cap
+        host I/O via Firecracker's own token-bucket rate limiter, applied
+        to the rootfs drive, every attached drive, and both directions of
+        the network interface. Both omitted (the default) means unlimited
+        host I/O, unchanged from before this existed. A `0` for either
+        raises `SandkilnApiError` with status 400 — meaningless, rejected
+        outright rather than silently treated as unlimited."""
         resolved_base_url = resolve_base_url(base_url)
         resolved_token = resolve_auth_token(auth_token)
         body: dict[str, object] = {}
@@ -99,6 +123,9 @@ class Sandbox:
             body["mem_size_mib"] = mem_size_mib
         if image_id is not None:
             body["image_id"] = image_id
+        rate_limit = _build_rate_limit(rate_limit_bandwidth_bytes_per_sec, rate_limit_ops_per_sec)
+        if rate_limit is not None:
+            body["rate_limit"] = rate_limit
         response = request(resolved_base_url, "POST", "/sandboxes", resolved_token, body or None)
         return cls(response["id"], resolved_base_url, resolved_token)
 
@@ -132,14 +159,17 @@ class Sandbox:
         auth_token: str | None = None,
         vcpu_count: int | None = None,
         mem_size_mib: int | None = None,
+        rate_limit_bandwidth_bytes_per_sec: int | None = None,
+        rate_limit_ops_per_sec: int | None = None,
     ) -> tuple["Sandbox", bool]:
         """Resolves `name` to a sandbox in one call, creating it if it
         doesn't exist yet: a live sandbox with this name is returned
         as-is, a stopped (snapshotted) one is resumed, and otherwise a
         fresh sandbox is created and given this name. `tags`/
-        `vcpu_count`/`mem_size_mib` only apply to the create-fresh case —
-        resuming an existing snapshot uses what was recorded on it when it
-        was taken, same as `Sandbox.resume`.
+        `vcpu_count`/`mem_size_mib`/rate limit options only apply to the
+        create-fresh case — resuming an existing snapshot uses what was
+        recorded on it when it was taken, same as `Sandbox.resume`. See
+        `Sandbox.create` for what the rate-limit options mean.
 
         Returns `(sandbox, created)` — `created` is `True` only when this
         call actually booted a brand-new sandbox from the base rootfs.
@@ -156,6 +186,9 @@ class Sandbox:
             body["vcpu_count"] = vcpu_count
         if mem_size_mib is not None:
             body["mem_size_mib"] = mem_size_mib
+        rate_limit = _build_rate_limit(rate_limit_bandwidth_bytes_per_sec, rate_limit_ops_per_sec)
+        if rate_limit is not None:
+            body["rate_limit"] = rate_limit
         response = request(resolved_base_url, "POST", "/sandboxes/get-or-create", resolved_token, body)
         return cls(response["id"], resolved_base_url, resolved_token), response["created"]
 

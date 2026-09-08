@@ -15,6 +15,24 @@ Changelog](https://keepachangelog.com/).
 
 Nothing yet — `main` matches what's published.
 
+## [0.4.0] — 2026-09-08
+
+### Added
+- Per-sandbox I/O rate limiting via Firecracker's own token-bucket rate
+  limiter: `POST /sandboxes` (and `get-or-create`) accepts an optional
+  `rate_limit: {bandwidth_bytes_per_sec?, ops_per_sec?}`, applied
+  uniformly to the rootfs drive, every attached drive, and both
+  directions of the network interface. At least one sub-field must be
+  set and non-zero if `rate_limit` is present at all — `0` or an empty
+  object is rejected with `400`, the same convention as `vcpu_count`/
+  `mem_size_mib`. `None`/omitted means unlimited host I/O, unchanged
+  from before this existed. Both SDKs (`rateLimit`/
+  `rate_limit_bandwidth_bytes_per_sec`+`rate_limit_ops_per_sec`) and the
+  CLI (`--rate-bandwidth`/`--rate-ops` on `kiln sandbox create` and
+  `get-or-create`) are updated to match. Not yet exposed as a
+  standalone daemon-level ceiling/floor — see `ROADMAP.md`'s Security
+  hardening section.
+
 ## [0.3.0] — 2026-09-01
 
 Custom/managed images, named sandboxes, persistent-by-default stop,

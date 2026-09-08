@@ -17,6 +17,8 @@ import type {
   ListSnapshotsOptions,
   ListSnapshotsResponseBody,
   PreviewUrlOptions,
+  RateLimitOptions,
+  RateLimitRequestBody,
   ReadFileRequestBody,
   ReadFileResponseBody,
   ResumeSnapshotResponseBody,
@@ -127,6 +129,8 @@ export class Sandbox {
     if (options.tags !== undefined) requestBody.tags = options.tags;
     if (options.vcpuCount !== undefined) requestBody.vcpu_count = options.vcpuCount;
     if (options.memSizeMib !== undefined) requestBody.mem_size_mib = options.memSizeMib;
+    const rateLimit = buildRateLimitRequestBody(options.rateLimit);
+    if (rateLimit !== undefined) requestBody.rate_limit = rateLimit;
 
     const body = await request<GetOrCreateSandboxResponseBody>({
       ...client,
@@ -324,6 +328,17 @@ export class Sandbox {
   }
 }
 
+/** Only includes the sub-fields the caller actually set — mirrors the
+ * daemon's own per-field `#[serde(default)]` optionality on
+ * `RateLimitRequest` rather than always sending both keys. */
+function buildRateLimitRequestBody(rateLimit: RateLimitOptions | undefined): RateLimitRequestBody | undefined {
+  if (rateLimit === undefined) return undefined;
+  const body: RateLimitRequestBody = {};
+  if (rateLimit.bandwidthBytesPerSec !== undefined) body.bandwidth_bytes_per_sec = rateLimit.bandwidthBytesPerSec;
+  if (rateLimit.opsPerSec !== undefined) body.ops_per_sec = rateLimit.opsPerSec;
+  return body;
+}
+
 /** `undefined` (rather than `{}`) when the caller didn't set anything,
  * matching the daemon's own "empty body means all defaults" handling and
  * this SDK's existing convention for an all-default `POST /sandboxes`. */
@@ -334,5 +349,7 @@ function buildCreateSandboxRequestBody(options: CreateSandboxOptions): CreateSan
   if (options.vcpuCount !== undefined) body.vcpu_count = options.vcpuCount;
   if (options.memSizeMib !== undefined) body.mem_size_mib = options.memSizeMib;
   if (options.imageId !== undefined) body.image_id = options.imageId;
+  const rateLimit = buildRateLimitRequestBody(options.rateLimit);
+  if (rateLimit !== undefined) body.rate_limit = rateLimit;
   return Object.keys(body).length > 0 ? body : undefined;
 }
