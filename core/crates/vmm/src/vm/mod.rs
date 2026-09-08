@@ -100,6 +100,20 @@ pub struct VmConfig {
     /// `None` (the default) means unlimited host I/O, unchanged from
     /// before this existed.
     pub rate_limit: Option<RateLimiter>,
+    /// Arbitrary JSON served to the guest via Firecracker's own MMDS
+    /// (Microvm Metadata Service) at `http://169.254.169.254/` — a
+    /// link-local HTTP endpoint Firecracker's device model answers
+    /// directly, no vsock/guest-agent involvement at all. Configured
+    /// V2 (token-gated: the guest must `PUT .../latest/api/token` for a
+    /// session token before `GET`ting anything) rather than V1's plain
+    /// unauthenticated GET, since a sandbox may run untrusted or
+    /// AI-generated code that could otherwise SSRF an unauthenticated
+    /// metadata endpoint. Requires `network` to also be set — MMDS
+    /// intercepts requests via a configured network interface, so
+    /// there's nothing for it to intercept without one. `None` (the
+    /// default) configures no MMDS at all, unchanged from before this
+    /// existed.
+    pub metadata: Option<serde_json::Value>,
 }
 
 pub struct Vm {

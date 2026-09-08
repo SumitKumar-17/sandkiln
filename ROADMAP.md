@@ -443,17 +443,32 @@ outbound HTTP both still work.
   caller wants) for filtering and listing.
 - Sqlite-backed sandbox state instead of the current in-memory map, so
   tags, history, and listings survive a daemon restart.
-- **Guest-accessible metadata service**: sandkiln has no way for code
-  running *inside* a sandbox to read its own tags/name/config from the
-  daemon — a caller has to bake anything the guest needs to know about
-  itself into the rootfs at image-build time, or push it in after boot
-  via `write_file`. Firecracker itself documents exactly this gap being
-  solvable: a host-configurable, guest-reachable metadata endpoint the
-  guest can query over its own network path, updatable by the host
-  without a reboot. Not started, but worth designing toward — it's the
-  natural place tags/name would become visible to the workload running
-  inside the sandbox itself, not just to the caller managing it from
-  outside.
+- **Done: guest-accessible metadata service**, via Firecracker's own
+  native MMDS (Microvm Metadata Service) rather than anything
+  sandkiln-built — every sandbox with a name and/or tags automatically
+  gets its own `{id, name, tags}` served at `http://169.254.169.254/`
+  inside the guest, a link-local HTTP endpoint Firecracker's device
+  model answers directly at the network layer. **No vsock/guest-agent
+  involvement at all** — this needed zero protocol or guest-agent
+  changes, and zero new daemon HTTP routes or SDK/CLI surface (nothing
+  outside the guest ever calls this; it's automatic from whatever
+  `tags`/`name` a caller already provides at create time). Configured
+  V2 (token-gated: the guest must `PUT
+  http://169.254.169.254/latest/api/token` for a session token before
+  it can `GET` anything) rather than V1's plain unauthenticated GET,
+  since a sandbox may run untrusted or AI-generated code that could
+  otherwise SSRF an unauthenticated metadata endpoint. **Live-verified**
+  by actually curling it from inside a real sandbox (5 new
+  `scripts/integration-test.sh` checks, 194/194 passing) — including a
+  real gotcha worth knowing: `GET /` with no `Accept` header returns an
+  AWS-IMDS-style newline-separated list of top-level key names (`id`,
+  `name`, `tags`), not the JSON value itself; `Accept: application/json`
+  is required to get the actual content back. Not yet wired: live
+  updates if tags ever become mutable after create (no such API exists
+  yet — `PATCH /mmds` is available in Firecracker whenever that's
+  needed) or exposing resource config (`vcpu_count`/`mem_size_mib`/etc.)
+  alongside `id`/`name`/`tags` (out of scope for what this item asked
+  for).
 
 ## Benchmarking
 

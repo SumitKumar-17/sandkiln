@@ -13,7 +13,15 @@ Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
-Nothing yet — `main` matches what's published.
+### Added
+- Guest-accessible metadata service (daemon/`sandkiln-vmm` only — no
+  SDK/CLI change, nothing to publish): every sandbox with a name and/or
+  tags now automatically serves its own `{id, name, tags}` via
+  Firecracker's native MMDS at `http://169.254.169.254/` inside the
+  guest, V2 (token-gated). Live-verified by curling it from inside a
+  real sandbox — 5 new `scripts/integration-test.sh` checks, 194/194
+  passing. See `ROADMAP.md`'s "Tags and sandbox metadata" section for
+  the `Accept: application/json` header requirement and other details.
 
 ## [0.5.0] — 2026-09-08
 

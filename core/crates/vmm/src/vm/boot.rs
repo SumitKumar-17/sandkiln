@@ -237,6 +237,17 @@ fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result
         put_checked(&mut api, "/network-interfaces/eth0", &net_body)?;
     }
 
+    if let Some(metadata) = &config.metadata {
+        if config.network.is_none() {
+            return Err(io::Error::other("VmConfig::metadata requires VmConfig::network to also be set"));
+        }
+        // Pre-boot only, and only valid once the interface it names is
+        // itself configured -- must come after the /network-interfaces
+        // PUT above, not before.
+        put_checked(&mut api, "/mmds/config", &json!({ "network_interfaces": ["eth0"], "version": "V2" }))?;
+        put_checked(&mut api, "/mmds", metadata)?;
+    }
+
     put_checked(
         &mut api,
         "/vsock",

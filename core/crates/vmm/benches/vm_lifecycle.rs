@@ -49,6 +49,7 @@ impl BenchConfig {
             extra_drives: Vec::new(),
             jail: None,
             rate_limit: None,
+            metadata: None,
         }
     }
 }

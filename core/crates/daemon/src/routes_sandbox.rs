@@ -191,6 +191,11 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
     };
 
     let id = Uuid::new_v4().to_string();
+    // Guest-reachable via Firecracker's own MMDS (see VmConfig::metadata's
+    // doc comment) -- built from what the caller already gave us, not new
+    // input; borrowed rather than cloned since `request.tags`/`request.name`
+    // are still needed below for the `Sandbox` this call ultimately builds.
+    let metadata = serde_json::json!({ "id": id, "name": &request.name, "tags": &request.tags });
     let rootfs_path = std::env::temp_dir().join(format!("sandkiln-rootfs-{id}.ext4"));
     let attached_drives: Vec<AttachedDrive> =
         request.drives.iter().map(|d| AttachedDrive { drive_id: d.id.clone(), read_only: d.read_only }).collect();
@@ -265,6 +270,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
                 extra_drives,
                 jail,
                 rate_limit,
+                metadata: Some(metadata),
             });
             match vm {
                 Ok(vm) => {

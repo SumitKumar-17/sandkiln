@@ -42,7 +42,15 @@ not in `daemon`.
   `/kernel` for a jailed one — see `jailer.rs`); `configure_and_start`
   runs the same API PUT sequence either way, including inserting
   `rate_limit` (see `insert_rate_limiter`) into the drive/network-
-  interface bodies when set.
+  interface bodies when set. Also configures `VmConfig::metadata` (if
+  set) via Firecracker's own MMDS — `PUT /mmds/config` then `PUT /mmds`,
+  right after `/network-interfaces/eth0` (MMDS needs that interface
+  already configured) and before `/vsock`/`InstanceStart`. This is a
+  completely separate mechanism from everything else in this file — no
+  vsock, no guest agent; Firecracker's device model answers
+  `http://169.254.169.254/` requests from the guest directly. Errors
+  loudly (`io::Error`) if `metadata` is set without `network` also being
+  set, rather than silently doing nothing.
 - `vm/snapshot.rs` — `Vm::pause`/`snapshot`/`resume` and `ResumeConfig`,
   as a submodule of `vm` (not a sibling) specifically so it can still see
   `Vm`'s private fields. Split out once `vm.rs` passed ~350 lines.
