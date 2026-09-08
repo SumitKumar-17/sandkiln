@@ -9,6 +9,15 @@ hardware, not just code that compiles.
 - A Firecracker microVM boots under real KVM in ~30ms, with a guest agent
   running inside it that answers `exec` / `read_file` / `write_file` /
   `list_dir` over vsock.
+- **Current sandbox launch latency, measured, not estimated**: a full
+  `POST /sandboxes` create averages **211ms** (min 137ms, p95 577ms,
+  under concurrent load) — the ~30ms boot time above plus rootfs-copy
+  and network-lease overhead. The ~180ms gap between raw boot and full
+  create is the known, actively-tracked bottleneck (see Benchmarking and
+  Persistence and snapshotting below for the CoW-filesystem and
+  pre-warmed-pool plans to close it) — worth stating up front since it's
+  the number that actually matters for "how long until I can run code,"
+  not the boot time alone.
 - An HTTP daemon (`sandkilnd`) manages the full lifecycle — create, exec,
   list, stop — driving Firecracker directly from Rust rather than shelling
   out.
@@ -29,7 +38,7 @@ hardware, not just code that compiles.
   per-sandbox resource overrides with enforced ceilings; request-id
   correlation and a `/metrics` endpoint; opt-in Firecracker jailer
   hardening. All exposed through both SDKs and the CLI, live-verified via
-  `scripts/integration-test.sh` (89 checks, 0 failing).
+  `scripts/integration-test.sh` (154 checks, 0 failing).
 
 ## Engineering principles
 
