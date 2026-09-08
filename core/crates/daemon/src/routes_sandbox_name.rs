@@ -94,6 +94,8 @@ pub struct GetOrCreateSandboxRequest {
     vcpu_count: Option<u8>,
     #[serde(default)]
     mem_size_mib: Option<u32>,
+    #[serde(default)]
+    rate_limit: Option<crate::routes_sandbox::RateLimitRequest>,
 }
 
 #[derive(Serialize)]
@@ -144,6 +146,7 @@ pub async fn get_or_create_sandbox(
                 vcpu_count: request.vcpu_count,
                 mem_size_mib: request.mem_size_mib,
                 image_id: None,
+                rate_limit: request.rate_limit,
             };
             let id = create_sandbox_core(&state, create_request).await?;
             Ok(Json(GetOrCreateSandboxResponse { id, created: true }))

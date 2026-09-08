@@ -47,6 +47,35 @@ pub struct DriveConfig {
     pub read_only: bool,
 }
 
+/// Firecracker's own token-bucket rate limiter — a maximum capacity
+/// (`size`), replenished at a constant rate derived from `size` and
+/// `refill_time` (ms), with an optional initial burst
+/// (`one_time_burst`) consumed before the refill rate applies. Field
+/// names match Firecracker's wire format exactly (see its `TokenBucket`
+/// schema) since this is serialized directly into the PUT body.
+#[derive(Clone, Copy, serde::Serialize)]
+pub struct TokenBucket {
+    pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub one_time_burst: Option<u64>,
+    pub refill_time: u64,
+}
+
+/// Independent bandwidth (bytes/s) and ops (operations/s) limits — either
+/// or both may be set. Applied uniformly to the rootfs drive, every extra
+/// drive, and both directions of the network interface (Firecracker
+/// itself limits ingress/egress independently via `rx_rate_limiter`/
+/// `tx_rate_limiter`, but sandkiln exposes one combined sandbox-level
+/// knob rather than four independent ones — a deliberately simpler
+/// surface than Firecracker's own, not a limitation of the device model).
+#[derive(Clone, Copy, serde::Serialize)]
+pub struct RateLimiter {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bandwidth: Option<TokenBucket>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ops: Option<TokenBucket>,
+}
+
 pub struct VmConfig {
     pub firecracker_bin: PathBuf,
     pub kernel_path: PathBuf,
@@ -63,6 +92,11 @@ pub struct VmConfig {
     /// limits, a dedicated unprivileged uid/gid) instead of the direct
     /// process spawn used when this is `None`. See `crate::jailer`.
     pub jail: Option<JailLaunch>,
+    /// When set, applied to the rootfs drive, every entry in
+    /// `extra_drives`, and both directions of the network interface.
+    /// `None` (the default) means unlimited host I/O, unchanged from
+    /// before this existed.
+    pub rate_limit: Option<RateLimiter>,
 }
 
 pub struct Vm {
@@ -328,28 +362,24 @@ fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result
         }),
     )?;
 
-    put_checked(
-        &mut api,
-        "/drives/rootfs",
-        &json!({
-            "drive_id": "rootfs",
-            "path_on_host": path_str(&target.rootfs_path),
-            "is_root_device": true,
-            "is_read_only": false,
-        }),
-    )?;
+    let mut rootfs_body = json!({
+        "drive_id": "rootfs",
+        "path_on_host": path_str(&target.rootfs_path),
+        "is_root_device": true,
+        "is_read_only": false,
+    });
+    insert_rate_limiter(&mut rootfs_body, "rate_limiter", &config.rate_limit);
+    put_checked(&mut api, "/drives/rootfs", &rootfs_body)?;
 
     for (drive, path) in config.extra_drives.iter().zip(target.drive_paths.iter()) {
-        put_checked(
-            &mut api,
-            &format!("/drives/{}", drive.drive_id),
-            &json!({
-                "drive_id": drive.drive_id,
-                "path_on_host": path_str(path),
-                "is_root_device": false,
-                "is_read_only": drive.read_only,
-            }),
-        )?;
+        let mut drive_body = json!({
+            "drive_id": drive.drive_id,
+            "path_on_host": path_str(path),
+            "is_root_device": false,
+            "is_read_only": drive.read_only,
+        });
+        insert_rate_limiter(&mut drive_body, "rate_limiter", &config.rate_limit);
+        put_checked(&mut api, &format!("/drives/{}", drive.drive_id), &drive_body)?;
     }
 
     put_checked(
@@ -362,15 +392,14 @@ fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result
     )?;
 
     if let Some(net) = &config.network {
-        put_checked(
-            &mut api,
-            "/network-interfaces/eth0",
-            &json!({
-                "iface_id": "eth0",
-                "guest_mac": net.guest_mac,
-                "host_dev_name": net.tap_device,
-            }),
-        )?;
+        let mut net_body = json!({
+            "iface_id": "eth0",
+            "guest_mac": net.guest_mac,
+            "host_dev_name": net.tap_device,
+        });
+        insert_rate_limiter(&mut net_body, "rx_rate_limiter", &config.rate_limit);
+        insert_rate_limiter(&mut net_body, "tx_rate_limiter", &config.rate_limit);
+        put_checked(&mut api, "/network-interfaces/eth0", &net_body)?;
     }
 
     put_checked(
@@ -385,6 +414,19 @@ fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result
 
     put_checked(&mut api, "/actions", &json!({"action_type": "InstanceStart"}))?;
     Ok(())
+}
+
+/// Inserts `rate_limit` (if set) into `body` under `key` — `key` is
+/// `"rate_limiter"` for a drive body, or `"rx_rate_limiter"`/
+/// `"tx_rate_limiter"` for a network-interface body (Firecracker limits
+/// each direction independently even though sandkiln applies the same
+/// limiter to both). A no-op when `rate_limit` is `None`, leaving the
+/// body exactly as it was before this existed.
+fn insert_rate_limiter(body: &mut serde_json::Value, key: &str, rate_limit: &Option<RateLimiter>) {
+    if let Some(rl) = rate_limit {
+        let value = serde_json::to_value(rl).expect("RateLimiter always serializes");
+        body.as_object_mut().expect("body is always a JSON object").insert(key.to_string(), value);
+    }
 }
 
 fn put_checked(api: &mut ApiClient, path: &str, body: &serde_json::Value) -> io::Result<()> {

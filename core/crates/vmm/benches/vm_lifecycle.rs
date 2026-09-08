@@ -48,6 +48,7 @@ impl BenchConfig {
             network: None,
             extra_drives: Vec::new(),
             jail: None,
+            rate_limit: None,
         }
     }
 }

@@ -324,17 +324,24 @@ outbound HTTP both still work.
 - **Done:** network isolation between sandboxes on the shared bridge (see
   the Networking section) — bridge port isolation, no sandbox-to-sandbox
   traffic by default.
-- **Per-sandbox I/O rate limiting is not configured, even though
-  Firecracker already supports it natively.** Firecracker's own device
-  model has a built-in token-bucket rate limiter — separate ops/sec and
-  bandwidth buckets, each with a configurable burst — for both the
-  network interface and each block device, entirely independent of
-  anything sandkiln adds itself. Today nothing in `sandkiln-vmm`'s
-  `VmConfig`/drive-attach path sets one, so every sandbox gets
-  unlimited host bandwidth/IOPS by default. Wiring this through (a
-  `rate_limit` option alongside `vcpu_count`/`mem_size_mib`) is mostly
-  plumbing an existing Firecracker capability, not new isolation
-  mechanics — a comparatively cheap, real gap.
+- **Done: per-sandbox I/O rate limiting.** `POST /sandboxes` (and
+  `get-or-create`) takes an optional `rate_limit: {bandwidth_bytes_per_sec?,
+  ops_per_sec?}`, validated by the same "reject, don't silently no-op"
+  rule as `vcpu_count`/`mem_size_mib` (at least one sub-field required if
+  present at all, `0` rejected outright with `400`) and applied uniformly
+  to the rootfs drive, every attached drive, and both directions of the
+  network interface via Firecracker's own token-bucket rate limiter
+  (`rate_limiter` on each drive, `rx_rate_limiter`/`tx_rate_limiter` on
+  the NIC — confirmed against the real `firecracker_spec` swagger schema,
+  not assumed). Each bucket refills to its full size once per second, a
+  deliberately simple sandbox-level knob rather than exposing
+  Firecracker's own independent-burst/independent-direction granularity —
+  that's still available at the vmm-crate level (`VmConfig::rate_limit`,
+  `sandkiln_vmm::vm::{RateLimiter, TokenBucket}`) if a future need for
+  finer control shows up. `None` (the default) means unlimited host I/O,
+  unchanged from before this existed. **Not yet done:** exposed in either
+  SDK or the CLI — daemon-level only for now, same shape as the
+  drives-in-SDK gap below.
 
 ## Multi-agent isolation
 

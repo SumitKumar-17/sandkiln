@@ -19,7 +19,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use sandkiln_vmm::jailer::JailLaunch;
 use sandkiln_vmm::network::Lease;
-use sandkiln_vmm::vm::{DriveConfig, Vm, VmConfig};
+use sandkiln_vmm::vm::{DriveConfig, RateLimiter, TokenBucket, Vm, VmConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -59,6 +59,23 @@ pub struct CreateSandboxRequest {
     /// this id is currently registered.
     #[serde(default)]
     pub(crate) image_id: Option<String>,
+    /// Caps host I/O for this sandbox — Firecracker's own token-bucket
+    /// rate limiter, applied to the rootfs drive, every attached drive,
+    /// and the network interface (both directions). Omitted means
+    /// unlimited host I/O — today's behavior, unchanged. At least one of
+    /// `bandwidth_bytes_per_sec`/`ops_per_sec` must be set and non-zero if
+    /// this is present at all — `400` otherwise, same "reject, don't
+    /// silently no-op" convention as `vcpu_count`/`mem_size_mib`.
+    #[serde(default)]
+    pub(crate) rate_limit: Option<RateLimitRequest>,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+pub struct RateLimitRequest {
+    #[serde(default)]
+    pub(crate) bandwidth_bytes_per_sec: Option<u64>,
+    #[serde(default)]
+    pub(crate) ops_per_sec: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -153,6 +170,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
     let mem_size_mib =
         resolve_resource_override(request.mem_size_mib, state.config.mem_size_mib, state.config.max_mem_size_mib, "mem_size_mib")
             .map_err(AppError::BadRequest)?;
+    let rate_limit = resolve_rate_limit(&request.rate_limit).map_err(AppError::BadRequest)?;
     // Checked and reserved before the (slow) boot starts, not just relied
     // on implicitly once the sandbox is inserted into `state.sandboxes` at
     // the end — closes the window where a concurrent `DELETE /images/:id`
@@ -246,6 +264,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
                 network: Some(lease.config.clone()),
                 extra_drives,
                 jail,
+                rate_limit,
             });
             match vm {
                 Ok(vm) => {
@@ -544,6 +563,35 @@ where
         Some(value) if value > max => Err(format!("{field} {value} exceeds the configured maximum of {max}")),
         Some(value) => Ok(value),
     }
+}
+
+/// Resolves a per-request `rate_limit` into the vmm-level `RateLimiter`
+/// Firecracker actually understands. `None` (the field omitted) means
+/// unlimited I/O, unchanged from before this existed — returns `Ok(None)`.
+/// A caller-supplied `rate_limit` with neither sub-field set, or either
+/// set to `0`, is rejected outright (`0` bytes/s or ops/s is meaningless —
+/// no drive could ever make progress) rather than silently treated as
+/// unlimited, mirroring `resolve_resource_override`'s convention. Each
+/// token bucket refills to its full `size` once per second
+/// (`refill_time: 1000`ms) with no initial burst — the simplest possible
+/// mapping from "bytes/ops per second" to Firecracker's bucket model;
+/// burst tuning isn't exposed at this level yet.
+fn resolve_rate_limit(requested: &Option<RateLimitRequest>) -> Result<Option<RateLimiter>, String> {
+    let Some(req) = requested else { return Ok(None) };
+    if req.bandwidth_bytes_per_sec.is_none() && req.ops_per_sec.is_none() {
+        return Err("rate_limit must set at least one of bandwidth_bytes_per_sec/ops_per_sec".to_string());
+    }
+    let to_bucket = |field: &str, value: Option<u64>| -> Result<Option<TokenBucket>, String> {
+        match value {
+            None => Ok(None),
+            Some(0) => Err(format!("rate_limit.{field} must be greater than 0")),
+            Some(size) => Ok(Some(TokenBucket { size, one_time_burst: None, refill_time: 1000 })),
+        }
+    };
+    Ok(Some(RateLimiter {
+        bandwidth: to_bucket("bandwidth_bytes_per_sec", req.bandwidth_bytes_per_sec)?,
+        ops: to_bucket("ops_per_sec", req.ops_per_sec)?,
+    }))
 }
 
 /// Returns the first item that's already been seen, if any.
