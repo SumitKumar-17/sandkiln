@@ -5,6 +5,42 @@ description: Every route sandkilnd exposes.
 
 Base URL defaults to `http://127.0.0.1:7777`. Every route below except `/healthz` and `/metrics` requires `Authorization: Bearer <token>` when `SANDKILN_AUTH_TOKEN` is set — see [Auth](../../concepts/auth/).
 
+## A complete session, in raw HTTP
+
+```bash
+TOKEN=...
+BASE=http://127.0.0.1:7777
+
+# Create, named so it can be found again by name later.
+curl -s -X POST "$BASE/sandboxes" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"build-worker","tags":{"env":"ci"},"vcpu_count":2,"mem_size_mib":1024}'
+# {"id":"..."}
+
+curl -s -X POST "$BASE/sandboxes/build-worker/exec" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"command":"npm","args":["test"]}'
+# {"stdout":"...","stderr":"","exit_code":0}
+```
+
+Every id above is written as `build-worker` for readability — the real
+`id` a create call actually returns is an opaque UUID; resolve a name
+back to its live id first with `GET /sandboxes/by-name/build-worker`
+if you only have the name (see [Named sandboxes](../../concepts/named-sandboxes/)).
+
+```bash
+# Stop it -- preserves state as a snapshot by default.
+curl -s -X DELETE "$BASE/sandboxes/build-worker" -H "Authorization: Bearer $TOKEN"
+# {"kept":true,"snapshot_id":"..."}
+
+# Tomorrow: resolve the same name back to a live sandbox in one call,
+# resuming the snapshot above automatically.
+curl -s -X POST "$BASE/sandboxes/get-or-create" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"build-worker"}'
+# {"id":"...","created":false}
+```
+
 ## Sandboxes
 
 | Route | What it does |

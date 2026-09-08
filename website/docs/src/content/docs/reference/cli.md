@@ -9,6 +9,30 @@ npm install -g sandkiln-cli   # installs the `kiln` command
 
 Global options, available on every subcommand: `--base-url <url>` (default: `SANDKILN_DAEMON_URL` or `http://127.0.0.1:7777`), `--token <token>` (default: `SANDKILN_AUTH_TOKEN`).
 
+## A complete session
+
+```bash
+export SANDKILN_DAEMON_URL=http://127.0.0.1:7777
+export SANDKILN_AUTH_TOKEN=...   # omit entirely for an unauthenticated local daemon
+
+# Named, so you can find it again tomorrow without tracking an id yourself.
+kiln sandbox get-or-create --name build-worker --vcpu 2 --mem 1024
+
+kiln sandbox exec build-worker npm install
+kiln sandbox exec build-worker npm test
+
+kiln sandbox write build-worker /tmp/config.json ./local-config.json
+kiln sandbox read build-worker /tmp/result.json
+
+kiln sandbox preview build-worker 3000
+
+kiln sandbox ls --tag env=ci
+
+# Preserves state as a snapshot -- resolve it by the same name tomorrow
+# with another `get-or-create`, no snapshot id to remember.
+kiln sandbox rm build-worker
+```
+
 ## `kiln sandbox`
 
 | Command | What it does |

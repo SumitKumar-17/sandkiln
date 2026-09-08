@@ -1,11 +1,77 @@
-/* Match the marketing site's accent color so the two feel like one product. */
+/*
+  Same foundry/kiln identity as the marketing site (see
+  website/src/styles/global.css's own comment for the reasoning) —
+  fired-clay/paper in light mode, the kiln's own firebox in dark mode.
+  Re-themes Starlight's full token set, not just the accent color, so
+  the docs site reads as the same product rather than "default theme,
+  accent swapped."
+*/
+@import url("https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
 :root {
-  --sl-color-accent-low: #f6d9cc;
-  --sl-color-accent: #c53d14;
+  --sl-font: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+  --sl-font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --sl-color-accent-low: #e8dcc4;
+  --sl-color-accent: #cf4415;
   --sl-color-accent-high: #7a2a0f;
+
+  --sl-color-white: #211a10;
+  --sl-color-gray-1: #2a2118;
+  --sl-color-gray-2: #5c5140;
+  --sl-color-gray-3: #8b8066;
+  --sl-color-gray-4: #b6ac96;
+  --sl-color-gray-5: #d1c8b0;
+  --sl-color-gray-6: #e6e0d1;
+  --sl-color-gray-7: #f2efe6;
+  --sl-color-black: #ffffff;
+
+  --sl-color-bg: #f2efe6;
+  --sl-color-bg-nav: #ffffff;
+  --sl-color-bg-sidebar: #ffffff;
+  --sl-color-bg-inline-code: #e6e0d1;
+  --sl-color-hairline-light: #d1c8b0;
+  --sl-color-hairline: #d1c8b0;
+  --sl-color-hairline-shade: #d1c8b0;
 }
+
 :root[data-theme="dark"] {
-  --sl-color-accent-low: #4a2113;
-  --sl-color-accent: #e8491c;
-  --sl-color-accent-high: #ffb894;
+  --sl-color-accent-low: #402c17;
+  --sl-color-accent: #ff5a24;
+  --sl-color-accent-high: #ffb28e;
+
+  --sl-color-white: #f1e6cf;
+  --sl-color-gray-1: #f1e6cf;
+  --sl-color-gray-2: #b5a488;
+  --sl-color-gray-3: #7c6f58;
+  --sl-color-gray-4: #5a4f3d;
+  --sl-color-gray-5: #40331f;
+  --sl-color-gray-6: #2a2118;
+  --sl-color-gray-7: #1f1913;
+  --sl-color-black: #17130f;
+
+  --sl-color-bg: #17130f;
+  --sl-color-bg-nav: #1f1913;
+  --sl-color-bg-sidebar: #1f1913;
+  --sl-color-bg-inline-code: #2a2118;
+  --sl-color-hairline-light: #40331f;
+  --sl-color-hairline: #40331f;
+  --sl-color-hairline-shade: #40331f;
+}
+
+/* Headings use the same condensed display face as the marketing site's
+   hero/section titles, so a reader arriving from either site recognizes
+   the other immediately. */
+h1, h2, h3, h4 {
+  font-family: "Big Shoulders Display", "Arial Narrow", sans-serif;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+/* Starlight's default site-title area pairs an icon with the title text;
+   this project has no icon, so the title alone carries the same
+   condensed weight as the marketing site's wordmark. */
+.site-title {
+  font-family: "Big Shoulders Display", "Arial Narrow", sans-serif;
+  font-weight: 800;
 }

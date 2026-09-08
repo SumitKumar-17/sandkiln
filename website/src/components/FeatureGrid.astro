@@ -32,16 +32,16 @@ const features: Feature[] = [
   <div class="wrap">
     <div class="section-head">
       <div class="eyebrow">Feature surface</div>
-      <h2>Everything a sandbox platform needs. Built honestly.</h2>
-      <p>Every card below is marked by what's actually true today — proven on real hardware — versus what's designed and queued. Nothing here is vaporware dressed as a feature.</p>
+      <h2>Everything a sandbox platform needs, marked by what's actually true.</h2>
+      <p>The filled square is proven on real hardware. The open square is designed and queued, not built yet. Nothing here is vaporware dressed as a feature.</p>
     </div>
 
-    <div class="fgrid">
+    <div class="fmanifest">
       {features.map((f) => (
-        <div class="fcard">
-          <span class={`status ${f.status}`}>{f.status === "done" ? "Shipped" : "Planned"}</span>
-          <h3>{f.name}</h3>
-          <p>{f.desc}</p>
+        <div class={`frow ${f.status}`}>
+          <span class="fmark"></span>
+          <span class="fname">{f.name}</span>
+          <span class="fdesc">{f.desc}</span>
         </div>
       ))}
     </div>
