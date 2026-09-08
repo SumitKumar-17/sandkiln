@@ -26,9 +26,12 @@ The root cause is genuinely open — plausibly TSC/clock-source drift between sn
 
 **Handled, not just documented**: every claim runs a real post-resume health check (`exec true`) before being handed to a caller. A failed check tears the sandbox down and falls back to a normal cold create — a caller never receives a dead sandbox id. Confirmed via repeated stress tests showing zero caller-visible failures across every run, with the daemon's own logs confirming the fallback path firing at the rate the direct measurements predicted.
 
-## What's still scoped out of this first slice
+## `max_count`: an optional ceiling with queueing
 
-- **No `max_count` ceiling or queueing yet.** A pool's warm buffer has a target size but no cap on total concurrent live instances — a claim past what's currently warm just cold-creates, unbounded, same as if no pool existed at all.
+A pool's `warm_count` is a target size, not a hard cap on how many live instances of its profile can exist — by default, a claim past what's currently warm just cold-creates, unbounded. An optional `max_count` caps the total (warm + claimed) instead: a `POST /sandboxes` that would exceed it queues, waking the instant a slot frees up (a claimed instance stops, or a new warm snapshot finishes replenishing) rather than polling, and returns a real `503` after 30 seconds if nothing frees up in time — never silently exceeding the ceiling, never hanging a caller's request forever.
+
+## What's still scoped out
+
 - **Pool configuration is in-memory only**, not durable across a daemon restart the way snapshot records are — a caller has to re-`POST /pools` afterward, and a restart can orphan an already-warm snapshot with no pool left to claim or clean it up.
 
 ## What's next: the rootfs copy, not boot or resume
