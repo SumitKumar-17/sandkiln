@@ -41,6 +41,14 @@ pub struct CreatePoolRequest {
     /// rather than rejected since there's no *incorrect* behavior it
     /// would cause, just an inert pool.
     pub warm_count: u32,
+    /// Maximum number of live instances (warm + claimed, combined) this
+    /// pool's profile may ever have at once. Omitted means unbounded — a
+    /// claim past what's warm always just cold-creates, the original
+    /// behavior from before this field existed. When set, a claim that
+    /// arrives at the ceiling queues (up to `routes_sandbox::POOL_QUEUE_TIMEOUT`)
+    /// instead of either rejecting it or exceeding the ceiling.
+    #[serde(default)]
+    pub max_count: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -50,11 +58,18 @@ pub struct PoolSummary {
     vcpu_count: u8,
     mem_size_mib: u32,
     warm_count: u32,
+    max_count: Option<u32>,
     /// How many resumable snapshots are actually sitting warm right now
     /// — can be less than `warm_count` right after the pool is created
     /// or a claim just drained it; `crate::pool_replenisher` tops it back
     /// up in the background, not instantly.
     warm_ready: usize,
+    /// How many live instances of this pool's profile exist right now
+    /// (a resumed warm claim or a cold-created match, either way) —
+    /// tracked regardless of whether `max_count` is set, since it's
+    /// useful visibility on its own; only *enforced against* when
+    /// `max_count` is set.
+    claimed: u32,
 }
 
 fn summarize(pool: &Pool) -> PoolSummary {
@@ -64,7 +79,9 @@ fn summarize(pool: &Pool) -> PoolSummary {
         vcpu_count: pool.config.vcpu_count,
         mem_size_mib: pool.config.mem_size_mib,
         warm_count: pool.config.warm_count,
+        max_count: pool.config.max_count,
         warm_ready: pool.warm_ready(),
+        claimed: pool.claimed_count(),
     }
 }
 
@@ -84,7 +101,17 @@ pub async fn create_pool(State(state): State<Arc<AppState>>, Json(request): Json
         resolve_resource_override(request.mem_size_mib, state.config.mem_size_mib, state.config.max_mem_size_mib, "mem_size_mib")
             .map_err(AppError::BadRequest)?;
 
-    let config = PoolConfig { id: request.id.clone(), image_id: request.image_id, vcpu_count, mem_size_mib, warm_count: request.warm_count };
+    if let Some(0) = request.max_count {
+        return Err(AppError::BadRequest("max_count must be greater than 0 if given at all — omit it for an unbounded pool".to_string()));
+    }
+    let config = PoolConfig {
+        id: request.id.clone(),
+        image_id: request.image_id,
+        vcpu_count,
+        mem_size_mib,
+        warm_count: request.warm_count,
+        max_count: request.max_count,
+    };
 
     let mut pools = state.pools.lock().unwrap();
     if pools.contains_key(&request.id) {
@@ -108,10 +135,14 @@ pub async fn list_pools(State(state): State<Arc<AppState>>) -> Json<ListPoolsRes
 /// warm — `crate::pool_replenisher` naturally stops topping it up once
 /// it's gone from `AppState::pools`, so nothing further to signal there.
 /// A pool with nothing warm right now deletes just as cleanly (the loop
-/// below is simply empty).
+/// below is simply empty). Wakes anything queued on this pool (see
+/// `routes_sandbox::create_sandbox_core`'s `max_count` queueing) one
+/// last time so a queued caller notices the pool is gone and fails
+/// clearly, instead of waiting out its own timeout for nothing.
 #[tracing::instrument(skip(state))]
 pub async fn delete_pool(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<StatusCode, AppError> {
     let mut pool = { state.pools.lock().unwrap().remove(&id).ok_or_else(|| AppError::NotFound(id.clone()))? };
+    pool.notify.notify_waiters();
     while let Some(snapshot_id) = pool.take_warm() {
         if let Err(e) = delete_snapshot_by_id(state.clone(), snapshot_id.clone()).await {
             tracing::warn!(pool_id = %id, snapshot_id = %snapshot_id, error = %e, "failed to clean up a warm snapshot while deleting its pool");

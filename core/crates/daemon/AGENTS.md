@@ -96,7 +96,11 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   `?keep=false` opt-out or as the correct silent fallback for a forked
   sandbox (nothing new to preserve) or a jailed one (can't be
   snapshotted, surfaces as an error instead of silently discarding
-  state). `create_sandbox_core()` is the actual boot logic, shared with
+  state). Both `destroy_sandbox_by_id` and `routes_snapshot::snapshot_and_stop`
+  also release a stopped sandbox's `source_pool_id` slot back to its pool
+  (`Pool::record_release`) right after removing it from `state.sandboxes`
+  — whichever way it stops, warm or claimed slots are the same
+  `max_count` currency (see `crate::pool`). `create_sandbox_core()` is the actual boot logic, shared with
   `routes_sandbox_name::get_or_create_sandbox`'s create-fresh path — the
   `create_sandbox` handler itself adds the name-uniqueness check under
   `AppState::lock_name` and resolves which rootfs to clone from
@@ -107,14 +111,24 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   can't race an in-flight clone) before calling it.
   `create_sandbox_core` also tries a pre-warmed pool claim first (see
   `crate::pool`) whenever the request has no `drives`/`rate_limit` and a
-  configured pool's key matches — `claim_from_pool` resumes the warm
-  snapshot, runs a real post-resume health check (`exec true`) before
-  trusting it, and falls back to the normal cold-create path below on
-  either an outright resume failure or a failed health check (via
-  `destroy_unhealthy_claim`), rather than ever handing back a sandbox id
-  that's secretly a corpse — see `crate::pool`'s own module doc comment
-  for the real Firecracker/KVM finding that made this check load-bearing,
-  not defensive theater.
+  configured pool's key matches — `resolve_pool_claim` decides between
+  `PoolClaim::Warm`/`ColdSlot`/`NoPool`, queueing (up to
+  `POOL_QUEUE_TIMEOUT`, a `503` past that) on a `max_count`-bounded
+  pool's own `Notify` if neither a warm snapshot nor headroom is
+  available. A `Warm` claim's `claim_from_pool` resumes the snapshot,
+  runs a real post-resume health check (`exec true`) before trusting it,
+  and on failure releases its reserved slot (`PoolClaimGuard`'s `Drop`)
+  and **retries** `resolve_pool_claim` (bounded, `MAX_POOL_CLAIM_ATTEMPTS`)
+  before ever falling through to a plain, unattributed cold create — see
+  `crate::pool`'s own module doc comment for the real Firecracker/KVM
+  finding that made the health check load-bearing (not defensive
+  theater) and the real bug the retry loop itself fixes (a failed
+  claim's fallback silently not counting against `max_count`, found by
+  live-testing this exact feature, not caught on paper). `ColdSlot`
+  threads its reserved `pool_id` through `create_sandbox_cold` (the
+  factored-out boot mechanics, shared by both the `ColdSlot` and
+  unattributed paths) into `Sandbox::source_pool_id`, committing the
+  `PoolClaimGuard` on success.
 - `routes_sandbox_name.rs` — name-based lookup and get-or-create:
   `GET /sandboxes/by-name/:name` (live sandboxes only — a name currently
   held by a snapshot is a `409` pointing at get-or-create, not a silent
@@ -146,12 +160,21 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   file's own module doc comment for why that's a deliberate consistency
   choice, not an oversight.
 - `pool.rs` — `Pool`/`PoolConfig`/`PoolKey`: the pure state a configured
-  pre-warmed pool tracks (its resolved image/resource key and a FIFO
-  queue of warm snapshot ids) and the pure matching logic
-  (`PoolConfig::key`) a `POST /sandboxes` request is checked against. No
-  networking, no `AppState` — see this file's own module doc comment for
-  the feature's full shape and what's deliberately not built yet (a
-  `max_count` ceiling with queueing).
+  pre-warmed pool tracks (its resolved image/resource key, a FIFO queue
+  of warm snapshot ids, and `claimed` — how many live instances of this
+  pool's profile currently exist) and the pure matching logic
+  (`PoolConfig::key`) a `POST /sandboxes` request is checked against.
+  `PoolConfig.max_count` bounds `claimed` (plus what's warm);
+  `has_room_for_new_claim`/`record_claim`/`record_release` are the
+  three operations that keep it honest, and `effective_warm_target`
+  makes replenishment itself respect the same ceiling (never over-warms
+  past the remaining headroom). `Pool::notify` (a `tokio::sync::Notify`,
+  woken by `push_warm` and `record_release`) is what
+  `routes_sandbox::resolve_pool_claim` waits on when a `max_count`-bounded
+  pool is at capacity — condvar-style: every waiter re-checks the real
+  condition on wake rather than trusting the wakeup itself. No
+  networking, no `AppState` beyond that `Notify` — see this file's own
+  module doc comment for the feature's full shape.
 - `pool_replenisher.rs` — the background task (spawned unconditionally
   from `main.rs`, unlike `idle_reaper` below, since an idle tick with no
   pools configured is cheap) that keeps every pool topped up: boots a
@@ -163,10 +186,14 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   boot load.
 - `routes_pool.rs` — `POST/GET /pools`, `DELETE /pools/:id`: pool
   *configuration* only — replenishment lives in `pool_replenisher`,
-  claiming lives in `routes_sandbox::create_sandbox_core`. `DELETE`
-  destroys whatever the pool still has warm (via
-  `routes_snapshot::delete_snapshot_by_id`) rather than leaking it as an
-  orphaned, untracked snapshot.
+  claiming lives in `routes_sandbox::create_sandbox_core`. `POST /pools`
+  accepts `max_count` (rejects an explicit `0` — omit it for unbounded
+  instead); `GET /pools` reports it alongside the live `claimed` count.
+  `DELETE` destroys whatever the pool still has warm (via
+  `routes_snapshot::delete_snapshot_by_id`) and calls
+  `pool.notify.notify_waiters()` first, so anything queued on a
+  `max_count`-bounded pool that just got deleted fails clearly instead of
+  waiting out its own timeout for a pool that no longer exists.
 - `idle_reaper.rs` — background task (spawned from `main.rs` whenever
   `SANDKILN_IDLE_TIMEOUT_SECS` and/or `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`
   is set) that reclaims idle sandboxes two ways: auto-suspend (pause +

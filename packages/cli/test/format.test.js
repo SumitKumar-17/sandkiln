@@ -178,14 +178,14 @@ test("formatPoolList reports an empty list distinctly", () => {
   assert.equal(formatPoolList([]), "no pools\n");
 });
 
-test("formatPoolList renders id, image, resources, and warm/target counts per line", () => {
+test("formatPoolList renders id, image, resources, warm/target counts, and claimed count per line", () => {
   const pools = [
-    { id: "pool-1", imageId: null, vcpuCount: 2, memSizeMib: 512, warmCount: 2, warmReady: 1 },
-    { id: "pool-2", imageId: "img-1", vcpuCount: 4, memSizeMib: 1024, warmCount: 1, warmReady: 0 },
+    { id: "pool-1", imageId: null, vcpuCount: 2, memSizeMib: 512, warmCount: 2, maxCount: null, warmReady: 1, claimed: 0 },
+    { id: "pool-2", imageId: "img-1", vcpuCount: 4, memSizeMib: 1024, warmCount: 1, maxCount: 3, warmReady: 0, claimed: 2 },
   ];
   assert.equal(
     formatPoolList(pools),
-    "pool-1  -  2vcpu/512MiB  warm 1/2\n" + "pool-2  img-1  4vcpu/1024MiB  warm 0/1\n",
+    "pool-1  -  2vcpu/512MiB  warm 1/2  claimed 0\n" + "pool-2  img-1  4vcpu/1024MiB  warm 0/1  claimed 2/3\n",
   );
 });
 

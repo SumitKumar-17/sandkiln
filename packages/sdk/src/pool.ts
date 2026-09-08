@@ -14,10 +14,12 @@ import type { CreatePoolRequestBody, ListPoolsResponseBody, PoolInfo, PoolOption
  * matches a plain create (no `drives`, no `rateLimit`) against every
  * configured pool by `imageId`/`vcpuCount`/`memSizeMib` and resumes a
  * warm snapshot automatically when one is ready — there's no separate
- * "create from pool" call. See `ROADMAP.md`'s "Persistence and
- * snapshotting" section, "Pre-warmed snapshot pool", for the full design
- * and what's deliberately not implemented yet (a `maxCount` ceiling with
- * queueing past it).
+ * "create from pool" call. `maxCount` caps the total live instances
+ * (warm + claimed) a pool's profile may have at once; a claim arriving
+ * at that ceiling with nothing warm queues daemon-side (up to 30s)
+ * before the underlying `Sandbox.create()` call rejects with a `503`.
+ * See `ROADMAP.md`'s "Persistence and snapshotting" section, "Pre-warmed
+ * snapshot pool", for the full design.
  */
 export class Pool {
   /**
@@ -26,7 +28,10 @@ export class Pool {
    * sandbox created from it). Rejected (`409`) if `id` is already taken;
    * delete it first to reconfigure. `warmCount` is how many resumable
    * snapshots to keep ready at once — replenishment happens in the
-   * background and isn't instant, see `PoolInfo.warmReady`.
+   * background and isn't instant, see `PoolInfo.warmReady`. `maxCount`
+   * is omitted for an unbounded pool (the original, still-default
+   * behavior) — throws if given as `0`, since that's never a meaningful
+   * ceiling.
    */
   static async create(id: string, options: CreatePoolOptions = {}): Promise<PoolInfo> {
     const client = resolveClient(options);
@@ -36,6 +41,7 @@ export class Pool {
       vcpu_count: options.vcpuCount,
       mem_size_mib: options.memSizeMib,
       warm_count: options.warmCount ?? 0,
+      max_count: options.maxCount,
     };
     const body = await request<PoolSummaryBody>({
       ...client,
@@ -83,6 +89,11 @@ export interface CreatePoolOptions extends PoolOptions {
    * (configures the pool's identity/matching key without ever keeping
    * anything warm) — a strange thing to actually want, but not an error. */
   warmCount?: number;
+  /** Maximum live instances (warm + claimed, combined) this pool's
+   * profile may ever have at once. Omitted means unbounded — a claim
+   * past what's warm always just cold-creates, with nothing capping how
+   * many can be live simultaneously. */
+  maxCount?: number;
 }
 
 function toPoolInfo(body: PoolSummaryBody): PoolInfo {
@@ -92,6 +103,8 @@ function toPoolInfo(body: PoolSummaryBody): PoolInfo {
     vcpuCount: body.vcpu_count,
     memSizeMib: body.mem_size_mib,
     warmCount: body.warm_count,
+    maxCount: body.max_count,
     warmReady: body.warm_ready,
+    claimed: body.claimed,
   };
 }

@@ -143,6 +143,14 @@ pub async fn create_sandbox(
 /// callers already did that under `AppState::lock_name` before reaching
 /// here, and re-checking would just be redundant work under the same
 /// lock they're still holding.
+/// How long a `POST /sandboxes` request matching a `max_count`-bounded
+/// pool at capacity waits for room before giving up (`503`, see
+/// `AppError::ServiceUnavailable`) rather than either exceeding the
+/// ceiling or hanging the caller's request forever. Not currently
+/// configurable — see `crate::pool`'s "scoped honestly" notes; a fixed
+/// default is enough for a first cut of queueing.
+pub(crate) const POOL_QUEUE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSandboxRequest) -> Result<String, AppError> {
     if let Some(dup) = first_duplicate(request.drives.iter().map(|d| d.id.as_str())) {
         return Err(AppError::BadRequest(format!("drive listed more than once: {dup}")));
@@ -179,27 +187,179 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
     // a VM's state at boot time and a warm snapshot was booted with
     // neither, so either one present here means this request can never
     // match a pool, regardless of image/resources — falls through to the
-    // normal cold-create path below instead of silently ignoring them.
+    // normal cold-create path below instead of silently ignoring them (and
+    // never queues on a `max_count`-bounded pool either, for the same
+    // reason: it was never going to match that pool anyway).
     if request.drives.is_empty() && request.rate_limit.is_none() {
         let key = crate::pool::PoolKey { image_id: request.image_id.clone(), vcpu_count, mem_size_mib };
-        let claimed_snapshot = {
-            let mut pools = state.pools.lock().unwrap();
-            pools.values_mut().find(|p| p.config.key() == key).and_then(|p| p.take_warm())
-        };
-        if let Some(snapshot_id) = claimed_snapshot {
-            match claim_from_pool(state, snapshot_id, &request).await {
-                Ok(id) => return Ok(id),
-                Err(e) => {
-                    // A claim can fail for reasons a caller's own request
-                    // had nothing to do with (see `claim_from_pool`'s doc
-                    // comment) — degrading to a normal cold create rather
-                    // than failing the whole request is the entire point
-                    // of a pool being an optimization, not a guarantee.
-                    tracing::warn!(error = %e, "pool claim failed — falling back to a normal cold create");
+        // Bounded retry, not a single attempt: a warm claim failing its
+        // post-resume health check (see `claim_from_pool`'s doc comment —
+        // measured at up to ~2-in-3 resumes, not a rare corner case)
+        // releases its reserved slot right back to the pool via
+        // `PoolClaimGuard`'s drop — re-resolving immediately afterward is
+        // what lets the resulting fallback cold-create still count
+        // against `max_count` instead of silently bypassing it. Without
+        // this loop, a `max_count`-bounded pool with a high resume
+        // failure rate could end up running noticeably more live
+        // instances than its own configured ceiling. Bounded (not
+        // unbounded) purely as a safety margin against a pathological
+        // run of consecutive bad warm snapshots — see
+        // `MAX_POOL_CLAIM_ATTEMPTS`.
+        for _ in 0..MAX_POOL_CLAIM_ATTEMPTS {
+            match resolve_pool_claim(state, &key).await? {
+                PoolClaim::Warm { pool_id, snapshot_id } => {
+                    let guard = PoolClaimGuard::new(state.clone(), Some(pool_id.clone()));
+                    match claim_from_pool(state, snapshot_id, pool_id, &request).await {
+                        Ok(id) => {
+                            guard.commit();
+                            return Ok(id);
+                        }
+                        Err(e) => {
+                            // `guard` drops at the end of this arm (not
+                            // committed), releasing the slot this claim
+                            // reserved back to the pool — the next loop
+                            // iteration's `resolve_pool_claim` sees that
+                            // freed room immediately.
+                            tracing::warn!(error = %e, "pool claim failed — retrying against the pool once more before falling back unattributed");
+                        }
+                    }
                 }
+                PoolClaim::ColdSlot { pool_id } => {
+                    // Room under `max_count`, nothing warm ready right
+                    // now — proceed into the cold-create path below,
+                    // attributed to this pool so the reserved slot is
+                    // either committed to the resulting live `Sandbox` or
+                    // released on any failure (`PoolClaimGuard`,
+                    // constructed inside).
+                    return create_sandbox_cold(state, request, Some(pool_id), vcpu_count, mem_size_mib, rate_limit).await;
+                }
+                PoolClaim::NoPool => break, // no pool configured for this profile at all — today's original, totally unattributed behavior.
             }
         }
     }
+
+    create_sandbox_cold(state, request, None, vcpu_count, mem_size_mib, rate_limit).await
+}
+
+/// How many times a failed warm claim retries against the same pool
+/// before giving up and falling all the way through to an unattributed
+/// cold create — see the retry loop's own comment in `create_sandbox_core`
+/// for why this exists at all (keeping `max_count` honest under a high
+/// resume failure rate) and why it's bounded rather than unbounded. A
+/// genuinely pathological run of `MAX_POOL_CLAIM_ATTEMPTS` consecutive
+/// bad warm snapshots still falls through unattributed at the end — an
+/// accepted, rare edge case, not a guarantee this loop fully closes.
+const MAX_POOL_CLAIM_ATTEMPTS: u32 = 3;
+
+/// What a `POST /sandboxes` request resolves to against `AppState::pools`
+/// — see `resolve_pool_claim`.
+enum PoolClaim {
+    /// A warm snapshot was ready and reserved (`Pool::take_warm` +
+    /// `Pool::record_claim`, atomically under the same lock acquisition)
+    /// — the caller must resume it and either commit the reservation
+    /// (`PoolClaimGuard::commit`) or let it drop to release the slot.
+    Warm { pool_id: String, snapshot_id: String },
+    /// No pool configured for this key.
+    NoPool,
+    /// A pool matched, nothing was warm, but there was room under
+    /// `max_count` to cold-create a new instance and reserve it — same
+    /// commit-or-release contract as `Warm`.
+    ColdSlot { pool_id: String },
+}
+
+/// Resolves a `POST /sandboxes` request against every configured pool,
+/// waiting (up to `POOL_QUEUE_TIMEOUT`) if a matching pool exists but is
+/// at `max_count` capacity with nothing warm — the "queueing" half of the
+/// design in `crate::pool`'s module doc comment. Never holds
+/// `AppState::pools`'s lock across an await point: each iteration locks,
+/// makes a decision (or clones the pool's `Notify` to wait on), unlocks,
+/// then optionally awaits outside the lock before looping back to
+/// re-check with fresh state.
+async fn resolve_pool_claim(state: &Arc<AppState>, key: &crate::pool::PoolKey) -> Result<PoolClaim, AppError> {
+    let deadline = Instant::now() + POOL_QUEUE_TIMEOUT;
+    loop {
+        let notify = {
+            let mut pools = state.pools.lock().unwrap();
+            let Some(pool) = pools.values_mut().find(|p| p.config.key() == *key) else {
+                return Ok(PoolClaim::NoPool);
+            };
+            if let Some(snapshot_id) = pool.take_warm() {
+                pool.record_claim();
+                return Ok(PoolClaim::Warm { pool_id: pool.config.id.clone(), snapshot_id });
+            }
+            if pool.has_room_for_new_claim() {
+                pool.record_claim();
+                return Ok(PoolClaim::ColdSlot { pool_id: pool.config.id.clone() });
+            }
+            pool.notify.clone()
+        };
+
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(AppError::ServiceUnavailable(
+                "matching pool is at its configured max_count and no capacity freed up in time — try again shortly".to_string(),
+            ));
+        }
+        // Waiting past the deadline just means the next loop iteration's
+        // own check finds it's out of time and returns the error above —
+        // a `notify_waiters` that races with the timeout isn't lost, it's
+        // simply re-checked as "was there room after all" first.
+        let _ = tokio::time::timeout(deadline - now, notify.notified()).await;
+    }
+}
+
+/// RAII handle for a slot `resolve_pool_claim` reserved
+/// (`Pool::record_claim`) — releases it (`Pool::record_release`) on drop
+/// unless `commit()` was called first. Call `commit()` exactly when a
+/// real, live `Sandbox` now exists and durably owns this slot for the
+/// rest of its life (released later by `destroy_sandbox_by_id`/
+/// `routes_snapshot::snapshot_and_stop` instead) — every other exit path
+/// (a failed resume, a failed health check, a failed cold boot) should
+/// let this guard drop unclaimed so the slot goes back to the pool.
+struct PoolClaimGuard {
+    state: Arc<AppState>,
+    pool_id: Option<String>,
+    committed: bool,
+}
+
+impl PoolClaimGuard {
+    fn new(state: Arc<AppState>, pool_id: Option<String>) -> Self {
+        Self { state, pool_id, committed: false }
+    }
+
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for PoolClaimGuard {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        if let Some(pool_id) = &self.pool_id {
+            if let Some(pool) = self.state.pools.lock().unwrap().get_mut(pool_id) {
+                pool.record_release();
+            }
+        }
+    }
+}
+
+/// The actual cold-boot mechanics — unchanged from before pools existed,
+/// except for `pool_id`: `Some` when `create_sandbox_core` reserved a
+/// slot for this create against a `max_count`-bounded pool (see
+/// `PoolClaim::ColdSlot`), threaded through to `PoolClaimGuard` (released
+/// on any failure below) and `Sandbox::source_pool_id` (committed,
+/// permanently owning the slot, on success).
+async fn create_sandbox_cold(
+    state: &Arc<AppState>,
+    request: CreateSandboxRequest,
+    pool_id: Option<String>,
+    vcpu_count: u8,
+    mem_size_mib: u32,
+    rate_limit: Option<RateLimiter>,
+) -> Result<String, AppError> {
+    let pool_guard = PoolClaimGuard::new(state.clone(), pool_id.clone());
 
     // Checked and reserved before the (slow) boot starts, not just relied
     // on implicitly once the sandbox is inserted into `state.sandboxes` at
@@ -341,9 +501,15 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
         source_snapshot_id: None,
         name: request.name,
         pty_session_count: Default::default(),
+        source_pool_id: pool_id,
     };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
     state.metrics.record_sandbox_created();
+    // The slot `resolve_pool_claim` reserved (if any) is now durably
+    // owned by the live `Sandbox` above via `source_pool_id` — released
+    // later by `destroy_sandbox_by_id`/`snapshot_and_stop`, not this
+    // guard, which would otherwise release it right back on drop here.
+    pool_guard.commit();
 
     Ok(id)
 }
@@ -381,7 +547,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
 /// needs an explicit live Firecracker API call to fix, not just editing
 /// the daemon's own `Sandbox` record; see
 /// `sandkiln_vmm::vm::Vm::update_metadata`'s doc comment.
-async fn claim_from_pool(state: &Arc<AppState>, snapshot_id: String, request: &CreateSandboxRequest) -> Result<String, AppError> {
+async fn claim_from_pool(state: &Arc<AppState>, snapshot_id: String, pool_id: String, request: &CreateSandboxRequest) -> Result<String, AppError> {
     let id = resume_snapshot_by_id(state.clone(), snapshot_id).await?;
 
     let health_check = spawn_blocking_in_current_span("pool claim health check task panicked", {
@@ -417,6 +583,11 @@ async fn claim_from_pool(state: &Arc<AppState>, snapshot_id: String, request: &C
         sandbox.tags = request.tags.clone();
         sandbox.name = request.name.clone();
         sandbox.created_at = created_at;
+        // The slot `resolve_pool_claim` reserved for this claim is now
+        // durably owned by this live `Sandbox` — released later by
+        // `destroy_sandbox_by_id`/`snapshot_and_stop`, matching how
+        // `create_sandbox_cold` commits its own `PoolClaimGuard`.
+        sandbox.source_pool_id = Some(pool_id);
     }
 
     if let Err(e) = state.history.record_created(&id, request.name.as_deref(), &request.tags, request.image_id.as_deref(), created_at) {
@@ -721,6 +892,15 @@ async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopO
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or(StopError::NotFound)?;
     let source_snapshot_id = sandbox.source_snapshot_id.clone();
     let owns_rootfs = source_snapshot_id.is_none();
+
+    // This live instance's pool membership (if any) ends here — see the
+    // identical release in `routes_snapshot::snapshot_and_stop` for why
+    // this doesn't carry forward onto anything resumed/forked later.
+    if let Some(pool_id) = &sandbox.source_pool_id {
+        if let Some(pool) = state.pools.lock().unwrap().get_mut(pool_id) {
+            pool.record_release();
+        }
+    }
 
     spawn_blocking_in_current_span("stop task panicked", {
         let state = state.clone();

@@ -171,6 +171,16 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
     }
 
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or(SnapshotStopError::NotFound)?;
+    // This live instance's pool membership (if any) ends here, whether
+    // the snapshot below succeeds or not -- either way it's no longer a
+    // live `Sandbox` under `AppState::sandboxes`. See `crate::pool`'s
+    // module doc comment: a resume/fork of the snapshot this becomes is
+    // a fresh creation event, not tied back to this pool.
+    if let Some(pool_id) = &sandbox.source_pool_id {
+        if let Some(pool) = state.pools.lock().unwrap().get_mut(pool_id) {
+            pool.record_release();
+        }
+    }
     let Sandbox { vm, network, rootfs_path, attached_drives, image_id, tags, name, .. } = sandbox;
     // Only a forked descendant (rejected above) ever has `network: None`.
     let network = network.expect("non-fork sandboxes always hold a network lease");
@@ -389,6 +399,11 @@ pub(crate) async fn resume_snapshot_by_id(state: Arc<AppState>, snapshot_id: Str
         source_snapshot_id: None,
         name: snapshot.name,
         pty_session_count: Default::default(),
+        // A plain `POST /snapshots/:id/resume` isn't a pool claim — only
+        // `routes_sandbox::claim_from_pool` (which calls this same
+        // function, then overwrites this field) ties a resume back to a
+        // pool. See `crate::pool`'s module doc comment.
+        source_pool_id: None,
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
 
@@ -485,6 +500,9 @@ pub async fn fork_snapshot(
             // comment and `AppState::resolve_name`'s live-wins priority.
             name: snapshot.name.clone(),
             pty_session_count: Default::default(),
+            // A fork isn't a pool claim either -- see the same field on
+            // `resume_snapshot_by_id`'s own `Sandbox` construction above.
+            source_pool_id: None,
         }
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);

@@ -14,6 +14,24 @@ Changelog](https://keepachangelog.com/).
 ## Unreleased
 
 ### Added
+- Pre-warmed pools: `max_count` ceiling with queueing (daemon only — no
+  SDK/CLI change, nothing to publish). `PoolConfig.max_count` caps the
+  total live instances (warm + claimed) a pool's profile may have at
+  once; a `POST /sandboxes` claim arriving at the ceiling with nothing
+  warm queues (a `tokio::sync::Notify` per pool) for up to 30s before a
+  real `503`, instead of rejecting outright or silently exceeding the
+  ceiling. `GET /pools` now also reports `max_count`/`claimed`.
+  Live-verified: blocks a second claim at capacity, wakes it the instant
+  a slot frees (not on a poll interval), and 503s cleanly after the full
+  30s when nothing frees up. Also fixed a real bug found by live-testing
+  this exact feature: a failed warm claim's cold-create fallback wasn't
+  being attributed back to the pool, letting `max_count` be silently
+  exceeded under this project's own already-documented high resume
+  failure rate — fixed with a bounded 3-attempt retry so the fallback
+  re-resolves pool capacity instead of falling through unattributed. See
+  `ROADMAP.md`'s "Persistence and snapshotting" section for the full
+  story. 8 new `scripts/integration-test.sh` checks, 244/244 passing
+  overall.
 - Pre-warmed pools (0.7.0, above) added to the Python SDK too
   (`Pool.create/list/delete`, `packages/python/src/sandkiln/pool.py`) —
   not published to PyPI yet, so nothing to version here, but live-verified

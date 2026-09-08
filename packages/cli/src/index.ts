@@ -604,7 +604,13 @@ pool
   .option("--vcpu <count>", "vCPU count for warm instances (daemon default if omitted)", parsePositiveInt("--vcpu"))
   .option("--mem <mib>", "memory size in MiB for warm instances (daemon default if omitted)", parsePositiveInt("--mem"))
   .option("--warm-count <n>", "how many resumable snapshots to keep ready at once", parseNonNegativeInt("--warm-count"), 0)
-  .action(async function (this: Command, id: string, options: { image?: string; vcpu?: number; mem?: number; warmCount: number }) {
+  .option(
+    "--max-count <n>",
+    "maximum live instances (warm + claimed) this pool may ever have at once -- a claim past this queues (up to 30s) instead of " +
+      "cold-creating unbounded; omit for no ceiling",
+    parsePositiveInt("--max-count"),
+  )
+  .action(async function (this: Command, id: string, options: { image?: string; vcpu?: number; mem?: number; warmCount: number; maxCount?: number }) {
     const { baseUrl, token } = clientOptions(this);
     try {
       const created = await Pool.create(id, {
@@ -614,6 +620,7 @@ pool
         vcpuCount: options.vcpu,
         memSizeMib: options.mem,
         warmCount: options.warmCount,
+        maxCount: options.maxCount,
       });
       process.stdout.write(`${created.id}\n`);
     } catch (error) {

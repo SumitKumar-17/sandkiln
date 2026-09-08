@@ -20,6 +20,12 @@ pub enum AppError {
     /// A `/preview` proxy request's guest side didn't respond within
     /// `Config::preview_timeout`.
     GatewayTimeout(String),
+    /// A `POST /sandboxes` request matched a `max_count`-bounded pool
+    /// that stayed at capacity for the whole queueing window (see
+    /// `routes_sandbox::POOL_QUEUE_TIMEOUT`) — genuinely temporary, a
+    /// caller retrying later is the correct response, not a client
+    /// mistake (`BadRequest`) or a fixed conflict (`Conflict`).
+    ServiceUnavailable(String),
     Internal(std::io::Error),
 }
 
@@ -44,6 +50,7 @@ impl AppError {
             AppError::Conflict(message) => (StatusCode::CONFLICT, message.clone()),
             AppError::BadGateway(message) => (StatusCode::BAD_GATEWAY, message.clone()),
             AppError::GatewayTimeout(message) => (StatusCode::GATEWAY_TIMEOUT, message.clone()),
+            AppError::ServiceUnavailable(message) => (StatusCode::SERVICE_UNAVAILABLE, message.clone()),
             AppError::Internal(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         }
     }

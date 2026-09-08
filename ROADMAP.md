@@ -661,14 +661,45 @@ outbound HTTP both still work.
     (an inert pool); a request with `drives` or a custom `rate_limit`
     never matches a pool, since both are baked into a VM's state at boot
     time and a warm snapshot was booted with neither — falls through to
-    cold create rather than silently ignoring them. **Not yet built**: a
-    `max_count` ceiling with queueing past it (a claim past what's
-    currently warm just cold-creates instead, unbounded, same as no pool
-    existed) — a real follow-up, not implemented in this first slice. Pool
-    *configuration* is in-memory only, not durable across a daemon
-    restart (a caller re-`POST`s after one) — and a daemon restart can
-    orphan an already-warm snapshot that has no pool left to claim or
-    clean it up, a known, not-yet-solved edge of that same limitation.
+    cold create rather than silently ignoring them. Pool *configuration*
+    is in-memory only, not durable across a daemon restart (a caller
+    re-`POST`s after one) — and a daemon restart can orphan an
+    already-warm snapshot that has no pool left to claim or clean it up,
+    a known, not-yet-solved edge of that same limitation.
+  - **Done: `max_count` ceiling with queueing.** `PoolConfig.max_count`
+    (`Option<u32>`, unbounded when unset) caps the total number of *live*
+    instances — warm + claimed, combined — a pool's profile may have at
+    once; `POST /sandboxes` matching a pool at its ceiling with nothing
+    warm **queues** (a `tokio::sync::Notify` per pool, woken on every
+    warm-replenish or every live instance stopping) for up to 30 seconds
+    before returning a real `503`, rather than either rejecting the
+    request outright or silently exceeding the ceiling. `GET /pools` now
+    also reports `max_count` and `claimed`. Live-verified end to end: a
+    `max_count: 1` pool correctly blocks a second concurrent claim, wakes
+    it the instant the first is stopped (not on any fixed poll interval),
+    and returns a clean `503` with a clear message after the full 30s
+    when nothing ever frees up.
+    - **A real bug found in this feature by live-testing it, not
+      assumed away**: the first version shipped without retrying a
+      failed warm claim's pool resolution. Since a warm claim's
+      post-resume health check fails at the rate documented above (up to
+      ~2-in-3 resumes), and a failed claim's fallback used to fall
+      straight through to a *plain, unattributed* cold create, a
+      `max_count`-bounded pool under a bad run of resumes could silently
+      end up running more live instances than its own configured
+      ceiling — the accounting simply never saw the fallback create at
+      all. Caught by watching `GET /pools`'s `claimed` count read `0`
+      right after a claim that had, per the daemon's own log, actually
+      hit the health-check-failure path — a real, live, "the number is
+      wrong" discovery, not a design review catching it on paper. Fixed
+      with a bounded (3-attempt) retry: a failed warm claim's reserved
+      slot is released immediately (`PoolClaimGuard`'s `Drop`), and the
+      very next loop iteration re-resolves the pool from scratch, which
+      correctly finds room and attributes the resulting cold-create
+      fallback to the pool instead of letting it slip through unbounded.
+      A genuinely pathological run of 3 consecutive bad resumes still
+      falls through unattributed at the end — an accepted, rare residual
+      edge case, not a claim this closes completely.
 - **Snapshot lineage**: today a daemon only ever knows "the current
   snapshot" a sandbox became — there's no way to ask "what snapshot did
   *this* snapshot get forked from, and what else was forked from it."

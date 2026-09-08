@@ -83,4 +83,15 @@ pub struct Sandbox {
     /// needs to reach it long after `Sandbox` itself may no longer be
     /// reachable through the map at all.
     pub pty_session_count: Arc<AtomicU32>,
+    /// Set when this sandbox counts against a configured pool's
+    /// `max_count` (see `crate::pool`'s module doc comment for exactly
+    /// when) — a resumed warm claim or a cold-created instance made
+    /// under that pool's remaining headroom, never anything else. Read
+    /// by `destroy_sandbox_by_id`/`routes_snapshot::snapshot_and_stop` to
+    /// release the slot back when this sandbox stops being live, however
+    /// it stops. Deliberately **not** carried onto the `Snapshot` record
+    /// a stop might produce — a later resume/fork is a fresh creation
+    /// event, matched against whatever pool applies at that time, not
+    /// tied back to this one forever.
+    pub source_pool_id: Option<String>,
 }
