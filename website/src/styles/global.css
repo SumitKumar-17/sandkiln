@@ -4,13 +4,14 @@
   Light mode reads as fired-clay/technical-drafting-paper (a kiln's
   output, held up to daylight); dark mode reads as the kiln's own
   firebox — the working state, not just an inverted palette. Ember
-  orange is the one hot accent; steel blue is the cooled, hardened
+  orange is the one hot accent; verdigris — the green patina fired
+  metal takes on as it hardens, not a flat blue — is the cooled
   counterpart used for "done/shipped" status, so the page never leans
-  on a generic green checkmark.
+  on a generic green checkmark or the orange/teal cliché pairing.
 */
 :root {
   --bg: #f2efe6;
-  --surface: #ffffff;
+  --surface: #faf7f0;
   --surface-2: #e6e0d1;
   --border: #d1c8b0;
   --text: #211a10;
@@ -19,8 +20,8 @@
   --accent: #cf4415;
   --accent-glow: #e85a1f;
   --accent-ink: #ffffff;
-  --steel: #2f6a80;
-  --steel-dim: #4f8499;
+  --steel: #3c7a4f;
+  --steel-dim: #5c9670;
   --pending: #8a6a1f;
   --code-bg: #1c1712;
   --code-text: #f2e8d0;
@@ -44,8 +45,8 @@
     --accent: #ff5a24;
     --accent-glow: #ff8a4c;
     --accent-ink: #1a0f06;
-    --steel: #7ba6b8;
-    --steel-dim: #5a8598;
+    --steel: #7fc492;
+    --steel-dim: #5fa473;
     --pending: #d1a94e;
     --code-bg: #100c08;
     --code-text: #efe0c4;
@@ -64,8 +65,8 @@
   --accent: #ff5a24;
   --accent-glow: #ff8a4c;
   --accent-ink: #1a0f06;
-  --steel: #7ba6b8;
-  --steel-dim: #5a8598;
+  --steel: #7fc492;
+  --steel-dim: #5fa473;
   --pending: #d1a94e;
   --code-bg: #100c08;
   --code-text: #efe0c4;
