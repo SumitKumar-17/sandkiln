@@ -20,22 +20,29 @@ not in `daemon`.
   JSON PUT/PATCH requests, not worth pulling in `hyper` or similar for.
   If you need a new Firecracker API call, add a method here following
   the existing `put`/`patch` pattern.
-- `vm/mod.rs` — `Vm`/`VmConfig`: boot a microVM (spawn the Firecracker
-  process — directly, or via jailer when `VmConfig::jail` is set —
-  configure it over its API socket, start it), talk to its guest agent
-  (`vm.call()`, retries briefly since the agent isn't listening the
-  instant `InstanceStart` returns), stop it. `spawn_direct`/`spawn_jailed`
-  resolve the process to spawn and the paths Firecracker's API calls
-  should use (host paths for a direct boot, in-jail paths like `/kernel`
-  for a jailed one — see `jailer.rs`); `configure_and_start` runs the same
-  API PUT sequence either way. The spawned process's stdout/stderr (the
-  guest's `console=ttyS0` serial output) is captured to
-  `/tmp/sandkiln-fc-<id>.log` rather than discarded — see
-  `console_log_path`/`console_log_stdio` — and `annotate_with_console_log`
-  appends that path to a boot failure's error message, since a guest
-  kernel panic or agent crash before vsock comes up would otherwise be
-  invisible from the host. `snapshot::resume` uses the same three helpers
-  for the fresh Firecracker process it spawns.
+- `vm/mod.rs` — `Vm`/`VmConfig`: the public API surface only —
+  `Vm::boot`/`is_jailed`/`call`/`stop`, plus the shared helpers both
+  submodules below depend on (`console_log_path`/`console_log_stdio`/
+  `annotate_with_console_log`/`wait_for_socket`/`path_str`/`put_checked`).
+  The spawned process's stdout/stderr (the guest's `console=ttyS0` serial
+  output) is captured to `/tmp/sandkiln-fc-<id>.log` rather than
+  discarded — `annotate_with_console_log` appends that path to a boot
+  failure's error message, since a guest kernel panic or agent crash
+  before vsock comes up would otherwise be invisible from the host.
+  `snapshot::resume` uses the same shared helpers for the fresh
+  Firecracker process it spawns.
+- `vm/boot.rs` — the actual boot mechanics, as a submodule of `vm` (not a
+  sibling) specifically so it can still see `Vm`'s private fields to
+  construct one. Split out of `vm/mod.rs` (2026-09-08, evidence-based
+  crate audit) once that file mixed ~200 lines of boot-orchestration
+  internals into what should be pure public API surface — same
+  reasoning `vm/snapshot.rs` already gives for itself. `spawn_direct`/
+  `spawn_jailed` resolve the process to spawn and the paths Firecracker's
+  API calls should use (host paths for a direct boot, in-jail paths like
+  `/kernel` for a jailed one — see `jailer.rs`); `configure_and_start`
+  runs the same API PUT sequence either way, including inserting
+  `rate_limit` (see `insert_rate_limiter`) into the drive/network-
+  interface bodies when set.
 - `vm/snapshot.rs` — `Vm::pause`/`snapshot`/`resume` and `ResumeConfig`,
   as a submodule of `vm` (not a sibling) specifically so it can still see
   `Vm`'s private fields. Split out once `vm.rs` passed ~350 lines.
@@ -50,9 +57,15 @@ not in `daemon`.
   copy across filesystems) and reports the in-jail path Firecracker must
   use instead; `build_jailer_args`/`cgroup_limits` are pure and unit
   tested directly. Read its module doc comment before touching
-  `vm/mod.rs`'s `spawn_jailed`/`spawn_jailed_inner` — the chroot
+  `vm/boot.rs`'s `spawn_jailed`/`spawn_jailed_inner` — the chroot
   path-rewriting is the part most likely to look right and be subtly
-  wrong.
+  wrong. **Not yet proven on real hardware**: enabling
+  `SANDKILN_JAILER_ENABLED` breaks every sandbox create unless the
+  `jailer` binary itself has been made setuid-root first (a separate,
+  documented one-time step — see `SELF_HOSTING.md`'s "Optional:
+  jailer-based sandbox boot") — confirmed live 2026-09-08 via the actual
+  failure (`jailer` itself hits `Operation not permitted` trying to
+  chown a hard-linked file into the chroot before that step is done).
 - `network.rs` — `NetworkManager`/`Lease`: the tap-device pool, bridge
   attachment, IP allocation, and bridge port isolation. Read the module
   doc comment at the top — it explains *why* a pool of pre-created tap
