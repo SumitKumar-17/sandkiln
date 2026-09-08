@@ -29,6 +29,13 @@ external user of the published packages would write.
   and wires it to this process's own terminal (raw mode, keystrokes
   passed straight through) — distinct from `code-playground`'s
   request/response `runCommand()`.
+- `pool-warm-start/` — JS/TS, the `sandkiln` npm package. Configures a
+  pre-warmed pool with `Pool.create()` and claims from it several times
+  in a row (not just once), reporting each attempt as a clean claim or a
+  health-check fallback rather than a single number — see its own
+  README's "Why several attempts, not one" section before assuming a
+  pool always produces a fast result; a single-attempt version of this
+  example would be actively misleading given what real testing found.
 
 ## Conventions
 

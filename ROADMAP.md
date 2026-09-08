@@ -599,28 +599,53 @@ outbound HTTP both still work.
   claims a warm snapshot automatically instead of cold-booting — entirely
   transparent, no separate "create from pool" call. `Pool.create/list/delete`
   in the JS/TS SDK, `kiln pool create|ls|rm` in the CLI.
-  Live-verified, including the actual latency win on real hardware: a
-  claim measured at **71ms** vs. a cold create's **163ms** on the same
-  run (both single-run numbers on a shared, variable-load dev box, not a
-  controlled benchmark — see the Benchmarking section's own numbers for
-  the underlying boot/resume/setup breakdown this is built on).
+  Live-verified, including the actual latency win on real hardware — with
+  an important, honestly-measured caveat (see the finding right below
+  this): a **clean** claim (the resumed snapshot passes its health check)
+  measured at roughly **70–200ms** across repeated runs vs. a cold
+  create's own **~160–200ms** on the same box — a real but modest win at
+  this sample size (small-sample numbers on a shared, variable-load dev
+  box, not a controlled benchmark — see the Benchmarking section for the
+  underlying boot/resume/setup breakdown this is built on). That clean
+  win is **not** the reliable common case on this dev box today, though —
+  see the failure-rate finding immediately below, which affects a large
+  enough fraction of claims that "pools make creates faster" needs that
+  caveat attached, not stated as a clean, unconditional result.
   - **A real Firecracker/KVM finding from building this, not a sandkiln
-    bug**: resuming a snapshot has a rare but real failure mode where the
-    restored guest kernel panics early in boot (confirmed via its
-    captured console log — an early-boot divide-by-zero trap in the
-    console driver, restored CPU/timer state interacting badly with
-    timing-sensitive init code) and the whole Firecracker process exits
-    shortly after. Resuming *usually* works — `08-snapshots.sh`'s own
-    resume-then-exec check passes every run — but a pool's whole purpose
-    is resuming far more often than a manual test ever would, which
-    surfaces a failure rate that would otherwise stay invisible. Handled,
-    not just noted: every claim runs a real post-resume health check
-    (`exec true`) before being handed to the caller — a claim that fails
-    it tears the broken sandbox down and transparently falls back to a
+    bug — and a significant one, not a rare edge case.** Resuming a
+    snapshot has a failure mode where the restored guest kernel panics
+    early in boot (confirmed via its captured console log — an
+    early-boot divide-by-zero trap in the console driver, restored
+    CPU/timer state interacting badly with timing-sensitive init code —
+    plausibly TSC/clock-source drift between snapshot-time and
+    restore-time, though that's an informed guess, not a confirmed root
+    cause) and the whole Firecracker process exits shortly after.
+    **Measured directly, repeatedly, on this dev box**: across several
+    clean, isolated, sequential single-claim test runs (no concurrent
+    load), the failure rate ranged from roughly **1 in 3 to 2 in 3**
+    resumes — not a rare one-off. `08-snapshots.sh`'s own single
+    resume-then-exec check still passes every run because one resume
+    isn't enough attempts to reliably hit it; a pool's whole purpose is
+    resuming far more often than a manual test ever would, which is
+    exactly what surfaced a failure rate that would otherwise have stayed
+    invisible. Whether this is specific to this dev box's kernel/KVM/CPU
+    combination, this project's own guest kernel build, or a broader
+    Firecracker snapshot/restore characteristic is genuinely open —
+    worth real investigation before assuming it generalizes, but not
+    worth blocking this feature on, given the fallback below makes it
+    safe either way.
+    Handled, not just noted: every claim runs a real post-resume health
+    check (`exec true`) before being handed to the caller — a claim that
+    fails it tears the broken sandbox down (via `Vm::force_stop`, which
+    skips `stop()`'s own optimistic "sync before kill" call entirely,
+    since a VM that just failed its health check was never going to
+    respond to that either — found live too: without this, a fallback
+    paid two independent ~5-second retry timeouts back to back, ~10.3s
+    total, instead of one, ~5.4s) and transparently falls back to a
     normal cold create, so a caller never receives a dead sandbox id.
-    Confirmed live via a 15-iteration stress test (0 caller-visible
-    failures; the daemon log showed the fallback path actually firing
-    twice during that run).
+    Confirmed live via repeated stress tests (0 caller-visible failures
+    across every run; the daemon log confirms the fallback path actually
+    firing at the rate described above).
   - **A related, separately real finding**: Firecracker's snapshot/restore
     does not preserve MMDS's initialized state — `PATCH /mmds` alone fails
     with "MMDS data store is not initialized" after a resume, even though

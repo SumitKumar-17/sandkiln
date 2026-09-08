@@ -223,15 +223,33 @@ impl Vm {
         put_checked(&mut api, "/mmds", metadata)
     }
 
-    pub fn stop(mut self) -> io::Result<()> {
+    pub fn stop(self) -> io::Result<()> {
+        self.stop_inner(true)
+    }
+
+    /// Like `stop`, but skips the optimistic "sync before kill" call
+    /// entirely — for tearing down a VM already known to be dead or
+    /// unresponsive (see `sandkiln-daemon`'s `destroy_unhealthy_claim`,
+    /// used after a pool claim's own post-resume health check already
+    /// failed), where that call would just retry for its own separate
+    /// ~5-second timeout for nothing: there's no guest write to protect
+    /// on a VM that never did any real work, and the health check already
+    /// proved it isn't listening.
+    pub fn force_stop(self) -> io::Result<()> {
+        self.stop_inner(false)
+    }
+
+    fn stop_inner(mut self, sync_first: bool) -> io::Result<()> {
         // SIGKILL-ing Firecracker directly loses anything the guest
         // hasn't flushed from its page cache to the virtio-blk backing
         // file yet — this was silently losing recent writes to attached
         // drives (rootfs copies don't care, they're discarded anyway).
         // Best-effort: if the agent isn't reachable for any reason, fall
         // through to the kill rather than hang shutdown on it.
-        if let Err(e) = self.call(&Request::Exec { command: "sync".to_string(), args: vec![] }) {
-            tracing::warn!(vm_id = self.id, error = %e, "sync before stop failed, proceeding anyway");
+        if sync_first {
+            if let Err(e) = self.call(&Request::Exec { command: "sync".to_string(), args: vec![] }) {
+                tracing::warn!(vm_id = self.id, error = %e, "sync before stop failed, proceeding anyway");
+            }
         }
 
         let _ = self.child.kill();

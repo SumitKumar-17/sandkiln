@@ -353,22 +353,26 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
 /// verifies the result is actually alive, then overwrites its identity
 /// with what the *caller* actually asked for.
 ///
-/// **The health check is load-bearing, not defensive theater.** Found
-/// live while building this feature: Firecracker's snapshot/restore has
-/// a real, if rare, failure mode where the restored guest kernel panics
-/// early in boot (confirmed via its captured console log — an early-boot
-/// divide-by-zero trap in the console driver, restored CPU/timer state
-/// interacting badly with timing-sensitive init code) and the whole
-/// Firecracker process exits shortly after. Resuming *usually* works —
-/// this project's own `08-snapshots.sh` integration check does a resume
-/// and an exec afterward every run — but a pool's whole reason to exist
-/// is resuming far more often than a manual test ever would, which
-/// surfaces a rare failure rate that would otherwise stay invisible.
-/// Handing a caller a sandbox id that's actually a corpse would be worse
-/// than never having a pool at all, so this treats a failed health check
-/// as "the warm snapshot was bad" and cleans up + falls back to a normal
-/// cold create (see this function's caller) rather than either failing
-/// the request outright or returning a broken id.
+/// **The health check is load-bearing, not defensive theater — and not
+/// a rare edge case either.** Found live while building this feature:
+/// Firecracker's snapshot/restore has a real failure mode where the
+/// restored guest kernel panics early in boot (confirmed via its
+/// captured console log — an early-boot divide-by-zero trap in the
+/// console driver, restored CPU/timer state interacting badly with
+/// timing-sensitive init code) and the whole Firecracker process exits
+/// shortly after. Measured directly at roughly **1-in-3 to 2-in-3**
+/// resumes across repeated clean, isolated test runs on this dev box —
+/// this project's own `08-snapshots.sh` integration check still passes
+/// every run because one resume isn't enough attempts to reliably hit
+/// it, but a pool's whole reason to exist is resuming far more often
+/// than a manual test ever would, which is exactly what surfaced a
+/// failure rate this significant. Handing a caller a sandbox id that's
+/// actually a corpse would be worse than never having a pool at all, so
+/// this treats a failed health check as "the warm snapshot was bad" and
+/// cleans up + falls back to a normal cold create (see this function's
+/// caller) rather than either failing the request outright or returning
+/// a broken id — see `destroy_unhealthy_claim`'s use of `Vm::force_stop`
+/// for why the fallback itself doesn't pay a second unnecessary timeout.
 ///
 /// The warm snapshot's own tags/name/MMDS content reflect
 /// `pool_replenisher`'s placeholder request, not this one, and would
@@ -438,7 +442,12 @@ async fn destroy_unhealthy_claim(state: &Arc<AppState>, id: String) {
                 let _ = state.network.release(lease);
             }
             let _ = std::fs::remove_file(&sandbox.rootfs_path);
-            if let Err(e) = sandbox.vm.stop() {
+            // `force_stop`, not `stop` -- the health check that got us
+            // here already proved this VM isn't listening, so the
+            // optimistic "sync before kill" `stop()` would otherwise try
+            // has nothing to protect and would just burn its own
+            // separate ~5-second retry budget for no reason.
+            if let Err(e) = sandbox.vm.force_stop() {
                 tracing::warn!(sandbox_id = %id, error = %e, "failed to fully stop an unhealthy pool-claimed sandbox's VM");
             }
         }

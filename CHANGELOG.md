@@ -50,15 +50,17 @@ Changelog](https://keepachangelog.com/).
   `rateLimit`) matching a configured pool's image/resources
   transparently resumes a warm snapshot instead of cold-booting, once
   the background replenisher has one ready — no separate "create from
-  pool" call. Live-verified with a real measured win (71ms claim vs.
-  163ms cold create on the same run) and a real post-resume health check
-  that falls back to a normal cold create rather than ever handing back
-  a broken sandbox — see `ROADMAP.md`'s "Persistence and snapshotting"
-  section for two real Firecracker/KVM findings this surfaced (a rare
-  guest-kernel-panic-on-resume failure mode, and MMDS not surviving
-  snapshot/restore) and exactly how each is handled. 19 new
-  `scripts/integration-test.sh` checks (`18-pool.sh`), 234/234 passing
-  overall.
+  pool" call. Live-verified with a real measured win on a clean claim
+  (roughly 70–200ms vs. a cold create's ~160–200ms) — but that clean case
+  is honestly **not** the reliable common case on this dev box today: see
+  `ROADMAP.md`'s "Persistence and snapshotting" section for two real
+  Firecracker/KVM findings this surfaced and exactly how each is
+  handled — a guest-kernel-panic-on-resume failure mode measured at
+  roughly 1-in-3 to 2-in-3 resumes (not rare), handled with a real
+  post-resume health check that falls back to a normal cold create
+  rather than ever handing back a broken sandbox, and MMDS not
+  surviving snapshot/restore. 19 new `scripts/integration-test.sh`
+  checks (`18-pool.sh`), 234/234 passing overall.
 
 ## [0.6.0] — 2026-09-08
 
