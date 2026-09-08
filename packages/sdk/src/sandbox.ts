@@ -16,6 +16,8 @@ import type {
   ListSandboxesResponseBody,
   ListSnapshotsOptions,
   ListSnapshotsResponseBody,
+  DriveAttachmentOptions,
+  DriveAttachmentRequestBody,
   PreviewUrlOptions,
   RateLimitOptions,
   RateLimitRequestBody,
@@ -131,6 +133,8 @@ export class Sandbox {
     if (options.memSizeMib !== undefined) requestBody.mem_size_mib = options.memSizeMib;
     const rateLimit = buildRateLimitRequestBody(options.rateLimit);
     if (rateLimit !== undefined) requestBody.rate_limit = rateLimit;
+    const drives = buildDrivesRequestBody(options.drives);
+    if (drives !== undefined) requestBody.drives = drives;
 
     const body = await request<GetOrCreateSandboxResponseBody>({
       ...client,
@@ -328,6 +332,14 @@ export class Sandbox {
   }
 }
 
+/** `undefined` when the caller didn't attach any drives — matches every
+ * other optional-array-field convention in this SDK (`undefined`, not
+ * `[]`, means "the caller didn't ask for this"). */
+function buildDrivesRequestBody(drives: DriveAttachmentOptions[] | undefined): DriveAttachmentRequestBody[] | undefined {
+  if (drives === undefined) return undefined;
+  return drives.map((d) => ({ id: d.id, read_only: d.readOnly }));
+}
+
 /** Only includes the sub-fields the caller actually set — mirrors the
  * daemon's own per-field `#[serde(default)]` optionality on
  * `RateLimitRequest` rather than always sending both keys. */
@@ -351,5 +363,7 @@ function buildCreateSandboxRequestBody(options: CreateSandboxOptions): CreateSan
   if (options.imageId !== undefined) body.image_id = options.imageId;
   const rateLimit = buildRateLimitRequestBody(options.rateLimit);
   if (rateLimit !== undefined) body.rate_limit = rateLimit;
+  const drives = buildDrivesRequestBody(options.drives);
+  if (drives !== undefined) body.drives = drives;
   return Object.keys(body).length > 0 ? body : undefined;
 }

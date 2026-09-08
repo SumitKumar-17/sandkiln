@@ -37,6 +37,20 @@ export interface CreateSandboxOptions extends SandboxOptions {
   imageId?: string;
   /** Unlimited host I/O (the default) when omitted. See `RateLimitOptions`. */
   rateLimit?: RateLimitOptions;
+  /** Existing persistent drives (see `Drive.create`) to attach at boot,
+   * each becoming its own block device inside the guest. A read-write
+   * attachment (the default, `readOnly` omitted or `false`) needs
+   * exclusive access — rejected with a 409 if the drive is already
+   * attached anywhere; a `readOnly: true` attachment may coexist with
+   * any number of other read-only attachments of the same drive, but
+   * still conflicts with an existing read-write one. Omitted means no
+   * drives, unchanged from before this existed. */
+  drives?: DriveAttachmentOptions[];
+}
+
+export interface DriveAttachmentOptions {
+  id: string;
+  readOnly?: boolean;
 }
 
 /** `tags`/`vcpuCount`/`memSizeMib`/`rateLimit` are used only when
@@ -49,6 +63,7 @@ export interface GetOrCreateSandboxOptions extends SandboxOptions {
   vcpuCount?: number;
   memSizeMib?: number;
   rateLimit?: RateLimitOptions;
+  drives?: DriveAttachmentOptions[];
 }
 
 export interface ListSandboxesOptions extends SandboxOptions {
@@ -74,6 +89,11 @@ export interface RateLimitRequestBody {
   ops_per_sec?: number;
 }
 
+export interface DriveAttachmentRequestBody {
+  id: string;
+  read_only?: boolean;
+}
+
 export interface CreateSandboxRequestBody {
   name?: string;
   tags?: Record<string, string>;
@@ -81,6 +101,7 @@ export interface CreateSandboxRequestBody {
   mem_size_mib?: number;
   image_id?: string;
   rate_limit?: RateLimitRequestBody;
+  drives?: DriveAttachmentRequestBody[];
 }
 
 export interface CreateSandboxResponseBody {
@@ -199,6 +220,7 @@ export interface GetOrCreateSandboxRequestBody {
   vcpu_count?: number;
   mem_size_mib?: number;
   rate_limit?: RateLimitRequestBody;
+  drives?: DriveAttachmentRequestBody[];
 }
 
 export interface GetOrCreateSandboxResponseBody {
@@ -249,4 +271,44 @@ export interface ImageSummaryBody {
 
 export interface ListImagesResponseBody {
   images: ImageSummaryBody[];
+}
+
+export interface DriveOptions {
+  baseUrl?: string;
+  authToken?: string;
+}
+
+export interface CreateDriveRequestBody {
+  size_mib: number;
+}
+
+export interface DriveHolderSummaryBody {
+  holder: string;
+  read_only: boolean;
+}
+
+export interface DriveSummaryBody {
+  id: string;
+  size_mib: number;
+  created_at_unix: number;
+  attached_to: DriveHolderSummaryBody[];
+}
+
+export interface ListDrivesResponseBody {
+  drives: DriveSummaryBody[];
+}
+
+/** Who currently holds a drive — `"sandbox <id>"` or `"snapshot <id>"`.
+ * More than one holder means it's attached read-only to several at
+ * once; a drive can't be deleted while this is non-empty. */
+export interface DriveHolder {
+  holder: string;
+  readOnly: boolean;
+}
+
+export interface DriveInfo {
+  id: string;
+  sizeMib: number;
+  createdAt: Date;
+  attachedTo: DriveHolder[];
 }

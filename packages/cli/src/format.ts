@@ -1,5 +1,5 @@
 import { InvalidArgumentError } from "commander";
-import type { ImageInfo, SandboxInfo, SnapshotInfo } from "sandkiln";
+import type { DriveInfo, ImageInfo, SandboxInfo, SnapshotInfo } from "sandkiln";
 
 /**
  * A plain `Error` here crashes with a raw stack trace instead of the
@@ -13,6 +13,30 @@ export function parseTag(value: string, previous: Record<string, string>): Recor
     throw new InvalidArgumentError(`--tag expects key=value, got: ${value}`);
   }
   previous[value.slice(0, separatorIndex)] = value.slice(separatorIndex + 1);
+  return previous;
+}
+
+/**
+ * Parses a repeatable `--drive <id>` / `--drive <id>:ro` flag into the
+ * `{ id, readOnly }` shape `Sandbox.create`'s `drives` option expects —
+ * `:ro` is the only recognized suffix (read-only); anything else after
+ * the id is rejected rather than silently ignored.
+ */
+export function parseDriveAttachment(
+  value: string,
+  previous: { id: string; readOnly?: boolean }[],
+): { id: string; readOnly?: boolean }[] {
+  const separatorIndex = value.indexOf(":");
+  if (separatorIndex === -1) {
+    previous.push({ id: value });
+    return previous;
+  }
+  const id = value.slice(0, separatorIndex);
+  const suffix = value.slice(separatorIndex + 1);
+  if (suffix !== "ro") {
+    throw new InvalidArgumentError(`--drive expects <id> or <id>:ro, got: ${value}`);
+  }
+  previous.push({ id, readOnly: true });
   return previous;
 }
 
@@ -72,4 +96,19 @@ export function formatImageList(images: ImageInfo[]): string {
     return "no images\n";
   }
   return images.map(formatImageLine).join("\n") + "\n";
+}
+
+function formatDriveLine(info: DriveInfo): string {
+  const holders =
+    info.attachedTo.length === 0
+      ? "not attached"
+      : info.attachedTo.map((h) => `${h.holder}${h.readOnly ? ":ro" : ""}`).join(",");
+  return `${info.id}  ${info.sizeMib}MiB  ${info.createdAt.toISOString()}  ${holders}`;
+}
+
+export function formatDriveList(drives: DriveInfo[]): string {
+  if (drives.length === 0) {
+    return "no drives\n";
+  }
+  return drives.map(formatDriveLine).join("\n") + "\n";
 }

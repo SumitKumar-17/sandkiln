@@ -1,7 +1,15 @@
 import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
-import { Image, Sandbox, SandkilnApiError } from "sandkiln";
-import { formatImageList, formatSandboxList, formatSnapshotList, parsePositiveInt, parseTag } from "./format.js";
+import { Drive, Image, Sandbox, SandkilnApiError } from "sandkiln";
+import {
+  formatDriveList,
+  formatImageList,
+  formatSandboxList,
+  formatSnapshotList,
+  parseDriveAttachment,
+  parsePositiveInt,
+  parseTag,
+} from "./format.js";
 
 interface GlobalOptions {
   baseUrl?: string;
@@ -45,6 +53,12 @@ sandbox
   .option("--image <id>", "boot from a registered image instead of the daemon's default rootfs (see 'kiln image ls')")
   .option("--rate-bandwidth <bytes-per-sec>", "cap host I/O bandwidth (bytes/sec) via Firecracker's rate limiter", parsePositiveInt("--rate-bandwidth"))
   .option("--rate-ops <ops-per-sec>", "cap host I/O operations/sec via Firecracker's rate limiter", parsePositiveInt("--rate-ops"))
+  .option(
+    "--drive <id[:ro]>",
+    "attach an existing drive (see 'kiln drive ls'); repeatable; append :ro for a read-only attachment",
+    parseDriveAttachment,
+    [] as { id: string; readOnly?: boolean }[],
+  )
   .action(async function (
     this: Command,
     opts: {
@@ -55,6 +69,7 @@ sandbox
       image?: string;
       rateBandwidth?: number;
       rateOps?: number;
+      drive: { id: string; readOnly?: boolean }[];
     },
   ) {
     const { baseUrl, token } = clientOptions(this);
@@ -71,6 +86,7 @@ sandbox
           opts.rateBandwidth === undefined && opts.rateOps === undefined
             ? undefined
             : { bandwidthBytesPerSec: opts.rateBandwidth, opsPerSec: opts.rateOps },
+        drives: opts.drive.length > 0 ? opts.drive : undefined,
       });
       process.stdout.write(`${created.id}\n`);
     } catch (error) {
@@ -99,9 +115,23 @@ sandbox
     "I/O operations/sec cap, used only if a fresh sandbox is created",
     parsePositiveInt("--rate-ops"),
   )
+  .option(
+    "--drive <id[:ro]>",
+    "attach an existing drive, used only if a fresh sandbox is created; repeatable; append :ro for read-only",
+    parseDriveAttachment,
+    [] as { id: string; readOnly?: boolean }[],
+  )
   .action(async function (
     this: Command,
-    opts: { name: string; tag: Record<string, string>; vcpu?: number; mem?: number; rateBandwidth?: number; rateOps?: number },
+    opts: {
+      name: string;
+      tag: Record<string, string>;
+      vcpu?: number;
+      mem?: number;
+      rateBandwidth?: number;
+      rateOps?: number;
+      drive: { id: string; readOnly?: boolean }[];
+    },
   ) {
     const { baseUrl, token } = clientOptions(this);
     try {
@@ -116,6 +146,7 @@ sandbox
           opts.rateBandwidth === undefined && opts.rateOps === undefined
             ? undefined
             : { bandwidthBytesPerSec: opts.rateBandwidth, opsPerSec: opts.rateOps },
+        drives: opts.drive.length > 0 ? opts.drive : undefined,
       });
       process.stdout.write(`${resolved.id}  ${created ? "created" : "existing"}\n`);
     } catch (error) {
@@ -336,6 +367,47 @@ image
     const { baseUrl, token } = clientOptions(this);
     try {
       await Image.delete(id, { baseUrl, authToken: token });
+      process.stdout.write(`${id} deleted\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+const drive = program.command("drive").description("Create, inspect, and manage persistent drives sandboxes can attach.");
+
+drive
+  .command("create <size-mib>")
+  .description("Create a new empty drive of <size-mib> MiB, ready to attach via 'kiln sandbox create --drive'.")
+  .action(async function (this: Command, sizeMib: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const created = await Drive.create(parsePositiveInt("<size-mib>")(sizeMib), { baseUrl, authToken: token });
+      process.stdout.write(`${created.id}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+drive
+  .command("ls")
+  .description("List persistent drives.")
+  .action(async function (this: Command) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const drives = await Drive.list({ baseUrl, authToken: token });
+      process.stdout.write(formatDriveList(drives));
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+drive
+  .command("rm <id>")
+  .description("Delete a drive and its backing file. Refused while any sandbox or held snapshot still attaches it.")
+  .action(async function (this: Command, id: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await Drive.delete(id, { baseUrl, authToken: token });
       process.stdout.write(`${id} deleted\n`);
     } catch (error) {
       await handleApiError(error);

@@ -10,6 +10,20 @@ from ._http import request
 
 
 @dataclass(frozen=True)
+class DriveAttachment:
+    """A persistent drive (see `Drive.create`) to attach at boot, each
+    becoming its own block device inside the guest. A read-write
+    attachment (the default, `read_only=False`) needs exclusive access -
+    the daemon rejects it with a 409 if the drive is already attached
+    anywhere; `read_only=True` may coexist with any number of other
+    read-only attachments of the same drive, but still conflicts with an
+    existing read-write one."""
+
+    id: str
+    read_only: bool = False
+
+
+@dataclass(frozen=True)
 class ExecResult:
     stdout: str
     stderr: str
@@ -50,6 +64,10 @@ class SnapshotInfo:
     name: str | None = None
 
 
+def _drive_attachment_to_dict(attachment: DriveAttachment) -> dict[str, object]:
+    return {"id": attachment.id, "read_only": attachment.read_only}
+
+
 def _build_rate_limit(bandwidth_bytes_per_sec: int | None, ops_per_sec: int | None) -> dict[str, int] | None:
     """`None` when the caller didn't set either sub-field — only includes
     the ones actually set, mirroring the daemon's own per-field
@@ -85,6 +103,7 @@ class Sandbox:
         image_id: str | None = None,
         rate_limit_bandwidth_bytes_per_sec: int | None = None,
         rate_limit_ops_per_sec: int | None = None,
+        drives: list[DriveAttachment] | None = None,
     ) -> "Sandbox":
         """`name` is a caller-given identity, unique among live sandboxes
         and held snapshots at the moment it's claimed — the daemon rejects
@@ -109,7 +128,11 @@ class Sandbox:
         the network interface. Both omitted (the default) means unlimited
         host I/O, unchanged from before this existed. A `0` for either
         raises `SandkilnApiError` with status 400 — meaningless, rejected
-        outright rather than silently treated as unlimited."""
+        outright rather than silently treated as unlimited.
+
+        `drives` attaches existing persistent drives (see `Drive.create`)
+        at boot time. Omitted means no drives, unchanged from before this
+        existed."""
         resolved_base_url = resolve_base_url(base_url)
         resolved_token = resolve_auth_token(auth_token)
         body: dict[str, object] = {}
@@ -126,6 +149,8 @@ class Sandbox:
         rate_limit = _build_rate_limit(rate_limit_bandwidth_bytes_per_sec, rate_limit_ops_per_sec)
         if rate_limit is not None:
             body["rate_limit"] = rate_limit
+        if drives is not None:
+            body["drives"] = [_drive_attachment_to_dict(d) for d in drives]
         response = request(resolved_base_url, "POST", "/sandboxes", resolved_token, body or None)
         return cls(response["id"], resolved_base_url, resolved_token)
 
@@ -161,6 +186,7 @@ class Sandbox:
         mem_size_mib: int | None = None,
         rate_limit_bandwidth_bytes_per_sec: int | None = None,
         rate_limit_ops_per_sec: int | None = None,
+        drives: list[DriveAttachment] | None = None,
     ) -> tuple["Sandbox", bool]:
         """Resolves `name` to a sandbox in one call, creating it if it
         doesn't exist yet: a live sandbox with this name is returned
@@ -189,6 +215,8 @@ class Sandbox:
         rate_limit = _build_rate_limit(rate_limit_bandwidth_bytes_per_sec, rate_limit_ops_per_sec)
         if rate_limit is not None:
             body["rate_limit"] = rate_limit
+        if drives is not None:
+            body["drives"] = [_drive_attachment_to_dict(d) for d in drives]
         response = request(resolved_base_url, "POST", "/sandboxes/get-or-create", resolved_token, body)
         return cls(response["id"], resolved_base_url, resolved_token), response["created"]
 

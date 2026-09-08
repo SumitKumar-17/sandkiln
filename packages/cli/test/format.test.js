@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InvalidArgumentError } from "commander";
-import { formatImageList, formatSandboxList, formatSnapshotList, parseTag } from "../dist/format.js";
+import { formatDriveList, formatImageList, formatSandboxList, formatSnapshotList, parseDriveAttachment, parseTag } from "../dist/format.js";
 
 test("parseTag splits on the first = and accumulates into the previous object", () => {
   const acc = parseTag("env=prod", {});
@@ -103,5 +103,62 @@ test("formatImageList renders id, size, ISO timestamp, and in-use holder (or 'no
     formatImageList(images),
     "python-3.12-custom  2048MiB  2026-01-01T00:00:00.000Z  sandbox sb-1\n" +
       "node-lts-custom  1024MiB  2026-01-02T00:00:00.000Z  not in use\n",
+  );
+});
+
+test("parseDriveAttachment accumulates a bare id as a read-write attachment", () => {
+  const acc = parseDriveAttachment("drv-1", []);
+  assert.deepEqual(acc, [{ id: "drv-1" }]);
+
+  parseDriveAttachment("drv-2", acc);
+  assert.deepEqual(acc, [{ id: "drv-1" }, { id: "drv-2" }]);
+});
+
+test("parseDriveAttachment treats a :ro suffix as a read-only attachment", () => {
+  const acc = parseDriveAttachment("drv-1:ro", []);
+  assert.deepEqual(acc, [{ id: "drv-1", readOnly: true }]);
+});
+
+test("parseDriveAttachment rejects any suffix other than :ro", () => {
+  assert.throws(() => parseDriveAttachment("drv-1:rw", []), (err) => {
+    assert.ok(err instanceof InvalidArgumentError);
+    assert.match(err.message, /--drive expects <id> or <id>:ro, got: drv-1:rw/);
+    return true;
+  });
+});
+
+test("formatDriveList reports an empty list distinctly", () => {
+  assert.equal(formatDriveList([]), "no drives\n");
+});
+
+test("formatDriveList renders id, size, timestamp, and comma-joined holders per line", () => {
+  const drives = [
+    {
+      id: "drv-1",
+      sizeMib: 64,
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      attachedTo: [{ holder: "sandbox sb-1", readOnly: false }],
+    },
+    {
+      id: "drv-2",
+      sizeMib: 128,
+      createdAt: new Date("2026-01-02T00:00:00.000Z"),
+      attachedTo: [],
+    },
+    {
+      id: "drv-3",
+      sizeMib: 256,
+      createdAt: new Date("2026-01-03T00:00:00.000Z"),
+      attachedTo: [
+        { holder: "sandbox sb-2", readOnly: true },
+        { holder: "sandbox sb-3", readOnly: true },
+      ],
+    },
+  ];
+  assert.equal(
+    formatDriveList(drives),
+    "drv-1  64MiB  2026-01-01T00:00:00.000Z  sandbox sb-1\n" +
+      "drv-2  128MiB  2026-01-02T00:00:00.000Z  not attached\n" +
+      "drv-3  256MiB  2026-01-03T00:00:00.000Z  sandbox sb-2:ro,sandbox sb-3:ro\n",
   );
 });
