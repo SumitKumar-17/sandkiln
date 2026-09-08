@@ -20,7 +20,7 @@ set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "must run as root: sudo $0 [path-to-sandkilnd-binary]" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BIN="${1:-$REPO_ROOT/core/target/release/sandkilnd}"
 GRANT_SCRIPT="$SCRIPT_DIR/grant-net-admin.sh"
 BASH_BIN="$(command -v bash)"
