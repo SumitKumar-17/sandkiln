@@ -32,6 +32,10 @@ Changelog](https://keepachangelog.com/).
   verified it (a live record correctly flips to `orphaned_by_restart`
   with its tags intact; already-ended records are untouched). 15 new
   `scripts/integration-test.sh` checks, 209/209 passing overall.
+
+## [0.6.0] — 2026-09-08
+
+### Added
 - Interactive terminal access: `Sandbox.pty()` (JS/TS SDK, returns a
   native `WebSocket`) and `kiln sandbox pty <id>` (CLI, raw terminal
   mode) open a live, bidirectional shell session inside a sandbox over

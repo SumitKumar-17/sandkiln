@@ -24,6 +24,11 @@ external user of the published packages would write.
   server inside a sandbox and prints the URL to reach it from a browser
   via `Sandbox.previewUrl()` and the daemon's `/sandboxes/:id/preview/:port`
   reverse proxy.
+- `interactive-terminal/` — JS/TS, the `sandkiln` npm package. Opens a
+  live, bidirectional shell session inside a sandbox via `Sandbox.pty()`
+  and wires it to this process's own terminal (raw mode, keystrokes
+  passed straight through) — distinct from `code-playground`'s
+  request/response `runCommand()`.
 
 ## Conventions
 
