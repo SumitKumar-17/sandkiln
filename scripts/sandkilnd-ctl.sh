@@ -121,6 +121,9 @@ cmd_start() {
     echo "==> $DAEMON_BIN has no CAP_NET_ADMIN — granting it (needs sudo)"
     if ! sudo bash "$SCRIPT_DIR/grant-net-admin.sh" "$DAEMON_BIN"; then
       echo "failed to grant CAP_NET_ADMIN — see scripts/grant-net-admin.sh" >&2
+      echo "(a non-interactive shell, e.g. over SSH, can't prompt for the sudo password at all — run" >&2
+      echo " 'sudo scripts/allow-passwordless-cap-grant.sh' once, interactively, to fix this for every" >&2
+      echo " future rebuild-then-restart, not just this one)" >&2
       exit 1
     fi
   fi

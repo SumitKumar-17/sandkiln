@@ -413,8 +413,20 @@ reintroduce them:
   system-installed v12, not the real v20 the project targets. Source
   `$HOME/.cargo/env` / `$HOME/.nvm/nvm.sh` explicitly before running
   `cargo`/`npm`/`node` this way — `scripts/sandkilnd-ctl.sh` and
-  `scripts/setup.sh` already do this for cargo; do the equivalent for nvm
-  when scripting a JS/TS build over SSH.
+  `scripts/setup.sh` already do this for cargo, and `scripts/remote.sh`
+  (`run`/`ssh`) sources both automatically before every command, so
+  driving a build over `scripts/remote.sh run ...` doesn't need this
+  worked around by hand. Do the equivalent yourself only if you're
+  scripting a *new* SSH entry point that bypasses `remote.sh`.
+- **A non-interactive SSH shell also can't prompt for a sudo password at
+  all**, which matters specifically for `scripts/sandkilnd-ctl.sh
+  restart`'s CAP_NET_ADMIN re-grant (setcap doesn't survive a binary
+  rebuild, so this runs after every build): over `scripts/remote.sh run`
+  it fails outright instead of prompting. Run `sudo
+  scripts/allow-passwordless-cap-grant.sh` once, interactively, to add a
+  narrowly-scoped NOPASSWD rule (only `grant-net-admin.sh` against the
+  daemon's own binary path) so every future rebuild-then-restart over SSH
+  just works.
 - **A near-full disk can silently truncate a file mid-write, not just
   fail loudly.** Hit this for real: `@rollup/rollup-linux-x64-gnu`'s
   native `.node` binary got written at ~354KB instead of its real ~2.1MB
