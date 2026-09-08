@@ -32,11 +32,23 @@ that code belongs in `sandkiln-vmm` or `sandkiln-guest-agent` instead.
 - `framing.rs` — length-prefixed message framing (4-byte LE length +
   payload) over anything implementing `Read`/`Write`. Chosen over
   newline-delimited framing specifically so binary file contents in a
-  response can never be misinterpreted as a frame boundary.
+  response can never be misinterpreted as a frame boundary. Also reused
+  by `PtyHandshake` below — the *only* framed message on `PTY_PORT`,
+  since everything after it is a raw byte passthrough, not
+  `Request`/`Response` traffic.
 - `lib.rs` — re-exports, plus `AGENT_PORT` (the fixed vsock port both
-  sides agree on) and the `encode_*`/`decode_*` helper functions that
-  keep `serde_json` an implementation detail callers don't need to
+  sides agree on for `Request`/`Response` traffic), `PTY_PORT` (a
+  *second*, dedicated vsock port for interactive PTY sessions — see
+  `PtyHandshake` below), and the `encode_*`/`decode_*` helper functions
+  that keep `serde_json` an implementation detail callers don't need to
   depend on directly.
+- `messages.rs` also defines `PtyHandshake { cols, rows }` — not a
+  `Request`/`Response` variant, since a PTY session isn't
+  request/response shaped at all. A `PTY_PORT` connection reads exactly
+  one framed `PtyHandshake`, then becomes raw bytes for the rest of its
+  life; see `sandkiln-guest-agent`'s `pty.rs` and
+  `core/crates/daemon/src/routes_pty.rs` for the two ends of that
+  connection.
 
 ## Changing the protocol
 

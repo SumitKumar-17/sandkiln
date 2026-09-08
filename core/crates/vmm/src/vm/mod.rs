@@ -16,9 +16,10 @@ mod snapshot;
 use crate::firecracker_api::ApiClient;
 use crate::jailer::JailLaunch;
 use crate::vsock_client;
-use sandkiln_protocol::{Request, Response, AGENT_PORT};
+use sandkiln_protocol::{Request, Response, AGENT_PORT, PTY_PORT};
 use std::io;
 use std::net::Ipv4Addr;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -164,6 +165,32 @@ impl Vm {
                 Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
                 Err(e) => {
                     tracing::warn!(vm_id = self.id, error = %e, "vsock call failed");
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    /// Opens a new interactive PTY session inside this VM, sized to
+    /// `cols`x`rows` — a fundamentally different call shape from
+    /// `call()` above: this returns a raw, still-open stream the caller
+    /// shovels bytes through for as long as the session lasts, rather
+    /// than one request answered by one response. Retries briefly like
+    /// `call()` does, for the same reason (the agent may not be
+    /// listening yet immediately after boot) even though in practice a
+    /// PTY is usually opened well after a sandbox is already responsive.
+    pub fn open_pty(&self, cols: u16, rows: u16) -> io::Result<UnixStream> {
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(5);
+        loop {
+            match vsock_client::open_pty(&self.vsock_socket, PTY_PORT, cols, rows) {
+                Ok(stream) => {
+                    tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "pty session opened");
+                    return Ok(stream);
+                }
+                Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+                Err(e) => {
+                    tracing::warn!(vm_id = self.id, error = %e, "opening pty session failed");
                     return Err(e);
                 }
             }

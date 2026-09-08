@@ -388,6 +388,7 @@ pub(crate) async fn resume_snapshot_by_id(state: Arc<AppState>, snapshot_id: Str
         last_activity: std::sync::Mutex::new(std::time::Instant::now()),
         source_snapshot_id: None,
         name: snapshot.name,
+        pty_session_count: Default::default(),
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
 
@@ -483,6 +484,7 @@ pub async fn fork_snapshot(
             // same name at once, deliberately — see `Sandbox::name`'s doc
             // comment and `AppState::resolve_name`'s live-wins priority.
             name: snapshot.name.clone(),
+            pty_session_count: Default::default(),
         }
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);

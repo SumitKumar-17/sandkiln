@@ -12,8 +12,12 @@ path = "src/main.rs"
 sandkiln-protocol = { path = "../protocol" }
 sandkiln-vmm = { path = "../vmm" }
 sandkiln-store = { path = "../store" }
-axum = "0.7"
+axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+# For splitting/pumping a WebSocket (Stream + Sink) against an async
+# UnixStream in routes_pty.rs -- already compiled in transitively via
+# axum itself, naming it directly costs nothing new.
+futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"

@@ -366,6 +366,61 @@ sandbox
   });
 
 sandbox
+  .command("pty <id>")
+  .description("Open a live, interactive shell session inside a sandbox. Exit the remote shell (or Ctrl+D) to end the session.")
+  .action(async function (this: Command, id: string) {
+    const { baseUrl, token } = clientOptions(this);
+    const cols = process.stdout.columns || 80;
+    const rows = process.stdout.rows || 24;
+
+    let ws: WebSocket;
+    try {
+      ws = attachSandbox(id, baseUrl, token).pty({ cols, rows });
+    } catch (error) {
+      await handleApiError(error);
+      return;
+    }
+    ws.binaryType = "arraybuffer";
+
+    const wasRaw = process.stdin.isTTY ? process.stdin.isRaw : undefined;
+    const restoreTerminal = () => {
+      if (process.stdin.isTTY && wasRaw !== undefined) {
+        process.stdin.setRawMode(wasRaw);
+      }
+      process.stdin.pause();
+      process.stdin.removeAllListeners("data");
+    };
+
+    await new Promise<void>((resolve) => {
+      ws.addEventListener("open", () => {
+        if (process.stdin.isTTY) {
+          process.stdin.setRawMode(true);
+        }
+        process.stdin.resume();
+        // Every keystroke goes straight to the remote shell, including
+        // Ctrl+C -- raw mode means Node never intercepts it as SIGINT,
+        // the same way a real terminal/SSH client leaves Ctrl+C to
+        // whatever's running remotely rather than killing the local
+        // process.
+        process.stdin.on("data", (chunk: Buffer) => ws.send(chunk));
+      });
+
+      ws.addEventListener("message", (event) => {
+        const buf = event.data instanceof ArrayBuffer ? Buffer.from(event.data) : Buffer.from(String(event.data));
+        process.stdout.write(buf);
+      });
+
+      const end = () => {
+        restoreTerminal();
+        resolve();
+      };
+      ws.addEventListener("close", end);
+      ws.addEventListener("error", end);
+    });
+
+  });
+
+sandbox
   .command("preview <id> <port>")
   .description("Print the URL to reach a server listening on <port> inside a sandbox, proxied through the daemon.")
   .option("--path <path>", "path within the sandbox's server to preview", "/")

@@ -17,8 +17,19 @@ this package only ever catches up to what the daemon actually does.
 - `sandbox.ts` — the `Sandbox` class: `create`/`attach`/`list`/`resume`/
   `fork`/`byName`/`getOrCreate` (static), `runCommand`/`readFile`/
   `writeFile`/`chmod`/`chown`/`mkdir`/`rename`/`copy`/`symlink`/
-  `readlink`/`truncate`/`listDir`/`stop`/`snapshot`/`previewUrl`
-  (instance). `chmod`/`chown`/.../`listDir` all follow the exact same
+  `readlink`/`truncate`/`listDir`/`stop`/`snapshot`/`previewUrl`/`pty`
+  (instance). `pty(options)` is the odd one out — every other instance
+  method is `fetch`-based request/response through `http.ts`; this one
+  returns a native `WebSocket` directly (constructed against
+  `core/crates/daemon/src/routes_pty.rs`'s route) instead of awaiting
+  anything, since a PTY session is a live, bidirectional stream, not a
+  single call. Throws a clear error instead of returning a broken object
+  if `typeof WebSocket === "undefined"` (older Node without a polyfill)
+  — deliberately no `ws` npm dependency added just for this, to keep this
+  package's "zero runtime dependencies" property intact; see
+  `ROADMAP.md`'s "Dev servers and live preview" section for the auth
+  (`?token=`, same reasoning as `previewUrl` below) and the no-live-resize
+  caveat. `chmod`/`chown`/.../`listDir` all follow the exact same
   shape as `readFile`/`writeFile` — build a request body, `request<T>()`,
   map any snake_case response fields back to camelCase — and forward
   `path`/`from`/`to`/etc. completely unvalidated, same as `readFile`/

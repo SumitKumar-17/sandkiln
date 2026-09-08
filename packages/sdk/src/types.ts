@@ -191,6 +191,14 @@ export interface ListDirRequestBody {
   path: string;
 }
 
+/** Sizes the terminal once, at session start — see `Sandbox.pty()`'s own
+ * doc comment for why there's no live resize yet. Both default to a
+ * conventional 80x24 terminal if omitted. */
+export interface PtyOptions {
+  cols?: number;
+  rows?: number;
+}
+
 export interface DirEntryBody {
   name: string;
   is_dir: boolean;

@@ -81,7 +81,16 @@ not in `daemon`.
   `CAP_NET_ADMIN` doesn't cover the `TUNSETIFF` ioctl, only netlink ops).
 - `vsock_client.rs` — the host-side vsock connection, mediated through
   Firecracker's Unix-socket vsock bridging (`CONNECT <port>\n` handshake,
-  then the connection is a raw byte stream to the guest agent).
+  then the connection is a raw byte stream to the guest agent). Also
+  `open_pty` — the same `CONNECT`-handshake dance against
+  `sandkiln_protocol::PTY_PORT` instead of `AGENT_PORT`, followed by one
+  framed `PtyHandshake` instead of a `Request`, after which the returned
+  `UnixStream` is raw passthrough for its whole life (read/write timeouts
+  are explicitly cleared before returning it, unlike every other call on
+  this connection, since a PTY session is meant to sit idle between
+  keystrokes). `Vm::open_pty` (in `vm/mod.rs`) wraps this the same way
+  `Vm::call` wraps the request/response path — retrying for up to 5s
+  while the guest agent's second listener comes up.
 
 ## Building and testing
 

@@ -16,3 +16,9 @@ base64 = "0.22"
 # minimal, musl-friendly dependency rather than pulling in `nix` for a
 # single syscall wrapper.
 libc = "0.2"
+# Already compiled into this binary transitively via `vsock` (see its
+# own Cargo.lock entry) -- naming it directly costs nothing new, and the
+# openpty/forkpty/setsid/TIOCSCTTY dance for pty.rs is exactly the kind
+# of multi-step, easy-to-get-subtly-wrong process-lifecycle code `nix`
+# exists to get right, unlike chown's single trivial syscall above.
+nix = { version = "0.31", features = ["term", "process", "signal"] }

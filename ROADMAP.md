@@ -428,14 +428,31 @@ outbound HTTP both still work.
   replacement for it.
 - Fast iterative file sync tuned for dev-server workflows — write many
   small files quickly, ideally with watch-mode support.
-- **Interactive terminal access**: a real PTY inside the sandbox, exposed
-  over a WebSocket — distinct from batch `exec` (request in, response
-  out); this is a live, bidirectional shell session, what `kiln`'s
-  eventual interactive mode and any web-based terminal UI would need.
-  Validated as a real, commonly-offered capability elsewhere, not a
-  fringe idea — not currently in active development. If/when this is
-  built, a per-sandbox concurrent-session cap (a fixed ceiling like 64)
-  is a sane default worth copying rather than leaving unbounded.
+- **Done: interactive terminal access.** A real PTY inside the sandbox,
+  exposed over a WebSocket — distinct from batch `exec` (request in,
+  response out), this is a live, bidirectional shell session:
+  `GET /sandboxes/:id/pty[?cols=&rows=]` upgrades to a WebSocket and
+  proxies raw bytes to a shell forked (via `forkpty(2)`) inside the
+  guest, over a second, dedicated vsock port (`PTY_PORT`, separate from
+  the request/response `AGENT_PORT`) — `Sandbox.pty()` in the JS/TS SDK
+  (native `WebSocket`, no new runtime dependency), `kiln sandbox pty
+  <id>` in the CLI (raw terminal mode, keystrokes including Ctrl+C pass
+  straight through), an `examples/interactive-terminal` reference.
+  Live-verified end to end, including both hangup directions: the shell
+  exiting first cleanly ends the WebSocket session, and the WebSocket
+  closing first (a lost connection, a closed browser tab) sends the
+  shell's process group `SIGHUP` so it actually terminates instead of
+  running orphaned inside the guest.
+  - Auth: like `/preview/:port`, this accepts the token as a `?token=`
+    query parameter, not just a header — neither a browser's nor
+    Node.js's native `WebSocket` constructor can set custom headers.
+  - A per-sandbox concurrent-session cap (`MAX_PTY_SESSIONS_PER_SANDBOX
+    = 64`) is enforced daemon-side.
+  - No live terminal resize yet — `cols`/`rows` size the session once,
+    at open time, via the initial `PtyHandshake`; a real follow-up would
+    need a small control-message side-channel over the same WebSocket
+    (e.g. a JSON resize message multiplexed alongside the raw byte
+    stream) to change it mid-session.
 
 ## Tags and sandbox metadata
 

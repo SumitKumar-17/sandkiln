@@ -14,8 +14,23 @@ straight to the SDK.
 ## Files
 
 - `src/index.ts` — the CLI. `sandbox create|get-or-create|by-name|ls|rm|
-  exec|read|write|preview|snapshot|resume|fork` and `image create|ls|rm`
-  subcommands, each a thin call into `Sandbox`/`Sandbox.attach()`/`Image`.
+  exec|read|write|preview|pty|snapshot|resume|fork|chmod|chown|mkdir|
+  rename|cp|symlink|readlink|truncate|ls-dir` and `image create|ls|rm`,
+  `drive create|ls|rm` subcommands, each a thin call into
+  `Sandbox`/`Sandbox.attach()`/`Image`/`Drive`. `pty <id>` opens
+  `Sandbox.pty()`'s `WebSocket` and pumps bytes between it and the local
+  terminal: raw mode (`process.stdin.setRawMode(true)`) so every
+  keystroke, including Ctrl+C, goes straight to the remote shell instead
+  of Node intercepting it. A real live-tested gotcha here: the process
+  used to hang for a full 10 seconds after the remote shell exited before
+  this was traced to a guest-side bug (see `sandkiln-guest-agent`'s
+  `pty.rs` and its own `AGENTS.md`) rather than anything in this file —
+  the WebSocket's `close` event genuinely never fired until the guest
+  actually tore down its side of the connection, so no amount of
+  client-side cleanup here could have fixed it. Worth remembering if a
+  similar hang ever shows up again: check whether the *server* side is
+  actually closing the connection before assuming it's a local handle
+  leak.
   `resume`/`fork`/`get-or-create`/`by-name` call the SDK's static
   `Sandbox.resume`/`Sandbox.fork`/`Sandbox.getOrCreate`/`Sandbox.byName`
   directly (none acts on an already-existing handle — `resume`/`fork`

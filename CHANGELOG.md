@@ -32,6 +32,20 @@ Changelog](https://keepachangelog.com/).
   verified it (a live record correctly flips to `orphaned_by_restart`
   with its tags intact; already-ended records are untouched). 15 new
   `scripts/integration-test.sh` checks, 209/209 passing overall.
+- Interactive terminal access: `Sandbox.pty()` (JS/TS SDK, returns a
+  native `WebSocket`) and `kiln sandbox pty <id>` (CLI, raw terminal
+  mode) open a live, bidirectional shell session inside a sandbox over
+  `GET /sandboxes/:id/pty`, distinct from batch `exec`. A new
+  `examples/interactive-terminal` reference project replaces ad hoc
+  testing for this one. Live-verified end to end on real hardware,
+  including a real bug found and fixed during that verification: the
+  guest agent originally left one side of a disconnected session blocked
+  forever (or, in the other direction, an orphaned shell process running
+  with nothing attached to it) — fixed with an explicit socket shutdown
+  and a `SIGHUP` to the shell's process group, matching real terminal
+  hangup semantics. See `ROADMAP.md`'s "Dev servers and live preview"
+  section for the auth (`?token=`), the per-sandbox 64-session cap, and
+  the no-live-resize caveat.
 
 ## [0.5.0] — 2026-09-08
 

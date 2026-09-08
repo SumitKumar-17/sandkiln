@@ -76,6 +76,17 @@ pub struct DirEntry {
     pub mtime_unix: u64,
 }
 
+/// The one framed message sent at the start of a [`crate::PTY_PORT`]
+/// connection, before it becomes a raw byte passthrough — see that
+/// constant's own doc comment for the full picture. Not part of the
+/// `Request`/`Response` enums: a PTY connection is a different protocol
+/// entirely, not a new operation on the existing one.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct PtyHandshake {
+    pub cols: u16,
+    pub rows: u16,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Response {
@@ -253,6 +264,13 @@ mod tests {
     fn error_response_wire_shape() {
         let resp = Response::Error { message: "boom".to_string() };
         assert_eq!(serde_json::to_string(&resp).unwrap(), r#"{"status":"error","message":"boom"}"#);
+    }
+
+    #[test]
+    fn pty_handshake_wire_shape() {
+        let handshake = PtyHandshake { cols: 80, rows: 24 };
+        let json = serde_json::to_string(&handshake).unwrap();
+        assert_eq!(json, r#"{"cols":80,"rows":24}"#);
     }
 
     #[test]

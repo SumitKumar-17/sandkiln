@@ -6,11 +6,14 @@ is scoped to this one crate.
 ## What this crate is
 
 A ~700KB static binary that runs *inside* every microVM as a systemd
-service, listening on vsock port `sandkiln_protocol::AGENT_PORT` and
+service, listening on two vsock ports: `sandkiln_protocol::AGENT_PORT`,
 answering `Request`s from `sandkiln-protocol` (exec, read/write file,
 directory listing with metadata, chmod/chown/mkdir/rename/copy/symlink/
-readlink/truncate). This is the only code that ever runs inside the
-guest — everything else (`vmm`, `daemon`) is host-side.
+readlink/truncate), and `sandkiln_protocol::PTY_PORT`, for interactive
+shell sessions (see `pty.rs` below) — a fundamentally different,
+long-lived-raw-bytes shape from the first port's one-request-one-response
+traffic. This is the only code that ever runs inside the guest —
+everything else (`vmm`, `daemon`) is host-side.
 
 Built for `x86_64-unknown-linux-musl` specifically (static linking, no
 libc dependency on the guest's exact glibc version) — see root
@@ -21,9 +24,14 @@ time.
 
 ## Files
 
-- `main.rs` — the vsock listener loop: accept a connection, read framed
-  messages in a loop, dispatch to `handler::handle`, write the framed
-  response, repeat until the peer disconnects.
+- `main.rs` — two listener loops, one per port, the `PTY_PORT` one on
+  its own thread from startup: the `AGENT_PORT` loop accepts a
+  connection, reads framed messages in a loop, dispatches to
+  `handler::handle`, writes the framed response, repeats until the peer
+  disconnects; the `PTY_PORT` loop accepts a connection and spawns a new
+  thread per session (`pty::handle_connection`), since a PTY session is
+  expected to stay open a long time and must never block the next
+  `accept()`.
 - `handler.rs` — the actual implementation of each `Request` variant.
   This is genuinely simple (thin wrappers over `std::process::Command`
   and `std::fs`, plus one raw `libc::chown` call — std has no chown
@@ -36,6 +44,12 @@ time.
   does. That's deliberate, not a gap to fix here; a path is scoped to
   whatever it resolves to inside that one microVM's own filesystem
   regardless.
+- `pty.rs` — one interactive PTY session start to finish: read the
+  `PtyHandshake`, `forkpty(2)` a shell sized to it (via `nix`, gated
+  behind its `term`/`process`/`signal` features), then shovel bytes
+  between the vsock connection and the pty master on two threads until
+  either side ends. See "Non-obvious things" below for the one real
+  gotcha in that last part.
 
 ## Building
 
@@ -75,6 +89,22 @@ booting sandboxes from the old one.
   see root `ROADMAP.md`) will eventually restrict what this process can
   do — don't build in an assumption of unrestricted root that a future
   security pass will have to unwind.
+- **`pty.rs`'s two vsock-stream handles are `try_clone()`d, not two
+  independent connections** — they're dup'd fds sharing the *same*
+  underlying socket. Dropping just one of them on a thread's own exit
+  does **not** close the connection (the kernel keeps a socket open as
+  long as any fd still references it), so a blocked read on the other
+  handle would otherwise wait forever for bytes nobody is left to send.
+  `shovel_bytes` handles both hangup directions explicitly instead of
+  assuming either side notices on its own: the pty-output thread calls
+  `stream.shutdown(Shutdown::Both)` when the shell exits (unblocking the
+  vsock-input thread's read immediately), and the vsock-input side sends
+  the child `SIGHUP` when *it* ends first — the same signal a real
+  terminal sends its foreground process group on hangup — so a
+  disconnected session never leaves an orphaned shell running. This was
+  a real bug (a 10-second hang, only ever noticed via a live CLI test,
+  not a unit test) — see `packages/cli`'s `sandbox pty` command for
+  where it first showed up.
 
 ## Verifying a change
 

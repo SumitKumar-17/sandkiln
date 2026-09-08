@@ -26,6 +26,7 @@ import type {
   ListSnapshotsResponseBody,
   MkdirRequestBody,
   PreviewUrlOptions,
+  PtyOptions,
   RateLimitOptions,
   RateLimitRequestBody,
   ReadFileRequestBody,
@@ -262,6 +263,47 @@ export class Sandbox {
       mode: e.mode,
       mtime: new Date(e.mtime_unix * 1000),
     }));
+  }
+
+  /**
+   * Opens a live, interactive PTY session inside this sandbox — a real
+   * shell, not `runCommand`'s one-shot request/response. Returns the raw
+   * `WebSocket` connected to it: binary/text messages you send become
+   * the shell's stdin, and every message it emits is the shell's own
+   * stdout+stderr (interleaved, exactly as a real terminal would show
+   * it) — pipe them to/from a real terminal (see `examples/interactive-terminal`)
+   * or drive it programmatically however you like.
+   *
+   * Requires a runtime with a global `WebSocket` — any browser, or
+   * Node.js >= 22 (native `WebSocket`, no dependency). Every other
+   * method on this class works without one; this is the one exception,
+   * because a live bidirectional stream needs a fundamentally different
+   * transport than the plain HTTP `fetch` calls everything else makes.
+   *
+   * `cols`/`rows` size the terminal once, at session start — there is no
+   * live resize yet (a genuine, documented limitation, not an oversight;
+   * see `ROADMAP.md`'s "Dev servers and live preview" section). The auth
+   * token, if configured, is sent as a `?token=` query parameter rather
+   * than an `Authorization` header — neither a browser's nor Node's
+   * native `WebSocket` constructor can set custom headers, the same
+   * reason `previewUrl()` has the same fallback.
+   */
+  pty(options: PtyOptions = {}): WebSocket {
+    if (typeof WebSocket === "undefined") {
+      throw new Error(
+        "Sandbox.pty() requires a runtime with a global WebSocket implementation (Node.js >= 22, or any browser) — this runtime doesn't have one.",
+      );
+    }
+    const cols = options.cols ?? 80;
+    const rows = options.rows ?? 24;
+    const wsBaseUrl = this.client.baseUrl.replace(/^http/, "ws");
+    const url = new URL(`${wsBaseUrl}/sandboxes/${encodeURIComponent(this.id)}/pty`);
+    url.searchParams.set("cols", String(cols));
+    url.searchParams.set("rows", String(rows));
+    if (this.client.authToken !== undefined) {
+      url.searchParams.set("token", this.client.authToken);
+    }
+    return new WebSocket(url);
   }
 
   /**

@@ -310,6 +310,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
         last_activity: std::sync::Mutex::new(std::time::Instant::now()),
         source_snapshot_id: None,
         name: request.name,
+        pty_session_count: Default::default(),
     };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
     state.metrics.record_sandbox_created();

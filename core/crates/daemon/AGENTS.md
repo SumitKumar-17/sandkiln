@@ -69,8 +69,11 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   rootfs was cloned from, if any, `None` meaning the daemon-wide
   `SANDKILN_BASE_ROOTFS` default — `jail_id`, the leased uid/gid if this
   sandbox booted jailed, released back to `state.jailer_ids` on stop —
-  and `name`, the caller-given identity carried across the
-  sandbox<->snapshot boundary).
+  `name`, the caller-given identity carried across the sandbox<->snapshot
+  boundary — and `pty_session_count`, an `Arc<AtomicU32>` so a
+  `PtySessionGuard` (see `routes_pty.rs`) can outlive the `state.sandboxes`
+  lock it was incremented under and still decrement the right counter on
+  drop).
 - `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop/
   history (`GET /sandboxes/history`, reading `AppState::history` — the
   only read path for it; every write happens as a side effect of
@@ -193,6 +196,23 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   this API's credential). Connection-refused/unreachable maps to
   `AppError::BadGateway` (502); no response within `Config::preview_timeout`
   maps to `AppError::GatewayTimeout` (504) — see `error.rs`.
+- `routes_pty.rs` — `GET /sandboxes/:id/pty[?cols=&rows=]`: upgrades to a
+  WebSocket and proxies raw bytes to a shell running inside the sandbox,
+  via `sandkiln_vmm::vm::Vm::open_pty` — a fundamentally different shape
+  from every other route in this crate (all one-request-one-response;
+  this is a live, long-lived, bidirectional session). Its own router in
+  `main.rs`, guarded by `auth::require_preview_token` for exactly the
+  same reason as `routes_preview.rs` above: neither a browser's nor
+  Node.js's native `WebSocket` constructor can set custom headers, so
+  header-only `require_bearer_token` auth can't work here. Enforces
+  `MAX_PTY_SESSIONS_PER_SANDBOX` (64) via `Sandbox::pty_session_count`
+  and a `PtySessionGuard` whose `Drop` decrements it on every exit path
+  (clean close, error, or the task simply being dropped). See
+  `sandkiln-guest-agent`'s `pty.rs` for the other end of the connection
+  and the real hangup-handling bug found and fixed there — this route's
+  own `proxy_pty` just needs both `tokio::select!` arms to end the
+  session as soon as either side does, which was already correct; the
+  bug was entirely guest-side.
 - `error.rs` — `AppError`, the one error type every handler returns.
   Add a variant here rather than inventing a new ad hoc error shape.
 

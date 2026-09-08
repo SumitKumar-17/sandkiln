@@ -10,6 +10,7 @@ mod routes_fs;
 mod routes_images;
 mod routes_metrics;
 mod routes_preview;
+mod routes_pty;
 mod routes_sandbox;
 mod routes_sandbox_name;
 mod routes_snapshot;
@@ -150,6 +151,16 @@ async fn async_main() {
         .route("/sandboxes/:id/list-dir", post(routes_fs::list_dir))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
+    // Its own router, guarded by `auth::require_preview_token` rather than
+    // `auth::require_bearer_token` — for the same reason `preview_routes`
+    // below is: neither a browser's nor Node's native `WebSocket`
+    // constructor can set a custom `Authorization` header, so a PTY
+    // session needs the same `?token=` query-parameter fallback preview
+    // URLs already use.
+    let pty_routes = Router::new()
+        .route("/sandboxes/:id/pty", get(routes_pty::pty_session))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_preview_token));
+
     let drive_routes = Router::new()
         .route("/drives", post(routes_drives::create_drive).get(routes_drives::list_drives))
         .route("/drives/:id", delete(routes_drives::delete_drive))
@@ -187,6 +198,7 @@ async fn async_main() {
         .merge(image_routes)
         .merge(snapshot_routes)
         .merge(preview_routes)
+        .merge(pty_routes)
         .layer(TraceLayer::new_for_http())
         // Outermost: wraps everything above, including `TraceLayer`, so a
         // caller-supplied or freshly generated request id is already

@@ -7,11 +7,23 @@ mod framing;
 mod messages;
 
 pub use framing::{read_message, write_message};
-pub use messages::{DirEntry, Request, Response};
+pub use messages::{DirEntry, PtyHandshake, Request, Response};
 
-/// The vsock port the guest agent listens on, and the host connects to.
-/// Lives here so the two sides can't drift out of sync on it.
+/// The vsock port the guest agent listens on for exec/file-op requests,
+/// and the host connects to. Lives here so the two sides can't drift out
+/// of sync on it.
 pub const AGENT_PORT: u32 = 5000;
+
+/// A second, separate vsock port for interactive PTY sessions — a
+/// fundamentally different connection shape (one long-lived, raw
+/// bidirectional byte stream) from `AGENT_PORT`'s one-request-one-
+/// response-then-close model, so it gets its own port rather than a new
+/// `Request`/`Response` variant. A connection here sends exactly one
+/// framed [`PtyHandshake`] (via [`write_message`]/[`read_message`], same
+/// as `AGENT_PORT`), then immediately becomes a raw passthrough: every
+/// byte either side writes after that goes straight to the pty, no more
+/// framing, no more JSON.
+pub const PTY_PORT: u32 = 5001;
 
 /// The wire encoding (JSON) is an implementation detail; this alias lets
 /// callers handle codec errors without depending on serde_json directly.
@@ -39,6 +51,18 @@ pub fn encode_request(request: &Request) -> Result<Vec<u8>, CodecError> {
 /// Decodes a `Response` from a message payload — used by the host-side
 /// client.
 pub fn decode_response(payload: &[u8]) -> Result<Response, CodecError> {
+    serde_json::from_slice(payload)
+}
+
+/// Encodes the one handshake message a [`PTY_PORT`] connection starts
+/// with — used by the host-side client that opens it.
+pub fn encode_pty_handshake(handshake: &PtyHandshake) -> Result<Vec<u8>, CodecError> {
+    serde_json::to_vec(handshake)
+}
+
+/// Decodes a [`PtyHandshake`] from a message payload — used by the guest
+/// agent's `PTY_PORT` connection handler.
+pub fn decode_pty_handshake(payload: &[u8]) -> Result<PtyHandshake, CodecError> {
     serde_json::from_slice(payload)
 }
 
