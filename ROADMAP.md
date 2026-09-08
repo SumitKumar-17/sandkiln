@@ -586,25 +586,64 @@ outbound HTTP both still work.
     is pre-doing *that* setup ahead of a request, not shaving boot
     latency itself, which was never the bottleneck. Worth re-measuring
     once a pool exists, rather than assumed up front.
-- **Pre-warmed snapshot pool**: the mechanism sandkiln already has
-  (snapshot/resume, auto-suspend) is the same one production Firecracker
-  users document as their main cold-start fix — restore an
-  already-initialized VM instead of booting one from scratch. The gap:
-  sandkiln only takes that path reactively (idle-timeout-triggered or a
-  caller's own explicit `snapshot()`), never proactively ahead of a
-  request the way a pre-warmed pool would. Concrete next step: keep a
-  small pool of ready-to-resume snapshots (per image/config) so a
-  `get-or-create`/create-from-image call can resume one instead of
-  cold-booting — now scoped correctly per the finding above: the win is
-  skipping per-create rootfs/network setup ahead of time, with the
-  boot-vs-resume gap itself a secondary, much smaller effect. Shape
-  worth copying from how other pooled-sandbox systems configure this,
-  if/when it's built: pool identity keyed by image+resource-config (not
-  just image), a configurable warm-instance count with `0` meaning
-  scale-to-zero, a separate max-instance ceiling above the warm count,
-  queueing (not rejecting) a claim that arrives at the ceiling, and the
-  pool auto-replacing a claimed instance in the background to keep the
-  warm buffer full rather than refilling only on the next claim.
+- **Done: pre-warmed snapshot pool, a first honestly-scoped slice.** The
+  mechanism sandkiln already has (snapshot/resume, auto-suspend) is the
+  same one production Firecracker users document as their main cold-start
+  fix — restore an already-initialized VM instead of booting one from
+  scratch. This closes the gap identified above: `POST /pools`
+  (`{id, image_id?, vcpu_count?, mem_size_mib?, warm_count}`) configures a
+  pool; a background replenisher (`sandkiln-daemon`'s `pool_replenisher`
+  module, ticking every 2s) keeps `warm_count` resumable snapshots ready
+  per pool; a plain `POST /sandboxes` (no `drives`, no `rate_limit` — see
+  below) matching a pool's `image_id`/resolved `vcpu_count`/`mem_size_mib`
+  claims a warm snapshot automatically instead of cold-booting — entirely
+  transparent, no separate "create from pool" call. `Pool.create/list/delete`
+  in the JS/TS SDK, `kiln pool create|ls|rm` in the CLI.
+  Live-verified, including the actual latency win on real hardware: a
+  claim measured at **71ms** vs. a cold create's **163ms** on the same
+  run (both single-run numbers on a shared, variable-load dev box, not a
+  controlled benchmark — see the Benchmarking section's own numbers for
+  the underlying boot/resume/setup breakdown this is built on).
+  - **A real Firecracker/KVM finding from building this, not a sandkiln
+    bug**: resuming a snapshot has a rare but real failure mode where the
+    restored guest kernel panics early in boot (confirmed via its
+    captured console log — an early-boot divide-by-zero trap in the
+    console driver, restored CPU/timer state interacting badly with
+    timing-sensitive init code) and the whole Firecracker process exits
+    shortly after. Resuming *usually* works — `08-snapshots.sh`'s own
+    resume-then-exec check passes every run — but a pool's whole purpose
+    is resuming far more often than a manual test ever would, which
+    surfaces a failure rate that would otherwise stay invisible. Handled,
+    not just noted: every claim runs a real post-resume health check
+    (`exec true`) before being handed to the caller — a claim that fails
+    it tears the broken sandbox down and transparently falls back to a
+    normal cold create, so a caller never receives a dead sandbox id.
+    Confirmed live via a 15-iteration stress test (0 caller-visible
+    failures; the daemon log showed the fallback path actually firing
+    twice during that run).
+  - **A related, separately real finding**: Firecracker's snapshot/restore
+    does not preserve MMDS's initialized state — `PATCH /mmds` alone fails
+    with "MMDS data store is not initialized" after a resume, even though
+    the VM was networked and had MMDS configured before being snapshotted.
+    `sandkiln_vmm::vm::Vm::update_metadata` works around this by redoing
+    the full `PUT /mmds/config` + `PUT /mmds` sequence rather than a bare
+    `PATCH`, so a pool-claimed sandbox's guest-visible MMDS content
+    correctly reflects the caller's real identity, not the warm-boot
+    placeholder's.
+  - **Scoped honestly, matching the shape sketched above with one
+    deliberate cut**: pool identity is keyed by image + resolved
+    vcpu/mem config (not just image); `warm_count` of `0` is valid
+    (an inert pool); a request with `drives` or a custom `rate_limit`
+    never matches a pool, since both are baked into a VM's state at boot
+    time and a warm snapshot was booted with neither — falls through to
+    cold create rather than silently ignoring them. **Not yet built**: a
+    `max_count` ceiling with queueing past it (a claim past what's
+    currently warm just cold-creates instead, unbounded, same as no pool
+    existed) — a real follow-up, not implemented in this first slice. Pool
+    *configuration* is in-memory only, not durable across a daemon
+    restart (a caller re-`POST`s after one) — and a daemon restart can
+    orphan an already-warm snapshot that has no pool left to claim or
+    clean it up, a known, not-yet-solved edge of that same limitation.
 - **Snapshot lineage**: today a daemon only ever knows "the current
   snapshot" a sandbox became — there's no way to ask "what snapshot did
   *this* snapshot get forked from, and what else was forked from it."

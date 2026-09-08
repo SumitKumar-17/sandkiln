@@ -41,6 +41,25 @@ Changelog](https://keepachangelog.com/).
   passing overall (with `SANDKILN_AUTH_TOKEN` set — auth-gated cases
   bring the total above 209 too).
 
+## [0.7.0] — 2026-09-08
+
+### Added
+- Pre-warmed snapshot pools: `POST/GET /pools`, `DELETE /pools/:id`
+  (daemon), `Pool.create/list/delete` (JS/TS SDK), `kiln pool create|ls|rm`
+  (CLI). A plain `POST /sandboxes`/`Sandbox.create()` (no `drives`, no
+  `rateLimit`) matching a configured pool's image/resources
+  transparently resumes a warm snapshot instead of cold-booting, once
+  the background replenisher has one ready — no separate "create from
+  pool" call. Live-verified with a real measured win (71ms claim vs.
+  163ms cold create on the same run) and a real post-resume health check
+  that falls back to a normal cold create rather than ever handing back
+  a broken sandbox — see `ROADMAP.md`'s "Persistence and snapshotting"
+  section for two real Firecracker/KVM findings this surfaced (a rare
+  guest-kernel-panic-on-resume failure mode, and MMDS not surviving
+  snapshot/restore) and exactly how each is handled. 19 new
+  `scripts/integration-test.sh` checks (`18-pool.sh`), 234/234 passing
+  overall.
+
 ## [0.6.0] — 2026-09-08
 
 ### Added

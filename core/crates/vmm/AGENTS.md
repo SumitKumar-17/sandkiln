@@ -21,16 +21,30 @@ not in `daemon`.
   If you need a new Firecracker API call, add a method here following
   the existing `put`/`patch` pattern.
 - `vm/mod.rs` — `Vm`/`VmConfig`: the public API surface only —
-  `Vm::boot`/`is_jailed`/`call`/`stop`, plus the shared helpers both
-  submodules below depend on (`console_log_path`/`console_log_stdio`/
-  `annotate_with_console_log`/`wait_for_socket`/`path_str`/`put_checked`).
-  The spawned process's stdout/stderr (the guest's `console=ttyS0` serial
-  output) is captured to `/tmp/sandkiln-fc-<id>.log` rather than
-  discarded — `annotate_with_console_log` appends that path to a boot
-  failure's error message, since a guest kernel panic or agent crash
-  before vsock comes up would otherwise be invisible from the host.
-  `snapshot::resume` uses the same shared helpers for the fresh
-  Firecracker process it spawns.
+  `Vm::boot`/`is_jailed`/`call`/`open_pty`/`update_metadata`/`stop`, plus
+  the shared helpers both submodules below depend on
+  (`console_log_path`/`console_log_stdio`/`annotate_with_console_log`/
+  `wait_for_socket`/`path_str`/`put_checked`). The spawned process's
+  stdout/stderr (the guest's `console=ttyS0` serial output) is captured
+  to `/tmp/sandkiln-fc-<id>.log` rather than discarded —
+  `annotate_with_console_log` appends that path to a boot failure's error
+  message, since a guest kernel panic or agent crash before vsock comes
+  up would otherwise be invisible from the host. This is exactly what
+  caught a real, rare Firecracker/KVM bug while building `sandkiln-daemon`'s
+  `pool` module: a resumed guest kernel occasionally panics early in boot
+  (a divide-by-zero trap in the console driver, restored CPU/timer state
+  interacting badly with timing-sensitive init code) and Firecracker
+  exits shortly after — confirmed by reading exactly this console log,
+  not guessed at. `snapshot::resume` uses the same shared helpers for the
+  fresh Firecracker process it spawns.
+  `update_metadata` redoes the full `PUT /mmds/config` + `PUT /mmds`
+  sequence rather than a bare `PATCH /mmds`, for a real reason found
+  live: a resumed VM's MMDS data store comes back **uninitialized** even
+  though the VM had MMDS configured before being snapshotted — `PATCH
+  /mmds` alone fails with "MMDS data store is not initialized" after a
+  resume. This is the mechanism `sandkiln-daemon`'s pool-claim path uses
+  to refresh a resumed sandbox's guest-visible identity away from
+  whatever placeholder it had as a warm instance.
 - `vm/boot.rs` — the actual boot mechanics, as a submodule of `vm` (not a
   sibling) specifically so it can still see `Vm`'s private fields to
   construct one. Split out of `vm/mod.rs` (2026-09-08, evidence-based

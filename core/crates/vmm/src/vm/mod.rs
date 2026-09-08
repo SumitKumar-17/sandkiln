@@ -197,6 +197,32 @@ impl Vm {
         }
     }
 
+    /// Updates this VM's MMDS content in place, without a reboot or
+    /// fresh boot — for when a sandbox's real identity (id/name/tags) is
+    /// only known *after* it's already running, e.g. one resumed from a
+    /// pre-warmed pool snapshot (see `sandkiln-daemon`'s `pool` module):
+    /// the snapshot's own frozen MMDS content still reflects whatever was
+    /// set when the *warm* instance was originally booted, not the
+    /// caller's actual request.
+    ///
+    /// Redoes the full `PUT /mmds/config` + `PUT /mmds` sequence (exactly
+    /// what a fresh boot's own `configure_and_start` does) rather than a
+    /// bare `PATCH /mmds` — confirmed live that a resumed VM's MMDS data
+    /// store comes back **uninitialized** even though the VM was
+    /// networked and had MMDS configured before being snapshotted
+    /// (`PATCH /mmds` alone fails with "MMDS data store is not
+    /// initialized" after a resume, a real Firecracker snapshot/restore
+    /// gap this works around rather than assumes away). Redoing the full
+    /// sequence is correct either way, whether this VM already had MMDS
+    /// content or never did. Fails if this VM has no network interface at
+    /// all — `/mmds/config` needs one — which should never happen for a
+    /// sandbox that reached this call, since every sandbox is networked.
+    pub fn update_metadata(&self, metadata: &serde_json::Value) -> io::Result<()> {
+        let mut api = ApiClient::connect(&self.api_socket)?;
+        put_checked(&mut api, "/mmds/config", &serde_json::json!({ "network_interfaces": ["eth0"], "version": "V2" }))?;
+        put_checked(&mut api, "/mmds", metadata)
+    }
+
     pub fn stop(mut self) -> io::Result<()> {
         // SIGKILL-ing Firecracker directly loses anything the guest
         // hasn't flushed from its page cache to the virtio-blk backing

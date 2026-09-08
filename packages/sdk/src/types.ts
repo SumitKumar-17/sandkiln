@@ -393,3 +393,46 @@ export interface DriveInfo {
   createdAt: Date;
   attachedTo: DriveHolder[];
 }
+
+export interface PoolOptions {
+  baseUrl?: string;
+  authToken?: string;
+}
+
+export interface CreatePoolRequestBody {
+  id: string;
+  image_id?: string;
+  vcpu_count?: number;
+  mem_size_mib?: number;
+  warm_count: number;
+}
+
+export interface PoolSummaryBody {
+  id: string;
+  image_id: string | null;
+  vcpu_count: number;
+  mem_size_mib: number;
+  warm_count: number;
+  warm_ready: number;
+}
+
+export interface ListPoolsResponseBody {
+  pools: PoolSummaryBody[];
+}
+
+/** A configured pre-warmed pool — see `Pool`. `vcpuCount`/`memSizeMib`
+ * are already resolved to concrete values (whatever the daemon's own
+ * defaults were at the moment this pool was created), not the
+ * `undefined`-means-"use the default" shape `CreatePoolOptions` takes. */
+export interface PoolInfo {
+  id: string;
+  imageId: string | null;
+  vcpuCount: number;
+  memSizeMib: number;
+  warmCount: number;
+  /** How many resumable snapshots are actually sitting warm right now —
+   * can be less than `warmCount` right after the pool is created or a
+   * claim just drained it; replenishment happens in the background, not
+   * instantly. */
+  warmReady: number;
+}

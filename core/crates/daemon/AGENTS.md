@@ -63,6 +63,10 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   image referenced by a boot that's still in flight (not yet a `Sandbox`
   in the map), closing the race where `DELETE /images/:id` could
   otherwise remove a file an in-progress rootfs copy is still reading.
+  Also owns `pools` (`Mutex<HashMap<String, crate::pool::Pool>>`) —
+  configured pre-warmed pools, in-memory only (unlike `snapshots`, not
+  reconciled from disk at startup — see `crate::pool`'s module doc
+  comment for why).
 - `sandbox.rs` — the `Sandbox` struct the daemon tracks per running VM
   (id, `Vm` handle, network `Lease`, rootfs path, tags, created-at,
   `last_activity`, `image_id` — the registered image this sandbox's
@@ -101,6 +105,16 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   reserving/releasing a pending-boot claim on that image id around the
   whole boot with `PendingImageBootGuard` so a concurrent image deletion
   can't race an in-flight clone) before calling it.
+  `create_sandbox_core` also tries a pre-warmed pool claim first (see
+  `crate::pool`) whenever the request has no `drives`/`rate_limit` and a
+  configured pool's key matches — `claim_from_pool` resumes the warm
+  snapshot, runs a real post-resume health check (`exec true`) before
+  trusting it, and falls back to the normal cold-create path below on
+  either an outright resume failure or a failed health check (via
+  `destroy_unhealthy_claim`), rather than ever handing back a sandbox id
+  that's secretly a corpse — see `crate::pool`'s own module doc comment
+  for the real Firecracker/KVM finding that made this check load-bearing,
+  not defensive theater.
 - `routes_sandbox_name.rs` — name-based lookup and get-or-create:
   `GET /sandboxes/by-name/:name` (live sandboxes only — a name currently
   held by a snapshot is a `409` pointing at get-or-create, not a silent
@@ -131,6 +145,28 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   `routes_exec::read_file`/`write_file` already have none — see this
   file's own module doc comment for why that's a deliberate consistency
   choice, not an oversight.
+- `pool.rs` — `Pool`/`PoolConfig`/`PoolKey`: the pure state a configured
+  pre-warmed pool tracks (its resolved image/resource key and a FIFO
+  queue of warm snapshot ids) and the pure matching logic
+  (`PoolConfig::key`) a `POST /sandboxes` request is checked against. No
+  networking, no `AppState` — see this file's own module doc comment for
+  the feature's full shape and what's deliberately not built yet (a
+  `max_count` ceiling with queueing).
+- `pool_replenisher.rs` — the background task (spawned unconditionally
+  from `main.rs`, unlike `idle_reaper` below, since an idle tick with no
+  pools configured is cheap) that keeps every pool topped up: boots a
+  warm instance via `routes_sandbox::create_sandbox_core` (tagged
+  `sandkiln.pool` for identifiability, nothing more), immediately
+  `snapshot_and_stop`s it, and pushes the resulting snapshot id onto that
+  pool's warm queue. One slot per pool per 2-second tick, not all at
+  once, so a large `warm_count` fills in gradually rather than spiking
+  boot load.
+- `routes_pool.rs` — `POST/GET /pools`, `DELETE /pools/:id`: pool
+  *configuration* only — replenishment lives in `pool_replenisher`,
+  claiming lives in `routes_sandbox::create_sandbox_core`. `DELETE`
+  destroys whatever the pool still has warm (via
+  `routes_snapshot::delete_snapshot_by_id`) rather than leaking it as an
+  orphaned, untracked snapshot.
 - `idle_reaper.rs` — background task (spawned from `main.rs` whenever
   `SANDKILN_IDLE_TIMEOUT_SECS` and/or `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`
   is set) that reclaims idle sandboxes two ways: auto-suspend (pause +
@@ -161,12 +197,17 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   the HTTP listener starts accepting connections.
 - `routes_drives.rs` / `routes_snapshot.rs` — drives and snapshot/resume
   handlers, each in their own file for the same reason as above. The
-  actual pause/snapshot/stop mechanics live in `snapshot_and_stop()` and
-  the actual resume mechanics in `resume_snapshot_by_id()` — both
-  `pub(crate)`, both reused by `routes_sandbox`'s persistent-by-default
-  stop, `routes_sandbox_name`'s get-or-create, and `idle_reaper`'s
-  auto-suspend so there's exactly one place that knows what "snapshot this
-  sandbox" / "resume this snapshot" means. `check_snapshottable`/
+  actual pause/snapshot/stop mechanics live in `snapshot_and_stop()`, the
+  actual resume mechanics in `resume_snapshot_by_id()`, and the actual
+  delete mechanics in `delete_snapshot_by_id()` — all three `pub(crate)`,
+  all reused elsewhere in this crate (`snapshot_and_stop`/
+  `resume_snapshot_by_id` by `routes_sandbox`'s persistent-by-default
+  stop, `routes_sandbox_name`'s get-or-create, `idle_reaper`'s
+  auto-suspend, and now `pool`/`pool_replenisher`/`routes_sandbox`'s
+  claim path; `delete_snapshot_by_id` by `routes_pool::delete_pool`'s
+  warm-snapshot cleanup) so there's exactly one place that knows what
+  "snapshot this sandbox" / "resume this snapshot" / "delete this
+  snapshot" means. `check_snapshottable`/
   `SnapshotBlocked` refuses to snapshot a jailed sandbox (`Vm::is_jailed`)
   — `Vm::resume` only ever spawns directly, so a jailed sandbox's snapshot
   could never be resumed correctly; see `sandkiln_vmm::jailer`'s module doc

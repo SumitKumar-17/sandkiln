@@ -68,6 +68,16 @@ this package only ever catches up to what the daemon actually does.
   behavior besides delete). Attach one at create time via
   `CreateSandboxOptions.drives`, not through this class — `Drive` only
   covers the drive resource itself (create/list/delete), not attachment.
+- `pool.ts` — the `Pool` class: `create`/`list`/`delete`, all static —
+  same static-namespace shape as `image.ts`/`drive.ts`. `Pool.create`
+  takes a caller-given `id` (like `Image.register`, not
+  `Drive.create`'s server-generated one) since a pool's id is purely a
+  configuration handle, never guest- or sandbox-visible. There is no
+  "claim from pool" method here at all — claiming is entirely
+  transparent, done server-side by a plain `Sandbox.create()` whose
+  image/resources match a configured pool (see
+  `core/crates/daemon/src/pool.rs`'s module doc comment) — this class
+  only ever manages pool *configuration*.
 - `client.ts` — `ClientContext`/`resolveClient`, pulled out of
   `sandbox.ts` once `image.ts` needed the exact same
   `baseUrl`/`authToken` resolution.

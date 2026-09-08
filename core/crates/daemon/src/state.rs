@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::metrics::Metrics;
+use crate::pool::Pool;
 use crate::routes_preview::PreviewClient;
 use crate::sandbox::Sandbox;
 use crate::snapshot::Snapshot;
@@ -68,6 +69,11 @@ pub struct AppState {
     /// see that crate's own module doc comment for exactly what it does
     /// and does not solve.
     pub history: HistoryStore,
+    /// Configured pre-warmed pools, keyed by their caller-given id — see
+    /// `crate::pool`'s module doc comment. In-memory only, deliberately
+    /// (not durable across a restart, unlike `snapshots` above) — see
+    /// that module for why.
+    pub pools: Mutex<HashMap<String, Pool>>,
 }
 
 impl AppState {
@@ -98,6 +104,7 @@ impl AppState {
             metrics: Metrics::new(),
             preview_client: build_preview_client(),
             history,
+            pools: Mutex::new(HashMap::new()),
         }
     }
 

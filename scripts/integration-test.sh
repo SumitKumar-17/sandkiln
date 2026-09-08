@@ -55,6 +55,7 @@ CREATED_SANDBOXES=()
 CREATED_DRIVES=()
 CREATED_SNAPSHOTS=()
 CREATED_IMAGES=()
+CREATED_POOLS=()
 
 cleanup() {
   # ?keep=false: cleanup means "get rid of everything this run created",
@@ -72,6 +73,9 @@ cleanup() {
   done
   for id in "${CREATED_IMAGES[@]:-}"; do
     [ -n "$id" ] && curl -s -o /dev/null -X DELETE "$BASE_URL/images/$id" "${AUTH_HEADER[@]}"
+  done
+  for id in "${CREATED_POOLS[@]:-}"; do
+    [ -n "$id" ] && curl -s -o /dev/null -X DELETE "$BASE_URL/pools/$id" "${AUTH_HEADER[@]}"
   done
   rm -rf "$WORKDIR"
 }

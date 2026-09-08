@@ -5,6 +5,7 @@ import {
   formatDirEntryList,
   formatDriveList,
   formatImageList,
+  formatPoolList,
   formatSandboxList,
   formatSnapshotList,
   parseDriveAttachment,
@@ -170,6 +171,21 @@ test("formatDriveList renders id, size, timestamp, and comma-joined holders per 
     "drv-1  64MiB  2026-01-01T00:00:00.000Z  sandbox sb-1\n" +
       "drv-2  128MiB  2026-01-02T00:00:00.000Z  not attached\n" +
       "drv-3  256MiB  2026-01-03T00:00:00.000Z  sandbox sb-2:ro,sandbox sb-3:ro\n",
+  );
+});
+
+test("formatPoolList reports an empty list distinctly", () => {
+  assert.equal(formatPoolList([]), "no pools\n");
+});
+
+test("formatPoolList renders id, image, resources, and warm/target counts per line", () => {
+  const pools = [
+    { id: "pool-1", imageId: null, vcpuCount: 2, memSizeMib: 512, warmCount: 2, warmReady: 1 },
+    { id: "pool-2", imageId: "img-1", vcpuCount: 4, memSizeMib: 1024, warmCount: 1, warmReady: 0 },
+  ];
+  assert.equal(
+    formatPoolList(pools),
+    "pool-1  -  2vcpu/512MiB  warm 1/2\n" + "pool-2  img-1  4vcpu/1024MiB  warm 0/1\n",
   );
 });
 

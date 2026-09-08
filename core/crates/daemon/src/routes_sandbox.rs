@@ -8,7 +8,7 @@
 
 use crate::error::AppError;
 use crate::routes_drives::DriveAttachment;
-use crate::routes_snapshot::{snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
+use crate::routes_snapshot::{resume_snapshot_by_id, snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
 use crate::sandbox::Sandbox;
 use crate::state::{can_attach_read_only, describe_drive_holders, AppState, AttachedDrive};
 use crate::tracing_util::spawn_blocking_in_current_span;
@@ -171,6 +171,36 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
         resolve_resource_override(request.mem_size_mib, state.config.mem_size_mib, state.config.max_mem_size_mib, "mem_size_mib")
             .map_err(AppError::BadRequest)?;
     let rate_limit = resolve_rate_limit(&request.rate_limit).map_err(AppError::BadRequest)?;
+
+    // A matching, ready pre-warmed pool (see `crate::pool`) lets this
+    // resume a warm snapshot instead of paying full cold-create cost —
+    // only when the request doesn't need anything a warm snapshot can't
+    // already provide. Drives and a custom rate limit are both baked into
+    // a VM's state at boot time and a warm snapshot was booted with
+    // neither, so either one present here means this request can never
+    // match a pool, regardless of image/resources — falls through to the
+    // normal cold-create path below instead of silently ignoring them.
+    if request.drives.is_empty() && request.rate_limit.is_none() {
+        let key = crate::pool::PoolKey { image_id: request.image_id.clone(), vcpu_count, mem_size_mib };
+        let claimed_snapshot = {
+            let mut pools = state.pools.lock().unwrap();
+            pools.values_mut().find(|p| p.config.key() == key).and_then(|p| p.take_warm())
+        };
+        if let Some(snapshot_id) = claimed_snapshot {
+            match claim_from_pool(state, snapshot_id, &request).await {
+                Ok(id) => return Ok(id),
+                Err(e) => {
+                    // A claim can fail for reasons a caller's own request
+                    // had nothing to do with (see `claim_from_pool`'s doc
+                    // comment) — degrading to a normal cold create rather
+                    // than failing the whole request is the entire point
+                    // of a pool being an optimization, not a guarantee.
+                    tracing::warn!(error = %e, "pool claim failed — falling back to a normal cold create");
+                }
+            }
+        }
+    }
+
     // Checked and reserved before the (slow) boot starts, not just relied
     // on implicitly once the sandbox is inserted into `state.sandboxes` at
     // the end — closes the window where a concurrent `DELETE /images/:id`
@@ -316,6 +346,104 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
     state.metrics.record_sandbox_created();
 
     Ok(id)
+}
+
+/// Finishes a pre-warmed pool claim (see `crate::pool`): resumes the warm
+/// snapshot `create_sandbox_core` already popped off a matching pool,
+/// verifies the result is actually alive, then overwrites its identity
+/// with what the *caller* actually asked for.
+///
+/// **The health check is load-bearing, not defensive theater.** Found
+/// live while building this feature: Firecracker's snapshot/restore has
+/// a real, if rare, failure mode where the restored guest kernel panics
+/// early in boot (confirmed via its captured console log — an early-boot
+/// divide-by-zero trap in the console driver, restored CPU/timer state
+/// interacting badly with timing-sensitive init code) and the whole
+/// Firecracker process exits shortly after. Resuming *usually* works —
+/// this project's own `08-snapshots.sh` integration check does a resume
+/// and an exec afterward every run — but a pool's whole reason to exist
+/// is resuming far more often than a manual test ever would, which
+/// surfaces a rare failure rate that would otherwise stay invisible.
+/// Handing a caller a sandbox id that's actually a corpse would be worse
+/// than never having a pool at all, so this treats a failed health check
+/// as "the warm snapshot was bad" and cleans up + falls back to a normal
+/// cold create (see this function's caller) rather than either failing
+/// the request outright or returning a broken id.
+///
+/// The warm snapshot's own tags/name/MMDS content reflect
+/// `pool_replenisher`'s placeholder request, not this one, and would
+/// otherwise leak through as a confusing stale identity once a sandbox
+/// does pass its health check — the guest-visible half of that (MMDS)
+/// needs an explicit live Firecracker API call to fix, not just editing
+/// the daemon's own `Sandbox` record; see
+/// `sandkiln_vmm::vm::Vm::update_metadata`'s doc comment.
+async fn claim_from_pool(state: &Arc<AppState>, snapshot_id: String, request: &CreateSandboxRequest) -> Result<String, AppError> {
+    let id = resume_snapshot_by_id(state.clone(), snapshot_id).await?;
+
+    let health_check = spawn_blocking_in_current_span("pool claim health check task panicked", {
+        let state = state.clone();
+        let id = id.clone();
+        move || {
+            let sandboxes = state.sandboxes.lock().unwrap();
+            let sandbox = sandboxes.get(&id).expect("resume_snapshot_by_id above just inserted this id");
+            sandbox.vm.call(&sandkiln_protocol::Request::Exec { command: "true".to_string(), args: vec![] })
+        }
+    })
+    .await;
+
+    if let Err(e) = health_check {
+        tracing::warn!(sandbox_id = %id, error = %e, "pool-claimed sandbox failed its post-resume health check — tearing it down");
+        destroy_unhealthy_claim(state, id).await;
+        return Err(AppError::from(std::io::Error::other("pool-claimed sandbox failed its post-resume health check")));
+    }
+
+    let created_at = SystemTime::now();
+    let metadata = serde_json::json!({ "id": id, "name": &request.name, "tags": &request.tags });
+    {
+        let mut sandboxes = state.sandboxes.lock().unwrap();
+        let sandbox = sandboxes.get_mut(&id).expect("resume_snapshot_by_id above just inserted this id");
+        // Non-fatal if this fails: the sandbox already passed its health
+        // check above and is genuinely usable either way, just with
+        // stale MMDS content until something else resumes or re-patches
+        // it (nothing does today) — worth a loud warning, not a failed
+        // create over a metadata-only mismatch.
+        if let Err(e) = sandbox.vm.update_metadata(&metadata) {
+            tracing::warn!(sandbox_id = %id, error = %e, "failed to refresh MMDS metadata after resuming a pool-claimed sandbox");
+        }
+        sandbox.tags = request.tags.clone();
+        sandbox.name = request.name.clone();
+        sandbox.created_at = created_at;
+    }
+
+    if let Err(e) = state.history.record_created(&id, request.name.as_deref(), &request.tags, request.image_id.as_deref(), created_at) {
+        tracing::warn!(error = %e, sandbox_id = %id, "failed to record sandbox creation in history store");
+    }
+    state.metrics.record_sandbox_created();
+    tracing::info!(sandbox_id = %id, "claimed a pre-warmed pool instance instead of cold-booting");
+    Ok(id)
+}
+
+/// Tears down a pool-claimed sandbox that failed its post-resume health
+/// check — same resource cleanup `stop_sandbox_by_id`'s destroy path
+/// does (release the network lease, remove the rootfs copy, stop the
+/// `Vm`), just entered from a different failure mode: this sandbox never
+/// got the chance to be a real, usable create in the first place.
+async fn destroy_unhealthy_claim(state: &Arc<AppState>, id: String) {
+    let sandbox = state.sandboxes.lock().unwrap().remove(&id);
+    let Some(sandbox) = sandbox else { return };
+    spawn_blocking_in_current_span("unhealthy claim teardown task panicked", {
+        let state = state.clone();
+        move || {
+            if let Some(lease) = sandbox.network {
+                let _ = state.network.release(lease);
+            }
+            let _ = std::fs::remove_file(&sandbox.rootfs_path);
+            if let Err(e) = sandbox.vm.stop() {
+                tracing::warn!(sandbox_id = %id, error = %e, "failed to fully stop an unhealthy pool-claimed sandbox's VM");
+            }
+        }
+    })
+    .await;
 }
 
 #[derive(Serialize)]
@@ -629,7 +757,7 @@ async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopO
 /// negative value can't reach here at all: `vcpu_count`/`mem_size_mib`
 /// deserialize as unsigned integers, so `serde_json` already rejects a
 /// negative number in the request body before this is ever called.
-fn resolve_resource_override<T>(requested: Option<T>, default: T, max: T, field: &str) -> Result<T, String>
+pub(crate) fn resolve_resource_override<T>(requested: Option<T>, default: T, max: T, field: &str) -> Result<T, String>
 where
     T: PartialOrd + Copy + Default + std::fmt::Display,
 {

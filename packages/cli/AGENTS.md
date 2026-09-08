@@ -16,8 +16,12 @@ straight to the SDK.
 - `src/index.ts` — the CLI. `sandbox create|get-or-create|by-name|ls|rm|
   exec|read|write|preview|pty|snapshot|resume|fork|chmod|chown|mkdir|
   rename|cp|symlink|readlink|truncate|ls-dir` and `image create|ls|rm`,
-  `drive create|ls|rm` subcommands, each a thin call into
-  `Sandbox`/`Sandbox.attach()`/`Image`/`Drive`. `pty <id>` opens
+  `drive create|ls|rm`, `pool create|ls|rm` subcommands, each a thin call
+  into `Sandbox`/`Sandbox.attach()`/`Image`/`Drive`/`Pool`. `pool create
+  <id>` has no "claim" counterpart at all — claiming a warm instance is
+  entirely transparent, done by a plain `sandbox create` whose
+  `--image`/`--vcpu`/`--mem` match a configured pool (see
+  `packages/sdk/AGENTS.md`'s `pool.ts` entry). `pty <id>` opens
   `Sandbox.pty()`'s `WebSocket` and pumps bytes between it and the local
   terminal: raw mode (`process.stdin.setRawMode(true)`) so every
   keystroke, including Ctrl+C, goes straight to the remote shell instead

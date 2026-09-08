@@ -520,6 +520,15 @@ fn check_no_live_fork(forked_into: Option<&str>, snapshot_id: &str, action: &str
 /// still alive, for the same reason `resume_snapshot` does.
 #[tracing::instrument(skip(state))]
 pub async fn delete_snapshot(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<StatusCode, AppError> {
+    delete_snapshot_by_id(state, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The actual teardown, shared by `delete_snapshot` (`DELETE
+/// /snapshots/:id`) and `crate::pool`'s pool-deletion path, which needs
+/// to tear down whatever a pool still has warm the same way — same
+/// `_by_id` split as `resume_snapshot_by_id`/`stop_sandbox_by_id`.
+pub(crate) async fn delete_snapshot_by_id(state: Arc<AppState>, id: String) -> Result<(), AppError> {
     let snapshot = {
         let mut snapshots = state.snapshots.lock().unwrap();
         let existing = snapshots.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
@@ -537,7 +546,7 @@ pub async fn delete_snapshot(State(state): State<Arc<AppState>>, Path(id): Path<
     })
     .await;
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
 #[cfg(test)]

@@ -3,12 +3,15 @@ mod config;
 mod error;
 mod idle_reaper;
 mod metrics;
+mod pool;
+mod pool_replenisher;
 mod request_id;
 mod routes_drives;
 mod routes_exec;
 mod routes_fs;
 mod routes_images;
 mod routes_metrics;
+mod routes_pool;
 mod routes_preview;
 mod routes_pty;
 mod routes_sandbox;
@@ -130,6 +133,10 @@ async fn async_main() {
         }
         tokio::spawn(idle_reaper::run(state.clone(), idle_timeout, auto_suspend_timeout));
     }
+    // Unconditional, unlike the reaper above -- see `pool_replenisher`'s
+    // own doc comment for why an idle tick with no pools configured is
+    // cheap enough not to bother gating behind whether any exist yet.
+    tokio::spawn(pool_replenisher::run(state.clone()));
 
     let sandbox_routes = Router::new()
         .route("/sandboxes", post(routes_sandbox::create_sandbox).get(routes_sandbox::list_sandboxes))
@@ -171,6 +178,11 @@ async fn async_main() {
         .route("/images/:id", delete(routes_images::delete_image))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
+    let pool_routes = Router::new()
+        .route("/pools", post(routes_pool::create_pool).get(routes_pool::list_pools))
+        .route("/pools/:id", delete(routes_pool::delete_pool))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
+
     let snapshot_routes =
         routes_snapshot::router().route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
@@ -196,6 +208,7 @@ async fn async_main() {
         .merge(sandbox_routes)
         .merge(drive_routes)
         .merge(image_routes)
+        .merge(pool_routes)
         .merge(snapshot_routes)
         .merge(preview_routes)
         .merge(pty_routes)
