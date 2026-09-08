@@ -79,6 +79,7 @@ export default defineConfig({
             { label: "Wire protocol", slug: "architecture/wire-protocol" },
             { label: "Persistence model", slug: "architecture/persistence-model" },
             { label: "Bug hunt: the vsock timeout", slug: "architecture/bug-hunt-vsock-timeout" },
+            { label: "Engineering notebook", slug: "architecture/engineering-notebook" },
             { label: "Startup latency & the pre-warmed pool", slug: "architecture/startup-latency" },
           ],
         },

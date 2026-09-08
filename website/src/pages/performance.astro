@@ -33,6 +33,16 @@ import Footer from "../components/Footer.astro";
           <div class="ctx">Over an already-open vsock connection</div>
         </div>
         <div class="bench-card">
+          <div class="label">Resume from snapshot (criterion)</div>
+          <div class="value">~25.8<span style="font-size:16px;">ms</span></div>
+          <div class="ctx">25.5–26.2ms — only ~19% faster than cold boot</div>
+        </div>
+        <div class="bench-card">
+          <div class="label">Snapshot take (criterion)</div>
+          <div class="value">~322<span style="font-size:16px;">ms</span></div>
+          <div class="ctx">Pause + write full memory/state to disk</div>
+        </div>
+        <div class="bench-card">
           <div class="label">Load test throughput</div>
           <div class="value">5.59<span style="font-size:16px;">/sec</span></div>
           <div class="ctx">4 concurrent workers, 20 cycles, 0 errors</div>
@@ -62,28 +72,43 @@ import Footer from "../components/Footer.astro";
   <section>
     <div class="wrap">
       <div class="section-head">
-        <div class="eyebrow">Next: reducing cold-start latency</div>
-        <h2>The mechanism already exists. It just isn't proactive yet.</h2>
-        <p>Firecracker's own published numbers document sub-second, even sub-125ms, boot times and under-5MiB per-VM memory overhead — sandkiln's own measured 32.3–33.1ms cold boot is consistent with that. But "boot fast" and "start instantly" aren't the same claim, and the biggest lever for the second one isn't a faster boot at all.</p>
+        <div class="eyebrow">Shipped: pre-warmed pools</div>
+        <h2>The mechanism already existed. Now it's proactive.</h2>
+        <p>Firecracker's own published numbers document sub-second, even sub-125ms, boot times and under-5MiB per-VM memory overhead — sandkiln's own measured 32.3–33.1ms cold boot is consistent with that. Production Firecracker users solve cold-start latency the same way: not booting from scratch at all, but snapshotting a VM that's already past initialization and restoring that instead. sandkiln had the primitive (<code>snapshot</code>/<code>resume</code>/<code>fork</code>, auto-suspend) for a while before it had the proactive half — a <b><code>POST /pools</code></b> configures a pool, a background replenisher keeps a target number of resumable snapshots ready per pool, and a plain <code>Sandbox.create()</code> matching one resumes it automatically instead of cold-booting. No special call — <code>Pool.create/list/delete</code> configures it, everything else about creating a sandbox stays the same.</p>
       </div>
 
       <div class="note-block">
-        <span class="tag">The documented industry technique</span>
-        <h3>Snapshot-and-restore of an already-initialized environment, not a faster cold boot</h3>
-        <p>Production Firecracker users solve cold-start latency by not booting from scratch at all: they snapshot a VM that's already past initialization — kernel loaded, runtime warmed, dependencies imported — and restore <em>that</em> on the next request instead of repeating the boot-and-initialize sequence every time. The saving isn't in the boot path getting faster; it's in skipping most of the path entirely.</p>
-        <p>sandkiln already has the exact mechanism this needs: <code>snapshot</code>/<code>resume</code>/<code>fork</code> save a running sandbox's full memory and disk state and boot a new one directly from it, and auto-suspend (<code>SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS</code>) already turns an idle sandbox into a resumable snapshot automatically. The primitive is not the gap.</p>
+        <span class="tag">What we measured</span>
+        <h3>A real, modest win on a clean claim — not a clean, unconditional one</h3>
+        <p>A claim that resumes cleanly measured at roughly <b>70–200ms</b> against a cold create's own <b>~160–200ms</b> on the same box — a real, repeatable win at this sample size, consistent with resume's own ~25.8ms criterion number sitting well under cold boot's ~32ms. But that clean case is <b>not</b> the reliable common case on this dev box today — see the finding below, which is the more important result this work actually produced.</p>
       </div>
 
       <div class="note-block">
-        <span class="tag">The actual gap</span>
-        <h3>Reactive, not proactive</h3>
-        <p>Every snapshot sandkiln produces today exists because something already happened — a caller explicitly called <code>snapshot()</code>, or a sandbox sat idle long enough for auto-suspend to catch it. There's no path yet where a snapshot is prepared <em>ahead of</em> a request that hasn't arrived, the way a pre-warmed pool would keep one ready. That's the concrete difference between what sandkiln does today and what the documented industry technique actually achieves in production: pre-warming turns "resume is faster than cold boot" into "the caller never pays the cold-boot cost at all," because a ready-to-resume snapshot is already sitting there when the request lands.</p>
+        <span class="tag">What we found — the more significant result</span>
+        <h3>Resuming a snapshot has a real, non-rare failure mode</h3>
+        <p>Building a pool means resuming far more often than any prior manual test ever had, and that surfaced something real: a resumed guest kernel can panic early in boot (an early-boot divide-by-zero trap in the console driver, caught via Firecracker's own captured console log — built specifically so a guest crash before vsock comes up isn't invisible). Measured directly, repeatedly, across clean isolated test runs: the failure rate ranged from roughly <b>1 in 3 to 2 in 3</b> resumes — not a rare edge case. The existing snapshot/resume integration check still passes every run, because one resume in a row isn't enough attempts to reliably hit it.</p>
+        <p>Root cause is still an open question — plausibly TSC/clock-source drift between snapshot-time and restore-time, but that's an informed guess, not a confirmed diagnosis; see <a href="../docs/architecture/engineering-notebook/">the engineering notebook</a> for the full investigation. Handled either way: every claim runs a real post-resume health check before being handed to a caller, and a failed check tears the sandbox down and falls back to a normal cold create — a caller never receives a dead sandbox id, confirmed via repeated stress tests showing zero caller-visible failures across every run.</p>
+      </div>
+
+      <div class="section-head" style="margin-top:48px;">
+        <div class="eyebrow">What's next</div>
+        <h2>The remaining latency gap, and where it actually lives.</h2>
+        <p>Snapshot-take and resume are both already small (~322ms and ~25.8ms) — resume isn't the bottleneck. The ~180ms gap between a ~32ms boot and a full cold create is in the surrounding per-create setup, mainly the rootfs copy.</p>
       </div>
 
       <div class="note-block">
-        <span class="tag">Concrete next step</span>
-        <h3>A pre-warmed snapshot pool</h3>
-        <p>Keep a small pool of ready-to-resume snapshots per image/config, populated ahead of demand rather than only after an idle timeout. A <code>get-or-create</code> or create-from-image call that finds a matching pooled snapshot resumes it instead of cold-booting; the pool backfills in the background. This needs an actual resume-latency number to justify the pool size and refill rate — which doesn't exist yet either: there's no <code>criterion</code> benchmark for resume, only the manually-verified ~39ms for a single resume during snapshot/resume development. Both — the benchmark and the pool — are the next real work here, not a vaguer "optimize boot."</p>
+        <span class="tag">The concrete next lever</span>
+        <h3>A copy-on-write filesystem or device-mapper layer for rootfs storage</h3>
+        <p>This dev box runs ext4, which has no copy-on-write, so <code>cp --reflink=auto</code> silently falls back to an ordinary copy — the remaining ~180ms is real file-copy time. A CoW-capable filesystem (XFS, Btrfs) would make that same <code>--reflink=auto</code> call an instant clone with no code change at all; a device-mapper/thin-provisioning layer would get there a different way if the host filesystem can't change. Either closes the single largest remaining piece of "how long until I can run code," for every create the pool above doesn't already serve from a warm snapshot.</p>
+      </div>
+
+      <div class="note-block">
+        <span class="tag">Ideas — not shipped, not verified</span>
+        <h3>A few more directions worth a real look</h3>
+        <p>Flagged explicitly as brainstorming, not results, per this project's own standard of never stating an unverified claim as fact:</p>
+        <p><b>A pool <code>max_count</code> ceiling with queueing.</b> Today a pool's warm buffer has a target size but no cap on total concurrent instances — bounding that (and queuing a claim that arrives at the ceiling instead of either rejecting it or growing unbounded) is a natural extension of the same mechanism, not a new one.</p>
+        <p><b>Whether jailer's chroot hard-linking adds measurable overhead.</b> Jailer boots via a chroot with hard-linked kernel/rootfs/drive copies rather than the direct paths a non-jailed boot uses — nobody has benchmarked whether that link step itself is visible next to the ~32ms boot number, since jailer hasn't been proven on real hardware yet at all (see the Roadmap page).</p>
+        <p><b>Whether the network lease step has room to shrink.</b> The lease already runs concurrently with the rootfs copy rather than after it, so it's not on the critical path today unless the copy itself gets fast enough (via the CoW work above) that the lease becomes the new tail — worth re-measuring once that happens, not before.</p>
       </div>
     </div>
   </section>

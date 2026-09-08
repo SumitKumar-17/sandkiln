@@ -16,7 +16,8 @@ const persistence: Row[] = [
   { name: "Auto-suspend on idle", desc: "An idle sandbox is paused and snapshotted automatically, freeing resources while staying resumable.", status: "done" },
   { name: "Custom/managed images", desc: "Register an already-built rootfs and boot from it. OCI/Docker-image conversion is not done.", status: "partial" },
   { name: "Non-consuming snapshot fork", desc: "Fork a snapshot without consuming it. Not true parallel forking — at most one live fork of a given snapshot at a time.", status: "partial" },
-  { name: "Pre-warmed snapshot pool", desc: "The concrete next latency lever: apply the existing snapshot/resume mechanism proactively, not only reactively. See the Performance page.", status: "planned" },
+  { name: "Durable sandbox history", desc: "A sqlite-backed record of every sandbox that ever existed and how it ended, surviving a daemon restart — deliberately not the same thing as live sandboxes surviving one, which nothing can make true today.", status: "done" },
+  { name: "Pre-warmed snapshot pool", desc: "A matching sandbox create resumes a ready snapshot instead of cold-booting — transparent, no special call. Real, honestly-measured caveats: a clean claim is faster, but resuming a snapshot has a real, non-rare guest-kernel-panic failure mode a health check catches and falls back from; no max_count ceiling/queueing yet. See the Performance page.", status: "partial" },
   { name: "Tiered idle lifecycle", desc: "Extend auto-suspend into named tiers — suspend, then archive to cheaper storage, then delete — each with its own configurable window.", status: "planned" },
   { name: "Time-travel restore", desc: "Keep more than the latest snapshot per sandbox, so a caller can restore an earlier point, not only the most recent stop.", status: "planned" },
   { name: "Snapshot lineage", desc: "No ancestry tracking today — a daemon only knows the current snapshot, not what it was forked from or what else was forked from it.", status: "planned" },
@@ -31,18 +32,17 @@ const security: Row[] = [
   { name: "Jailer hardening", desc: "Firecracker's jailer (chroot, cgroups v2, unprivileged uid), opt-in. Not yet proven against a real jailer binary on hardware.", status: "partial" },
   { name: "Multi-agent isolation", desc: "Separate Linux users with private home directories, baked into the base image build.", status: "done" },
   { name: "Egress firewall", desc: "Domain allowlist plus separate subnet allow/deny lists (deny takes precedence), enforced at the DNS proxy before a connection ever opens.", status: "planned" },
-  { name: "Per-sandbox I/O rate limiting", desc: "Firecracker's own token-bucket rate limiter (ops/sec + bandwidth, per drive and network interface) isn't configured — every sandbox gets unlimited host I/O by default today.", status: "planned" },
+  { name: "Per-sandbox I/O rate limiting", desc: "Firecracker's own token-bucket rate limiter (ops/sec + bandwidth), applied per sandbox to every drive and the network interface — unlimited by default, capped with one field on create.", status: "done" },
   { name: "Seccomp filters, disk-size ceilings", desc: "Per-sandbox syscall filtering and a hard disk quota — neither exists yet.", status: "planned" },
 ];
 
 const platform: Row[] = [
-  { name: "Read-only shared drives", desc: "A drive attached read-only may be shared by arbitrarily many sandboxes at once; read-write still needs exclusive access.", status: "done" },
-  { name: "Drives in the SDKs & CLI", desc: "Only the daemon's raw HTTP API supports attaching drives at create time — neither SDK nor kiln exposes it yet.", status: "planned" },
+  { name: "Read-only shared drives", desc: "A drive attached read-only may be shared by arbitrarily many sandboxes at once; read-write still needs exclusive access. Drive.create/list/delete in both SDKs and kiln drive.", status: "done" },
   { name: "Remote storage mounts", desc: "FUSE-mount an S3-compatible object store into a sandbox, read/written like local disk.", status: "planned" },
   { name: "Streamed output", desc: "kiln logs -f and streamed exec output, once the daemon can stream a response.", status: "planned" },
-  { name: "PTY / interactive terminal", desc: "A real, bidirectional shell session over WebSocket, distinct from batch exec — validated as a real use case elsewhere. A per-sandbox concurrent-session cap is the sane default if/when this is built.", status: "planned" },
-  { name: "Guest-accessible metadata service", desc: "Nothing running inside a sandbox can read its own tags/name/config from the daemon today — has to be baked into the image or pushed in after boot.", status: "planned" },
-  { name: "Full filesystem API surface", desc: "chmod/chown/symlink/rename/copy/truncate — only read-file/write-file exist today. A developer-experience gap, not a capability one.", status: "planned" },
+  { name: "PTY / interactive terminal", desc: "A real, bidirectional shell session over WebSocket, distinct from batch exec. kiln sandbox pty and Sandbox.pty() (JS/TS SDK). A per-sandbox concurrent-session cap (64) is enforced daemon-side. No live resize yet.", status: "done" },
+  { name: "Guest-accessible metadata service", desc: "Every sandbox with a name and/or tags serves its own {id, name, tags} to itself via Firecracker's native MMDS at 169.254.169.254 — no daemon call needed from inside the guest.", status: "done" },
+  { name: "Full filesystem API surface", desc: "chmod, chown, mkdir, rename, copy, symlink, readlink, truncate, and directory listing with real metadata — the full set, in both SDKs and the CLI, alongside read-file/write-file.", status: "done" },
   { name: "Public URL per exposed port", desc: "An alternative to the proxied /preview/:port path — a real routable domain per port. Needs DNS/routing infra this project doesn't have; a bigger lift than the existing proxy.", status: "planned" },
   { name: "GPU passthrough", desc: "Explicitly not planned — Firecracker has no GPU device model, and adding one is a different project from this one.", status: "planned" },
   { name: "System-privileged workloads", desc: "Docker-in-VM, VPN clients, FUSE drivers inside the guest — needs base-image and kernel-config work more than daemon changes.", status: "planned" },
@@ -56,7 +56,7 @@ const bigIdeas: Row[] = [
 
 const documentation: Row[] = [
   { name: "Full docs site", desc: "Getting started, core concepts, guides, and reference for the HTTP API and both SDKs/the CLI — this site.", status: "done" },
-  { name: "Example projects", desc: "A code playground (JS/TS), an AI-agent sandbox runner (Python), and a dev-server preview reference — see examples/ in the repository.", status: "done" },
+  { name: "Example projects", desc: "A code playground (JS/TS), an AI-agent sandbox runner (Python), a dev-server preview reference, an interactive-terminal reference, and a pre-warmed-pool reference that reports real results honestly instead of a single lucky run — see examples/ in the repository.", status: "done" },
 ];
 
 const sections: { title: string; rows: Row[] }[] = [

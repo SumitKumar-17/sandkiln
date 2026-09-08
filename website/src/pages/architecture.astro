@@ -9,7 +9,7 @@ import Footer from "../components/Footer.astro";
 
   <section class="page-hero">
     <div class="wrap">
-      <h1>Four crates. No crate reaches into another's internals.</h1>
+      <h1>Five crates. No crate reaches into another's internals.</h1>
       <p>The core is a Rust workspace, kept deliberately modular — the daemon can change without touching the guest agent, and the guest agent ships as its own static binary independent of everything that talks to it.</p>
     </div>
   </section>
@@ -35,7 +35,12 @@ import Footer from "../components/Footer.astro";
         <div class="crate">
           <div class="n">04</div>
           <h3>sandkiln-daemon</h3>
-          <p>axum + tokio HTTP API wrapping the lifecycle — create, exec, list, stop, snapshot, images, drives — with auth, tags, and tracing built in from day one.</p>
+          <p>axum + tokio HTTP API wrapping the lifecycle — create, exec, list, stop, snapshot, images, drives, pools — with auth, tags, and tracing built in from day one.</p>
+        </div>
+        <div class="crate">
+          <div class="n">05</div>
+          <h3>sandkiln-store</h3>
+          <p>A small sqlite-backed crate for durable sandbox history — the record of every sandbox that ever existed and how it ended, surviving a daemon restart the live sandbox map itself never could.</p>
         </div>
       </div>
 

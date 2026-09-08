@@ -211,7 +211,8 @@ nav.topnav a[aria-current="page"] { color: var(--accent); }
 .status.planned::before { background: transparent; border: 1.5px solid var(--pending); }
 
 /* ---------- architecture ---------- */
-.arch { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 48px; }
+.arch { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 48px; }
+@media (max-width: 1080px) { .arch { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 860px) { .arch { grid-template-columns: repeat(2, 1fr); } }
 .crate { border: 1px solid var(--border); background: var(--surface); padding: 20px; position: relative; }
 .crate .n { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }

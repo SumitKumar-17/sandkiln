@@ -45,14 +45,25 @@ curl -s -X POST "$BASE/sandboxes/get-or-create" \
 
 | Route | What it does |
 |---|---|
-| `POST /sandboxes` | Boot a sandbox. Body: `name?`, `tags?`, `vcpu_count?`, `mem_size_mib?`, `image_id?`, `drives?`. |
+| `POST /sandboxes` | Boot a sandbox. Body: `name?`, `tags?`, `vcpu_count?`, `mem_size_mib?`, `image_id?`, `drives?`, `rate_limit?` (`{bandwidth_bytes_per_sec?, ops_per_sec?}`, Firecracker's own token-bucket limiter). A request with no `drives`/`rate_limit` matching a configured pool's image/resources transparently resumes a warm snapshot instead of cold-booting — see [Startup latency & the pre-warmed pool](../../architecture/startup-latency/). |
 | `GET /sandboxes` | List sandboxes. `?tag.<key>=<value>` filters (repeatable, all must match). |
+| `GET /sandboxes/history` | Durable history of every sandbox that ever existed and how it ended (`sqlite`-backed, survives a daemon restart, unlike this list itself). `?live_only=true`, `?limit=<n>`. |
 | `GET /sandboxes/by-name/:name` | Resolve a name to a *live* sandbox's id. `409` if the name currently belongs to a held snapshot instead. |
-| `POST /sandboxes/get-or-create` | Resolve-or-create by name in one call. Body: `name` (required), `tags?`, `vcpu_count?`, `mem_size_mib?`. |
+| `POST /sandboxes/get-or-create` | Resolve-or-create by name in one call. Body: `name` (required), `tags?`, `vcpu_count?`, `mem_size_mib?`, `image_id?`, `rate_limit?`, `drives?` (the last four used only if a fresh sandbox is created). |
 | `DELETE /sandboxes/:id` | Stop a sandbox. Preserves state as a snapshot by default (`200`, `{"kept": true, "snapshot_id": "..."}`); `?keep=false` fully destroys instead (`204`). See [Sandbox lifecycle](../../concepts/sandbox-lifecycle/). |
 | `POST /sandboxes/:id/exec` | Run a command. Body: `{"command": "...", "args": [...]}`. Returns `stdout`/`stderr`/`exit_code`. |
 | `POST /sandboxes/:id/read-file` | Body: `{"path": "..."}`. Returns `{"content_base64": "..."}`. |
 | `POST /sandboxes/:id/write-file` | Body: `{"path": "...", "content_base64": "..."}`. |
+| `POST /sandboxes/:id/chmod` | Body: `{"path": "...", "mode": <octal-as-int>}`. |
+| `POST /sandboxes/:id/chown` | Body: `{"path": "...", "uid": <n>, "gid": <n>}`. |
+| `POST /sandboxes/:id/mkdir` | Body: `{"path": "...", "parents"?: <bool>}`. |
+| `POST /sandboxes/:id/rename` | Body: `{"from": "...", "to": "..."}`. |
+| `POST /sandboxes/:id/copy` | Body: `{"from": "...", "to": "..."}`. |
+| `POST /sandboxes/:id/symlink` | Body: `{"target": "...", "link_path": "..."}`. |
+| `POST /sandboxes/:id/readlink` | Body: `{"path": "..."}`. Returns `{"target": "..."}`. |
+| `POST /sandboxes/:id/truncate` | Body: `{"path": "...", "size": <n>}`. |
+| `POST /sandboxes/:id/list-dir` | Body: `{"path": "..."}`. Returns real per-entry metadata: type, permission bits, size, mtime. |
+| `GET /sandboxes/:id/pty[?cols=&rows=]` | Upgrades to a WebSocket: a live, bidirectional shell session, distinct from `exec`'s request/response shape. Accepts the token as `?token=` as well as a header, since neither browsers' nor Node's native `WebSocket` constructor can set a custom header. A per-sandbox concurrent-session cap (64) is enforced. |
 
 ## Snapshots
 
@@ -79,6 +90,16 @@ curl -s -X POST "$BASE/sandboxes/get-or-create" \
 | `POST /images` | Body: `{"id": "...", "path": "..."}`. Registers an already-built ext4 rootfs from a host path. |
 | `GET /images` | List registered images (`guest_agent_verified` is always `false`, see [Custom & managed images](../../concepts/images/)). |
 | `DELETE /images/:id` | Delete an image. `409` while any live sandbox, in-flight boot, or held snapshot references it. |
+
+## Pools
+
+Pool *configuration* only — replenishment happens in the background, and claiming is entirely transparent (a matching `POST /sandboxes`, above). See [Startup latency & the pre-warmed pool](../../architecture/startup-latency/).
+
+| Route | What it does |
+|---|---|
+| `POST /pools` | Configure a pool. Body: `id` (required, caller-given, `409` if already taken), `image_id?`, `vcpu_count?`, `mem_size_mib?`, `warm_count` (required, `0` is valid — an inert pool), `max_count?` (a ceiling on total live instances of this pool's profile — omitted means unbounded, the original behavior). A `POST /sandboxes` matching a pool at its `max_count` ceiling with nothing warm queues (up to 30s) instead of exceeding it or rejecting outright — `503` if nothing frees up in time. |
+| `GET /pools` | List configured pools, including `warm_ready` (how many resumable snapshots are actually ready right now) and `claimed` (how many live instances of this pool's profile exist right now, warm-resumed or cold-created alike). |
+| `DELETE /pools/:id` | Remove a pool's configuration and destroy whatever it currently has warm. A sandbox already claimed from it is unaffected. |
 
 ## Preview
 
