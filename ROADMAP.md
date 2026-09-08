@@ -62,9 +62,9 @@ box over SSH.
 ## Networking — done
 
 Every sandbox leases a tap device from a pre-created pool
-(`scripts/create-tap-pool.sh`) and attaches it to a shared bridge with a
+(`scripts/host-setup/create-tap-pool.sh`) and attaches it to a shared bridge with a
 statically assigned IP; the daemon runs unprivileged with `CAP_NET_ADMIN`
-raised into its ambient set (`scripts/grant-net-admin.sh`), not as root.
+raised into its ambient set (`scripts/host-setup/grant-net-admin.sh`), not as root.
 Verified: two sandboxes running concurrently, each with a distinct IP,
 both resolving DNS and reaching the real internet through the daemon's
 HTTP API.

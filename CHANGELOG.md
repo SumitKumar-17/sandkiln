@@ -13,7 +13,23 @@ Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
-Nothing yet — `main` matches what's published.
+### Changed
+- Reorganized `scripts/`: one-time host-provisioning steps
+  (`create-tap-pool.sh`, `grant-net-admin.sh`, `install-firecracker.sh`,
+  `allow-passwordless-cap-grant.sh`, `start-dns-proxy.sh`) moved into
+  `scripts/host-setup/`; narrow manual-debugging tools
+  (`boot-test-vm.sh`, `setup-tap-network.sh`) moved into
+  `scripts/dev-tools/`. Every internal call site and doc reference was
+  updated. `preflight-check.sh`, `setup.sh`, `sandkilnd-ctl.sh`,
+  `install-systemd-service.sh` (+ its template), `integration-test.sh`,
+  `load-test.sh`, `remote.sh`, and the new `dev.sh` dispatcher all stay
+  at the top level — no code deleted, purely a reorganization.
+  **Action needed on any host that already ran
+  `allow-passwordless-cap-grant.sh` under its old path**: that sudoers
+  rule is keyed to the exact old path and won't match the new one —
+  re-run `sudo scripts/host-setup/allow-passwordless-cap-grant.sh` once,
+  interactively, to restore passwordless `CAP_NET_ADMIN` granting on
+  daemon restart.
 
 ## [0.4.0] — 2026-09-08
 

@@ -8,8 +8,8 @@
 # "Base and custom images" in ROADMAP.md.
 #
 # Needs sudo: debootstrap, loop-mounting the image, and chroot operations
-# all require real root, the same as scripts/create-tap-pool.sh and
-# scripts/grant-net-admin.sh.
+# all require real root, the same as scripts/host-setup/create-tap-pool.sh and
+# scripts/host-setup/grant-net-admin.sh.
 #
 # Usage:
 #   sudo images/build-universal-image.sh <output-image-path> [size-in-gb] [ubuntu-codename] [agent-count]

@@ -55,7 +55,7 @@ async fn async_main() {
     };
     let tap_pool = (0..config.tap_pool_size).map(|i| format!("{}{i}", config.tap_pool_prefix));
     let net_manager = NetworkManager::new(config.bridge_name.clone(), config.bridge_gateway, uplink.clone(), tap_pool);
-    net_manager.ensure_ready().expect("set up sandbox network bridge (needs CAP_NET_ADMIN — see scripts/grant-net-admin.sh)");
+    net_manager.ensure_ready().expect("set up sandbox network bridge (needs CAP_NET_ADMIN — see scripts/host-setup/grant-net-admin.sh)");
     tracing::info!(bridge = %config.bridge_name, gateway = %config.bridge_gateway, %uplink, "sandbox network ready");
 
     let drives = DriveStore::new(&config.drives_dir)
@@ -81,7 +81,7 @@ async fn async_main() {
                 .expect("create/verify the jailer chroot base dir (SANDKILN_JAILER_CHROOT_BASE_DIR)");
             assert!(
                 jailer_cfg.jailer_bin.is_file(),
-                "SANDKILN_JAILER_BIN does not point at a file: {} — run scripts/install-firecracker.sh first",
+                "SANDKILN_JAILER_BIN does not point at a file: {} — run scripts/host-setup/install-firecracker.sh first",
                 jailer_cfg.jailer_bin.display()
             );
             tracing::info!(
@@ -193,7 +193,7 @@ fn init_tracing(log_format: LogFormat) {
 }
 
 /// The daemon needs CAP_NET_ADMIN itself (via `setcap ...+eip`, see
-/// scripts/grant-net-admin.sh) to manage tap devices and iptables rules —
+/// scripts/host-setup/grant-net-admin.sh) to manage tap devices and iptables rules —
 /// but that alone doesn't reach the `ip`/`iptables` child processes it
 /// shells out to. Raising the capability into the ambient set makes those
 /// children inherit it too.
@@ -205,7 +205,7 @@ fn raise_net_admin_ambient() {
     // empty) rather than set from the file — so it has to be added here,
     // which is allowed precisely because it's already in Permitted.
     caps::raise(None, CapSet::Inheritable, Capability::CAP_NET_ADMIN)
-        .expect("add CAP_NET_ADMIN to the inheritable set — grant the file capability first with scripts/grant-net-admin.sh");
+        .expect("add CAP_NET_ADMIN to the inheritable set — grant the file capability first with scripts/host-setup/grant-net-admin.sh");
     caps::raise(None, CapSet::Ambient, Capability::CAP_NET_ADMIN)
         .expect("raise CAP_NET_ADMIN into the ambient set");
 }

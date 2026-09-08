@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # One-time host bootstrap: everything sandkilnd needs to actually run,
 # in the right order, from a completely fresh checkout. Replaces
-# manually running install-firecracker.sh, building the guest agent,
-# fetching/building an image, injecting the agent into it,
-# create-tap-pool.sh, and grant-net-admin.sh yourself and keeping their
-# paths/counts in sync by hand — the exact friction that made getting a
-# working daemon up take a dozen commands instead of one.
+# manually running host-setup/install-firecracker.sh, building the guest
+# agent, fetching/building an image, injecting the agent into it,
+# host-setup/create-tap-pool.sh, and host-setup/grant-net-admin.sh
+# yourself and keeping their paths/counts in sync by hand — the exact
+# friction that made getting a working daemon up take a dozen commands
+# instead of one.
 #
 # Safe to re-run: every step checks whether it's already done before
 # doing it (matches this project's "development scripts must be safe to
@@ -135,7 +136,7 @@ FC_BIN="$TOOLS_DIR/bin/firecracker"
 if [ -x "$FC_BIN" ]; then
   skip "firecracker at $FC_BIN ($("$FC_BIN" --version 2>&1 | head -n1))"
 else
-  bash "$SCRIPT_DIR/install-firecracker.sh" "$TOOLS_DIR" || { bad "install-firecracker.sh failed"; exit 1; }
+  bash "$SCRIPT_DIR/host-setup/install-firecracker.sh" "$TOOLS_DIR" || { bad "install-firecracker.sh failed"; exit 1; }
   ok "firecracker installed to $TOOLS_DIR/bin"
 fi
 KERNEL_PATH="$TOOLS_DIR/images/vmlinux-5.10.223"
@@ -200,7 +201,7 @@ done
 if [ "$existing" -eq "$TAP_POOL_SIZE" ]; then
   skip "all $TAP_POOL_SIZE tap devices already present"
 else
-  sudo bash "$SCRIPT_DIR/create-tap-pool.sh" "$TAP_POOL_SIZE" "$(whoami)" sktap \
+  sudo bash "$SCRIPT_DIR/host-setup/create-tap-pool.sh" "$TAP_POOL_SIZE" "$(whoami)" sktap \
     || { bad "create-tap-pool.sh failed"; exit 1; }
   ok "tap pool ready: sktap0..sktap$((TAP_POOL_SIZE - 1))"
 fi
@@ -212,8 +213,8 @@ DAEMON_BIN="$CORE_DIR/target/release/sandkilnd"
 if getcap "$DAEMON_BIN" 2>/dev/null | grep -q cap_net_admin; then
   skip "CAP_NET_ADMIN already granted"
 else
-  sudo bash "$SCRIPT_DIR/grant-net-admin.sh" "$DAEMON_BIN" || { bad "grant-net-admin.sh failed"; exit 1; }
-  ok "CAP_NET_ADMIN granted (re-run this script, or just grant-net-admin.sh, after every rebuild)"
+  sudo bash "$SCRIPT_DIR/host-setup/grant-net-admin.sh" "$DAEMON_BIN" || { bad "grant-net-admin.sh failed"; exit 1; }
+  ok "CAP_NET_ADMIN granted (re-run this script, or just scripts/host-setup/grant-net-admin.sh, after every rebuild)"
 fi
 
 # ---------------------------------------------------------------------------

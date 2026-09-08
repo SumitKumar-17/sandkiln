@@ -71,6 +71,6 @@ booting sandboxes from the old one.
 
 Compiling isn't proof it works — this crate specifically needs the full
 live-boot verification loop (build → inject into a fresh rootfs copy →
-boot via `scripts/boot-test-vm.sh` or the daemon → talk to it over vsock)
+boot via `scripts/dev-tools/boot-test-vm.sh` or the daemon → talk to it over vsock)
 described in the root `AGENTS.md`. A change here that only "compiles" has
 not been verified.

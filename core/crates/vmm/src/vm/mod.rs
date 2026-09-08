@@ -1,6 +1,6 @@
 //! A single Firecracker microVM's lifecycle: boot, talk to its guest
 //! agent, tear down. This is the Rust equivalent of what
-//! `scripts/boot-test-vm.sh` does by hand — the daemon drives this
+//! `scripts/dev-tools/boot-test-vm.sh` does by hand — the daemon drives this
 //! directly instead of shelling out.
 //!
 //! Snapshot/resume (`pause`, `snapshot`, `resume`, `ResumeConfig`) lives in

@@ -45,7 +45,7 @@ pub struct Config {
     /// means "detect the default route interface at startup" — see
     /// `network::detect_uplink_iface`.
     pub uplink_iface: Option<String>,
-    /// Must match what `scripts/create-tap-pool.sh` was run with — this
+    /// Must match what `scripts/host-setup/create-tap-pool.sh` was run with — this
     /// is the daemon's max concurrent-sandbox-with-networking ceiling.
     pub tap_pool_prefix: String,
     pub tap_pool_size: u32,

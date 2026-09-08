@@ -29,12 +29,18 @@
 #   integration-test [base-url]                       scripts/integration-test.sh
 #   load-test [concurrency] [iterations] [base-url]    scripts/load-test.sh
 #
-# Everything else (create-tap-pool, grant-net-admin, install-firecracker,
-# install-systemd-service, start-dns-proxy, setup-tap-network,
-# allow-passwordless-cap-grant, boot-test-vm) is intentionally NOT
-# wrapped here — those are one-time or narrowly-scoped host-setup steps
-# `setup.sh` already calls in the right order; run them directly by name
-# if you need one in isolation.
+# Everything else is intentionally NOT wrapped here — one-time or
+# narrowly-scoped steps `setup.sh` already calls in the right order; run
+# them directly if you need one in isolation:
+#   scripts/host-setup/   create-tap-pool, grant-net-admin,
+#                         install-firecracker, start-dns-proxy,
+#                         allow-passwordless-cap-grant
+#   scripts/dev-tools/    boot-test-vm, setup-tap-network (a narrower,
+#                         older single-tap networking model — not part
+#                         of a normal setup, see their own comments)
+#   scripts/install-systemd-service.sh   persistent, boot-surviving
+#                                         deployment (vs. sandkilnd-ctl's
+#                                         direct-run dev loop above)
 #
 # Run with no arguments (or `help`/`-h`/`--help`) to print this again.
 

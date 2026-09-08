@@ -398,7 +398,7 @@ reintroduce them:
 
 - **`setcap` does not survive a rebuild.** The daemon binary loses its
   `CAP_NET_ADMIN` grant every time `cargo build --release` produces a new
-  binary. Re-run `scripts/grant-net-admin.sh <binary>` after every
+  binary. Re-run `scripts/host-setup/grant-net-admin.sh <binary>` after every
   rebuild before starting the daemon, or every network operation fails
   with "Operation not permitted."
 - **`#[tokio::main]` starts the runtime before your function body runs.**
@@ -412,14 +412,14 @@ reintroduce them:
   ambient `CAP_NET_ADMIN`.** Ambient `CAP_NET_ADMIN` covers netlink
   operations (attach/detach/up on an *existing* interface, bridge
   creation) but not the `TUNSETIFF` ioctl that creates a device. That's
-  why tap devices are pre-created once via `scripts/create-tap-pool.sh`
+  why tap devices are pre-created once via `scripts/host-setup/create-tap-pool.sh`
   (needs sudo) and the daemon only ever leases/releases from that pool.
 - **Use exact process names, not pattern matching, for process control.**
   `pkill -f` can match its own command line and kill the wrong thing —
   including the SSH session running it. Use `pkill -x <exact-process-name>`.
 - **DNS on the dev box's network is unusual**: direct queries to public
   resolvers don't work reliably, but resolution through the host's own
-  `systemd-resolved` stub does. `scripts/start-dns-proxy.sh` forwards to
+  `systemd-resolved` stub does. `scripts/host-setup/start-dns-proxy.sh` forwards to
   that for exactly this reason.
 - **Prefer real readiness checks over sleeps.** Where a fixed sleep is
   unavoidable (e.g. waiting on a fresh SSH connection to reflect state
@@ -443,7 +443,7 @@ reintroduce them:
   restart`'s CAP_NET_ADMIN re-grant (setcap doesn't survive a binary
   rebuild, so this runs after every build): over `scripts/remote.sh run`
   it fails outright instead of prompting. Run `sudo
-  scripts/allow-passwordless-cap-grant.sh` once, interactively, to add a
+  scripts/host-setup/allow-passwordless-cap-grant.sh` once, interactively, to add a
   narrowly-scoped NOPASSWD rule (only `grant-net-admin.sh` against the
   daemon's own binary path) so every future rebuild-then-restart over SSH
   just works.

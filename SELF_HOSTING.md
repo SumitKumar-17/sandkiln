@@ -85,11 +85,11 @@ the guest's musl target (section 4).
 Install Firecracker and the jailer binary:
 
 ```
-scripts/install-firecracker.sh ~/sandkiln-tools
+scripts/host-setup/install-firecracker.sh ~/sandkiln-tools
 ```
 
 This downloads both into `~/sandkiln-tools/bin`. Pin a specific version
-with `FIRECRACKER_VERSION=v1.16.1 scripts/install-firecracker.sh ...` if
+with `FIRECRACKER_VERSION=v1.16.1 scripts/host-setup/install-firecracker.sh ...` if
 you need one other than the script's default.
 
 You also need a guest kernel image. The quickest source is Firecracker's
@@ -217,7 +217,7 @@ to create the bridge yourself. What you do need to create, once, as
 root, is a pool of persistent TAP devices for the daemon to lease from:
 
 ```
-sudo scripts/create-tap-pool.sh 32 $(whoami) sktap
+sudo scripts/host-setup/create-tap-pool.sh 32 $(whoami) sktap
 ```
 
 This creates `sktap0`..`sktap31` owned by your user. `32` is your
@@ -237,7 +237,7 @@ Guest DNS needs a forwarder, since guests can't necessarily reach public
 resolvers directly but can reach the host's own resolver:
 
 ```
-sudo scripts/start-dns-proxy.sh 172.16.0.1   # match SANDKILN_BRIDGE_GATEWAY
+sudo scripts/host-setup/start-dns-proxy.sh 172.16.0.1   # match SANDKILN_BRIDGE_GATEWAY
 ```
 
 This isn't a systemd service yet — if you're running the daemon as a
@@ -246,9 +246,9 @@ persistent service (section 11), run this once per host boot too (a cron
 shipped here yet, tracked as an open item in `ROADMAP.md`'s
 Observability section).
 
-`scripts/setup-tap-network.sh` is a **different, older tool** — a
+`scripts/dev-tools/setup-tap-network.sh` is a **different, older tool** — a
 point-to-point (single tap, no bridge) model used only by
-`scripts/boot-test-vm.sh` for manual, outside-the-daemon boot testing.
+`scripts/dev-tools/boot-test-vm.sh` for manual, outside-the-daemon boot testing.
 It has nothing to do with the daemon's bridged-pool model above; don't
 run it as part of a normal self-hosting setup.
 
@@ -265,7 +265,7 @@ you're running the daemon:
 
 - **Manual (direct `./sandkilnd` invocation):**
   ```
-  sudo scripts/grant-net-admin.sh core/target/release/sandkilnd
+  sudo scripts/host-setup/grant-net-admin.sh core/target/release/sandkilnd
   ```
   This sets a file capability on the binary. **It does not survive a
   rebuild** — `cargo build --release` produces a new binary with no
@@ -321,7 +321,7 @@ sudo chown root:root ~/sandkiln-tools/bin/jailer
 sudo chmod u+s ~/sandkiln-tools/bin/jailer
 ```
 
-This does **not** survive a re-run of `scripts/install-firecracker.sh`
+This does **not** survive a re-run of `scripts/host-setup/install-firecracker.sh`
 (it overwrites the binary) — re-apply it after any jailer upgrade, the
 same way `grant-net-admin.sh` has to be re-run after every daemon
 rebuild.
@@ -554,18 +554,18 @@ capability stripped entirely, proving the `AmbientCapabilities=` path
 works independent of `setcap`.
 
 The DNS proxy (section 5) isn't wired into this unit yet — start
-`scripts/start-dns-proxy.sh` separately (or via your own small unit/cron
+`scripts/host-setup/start-dns-proxy.sh` separately (or via your own small unit/cron
 `@reboot` entry) if sandboxes need outbound DNS on a host that reboots.
 
 ## 12. Upgrades, rebuilds, and what must be repeated
 
 | You changed... | You must also... |
 |---|---|
-| daemon/vmm/protocol Rust source | `cargo build --release --workspace`. Under the systemd unit: nothing else. Running manually: re-run `scripts/grant-net-admin.sh` (section 6). |
+| daemon/vmm/protocol Rust source | `cargo build --release --workspace`. Under the systemd unit: nothing else. Running manually: re-run `scripts/host-setup/grant-net-admin.sh` (section 6). |
 | the guest agent (`core/crates/guest-agent`) | rebuild it for the musl target, then **re-inject it into every rootfs image currently in use** (`images/inject-agent.sh`) — a rebuilt agent binary sitting on the host does nothing until it's baked into the image `SANDKILN_BASE_ROOTFS` actually points at. |
 | the base image / added packages to it | rebuild it (`images/build-universal-image.sh`), re-inject the agent, and repoint `SANDKILN_BASE_ROOTFS` if you built it under a new path. Sandboxes already running keep using whatever image they booted from; only new sandboxes pick up the change. |
-| `SANDKILN_TAP_POOL_SIZE` upward | re-run `scripts/create-tap-pool.sh` with the new count (it's idempotent — existing devices are left alone, only missing ones are created) before raising the env var, or the daemon's own startup `ensure_ready()` check fails loudly rather than silently under-provisioning. |
-| Firecracker itself | re-run `scripts/install-firecracker.sh`, optionally pinning `FIRECRACKER_VERSION`. |
+| `SANDKILN_TAP_POOL_SIZE` upward | re-run `scripts/host-setup/create-tap-pool.sh` with the new count (it's idempotent — existing devices are left alone, only missing ones are created) before raising the env var, or the daemon's own startup `ensure_ready()` check fails loudly rather than silently under-provisioning. |
+| Firecracker itself | re-run `scripts/host-setup/install-firecracker.sh`, optionally pinning `FIRECRACKER_VERSION`. |
 
 Run `scripts/preflight-check.sh` again after any of the above before
 trusting the result — that's exactly what it exists for.
@@ -581,7 +581,7 @@ trusting the result — that's exactly what it exists for.
 - **"Operation not permitted" on any network call** — you rebuilt the
   daemon and are running it manually (not under the systemd unit) and
   forgot to re-run `grant-net-admin.sh`. See section 6.
-- **`tap devices missing: [...] — run scripts/create-tap-pool.sh first`**
+- **`tap devices missing: [...] — run scripts/host-setup/create-tap-pool.sh first`**
   at startup — `SANDKILN_TAP_POOL_PREFIX`/`SANDKILN_TAP_POOL_SIZE` don't
   match what you actually created, or the pool was created for a
   different user than the daemon runs as.
@@ -592,7 +592,7 @@ trusting the result — that's exactly what it exists for.
   see section 4.
 - **Sandboxes boot but have no outbound network** — confirm
   `SANDKILN_UPLINK_IFACE` detected the right interface (`ip route show
-  default`), and that `scripts/start-dns-proxy.sh` is actually running
+  default`), and that `scripts/host-setup/start-dns-proxy.sh` is actually running
   for guest DNS specifically to work (outbound IP connectivity and DNS
   resolution are independent failure modes — check both).
 - **`/dev/kvm: permission denied`** — `sudo usermod -aG kvm $USER`, then

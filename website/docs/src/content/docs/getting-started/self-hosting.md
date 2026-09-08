@@ -78,10 +78,10 @@ Every client (both SDKs, the CLI, raw HTTP) sends this back as `Authorization: B
 
 - **`setup.sh` fails with "a terminal is required to read the password"** — it ran non-interactively (e.g. over `ssh host 'cmd'`) and a `sudo` step had no TTY to prompt on. Run it from a real interactive shell, or `sudo -v` first to cache credentials before running it non-interactively.
 - **`/dev/kvm: permission denied`** — `sudo usermod -aG kvm $USER`, then log in again.
-- **"Operation not permitted" on any network call** — you rebuilt the daemon and are running it manually (not via `sandkilnd-ctl.sh`, which handles this) and need to re-grant `CAP_NET_ADMIN`: `sudo scripts/grant-net-admin.sh core/target/release/sandkilnd`.
+- **"Operation not permitted" on any network call** — you rebuilt the daemon and are running it manually (not via `sandkilnd-ctl.sh`, which handles this) and need to re-grant `CAP_NET_ADMIN`: `sudo scripts/host-setup/grant-net-admin.sh core/target/release/sandkilnd`.
 - **`tap devices missing: [...]`** at startup — `SANDKILN_TAP_POOL_PREFIX`/`SANDKILN_TAP_POOL_SIZE` don't match what was actually created, or the pool was created for a different user than the daemon runs as.
 - **Sandboxes create fine but `exec`/read/write time out or fail with a vsock error** — the guest agent isn't baked into whatever rootfs is configured. Run `sudo -E scripts/preflight-check.sh --root-checks` to confirm.
-- **Sandboxes boot but have no outbound network** — check `ip route show default` picked the right interface, and confirm `scripts/start-dns-proxy.sh` is actually running (DNS and raw IP connectivity are independent failure modes — check both separately).
+- **Sandboxes boot but have no outbound network** — check `ip route show default` picked the right interface, and confirm `scripts/host-setup/start-dns-proxy.sh` is actually running (DNS and raw IP connectivity are independent failure modes — check both separately).
 - **`preflight-check.sh --root-checks` reports missing binaries you know are installed** — you ran it with plain `sudo`, which resets `$HOME` to `/root` and breaks every `~/sandkiln-tools/...` default path. Use `sudo -E` instead.
 
 The repository's [`SELF_HOSTING.md`](https://github.com/SumitKumar-17/sandkiln/blob/main/SELF_HOSTING.md) covers more (production image build failures, jailer setup, running as a systemd service, the full environment-variable reference) if you hit something not listed here.

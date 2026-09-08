@@ -8,11 +8,11 @@
 # root AGENTS.md's SSH/non-interactive-shell gotchas).
 #
 # Adds a single, narrowly-scoped NOPASSWD rule: only this exact daemon
-# binary path, only via scripts/grant-net-admin.sh, nothing broader.
+# binary path, only via scripts/host-setup/grant-net-admin.sh, nothing broader.
 # Review the generated line before running this if you have any doubt —
 # it's one line, printed below before it's written.
 #
-# Usage: sudo scripts/allow-passwordless-cap-grant.sh [path-to-sandkilnd-binary]
+# Usage: sudo scripts/host-setup/allow-passwordless-cap-grant.sh [path-to-sandkilnd-binary]
 #   (defaults to core/target/release/sandkilnd relative to the repo root)
 
 set -euo pipefail
