@@ -42,6 +42,12 @@ a dependency the JS SDK's equivalent doesn't need either (it uses native
   a drive at create time via `Sandbox.create`'s `drives` argument
   (`DriveAttachment` dataclass, defined in `sandbox.py` since it's
   create-time input, not a `Drive`-class operation).
+- `pool.py` — the `Pool` class, `PoolInfo` dataclass. Mirrors
+  `packages/sdk/src/pool.ts` — same static-classmethod shape, caller-given
+  `id` like `image.py`'s `register` (not a server-generated one like
+  `drive.py`'s `create`). No "claim from pool" method here at all —
+  claiming is entirely transparent, done by a plain `Sandbox.create()`
+  whose image/resources match a configured pool.
 - `_http.py` — the one place `urllib.request` gets called. Leading
   underscore: not part of the public API, same convention as `_config.py`.
 - `_config.py` — env var fallback resolution

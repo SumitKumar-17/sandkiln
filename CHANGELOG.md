@@ -14,6 +14,10 @@ Changelog](https://keepachangelog.com/).
 ## Unreleased
 
 ### Added
+- Pre-warmed pools (0.7.0, above) added to the Python SDK too
+  (`Pool.create/list/delete`, `packages/python/src/sandkiln/pool.py`) —
+  not published to PyPI yet, so nothing to version here, but live-verified
+  end to end against a real daemon the same way the JS/TS SDK version was.
 - Guest-accessible metadata service (daemon/`sandkiln-vmm` only — no
   SDK/CLI change, nothing to publish): every sandbox with a name and/or
   tags now automatically serves its own `{id, name, tags}` via
