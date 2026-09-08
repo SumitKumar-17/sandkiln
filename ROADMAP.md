@@ -35,10 +35,15 @@ hardware, not just code that compiles.
   load-test script against the daemon's HTTP API.
 - Snapshot/resume/fork, durable across a daemon restart; a host-side
   reverse proxy for previewing a dev server running inside a sandbox;
-  per-sandbox resource overrides with enforced ceilings; request-id
-  correlation and a `/metrics` endpoint; opt-in Firecracker jailer
-  hardening. All exposed through both SDKs and the CLI, live-verified via
-  `scripts/integration-test.sh` (154 checks, 0 failing).
+  interactive PTY sessions over WebSocket; per-sandbox resource overrides
+  with enforced ceilings; request-id correlation and a `/metrics`
+  endpoint; opt-in Firecracker jailer hardening; full filesystem
+  operations; persistent drives with read-only sharing; a
+  guest-accessible metadata service; durable sandbox history. All exposed
+  through both SDKs and the CLI (interactive PTY: JS/TS SDK and CLI
+  only), live-verified via `scripts/integration-test.sh` (220 checks, 0
+  failing, with `SANDKILN_AUTH_TOKEN` set — see that script's own usage
+  comment for what's skipped without one).
 
 ## Engineering principles
 
@@ -283,10 +288,10 @@ outbound HTTP both still work.
   `can_attach_read_only()` is the pure rule deciding whether a new attach
   may coexist with what's already there. Covers snapshots holding a drive
   too, not just live sandboxes.
-- **Not yet done: drives in either SDK or the CLI.** Only the daemon's
-  raw HTTP API supports attaching drives at create time today — neither
-  the JS/TS nor the Python SDK exposes it on `Sandbox.create()`, and
-  `kiln` has no `--drive`/`--drives` flag either.
+- **Done: drives in both SDKs and the CLI.** `Drive.create/list/delete`
+  in the JS/TS and Python SDKs, `drives`/`DriveAttachment` on
+  `Sandbox.create()`/`create()` in both, and `kiln drive create|ls|rm`
+  plus `--drive <id[:ro]>` on `sandbox create`.
 - **Remote storage mounts**: mount an external object store (S3-compatible)
   into a sandbox via FUSE, so a sandbox can read/write remote files through
   its normal filesystem interface.
@@ -442,7 +447,13 @@ outbound HTTP both still work.
   exiting first cleanly ends the WebSocket session, and the WebSocket
   closing first (a lost connection, a closed browser tab) sends the
   shell's process group `SIGHUP` so it actually terminates instead of
-  running orphaned inside the guest.
+  running orphaned inside the guest. Also covered by
+  `scripts/integration-test.sh` itself now (`17-pty.sh`, via a small
+  Node WebSocket helper, `scripts/lib/pty-check.mjs`, since the rest of
+  that harness is bash+curl with no native way to drive a WebSocket) —
+  a real command's output round-tripping through a real shell, and the
+  SIGHUP cleanup itself (open a session, disconnect without exiting the
+  shell, `exec` a `ps` check confirming nothing orphaned survives).
   - Auth: like `/preview/:port`, this accepts the token as a `?token=`
     query parameter, not just a header — neither a browser's nor
     Node.js's native `WebSocket` constructor can set custom headers.

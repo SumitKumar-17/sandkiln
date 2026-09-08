@@ -32,6 +32,14 @@ Changelog](https://keepachangelog.com/).
   verified it (a live record correctly flips to `orphaned_by_restart`
   with its tags intact; already-ended records are untouched). 15 new
   `scripts/integration-test.sh` checks, 209/209 passing overall.
+- PTY WebSocket sessions (0.6.0, above) now covered by
+  `scripts/integration-test.sh` itself (`17-pty.sh`) via a small Node
+  helper (`scripts/lib/pty-check.mjs`) — a real command's output
+  round-tripping through a real shell, plus a real check that the
+  SIGHUP-on-hangup guest-agent fix actually prevents an orphaned shell
+  after a client disconnects without exiting one. 6 new checks, 220/220
+  passing overall (with `SANDKILN_AUTH_TOKEN` set — auth-gated cases
+  bring the total above 209 too).
 
 ## [0.6.0] — 2026-09-08
 
