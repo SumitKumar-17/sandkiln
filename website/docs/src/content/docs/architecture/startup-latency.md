@@ -11,8 +11,8 @@ Production Firecracker users solve cold-start latency by not booting from scratc
 
 sandkiln already has the exact mechanism this needs:
 
-- `snapshot`/`resume`/`fork` (see [Snapshots, resume, and fork](../concepts/snapshots/)) save a running sandbox's full memory and disk state and boot a new one directly from it.
-- Auto-suspend (`SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`, see [Auto-suspend idle sandboxes](../guides/auto-suspend/)) already turns an idle sandbox into a resumable snapshot automatically.
+- `snapshot`/`resume`/`fork` (see [Snapshots, resume, and fork](../../concepts/snapshots/)) save a running sandbox's full memory and disk state and boot a new one directly from it.
+- Auto-suspend (`SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`, see [Auto-suspend idle sandboxes](../../guides/auto-suspend/)) already turns an idle sandbox into a resumable snapshot automatically.
 
 The primitive is not the gap.
 
@@ -31,4 +31,4 @@ This needs an actual resume-latency number to justify the pool size and refill r
 Two things worth naming, since they're already load-bearing and not something sandkiln had to build:
 
 - **Minimal device model.** Firecracker emulates only five devices (virtio-net, virtio-block, virtio-vsock, serial console, keyboard controller). A smaller device surface is both a smaller attack surface and less to initialize at boot — sandkiln doesn't add anything beyond Firecracker's own default set.
-- **Jailer's defense-in-depth.** The jailer (see [Privilege model](privilege-model/)) does privileged setup once — cgroups, chroot, seccomp — then drops privileges and execs into an unprivileged Firecracker process, rather than running the VM itself with any elevated rights. sandkiln's own jailer support (opt-in, `SANDKILN_JAILER_ENABLED`) follows this same shape.
+- **Jailer's defense-in-depth.** The jailer (see [Privilege model](../privilege-model/)) does privileged setup once — cgroups, chroot, seccomp — then drops privileges and execs into an unprivileged Firecracker process, rather than running the VM itself with any elevated rights. sandkiln's own jailer support (opt-in, `SANDKILN_JAILER_ENABLED`) follows this same shape.

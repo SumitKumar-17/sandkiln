@@ -8,8 +8,8 @@ A snapshot saves a running sandbox's full state — memory and disk — to disk,
 ## Taking a snapshot
 
 - `POST /sandboxes/:id/snapshot` — pauses the VM, snapshots it, stops it. Returns a snapshot id.
-- `DELETE /sandboxes/:id` (the default, `keep=true`) does the same thing internally, triggered by a stop rather than an explicit snapshot call. See [Sandbox lifecycle](sandbox-lifecycle/).
-- Auto-suspend does it automatically for an idle sandbox, if configured. See [Auto-suspend idle sandboxes](../guides/auto-suspend/).
+- `DELETE /sandboxes/:id` (the default, `keep=true`) does the same thing internally, triggered by a stop rather than an explicit snapshot call. See [Sandbox lifecycle](../sandbox-lifecycle/).
+- Auto-suspend does it automatically for an idle sandbox, if configured. See [Auto-suspend idle sandboxes](../../guides/auto-suspend/).
 
 A jailed sandbox can't be snapshotted (`400`) — jailer support covers boot only, and Firecracker's own snapshot format bakes in the in-jail paths a resume can't reconstruct outside the jail.
 
@@ -19,7 +19,7 @@ A jailed sandbox can't be snapshotted (`400`) — jailer support covers boot onl
 
 ## Fork — doesn't consume it
 
-`POST /snapshots/:id/fork` boots a new sandbox from the snapshot **without** consuming it, so the same prepared state can be resumed or forked again later. Only one live fork of a given snapshot may exist at a time — Firecracker has no verified mechanism to give two live descendants of one snapshot independent rootfs backing files or independent guest IP/MAC (both are frozen into the snapshotted state at the original boot), so a second `fork`/`resume` attempt while one is already live is rejected with `409`. This is **not** true simultaneous parallel forking; see [Persistence model](../architecture/persistence-model/) for the full reasoning.
+`POST /snapshots/:id/fork` boots a new sandbox from the snapshot **without** consuming it, so the same prepared state can be resumed or forked again later. Only one live fork of a given snapshot may exist at a time — Firecracker has no verified mechanism to give two live descendants of one snapshot independent rootfs backing files or independent guest IP/MAC (both are frozen into the snapshotted state at the original boot), so a second `fork`/`resume` attempt while one is already live is rejected with `409`. This is **not** true simultaneous parallel forking; see [Persistence model](../../architecture/persistence-model/) for the full reasoning.
 
 ## Finding a snapshot
 

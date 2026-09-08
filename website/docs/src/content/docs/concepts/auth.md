@@ -19,4 +19,4 @@ Set `SANDKILN_AUTH_TOKEN` on the daemon. Unset (the default) means the API is **
 
 ## The one exception: preview URLs
 
-`/sandboxes/:id/preview/:port` accepts the token as a `?token=` query parameter as well as the header — the thing hitting that URL is typically a browser tab or `<iframe>`, neither of which can set a custom header on a plain navigation. See [Dev-server preview](preview/) for why that's an accepted, deliberate trade-off scoped to exactly this one route.
+`/sandboxes/:id/preview/:port` accepts the token as a `?token=` query parameter as well as the header — the thing hitting that URL is typically a browser tab or `<iframe>`, neither of which can set a custom header on a plain navigation. See [Dev-server preview](../preview/) for why that's an accepted, deliberate trade-off scoped to exactly this one route.

@@ -25,4 +25,4 @@ Race-safe under a per-name lock: two concurrent `get-or-create` calls for the sa
 
 ## Persistent-by-default stop
 
-`DELETE /sandboxes/:id` now preserves state by default instead of destroying it — see [Sandbox lifecycle](sandbox-lifecycle/) for the full mechanics. Combined with naming, this is what makes "stop it, come back tomorrow, resume by name" a one-line operation instead of something you have to track ids for yourself: a name carries through `snapshot`/`resume`/`fork` when you re-specify it, so `get-or-create` after a stop resolves straight back to the same identity.
+`DELETE /sandboxes/:id` now preserves state by default instead of destroying it — see [Sandbox lifecycle](../sandbox-lifecycle/) for the full mechanics. Combined with naming, this is what makes "stop it, come back tomorrow, resume by name" a one-line operation instead of something you have to track ids for yourself: a name carries through `snapshot`/`resume`/`fork` when you re-specify it, so `get-or-create` after a stop resolves straight back to the same identity.

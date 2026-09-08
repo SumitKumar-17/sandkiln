@@ -25,7 +25,7 @@ curl -X POST http://127.0.0.1:7777/sandboxes \
   -d '{"drives":[{"id":"<drive-id>","read_only":true}]}'
 ```
 
-Repeat this against as many sandboxes as you want — every one succeeds, concurrently, as long as every existing holder and every new attach are all `read_only: true`. A single read-write attach — existing or newly requested — still needs exclusive access; see [Drives](../concepts/drives/) for the exact rule.
+Repeat this against as many sandboxes as you want — every one succeeds, concurrently, as long as every existing holder and every new attach are all `read_only: true`. A single read-write attach — existing or newly requested — still needs exclusive access; see [Drives](../../concepts/drives/) for the exact rule.
 
 ## Check who's holding it
 

@@ -16,9 +16,9 @@ console.log(result.stdout, result.exitCode);
 await sandbox.stop(); // preserved as a resumable snapshot by default
 ```
 
-`Sandbox.create()`, `list()`, and every instance method reuse the `baseUrl`/`authToken` you pass in, or fall back to the `SANDKILN_DAEMON_URL`/`SANDKILN_AUTH_TOKEN` environment variables — see [Auth](../concepts/auth/). Full method reference: [JS/TS SDK](../reference/js-sdk/).
+`Sandbox.create()`, `list()`, and every instance method reuse the `baseUrl`/`authToken` you pass in, or fall back to the `SANDKILN_DAEMON_URL`/`SANDKILN_AUTH_TOKEN` environment variables — see [Auth](../../concepts/auth/). Full method reference: [JS/TS SDK](../../reference/js-sdk/).
 
 ## Next
 
-- Give the sandbox a name so you can find it again later: [Named sandboxes & persistent stop](../concepts/named-sandboxes/).
-- Boot from your own image instead of the daemon's default: [Boot from a custom image](../guides/custom-image/).
+- Give the sandbox a name so you can find it again later: [Named sandboxes & persistent stop](../../concepts/named-sandboxes/).
+- Boot from your own image instead of the daemon's default: [Boot from a custom image](../../guides/custom-image/).

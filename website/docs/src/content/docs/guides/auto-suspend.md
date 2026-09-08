@@ -31,4 +31,4 @@ or `kiln sandbox snapshots --source <id>`. At most one snapshot can ever match, 
 
 ## What doesn't get auto-suspended
 
-A jailed sandbox, or one forked from a snapshot (shares its rootfs with the snapshot it came from) — both are structurally ineligible for the same reasons they can't be snapshotted manually either. See [Snapshots, resume, and fork](../concepts/snapshots/).
+A jailed sandbox, or one forked from a snapshot (shares its rootfs with the snapshot it came from) — both are structurally ineligible for the same reasons they can't be snapshotted manually either. See [Snapshots, resume, and fork](../../concepts/snapshots/).

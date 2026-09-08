@@ -32,7 +32,7 @@ Next time this runs — tomorrow, next week — the exact same `getOrCreate({ na
 2. A stopped (snapshotted) one → resumed.
 3. Neither → created fresh, given this name.
 
-See [Named sandboxes & persistent stop](../concepts/named-sandboxes/) for the full mechanics, and [Snapshots, resume, and fork](../concepts/snapshots/) for what "resumed" actually does to the sandbox's state.
+See [Named sandboxes & persistent stop](../../concepts/named-sandboxes/) for the full mechanics, and [Snapshots, resume, and fork](../../concepts/snapshots/) for what "resumed" actually does to the sandbox's state.
 
 ## If you need it gone for good
 

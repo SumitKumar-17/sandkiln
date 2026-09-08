@@ -19,13 +19,13 @@ The core is a Rust workspace, kept deliberately modular — the daemon can chang
 3. **Agent up** — the guest kernel boots, systemd starts the guest agent, it binds its vsock port.
 4. **Ready** — the host's vsock client connects; the sandbox can run anything sent to it.
 
-Measured end to end: 32.3–33.1ms. See [Startup latency & the pre-warmed pool](startup-latency/) for what's next after boot itself is already this fast.
+Measured end to end: 32.3–33.1ms. See [Startup latency & the pre-warmed pool](../startup-latency/) for what's next after boot itself is already this fast.
 
 ## Deeper dives
 
 Each of the following came from hitting a real constraint on real hardware, not a whiteboard preference:
 
-- [Privilege model](privilege-model/) — ambient `CAP_NET_ADMIN`, a static tap pool, and a root that stays out of the hot path.
-- [Wire protocol](wire-protocol/) — vsock, a length-prefixed JSON frame, and a client that doesn't reach for a full HTTP stack.
-- [Persistence model](persistence-model/) — sandbox vs. session, and why a snapshot points at paths instead of carrying values.
-- [Bug hunt: the vsock timeout](bug-hunt-vsock-timeout/) — case study of a real bug that could hang a stop forever.
+- [Privilege model](../privilege-model/) — ambient `CAP_NET_ADMIN`, a static tap pool, and a root that stays out of the hot path.
+- [Wire protocol](../wire-protocol/) — vsock, a length-prefixed JSON frame, and a client that doesn't reach for a full HTTP stack.
+- [Persistence model](../persistence-model/) — sandbox vs. session, and why a snapshot points at paths instead of carrying values.
+- [Bug hunt: the vsock timeout](../bug-hunt-vsock-timeout/) — case study of a real bug that could hang a stop forever.

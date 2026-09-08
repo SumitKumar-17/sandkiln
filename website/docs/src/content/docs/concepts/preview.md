@@ -15,7 +15,7 @@ All three build the same thing: `GET/POST/... /sandboxes/:id/preview/:port[/path
 
 ## Auth in a browser context
 
-If the client has an auth token configured, it's appended as a `?token=` query parameter rather than sent as a header — the caller of this URL is typically a browser tab or an `<iframe src=...>` embed, neither of which can attach an `Authorization` header on a plain navigation. The daemon's preview route accepts the token either way. See [Auth](auth/).
+If the client has an auth token configured, it's appended as a `?token=` query parameter rather than sent as a header — the caller of this URL is typically a browser tab or an `<iframe src=...>` embed, neither of which can attach an `Authorization` header on a plain navigation. The daemon's preview route accepts the token either way. See [Auth](../auth/).
 
 ## What's not done yet
 
