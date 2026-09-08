@@ -19,6 +19,8 @@ const persistence: Row[] = [
   { name: "Pre-warmed snapshot pool", desc: "The concrete next latency lever: apply the existing snapshot/resume mechanism proactively, not only reactively. See the Performance page.", status: "planned" },
   { name: "Tiered idle lifecycle", desc: "Extend auto-suspend into named tiers — suspend, then archive to cheaper storage, then delete — each with its own configurable window.", status: "planned" },
   { name: "Time-travel restore", desc: "Keep more than the latest snapshot per sandbox, so a caller can restore an earlier point, not only the most recent stop.", status: "planned" },
+  { name: "Snapshot lineage", desc: "No ancestry tracking today — a daemon only knows the current snapshot, not what it was forked from or what else was forked from it.", status: "planned" },
+  { name: "Fan-out cloning", desc: "Cloning one snapshot into several live sandboxes at once needs the same unsolved independent-rootfs problem as parallel forking above — not a separately achievable feature.", status: "planned" },
 ];
 
 const security: Row[] = [
@@ -28,7 +30,8 @@ const security: Row[] = [
   { name: "Resource ceilings", desc: "Per-sandbox vcpu/memory overrides, rejected outright rather than silently clamped if out of range.", status: "done" },
   { name: "Jailer hardening", desc: "Firecracker's jailer (chroot, cgroups v2, unprivileged uid), opt-in. Not yet proven against a real jailer binary on hardware.", status: "partial" },
   { name: "Multi-agent isolation", desc: "Separate Linux users with private home directories, baked into the base image build.", status: "done" },
-  { name: "Egress firewall", desc: "Domain/IP/port allow-deny policy, enforced at the DNS proxy before a connection ever opens.", status: "planned" },
+  { name: "Egress firewall", desc: "Domain allowlist plus separate subnet allow/deny lists (deny takes precedence), enforced at the DNS proxy before a connection ever opens.", status: "planned" },
+  { name: "Per-sandbox I/O rate limiting", desc: "Firecracker's own token-bucket rate limiter (ops/sec + bandwidth, per drive and network interface) isn't configured — every sandbox gets unlimited host I/O by default today.", status: "planned" },
   { name: "Seccomp filters, disk-size ceilings", desc: "Per-sandbox syscall filtering and a hard disk quota — neither exists yet.", status: "planned" },
 ];
 
@@ -37,16 +40,31 @@ const platform: Row[] = [
   { name: "Drives in the SDKs & CLI", desc: "Only the daemon's raw HTTP API supports attaching drives at create time — neither SDK nor kiln exposes it yet.", status: "planned" },
   { name: "Remote storage mounts", desc: "FUSE-mount an S3-compatible object store into a sandbox, read/written like local disk.", status: "planned" },
   { name: "Streamed output", desc: "kiln logs -f and streamed exec output, once the daemon can stream a response.", status: "planned" },
-  { name: "PTY / interactive terminal", desc: "A real, bidirectional shell session over WebSocket, distinct from batch exec — validated as a real use case elsewhere; not currently in active development.", status: "planned" },
+  { name: "PTY / interactive terminal", desc: "A real, bidirectional shell session over WebSocket, distinct from batch exec — validated as a real use case elsewhere. A per-sandbox concurrent-session cap is the sane default if/when this is built.", status: "planned" },
+  { name: "Guest-accessible metadata service", desc: "Nothing running inside a sandbox can read its own tags/name/config from the daemon today — has to be baked into the image or pushed in after boot.", status: "planned" },
+  { name: "Full filesystem API surface", desc: "chmod/chown/symlink/rename/copy/truncate — only read-file/write-file exist today. A developer-experience gap, not a capability one.", status: "planned" },
+  { name: "Public URL per exposed port", desc: "An alternative to the proxied /preview/:port path — a real routable domain per port. Needs DNS/routing infra this project doesn't have; a bigger lift than the existing proxy.", status: "planned" },
   { name: "GPU passthrough", desc: "Explicitly not planned — Firecracker has no GPU device model, and adding one is a different project from this one.", status: "planned" },
   { name: "System-privileged workloads", desc: "Docker-in-VM, VPN clients, FUSE drivers inside the guest — needs base-image and kernel-config work more than daemon changes.", status: "planned" },
   { name: "Multi-node & regions", desc: "More than one daemon, more than one box, a routing layer — deliberately last, after single-node is fully solid.", status: "planned" },
+];
+
+const bigIdeas: Row[] = [
+  { name: "Desktop/GUI automation", desc: "A managed desktop inside a sandbox — screenshot capture, full keyboard/mouse control, reconnect without killing the VM. A meaningfully different product surface, not a small extension.", status: "planned" },
+  { name: "Git-native sandbox filesystem", desc: "Version-controlled sandbox state as a first-class concept — branches as mounted directories, a snapshot doubling as a commit. A substantial new subsystem alongside snapshot/resume/fork, not a replacement for them.", status: "planned" },
+];
+
+const documentation: Row[] = [
+  { name: "Full docs site", desc: "Getting started, core concepts, guides, and reference for the HTTP API and both SDKs/the CLI — this site.", status: "done" },
+  { name: "Example projects", desc: "A code playground (JS/TS), an AI-agent sandbox runner (Python), and a dev-server preview reference — see examples/ in the repository.", status: "done" },
 ];
 
 const sections: { title: string; rows: Row[] }[] = [
   { title: "Persistence & performance", rows: persistence },
   { title: "Security & isolation", rows: security },
   { title: "Platform & storage", rows: platform },
+  { title: "Documentation", rows: documentation },
+  { title: "Ideas explicitly not started, kept honest rather than silent", rows: bigIdeas },
 ];
 
 const statusLabel: Record<Row["status"], string> = { done: "Shipped", partial: "Partial", planned: "Planned" };

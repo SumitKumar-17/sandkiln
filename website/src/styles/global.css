@@ -201,6 +201,14 @@ nav.topnav a[aria-current="page"] { color: var(--accent); }
 .frow .fdesc { font-size: 13.5px; color: var(--text-dim); line-height: 1.6; }
 .frow.planned .fdesc { color: var(--text-faint); }
 
+/* ---------- status label (roadmap page's right-hand column) ---------- */
+.status { font-family: var(--mono); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; width: fit-content; }
+.status::before { content: ""; width: 8px; height: 8px; }
+.status.done { color: var(--steel); }
+.status.done::before { background: var(--steel); }
+.status.planned { color: var(--pending); }
+.status.planned::before { background: transparent; border: 1.5px solid var(--pending); }
+
 /* ---------- architecture ---------- */
 .arch { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 48px; }
 @media (max-width: 860px) { .arch { grid-template-columns: repeat(2, 1fr); } }
