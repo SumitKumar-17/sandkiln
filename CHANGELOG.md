@@ -13,8 +13,9 @@ Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
-Not yet published to npm — the filesystem-ops entry below still needs
-live guest-side verification (see its own note) before a version bump.
+Nothing yet — `main` matches what's published.
+
+## [0.5.0] — 2026-09-08
 
 ### Added
 - Persistent drives exposed in both SDKs and the CLI for the first time
@@ -24,13 +25,10 @@ live guest-side verification (see its own note) before a version bump.
   `symlink`/`readlink`/`truncate`/directory listing with metadata, as
   new vsock protocol commands plus daemon routes, both SDKs, and the
   CLI. Also exposes `list_dir`, which existed in the protocol/guest
-  agent already but was never wired up above that layer. **Live
-  guest-side verification pending** — needs the guest agent rebuilt and
-  re-injected into the base rootfs (`images/inject-agent.sh`, or a
-  fresh `scripts/setup.sh` run); daemon-side routing/serialization
-  confirmed correct against the *old* agent (clean 400, sandbox stays
-  healthy), but the actual filesystem operations need the new agent
-  binary in place to run for real.
+  agent already but was never wired up above that layer. **Live-verified
+  end to end** after rebuilding and re-injecting the guest agent: 21 new
+  `scripts/integration-test.sh` checks, 193/193 passing — see
+  `ROADMAP.md` for exactly what's covered.
 
 ### Changed
 - Reorganized `scripts/`: one-time host-provisioning steps

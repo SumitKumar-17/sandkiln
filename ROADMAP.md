@@ -110,14 +110,18 @@ outbound HTTP both still work.
   deliberate consistency choice, not an oversight: the guest agent is a
   "dumb executor" by design (see its own `AGENTS.md`), and a path is
   scoped to whatever it resolves to inside that one microVM's own
-  filesystem, not the real host. **Live guest-side verification
-  pending**: needs the guest agent rebuilt and re-injected into the
-  base rootfs (`images/inject-agent.sh`, or a fresh `scripts/setup.sh`
-  run) before these actually work against a real sandbox — confirmed
-  the daemon-side routing/serialization is correct by calling `mkdir`
-  against the *old* agent and getting back a clean, informative 400
-  ("unknown variant `mkdir`") rather than a hang or crash, with the
-  sandbox still fully usable afterward.
+  filesystem, not the real host. **Live-verified end to end** after
+  rebuilding and re-injecting the guest agent into the daemon's actual
+  base rootfs (`~/sandkiln-tools/images/ubuntu-22.04.ext4` —
+  `SANDKILN_BASE_ROOTFS`'s real default, not the differently-named test
+  image first (mistakenly) injected into): 21 new
+  `scripts/integration-test.sh` checks, 193/193 passing, covering
+  mkdir -p and its conflict case, chmod reflected in a later listing,
+  rename/copy both verified by content (copy leaves the original
+  intact, rename doesn't), symlink/readlink round-tripping the exact
+  target string, a listing correctly marking a symlink vs. a directory,
+  truncate verified byte-accurate by re-reading the file, chown, and
+  the chmod-on-nonexistent-path/readlink-on-non-symlink error cases.
 - **Python (`sandkiln` PyPI package) — working, mirrors the JS SDK
   exactly**, including `resume()`/`fork()`/`snapshot()`/`preview_url()`
   and resource overrides. Zero runtime dependencies (stdlib `urllib`,
