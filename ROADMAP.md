@@ -218,6 +218,14 @@ outbound HTTP both still work.
 - **Time-travel restore**: keep more than just the latest snapshot per
   sandbox, so a caller can restore to an earlier point, not only the most
   recent stop.
+- **Tiered idle lifecycle**: extend today's binary auto-suspend
+  (running → snapshot) into named tiers with independently configurable
+  windows — e.g. suspend past one timeout, then archive (move snapshot
+  storage off hot local disk to cheaper/remote storage, ties into the
+  Drives and remote storage section) past a longer one, then delete past
+  a longer one still. Not started; auto-suspend's existing
+  `snapshot_and_stop` path is the natural base to extend rather than a
+  new mechanism.
 
 ## Drives and remote storage
 
@@ -233,6 +241,10 @@ outbound HTTP both still work.
   `can_attach_read_only()` is the pure rule deciding whether a new attach
   may coexist with what's already there. Covers snapshots holding a drive
   too, not just live sandboxes.
+- **Not yet done: drives in either SDK.** The daemon and `kiln` both
+  support attaching drives at create time; neither the JS/TS nor the
+  Python SDK exposes it on `Sandbox.create()` yet — the only way to
+  attach a drive today is the raw HTTP API or the CLI.
 - **Remote storage mounts**: mount an external object store (S3-compatible)
   into a sandbox via FUSE, so a sandbox can read/write remote files through
   its normal filesystem interface.
@@ -252,6 +264,13 @@ outbound HTTP both still work.
 
 ## Security hardening
 
+- **Isolation model, stated explicitly**: every sandbox is a real
+  Firecracker microVM with its own kernel, not a shared-kernel
+  container/namespace sandbox with syscall interception. This is the
+  strongest isolation story available for running untrusted code and is
+  worth saying outright (in docs and on the website) rather than leaving
+  it implicit — it's the actual reason this project exists in this shape
+  rather than as a thinner container wrapper.
 - **Done (opt-in): Firecracker's jailer** — chroot, cgroup v2 resource
   limits, a dedicated unprivileged uid/gid per VM
   (`SANDKILN_JAILER_ENABLED`, see `SELF_HOSTING.md`'s "Optional:
@@ -291,6 +310,12 @@ outbound HTTP both still work.
   compatible runtime), VPN clients, FUSE filesystem drivers.
 - This needs care in the base image (kernel config, cgroups setup inside
   the guest) more than in the host-side daemon.
+- **GPU passthrough/access inside a sandbox is explicitly not planned.**
+  Called out here deliberately rather than left silent — Firecracker
+  itself has no GPU device model, and adding one would be a different
+  project (a real hardware-passthrough VMM), not an extension of this
+  one. If a workload needs a GPU, it doesn't belong in a sandkiln
+  sandbox today.
 
 ## Dev servers and live preview
 
@@ -360,9 +385,23 @@ outbound HTTP both still work.
     (~180ms of real file-copy time) still needs either a CoW-capable
     filesystem for image storage or a device-mapper/thin-provisioning
     layer (ties into "Base and custom images").
-- Snapshot/resume timing once that exists — the whole point of persistence
-  is that resume should be dramatically faster than a cold boot; that
-  claim needs a number behind it.
+- Snapshot/resume timing hasn't been benchmarked yet — no `criterion`
+  case exists for it (only `bench_cold_boot`/`bench_exec_roundtrip` in
+  `core/crates/vmm/benches/vm_lifecycle.rs`). The whole point of
+  persistence is that resume should be dramatically faster than a cold
+  boot; that claim needs a number behind it.
+- **Pre-warmed snapshot pool**: the mechanism sandkiln already has
+  (snapshot/resume, auto-suspend) is the same one production Firecracker
+  users document as their main cold-start fix — restore an
+  already-initialized VM instead of booting one from scratch. The gap:
+  sandkiln only takes that path reactively (idle-timeout-triggered or a
+  caller's own explicit `snapshot()`), never proactively ahead of a
+  request the way a pre-warmed pool would. Concrete next step: keep a
+  small pool of ready-to-resume snapshots (per image/config) so a
+  `get-or-create`/create-from-image call can resume one instead of
+  cold-booting, with resume latency actually measured against cold-boot
+  latency once the benchmark above exists — this is the real lever,
+  not a vaguer "make boot faster."
 - These numbers are from one manual run on one shared dev box, not
   isolated hardware — treat them as directionally useful, not authoritative.
   Automating re-runs so regressions are visible over time is still open.
