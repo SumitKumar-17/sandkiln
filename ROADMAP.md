@@ -241,10 +241,10 @@ outbound HTTP both still work.
   `can_attach_read_only()` is the pure rule deciding whether a new attach
   may coexist with what's already there. Covers snapshots holding a drive
   too, not just live sandboxes.
-- **Not yet done: drives in either SDK.** The daemon and `kiln` both
-  support attaching drives at create time; neither the JS/TS nor the
-  Python SDK exposes it on `Sandbox.create()` yet — the only way to
-  attach a drive today is the raw HTTP API or the CLI.
+- **Not yet done: drives in either SDK or the CLI.** Only the daemon's
+  raw HTTP API supports attaching drives at create time today — neither
+  the JS/TS nor the Python SDK exposes it on `Sandbox.create()`, and
+  `kiln` has no `--drive`/`--drives` flag either.
 - **Remote storage mounts**: mount an external object store (S3-compatible)
   into a sandbox via FUSE, so a sandbox can read/write remote files through
   its normal filesystem interface.
@@ -297,11 +297,15 @@ outbound HTTP both still work.
 
 ## Multi-agent isolation
 
-- Separate Linux users with private home directories within a single
-  sandbox, so multiple AI agents can share one VM without stepping on each
-  other.
-- Shared groups for deliberate, controlled file sharing between agents in
-  the same sandbox.
+- **Done: separate Linux users with private home directories, baked
+  into the base image.** `images/setup-multi-agent-users.sh` creates
+  per-agent users (private `$HOME`) plus a shared group for deliberate,
+  controlled file sharing between agents in the same sandbox — run as
+  part of `images/build-universal-image.sh`, not something a caller
+  configures at create time.
+- Runtime-configurable agent users (chosen per sandbox at `POST
+  /sandboxes` time, rather than fixed at image-build time) is still
+  open.
 
 ## System-privileged workloads
 

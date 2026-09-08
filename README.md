@@ -11,8 +11,10 @@ agent sandboxes, code playgrounds, and untrusted-code execution services:
 isolate first, then run.
 
 **Website**: https://sumitkumar-17.github.io/sandkiln/ (architecture, real
-benchmark numbers, live feature status) — also mirrored at
-https://sandkiln.vercel.app
+benchmark numbers, live feature status, and startup-latency research) —
+also mirrored at https://sandkiln.vercel.app. Full docs (getting
+started, guides, API/SDK/CLI reference) at
+https://sumitkumar-17.github.io/sandkiln/docs/.
 
 ## Quickstart
 
@@ -75,7 +77,10 @@ already hit and fixed once.
 - **`images/`** — kernel and rootfs build scripts for sandbox base images.
 - **`scripts/`** — dev-box setup: tap pool, network bridge, DNS proxy,
   remote sync.
-- **`website/`** — the project site, deployed via GitHub Pages.
+- **`website/`** — the project site (deployed via GitHub Pages) and, in
+  `website/docs/`, the full docs site (getting started, core concepts,
+  guides, API/SDK/CLI reference, architecture) — see
+  https://sumitkumar-17.github.io/sandkiln/docs/.
 
 ## License
 

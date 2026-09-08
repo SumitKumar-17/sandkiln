@@ -25,9 +25,35 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - uses: actions/configure-pages@v5
+      # GitHub Pages serves this as a project page (a subpath, not the
+      # domain root) — see website/astro.config.mjs and
+      # website/docs/astro.config.mjs for why ASTRO_BASE drives both
+      # builds' asset/link paths instead of hardcoding one.
+      - name: Build website
+        working-directory: website
+        run: |
+          npm ci
+          npm run build
+        env:
+          ASTRO_BASE: /sandkiln
+      - name: Build docs
+        working-directory: website/docs
+        run: |
+          npm ci
+          npm run build
+        env:
+          ASTRO_BASE: /sandkiln
+      # The docs site is served as a /docs subpath of the same
+      # deployment, not a separate site — merge its build output into
+      # the website's own dist/ before uploading a single artifact.
+      - name: Merge docs into website build
+        run: cp -r website/docs/dist website/dist/docs
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: website
+          path: website/dist
       - id: deployment
         uses: actions/deploy-pages@v4

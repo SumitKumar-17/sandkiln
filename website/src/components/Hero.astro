@@ -1,0 +1,68 @@
+<section class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div>
+      <h1>Run untrusted<br />code without<br /><span class="fire">flinching.</span></h1>
+      <p class="tagline">A compute primitive for safely executing untrusted or AI-generated code — each run gets its own Firecracker microVM, its own kernel, its own network.</p>
+      <p class="lede">Built from the metal up: a Rust VMM, a static guest agent talking over vsock, an HTTP daemon that drives it all — no shell scripts in the hot path, no container escape surface.</p>
+
+      <div class="stat-row">
+        <div class="stat"><b>32.7ms</b><span>Cold boot</span></div>
+        <div class="stat"><b>250µs</b><span>Exec round-trip</span></div>
+        <div class="stat"><b>MIT</b><span>License</span></div>
+        <div class="stat"><b>Rust</b><span>Core engine</span></div>
+      </div>
+
+      <div class="cta-row">
+        <a class="btn primary" href="#code">npm install sandkiln</a>
+        <a class="btn ghost" href="architecture/">Read the architecture →</a>
+      </div>
+    </div>
+
+    <div class="term" id="term">
+      <div class="term-bar"><span></span><span></span><span></span><b>sandkiln boot — real console output</b></div>
+      <pre id="term-out"></pre>
+    </div>
+  </div>
+</section>
+
+<script>
+  (function () {
+    var lines = [
+      { t: '[    0.000000] <span class="k">Linux version 5.10.223 (gcc 11.4.0) #1 SMP</span>' },
+      { t: '[    0.000000] <span class="k">Command line: console=ttyS0 reboot=k panic=1</span>' },
+      { t: '[    0.000000] <span class="hl">Hypervisor detected: KVM</span>' },
+      { t: '[    0.005803] Booting paravirtualized kernel on KVM' },
+      { t: '[    0.046087] smp: Brought up 1 node, 2 CPUs' },
+      { t: '[    0.214030] virtio_blk virtio0: [vda] 300 MiB' },
+      { t: '[    0.259624] <span class="ok">VFS: Mounted root (ext4) on device 254:0</span>' },
+      { t: '[    0.279281] Run /sbin/init as init process' },
+      { t: '[    0.302006] systemd[1]: systemd 249.11 running' },
+      { t: '         Starting <span class="hl">sandkiln-agent.service</span>...' },
+      { t: '<span class="ok">  OK  </span> Started sandkiln-agent.service' },
+      { t: '' },
+      { t: 'Ubuntu 22.04.5 LTS ubuntu-fc-uvm ttyS0' },
+      { t: 'ubuntu-fc-uvm login: <span class="hl">root</span> (automatic login)' },
+      { t: '' },
+      { t: '<span class="ok">agent</span>@sandkiln:~$ <span class="hl">boot complete — 32.7ms</span><span class="cursor"></span>' },
+    ];
+    var out = document.getElementById("term-out");
+    var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!out) return;
+    if (reduced) {
+      out.innerHTML = lines.map(function (l) { return l.t; }).join("\n");
+      return;
+    }
+    var i = 0;
+    function next() {
+      if (i >= lines.length) return;
+      var div = document.createElement("div");
+      div.innerHTML = lines[i].t;
+      out.appendChild(div);
+      i++;
+      var el = document.getElementById("term");
+      if (el) el.scrollTop = el.scrollHeight;
+      setTimeout(next, i === lines.length ? 0 : 28 + Math.random() * 70);
+    }
+    setTimeout(next, 300);
+  })();
+</script>

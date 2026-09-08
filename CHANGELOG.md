@@ -213,7 +213,7 @@ Current as of 0.3.0 — check there for anything that's landed since:
 - Python SDK not yet published to PyPI (code-side ready; needs the
   account owner's one-time trusted-publisher registration on pypi.org).
 - Drives (attach at create, read-only sharing) aren't exposed in either
-  SDK yet — daemon and CLI only.
+  SDK or the CLI yet — the raw daemon HTTP API only.
 - Snapshot storage lives under `$TMPDIR` — durable across a daemon
   restart, not necessarily a host reboot (depends on whether `/tmp` is
   tmpfs on that host).

@@ -1,0 +1,92 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+---
+
+<BaseLayout title="Performance — sandkiln">
+  <Header active="performance" />
+
+  <section class="page-hero">
+    <div class="wrap">
+      <h1>Real numbers from real hardware.</h1>
+      <p>Every figure here came from <code>criterion</code> benchmarks or a scripted load test against a live daemon on real KVM — not a spec sheet claim. This page also covers the concrete next lever for startup latency, and why it's the right one to build next rather than a vaguer "make it faster."</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">Measured, not estimated</div>
+        <h2>Cold boot, exec, and a full lifecycle under load.</h2>
+      </div>
+
+      <div class="bench-grid">
+        <div class="bench-card">
+          <div class="label">Cold boot (criterion)</div>
+          <div class="value">32.3–33.1<span style="font-size:16px;">ms</span></div>
+          <div class="ctx">Process spawn to InstanceStart acknowledged</div>
+        </div>
+        <div class="bench-card">
+          <div class="label">Exec round-trip (criterion)</div>
+          <div class="value">225–275<span style="font-size:16px;">µs</span></div>
+          <div class="ctx">Over an already-open vsock connection</div>
+        </div>
+        <div class="bench-card">
+          <div class="label">Load test throughput</div>
+          <div class="value">5.59<span style="font-size:16px;">/sec</span></div>
+          <div class="ctx">4 concurrent workers, 20 cycles, 0 errors</div>
+        </div>
+      </div>
+
+      <div class="table-scroll" style="margin-bottom: 32px;">
+        <table class="lat-table">
+          <thead><tr><th>Phase</th><th>Min</th><th>Mean</th><th>P95</th><th>Max</th></tr></thead>
+          <tbody>
+            <tr><td>create</td><td>137ms</td><td>211ms</td><td>577ms</td><td>581ms</td></tr>
+            <tr><td>exec</td><td>1ms</td><td>366ms</td><td>440ms</td><td>447ms</td></tr>
+            <tr><td>delete</td><td>96ms</td><td>131ms</td><td>153ms</td><td>159ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <p><b>What we measured:</b> cold boot via <code>criterion</code> at 32.3–33.1ms, an exec round-trip on an already-open vsock connection at 225–275µs, and a load test of 4 concurrent workers running 5 cycles each of create → exec → delete against the live daemon.</p>
+        <p><b>What we found:</b> the load test's <code>create</code> phase had a mean of 369ms (p95 588ms) — far above the ~33ms cold-boot figure sitting right next to it. The gap traced to the ~300MB rootfs copy, run synchronously right after the network lease, dominating the whole phase even though boot itself was fast.</p>
+        <p><b>What we fixed:</b> the rootfs copy and the network lease are independent work with no reason to serialize — they now run concurrently on separate threads — and the copy itself switched to <code>cp --reflink=auto</code>, an instant copy-on-write clone on a filesystem that supports it. Re-measured: <code>create</code> mean dropped to 211ms, a real, repeatable win.</p>
+        <p><b>What's still open:</b> this dev box runs ext4, which has no copy-on-write, so <code>--reflink=auto</code> silently falls back to an ordinary copy — the remaining ~180ms is real file-copy time that needs a CoW-capable filesystem (XFS, Btrfs) or a device-mapper layer to close. Every figure on this page is from one manual run on one shared, variable-load dev box, not isolated hardware — directionally useful, not authoritative; automating re-runs so regressions become visible over time is still on the roadmap.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">Next: reducing cold-start latency</div>
+        <h2>The mechanism already exists. It just isn't proactive yet.</h2>
+        <p>Firecracker's own published numbers document sub-second, even sub-125ms, boot times and under-5MiB per-VM memory overhead — sandkiln's own measured 32.3–33.1ms cold boot is consistent with that. But "boot fast" and "start instantly" aren't the same claim, and the biggest lever for the second one isn't a faster boot at all.</p>
+      </div>
+
+      <div class="note-block">
+        <span class="tag">The documented industry technique</span>
+        <h3>Snapshot-and-restore of an already-initialized environment, not a faster cold boot</h3>
+        <p>Production Firecracker users solve cold-start latency by not booting from scratch at all: they snapshot a VM that's already past initialization — kernel loaded, runtime warmed, dependencies imported — and restore <em>that</em> on the next request instead of repeating the boot-and-initialize sequence every time. The saving isn't in the boot path getting faster; it's in skipping most of the path entirely.</p>
+        <p>sandkiln already has the exact mechanism this needs: <code>snapshot</code>/<code>resume</code>/<code>fork</code> save a running sandbox's full memory and disk state and boot a new one directly from it, and auto-suspend (<code>SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS</code>) already turns an idle sandbox into a resumable snapshot automatically. The primitive is not the gap.</p>
+      </div>
+
+      <div class="note-block">
+        <span class="tag">The actual gap</span>
+        <h3>Reactive, not proactive</h3>
+        <p>Every snapshot sandkiln produces today exists because something already happened — a caller explicitly called <code>snapshot()</code>, or a sandbox sat idle long enough for auto-suspend to catch it. There's no path yet where a snapshot is prepared <em>ahead of</em> a request that hasn't arrived, the way a pre-warmed pool would keep one ready. That's the concrete difference between what sandkiln does today and what the documented industry technique actually achieves in production: pre-warming turns "resume is faster than cold boot" into "the caller never pays the cold-boot cost at all," because a ready-to-resume snapshot is already sitting there when the request lands.</p>
+      </div>
+
+      <div class="note-block">
+        <span class="tag">Concrete next step</span>
+        <h3>A pre-warmed snapshot pool</h3>
+        <p>Keep a small pool of ready-to-resume snapshots per image/config, populated ahead of demand rather than only after an idle timeout. A <code>get-or-create</code> or create-from-image call that finds a matching pooled snapshot resumes it instead of cold-booting; the pool backfills in the background. This needs an actual resume-latency number to justify the pool size and refill rate — which doesn't exist yet either: there's no <code>criterion</code> benchmark for resume, only the manually-verified ~39ms for a single resume during snapshot/resume development. Both — the benchmark and the pool — are the next real work here, not a vaguer "optimize boot."</p>
+      </div>
+    </div>
+  </section>
+
+  <Footer />
+</BaseLayout>

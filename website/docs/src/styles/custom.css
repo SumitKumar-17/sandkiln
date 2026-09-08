@@ -1,0 +1,11 @@
+/* Match the marketing site's accent color so the two feel like one product. */
+:root {
+  --sl-color-accent-low: #f6d9cc;
+  --sl-color-accent: #c53d14;
+  --sl-color-accent-high: #7a2a0f;
+}
+:root[data-theme="dark"] {
+  --sl-color-accent-low: #4a2113;
+  --sl-color-accent: #e8491c;
+  --sl-color-accent-high: #ffb894;
+}

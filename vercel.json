@@ -1,5 +1,5 @@
 {
-  "buildCommand": null,
-  "outputDirectory": "website",
+  "buildCommand": "cd website && npm install && npm run build && cd docs && npm install && npm run build && cd ../.. && cp -r website/docs/dist website/dist/docs",
+  "outputDirectory": "website/dist",
   "cleanUrls": true
 }

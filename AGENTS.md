@@ -25,7 +25,7 @@ packages/python/         sandkiln PyPI package (Python)
 packages/cli/            kiln CLI, wraps the JS/TS SDK
 images/                  rootfs/kernel build + agent-injection scripts
 scripts/                 one-command dev-box bootstrap + daemon lifecycle control, plus tap pool, network bridge, DNS proxy, sync, integration/load tests, preflight checks, systemd install
-website/                 the project site, deployed via GitHub Pages (and a live mirror)
+website/                 the project site (GitHub Pages + a live mirror) and, in website/docs/, the full docs site
 examples/                runnable reference projects (code playground, agent runner)
 ```
 
@@ -123,9 +123,10 @@ If asked to improve or add substantial website functionality: inspect the
 complete website architecture, identify the actual limitation, implement
 the appropriate solution — including restructuring, changing the build
 approach, or rewriting major portions if that's genuinely the best
-engineering solution. `website/AGENTS.md` has this page's specific
-constraints (single static file, no build step, design-rationale content
-belongs here rather than in new root-level `.md` files).
+engineering solution. `website/AGENTS.md` has this project's specific
+structure (a multi-page Astro marketing site plus an Astro+Starlight
+docs site in `website/docs/`, the two-deploy-target base-path handling,
+and where content belongs on which site).
 
 ### Performance / optimization
 

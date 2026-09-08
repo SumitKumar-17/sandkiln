@@ -1,0 +1,49 @@
+---
+interface Feature {
+  status: "done" | "planned";
+  name: string;
+  desc: string;
+}
+
+const features: Feature[] = [
+  { status: "done", name: "Isolation", desc: "Each sandbox is a real Firecracker microVM — own kernel, own filesystem, own network namespace. Not a container with extra steps." },
+  { status: "done", name: "Networking", desc: "Per-sandbox tap device leased from a pool, attached to a bridge, NAT'd outbound, DNS through a host-local proxy. Sandboxes can't reach each other — bridge port isolation, verified." },
+  { status: "done", name: "Auth", desc: "Bearer-token gated API. Off by default for local dev, on with one env var, warns loudly if you forget." },
+  { status: "done", name: "Tags", desc: "Key/value metadata on every sandbox, filterable at list time. Categorize by environment, owner, whatever you need." },
+  { status: "done", name: "File operations", desc: "Read and write files inside a running sandbox over the same vsock channel exec uses — no SSH, no sidecar." },
+  { status: "done", name: "Observability", desc: "Structured tracing from the VM layer up, a Prometheus /metrics endpoint, JSON log output, guest console capture on crash." },
+  { status: "done", name: "Snapshots & persistence", desc: "Save a running VM's full state and resume without re-booting. Stop preserves by default; named sandboxes resolve by name, not just opaque id." },
+  { status: "done", name: "Custom & managed images", desc: "Register an already-built rootfs and boot sandboxes from it. OCI/Docker-image conversion is a real, scoped follow-up — not done yet." },
+  { status: "done", name: "Drives", desc: "Persistent storage that outlives a single sandbox, reattachable to a new one — including concurrent read-only sharing across many sandboxes at once." },
+  { status: "done", name: "Auto-suspend on idle", desc: "An idle sandbox is paused and snapshotted instead of destroyed — resources freed, state kept resumable, no caller action needed." },
+  { status: "done", name: "Multi-agent isolation", desc: "Separate Linux users with private home directories baked into the base image, so multiple AI agents can share one VM without stepping on each other." },
+  { status: "done", name: "Jailer hardening", desc: "Firecracker's jailer: chroot, cgroups v2 limits, an unprivileged uid per VM — opt-in via one env var." },
+  { status: "done", name: "JS/TS SDK", desc: "Matches the daemon's entire API surface. ESM + CJS + full types, published to npm, verified against a live daemon." },
+  { status: "done", name: "Python SDK", desc: "Mirrors the JS SDK exactly — zero runtime dependencies, stdlib urllib only. Not yet published to PyPI." },
+  { status: "done", name: "CLI", desc: "kiln sandbox create|ls|rm|exec|read|write|snapshot|resume|fork and kiln image ls|create|rm — the full surface, no code required." },
+  { status: "done", name: "Benchmarking", desc: "Criterion benches for boot and exec latency, a scripted concurrent load test — real numbers, not estimates. See the Performance page." },
+  { status: "planned", name: "Remote storage mounts", desc: "FUSE-mounted, S3-compatible object storage read and written like local disk inside a sandbox." },
+  { status: "planned", name: "Egress firewall", desc: "Domain-level allow/deny policy enforced at the DNS proxy, before a sandbox ever opens a connection." },
+  { status: "planned", name: "System-privileged workloads", desc: "Docker-in-VM, VPN clients, FUSE drivers — workloads that need real privilege, safely contained by the microVM boundary." },
+];
+---
+
+<section id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">Feature surface</div>
+      <h2>Everything a sandbox platform needs. Built honestly.</h2>
+      <p>Every card below is marked by what's actually true today — proven on real hardware — versus what's designed and queued. Nothing here is vaporware dressed as a feature.</p>
+    </div>
+
+    <div class="fgrid">
+      {features.map((f) => (
+        <div class="fcard">
+          <span class={`status ${f.status}`}>{f.status === "done" ? "Shipped" : "Planned"}</span>
+          <h3>{f.name}</h3>
+          <p>{f.desc}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
