@@ -10,7 +10,7 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use sandkiln_protocol::Request;
-use sandkiln_vmm::vm::{Vm, VmConfig};
+use sandkiln_vmm::vm::{ResumeConfig, Vm, VmConfig};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -156,5 +156,100 @@ fn bench_exec_roundtrip(c: &mut Criterion) {
     let _ = std::fs::remove_file(&rootfs_path);
 }
 
-criterion_group!(benches, bench_cold_boot, bench_exec_roundtrip);
+static SNAPSHOT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// A fresh, disposable pair of (mem_path, snapshot_path) per iteration —
+/// same disposability reasoning as `fresh_rootfs_copy`.
+fn fresh_snapshot_paths() -> (PathBuf, PathBuf) {
+    let n = SNAPSHOT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let mem_path = std::env::temp_dir().join(format!("sandkiln-bench-mem-{pid}-{n}.bin"));
+    let snapshot_path = std::env::temp_dir().join(format!("sandkiln-bench-state-{pid}-{n}.snap"));
+    (mem_path, snapshot_path)
+}
+
+/// Snapshot-taking cost: a running VM, paused and snapshotted to disk.
+/// Mirrors the daemon's `snapshot_and_stop` sequence (pause then snapshot),
+/// timing only that pair — boot and cleanup happen outside the timed region.
+fn bench_snapshot_take(c: &mut Criterion) {
+    let config = BenchConfig::from_env();
+
+    let mut group = c.benchmark_group("vm_lifecycle");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(20));
+
+    group.bench_function("snapshot_take", |b| {
+        b.iter_custom(|iters| {
+            let mut total = Duration::ZERO;
+            for _ in 0..iters {
+                let rootfs_path = fresh_rootfs_copy(&config.base_rootfs_path);
+                let vm = Vm::boot(&config.vm_config(rootfs_path.clone()))
+                    .expect("Vm::boot failed during snapshot_take benchmark setup");
+                let (mem_path, snapshot_path) = fresh_snapshot_paths();
+
+                let started = Instant::now();
+                vm.pause().expect("Vm::pause failed during benchmark");
+                vm.snapshot(&mem_path, &snapshot_path).expect("Vm::snapshot failed during benchmark");
+                total += started.elapsed();
+
+                vm.stop().expect("Vm::stop failed during benchmark cleanup");
+                let _ = std::fs::remove_file(&rootfs_path);
+                let _ = std::fs::remove_file(&mem_path);
+                let _ = std::fs::remove_file(&snapshot_path);
+            }
+            total
+        });
+    });
+
+    group.finish();
+}
+
+/// Resume-from-snapshot latency — the number the persistence story lives or
+/// dies on: resuming an already-initialized VM should be dramatically
+/// faster than `cold_boot` above. Snapshot creation and all cleanup happen
+/// outside the timed region; only `Vm::resume` itself is measured.
+fn bench_resume(c: &mut Criterion) {
+    let config = BenchConfig::from_env();
+
+    let mut group = c.benchmark_group("vm_lifecycle");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(20));
+
+    group.bench_function("resume_from_snapshot", |b| {
+        b.iter_custom(|iters| {
+            let mut total = Duration::ZERO;
+            for _ in 0..iters {
+                let rootfs_path = fresh_rootfs_copy(&config.base_rootfs_path);
+                let vm = Vm::boot(&config.vm_config(rootfs_path.clone()))
+                    .expect("Vm::boot failed during resume benchmark setup");
+                let (mem_path, snapshot_path) = fresh_snapshot_paths();
+                vm.pause().expect("Vm::pause failed during resume benchmark setup");
+                vm.snapshot(&mem_path, &snapshot_path).expect("Vm::snapshot failed during resume benchmark setup");
+                vm.stop().expect("Vm::stop failed during resume benchmark setup");
+
+                let resume_config = ResumeConfig {
+                    firecracker_bin: config.firecracker_bin.clone(),
+                    snapshot_path: snapshot_path.clone(),
+                    mem_file_path: mem_path.clone(),
+                };
+
+                let started = Instant::now();
+                let resumed = Vm::resume(&resume_config).expect("Vm::resume failed during benchmark");
+                total += started.elapsed();
+
+                resumed.stop().expect("Vm::stop failed during resume benchmark cleanup");
+                let _ = std::fs::remove_file(&rootfs_path);
+                let _ = std::fs::remove_file(&mem_path);
+                let _ = std::fs::remove_file(&snapshot_path);
+            }
+            total
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_cold_boot, bench_exec_roundtrip, bench_snapshot_take, bench_resume);
 criterion_main!(benches);

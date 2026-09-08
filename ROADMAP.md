@@ -453,11 +453,27 @@ outbound HTTP both still work.
     (~180ms of real file-copy time) still needs either a CoW-capable
     filesystem for image storage or a device-mapper/thin-provisioning
     layer (ties into "Base and custom images").
-- Snapshot/resume timing hasn't been benchmarked yet — no `criterion`
-  case exists for it (only `bench_cold_boot`/`bench_exec_roundtrip` in
-  `core/crates/vmm/benches/vm_lifecycle.rs`). The whole point of
-  persistence is that resume should be dramatically faster than a cold
-  boot; that claim needs a number behind it.
+- **Done: snapshot/resume benchmarked** (`bench_snapshot_take`/
+  `bench_resume` in `core/crates/vmm/benches/vm_lifecycle.rs`, alongside
+  the existing `bench_cold_boot`/`bench_exec_roundtrip`). Real numbers,
+  same dev box as above:
+  - `snapshot_take` (pause + write memory/state to disk): **~322ms**
+    (309.6–335.0ms) — expensive, dominated by writing the guest's full
+    memory to disk synchronously; a real cost for auto-suspend and any
+    future tiered-idle-lifecycle work, not free.
+  - `resume_from_snapshot`: **~25.8ms** (25.5–26.2ms) — only **~19%
+    faster than `cold_boot`'s ~31.9ms** (31.5–32.4ms), not the dramatic
+    win the earlier framing below assumed. Both numbers are already
+    small on this base image (lightweight kernel, minimal guest-agent
+    init) — cold boot has little slack left for resume to undercut.
+  - **This changes what a pre-warmed pool actually buys**: the ~180ms
+    gap between a ~32ms boot and the measured 211ms full-create (see
+    "What works today" above) isn't in the boot/resume step at all —
+    both are ~25–32ms either way — it's in the surrounding per-create
+    setup (rootfs prep, network lease). A pre-warmed pool's real value
+    is pre-doing *that* setup ahead of a request, not shaving boot
+    latency itself, which was never the bottleneck. Worth re-measuring
+    once a pool exists, rather than assumed up front.
 - **Pre-warmed snapshot pool**: the mechanism sandkiln already has
   (snapshot/resume, auto-suspend) is the same one production Firecracker
   users document as their main cold-start fix — restore an
@@ -467,16 +483,16 @@ outbound HTTP both still work.
   request the way a pre-warmed pool would. Concrete next step: keep a
   small pool of ready-to-resume snapshots (per image/config) so a
   `get-or-create`/create-from-image call can resume one instead of
-  cold-booting, with resume latency actually measured against cold-boot
-  latency once the benchmark above exists — this is the real lever,
-  not a vaguer "make boot faster." Shape worth copying from how other
-  pooled-sandbox systems configure this, if/when it's built: pool
-  identity keyed by image+resource-config (not just image), a
-  configurable warm-instance count with `0` meaning scale-to-zero, a
-  separate max-instance ceiling above the warm count, queueing (not
-  rejecting) a claim that arrives at the ceiling, and the pool
-  auto-replacing a claimed instance in the background to keep the warm
-  buffer full rather than refilling only on the next claim.
+  cold-booting — now scoped correctly per the finding above: the win is
+  skipping per-create rootfs/network setup ahead of time, with the
+  boot-vs-resume gap itself a secondary, much smaller effect. Shape
+  worth copying from how other pooled-sandbox systems configure this,
+  if/when it's built: pool identity keyed by image+resource-config (not
+  just image), a configurable warm-instance count with `0` meaning
+  scale-to-zero, a separate max-instance ceiling above the warm count,
+  queueing (not rejecting) a claim that arrives at the ceiling, and the
+  pool auto-replacing a claimed instance in the background to keep the
+  warm buffer full rather than refilling only on the next claim.
 - **Snapshot lineage**: today a daemon only ever knows "the current
   snapshot" a sandbox became — there's no way to ask "what snapshot did
   *this* snapshot get forked from, and what else was forked from it."
