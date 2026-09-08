@@ -27,7 +27,12 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   (`SANDKILN_JAILER_ENABLED` and friends) is the daemon-operator switch
   for jailer-based sandbox boot — see `sandkiln_vmm::jailer` and
   `SELF_HOSTING.md`'s jailer section. Deliberately not something a
-  `POST /sandboxes` request body can override.
+  `POST /sandboxes` request body can override. `archive_timeout`/
+  `archive_dir` (`SANDKILN_ARCHIVE_TIMEOUT_SECS`/`SANDKILN_ARCHIVE_DIR`)
+  configure `idle_reaper`'s archive pass — see that module's own doc
+  comment and `archive_timeout`'s field doc comment for the real
+  Firecracker constraint (the rootfs backing file can never move) that
+  shapes what archiving actually does.
 - `metrics.rs` — `Metrics`: the `/metrics` endpoint's counters/gauge/
   histograms and a hand-rolled Prometheus text-exposition-format writer.
   Lives on `AppState` (`state.metrics`); route handlers record into it at
@@ -194,10 +199,11 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   `pool.notify.notify_waiters()` first, so anything queued on a
   `max_count`-bounded pool that just got deleted fails clearly instead of
   waiting out its own timeout for a pool that no longer exists.
-- `idle_reaper.rs` — background task (spawned from `main.rs` whenever
-  `SANDKILN_IDLE_TIMEOUT_SECS` and/or `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`
-  is set) that reclaims idle sandboxes two ways: auto-suspend (pause +
-  snapshot, via `routes_snapshot::snapshot_and_stop`) past
+- `idle_reaper.rs` — background task, spawned unconditionally from
+  `main.rs` (a tick with nothing configured is a cheap no-op scan, same
+  reasoning `pool_replenisher` already uses). Reclaims idle sandboxes two
+  ways: auto-suspend (pause + snapshot, via
+  `routes_snapshot::snapshot_and_stop`) past
   `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`, and destroy (via
   `routes_sandbox::stop_sandbox_by_id`, same preserve-by-default behavior
   as an explicit stop — see above — with a fallback to a real destroy only
@@ -207,34 +213,54 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   running — see `config::Config::auto_suspend_timeout`'s doc comment for
   why `auto_suspend_timeout` is required to be strictly shorter than
   `idle_timeout` when both are set (destroy is a backstop for a
-  persistently-failing auto-suspend, not a competing timer).
+  persistently-failing auto-suspend, not a competing timer). Also runs a
+  third, independent pass — `archive_idle_snapshots`, past
+  `SANDKILN_ARCHIVE_TIMEOUT_SECS` — that moves a *held snapshot's* (any
+  origin, not just auto-suspended ones) `state.snap`/`mem.bin` onto
+  `Config::archive_dir` via `routes_snapshot::archive_snapshot_by_id`;
+  see that function's own doc comment for why `rootfs_path` is
+  deliberately never touched.
 - `snapshot.rs` — the `Snapshot` type (`state.snapshots`'s value type)
   plus everything that makes it durable across a daemon restart: on-disk
   metadata (`meta.json`, alongside `state.snap`/`mem.bin` under
   `snapshot_dir(id)`) written atomically via write-then-rename, and
-  `reconcile()`, which scans `snapshots_root()` at startup and rebuilds
-  `AppState::snapshots` from what's actually on disk — the same
-  "filesystem is the source of truth" pattern `sandkiln_vmm::drive`'s
+  `reconcile()`, which scans both `snapshots_root()` (hot) and
+  `Config::archive_dir` (archived — always scanned, regardless of whether
+  `SANDKILN_ARCHIVE_TIMEOUT_SECS` is currently set, so turning archiving
+  off doesn't orphan snapshots already archived under it) and rebuilds
+  `AppState::snapshots` from what's actually on disk across both — the
+  same "filesystem is the source of truth" pattern `sandkiln_vmm::drive`'s
   `DriveStore::list()` uses for drives. A snapshot directory missing any
-  of its three files is treated as a crash-mid-write and skipped with a
-  warning rather than guessed at. `reconcile()` also calls
-  `NetworkManager::reserve()` for each reconciled snapshot's held tap
-  device/host octet so a live `lease()` call afterward can't hand the
-  same tap to a second sandbox — see `main.rs`, which runs this before
-  the HTTP listener starts accepting connections.
+  of its three files is treated as a crash-mid-write (or crash mid-
+  archive) and skipped with a warning rather than guessed at.
+  `reconcile()` also calls `NetworkManager::reserve()` for each
+  reconciled snapshot's held tap device/host octet so a live `lease()`
+  call afterward can't hand the same tap to a second sandbox — see
+  `main.rs`, which runs this before the HTTP listener starts accepting
+  connections. `move_snapshot_files`/`move_file` are the archiving
+  primitives (rename, falling back to copy-then-remove-original across
+  filesystems) — **`move_snapshot_files` never touches `rootfs_path`**,
+  see its own doc comment for the real Firecracker resume failure that
+  proved moving it breaks every future resume/fork (the backing file's
+  absolute host path is baked into `state.snap` itself, with no override
+  at `/snapshot/load` time).
 - `routes_drives.rs` / `routes_snapshot.rs` — drives and snapshot/resume
   handlers, each in their own file for the same reason as above. The
   actual pause/snapshot/stop mechanics live in `snapshot_and_stop()`, the
-  actual resume mechanics in `resume_snapshot_by_id()`, and the actual
-  delete mechanics in `delete_snapshot_by_id()` — all three `pub(crate)`,
-  all reused elsewhere in this crate (`snapshot_and_stop`/
-  `resume_snapshot_by_id` by `routes_sandbox`'s persistent-by-default
+  actual resume mechanics in `resume_snapshot_by_id()`, the actual delete
+  mechanics in `delete_snapshot_by_id()`, and the actual archive mechanics
+  in `archive_snapshot_by_id()` — all four `pub(crate)`, all reused
+  elsewhere in this crate (`snapshot_and_stop`/`resume_snapshot_by_id` by
+  `routes_sandbox`'s persistent-by-default
   stop, `routes_sandbox_name`'s get-or-create, `idle_reaper`'s
   auto-suspend, and now `pool`/`pool_replenisher`/`routes_sandbox`'s
   claim path; `delete_snapshot_by_id` by `routes_pool::delete_pool`'s
   warm-snapshot cleanup) so there's exactly one place that knows what
   "snapshot this sandbox" / "resume this snapshot" / "delete this
-  snapshot" means. `check_snapshottable`/
+  snapshot" / "archive this snapshot" means. `archive_snapshot_by_id` is
+  only ever called by `idle_reaper` today — no `POST /snapshots/:id/archive`
+  route exists yet to trigger it on demand, a deliberately deferred
+  follow-up. `check_snapshottable`/
   `SnapshotBlocked` refuses to snapshot a jailed sandbox (`Vm::is_jailed`)
   — `Vm::resume` only ever spawns directly, so a jailed sandbox's snapshot
   could never be resumed correctly; see `sandkiln_vmm::jailer`'s module doc

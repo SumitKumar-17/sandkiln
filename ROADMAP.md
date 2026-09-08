@@ -33,16 +33,19 @@ hardware, not just code that compiles.
   isolation.
 - `criterion` benchmarks for boot time and exec latency, and a concurrent
   load-test script against the daemon's HTTP API.
-- Snapshot/resume/fork, durable across a daemon restart; a host-side
-  reverse proxy for previewing a dev server running inside a sandbox;
-  interactive PTY sessions over WebSocket; per-sandbox resource overrides
-  with enforced ceilings; request-id correlation and a `/metrics`
-  endpoint; opt-in Firecracker jailer hardening; full filesystem
-  operations; persistent drives with read-only sharing; a
-  guest-accessible metadata service; durable sandbox history. All exposed
-  through both SDKs and the CLI (interactive PTY: JS/TS SDK and CLI
-  only), live-verified via `scripts/integration-test.sh` (220 checks, 0
-  failing, with `SANDKILN_AUTH_TOKEN` set — see that script's own usage
+- Snapshot/resume/fork, durable across a daemon restart, with a tiered
+  idle lifecycle (auto-suspend, then archive) on top; a host-side reverse
+  proxy for previewing a dev server running inside a sandbox; interactive
+  PTY sessions over WebSocket; pre-warmed snapshot pools with a
+  `max_count` ceiling and queueing; per-sandbox resource overrides with
+  enforced ceilings; request-id correlation and a `/metrics` endpoint;
+  opt-in Firecracker jailer hardening; full filesystem operations;
+  persistent drives with read-only sharing; a guest-accessible metadata
+  service; durable sandbox history. All exposed through both SDKs and the
+  CLI (interactive PTY: JS/TS SDK and CLI only; idle-lifecycle archiving:
+  daemon-operator config only, no client surface),
+  live-verified via `scripts/integration-test.sh` (245 checks, 0 failing,
+  with `SANDKILN_AUTH_TOKEN` set — see that script's own usage
   comment for what's skipped without one).
 
 ## Engineering principles
@@ -265,14 +268,62 @@ outbound HTTP both still work.
 - **Time-travel restore**: keep more than just the latest snapshot per
   sandbox, so a caller can restore to an earlier point, not only the most
   recent stop.
-- **Tiered idle lifecycle**: extend today's binary auto-suspend
-  (running → snapshot) into named tiers with independently configurable
-  windows — e.g. suspend past one timeout, then archive (move snapshot
-  storage off hot local disk to cheaper/remote storage, ties into the
-  Drives and remote storage section) past a longer one, then delete past
-  a longer one still. Not started; auto-suspend's existing
-  `snapshot_and_stop` path is the natural base to extend rather than a
-  new mechanism.
+- **Done: tiered idle lifecycle, the archive tier — a first honestly-scoped
+  slice.** Extends today's binary auto-suspend (running → snapshot) with
+  a second, independent tier: `SANDKILN_ARCHIVE_TIMEOUT_SECS` moves a
+  held snapshot's `state.snap`/`mem.bin` from `snapshots_root()` onto a
+  separately configured `SANDKILN_ARCHIVE_DIR` once it's sat unresumed
+  that long — `idle_reaper`'s new archive pass, applying to *any* held
+  snapshot regardless of how it arose (auto-suspend or a manual
+  `POST /sandboxes/:id/snapshot`), independent of whether auto-suspend or
+  `idle_timeout` are even configured. `GET /snapshots` reports
+  `archived_at_unix`. No SDK/CLI surface — daemon-operator config only,
+  same as `idle_timeout`/`auto_suspend_timeout`. Live-verified: a real
+  snapshot archived after a short configured timeout, its files
+  confirmed moved, a daemon restart correctly reconciling it back with
+  `archived: true` and no false-alarm warnings, and — critically — a
+  full resume afterward proving the archived snapshot is still exactly
+  as usable as a hot one (file content round-tripped through
+  write-file → snapshot → archive → resume → read-file correctly).
+  - **A real Firecracker constraint found the hard way, that reshaped
+    this feature mid-build**: the original design moved all three of a
+    snapshot's files (state, memory, *and* rootfs) into the archive
+    directory. Live-testing a resume afterward failed outright —
+    `"Error manipulating the backing file: No such file or directory ...
+    /tmp/sandkiln-rootfs-<id>.ext4"` — because Firecracker bakes the
+    rootfs backing file's absolute host path into `state.snap` itself at
+    snapshot time, and `/snapshot/load` has no override for it (unlike
+    `mem_backend.backend_path`, a genuine load-time parameter). The
+    rootfs file has to stay exactly where it was created for as long as
+    the snapshot might ever be resumed or forked. Fixed by having
+    archiving only ever move `state.snap`/`mem.bin` and leave
+    `rootfs_path` completely untouched — a real, if partial, win rather
+    than the complete one originally hoped for (`mem.bin` alone is
+    exactly the guest's configured RAM size, often comparable to or
+    larger than the rootfs copy, so this still meaningfully reduces what
+    an idle snapshot leaves on hot storage — just not all of it).
+  - **A second real bug found via the same live-testing pass**: two
+    existing snapshot-lifecycle code paths (`resume_snapshot_by_id`'s
+    post-resume cleanup, `delete_snapshot_by_id`'s teardown) derived the
+    directory to remove from a hardcoded `snapshot_dir(&id)` — always the
+    *hot* root, regardless of where a snapshot's files actually were.
+    For an archived snapshot this would have silently no-op'd (removing
+    an already-vacated or nonexistent hot directory) while leaking the
+    real, large archived files forever. Fixed by deriving the directory
+    from the snapshot's own current `snapshot_path` instead — accurate
+    whether hot or archived, and this was a latent bug even before
+    archiving existed as a concept, just never exercised until now.
+  - **Deliberately not built in this slice**: the delete-after-archive
+    tier the original design sketched (archive past one timeout, delete
+    past a longer one) — this ships archive only, explicitly deferred,
+    matching the same "narrower first slice, come back for the rest"
+    precedent `max_count` set for pre-warmed pools above. Also not the
+    "remote storage" archive tier originally imagined (an S3-compatible
+    store, which needs the not-yet-built remote-storage-mounts feature
+    first) — `SANDKILN_ARCHIVE_DIR` is still a local filesystem path,
+    just a separately configured one (the real, concrete win available
+    today: pointing it at a real disk instead of `snapshots_root()`'s
+    default location under `$TMPDIR`, often tmpfs).
 
 ## Drives and remote storage
 

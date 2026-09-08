@@ -14,6 +14,25 @@ Changelog](https://keepachangelog.com/).
 ## Unreleased
 
 ### Added
+- Tiered idle lifecycle, archive tier (daemon only — no SDK/CLI change,
+  nothing to publish): `SANDKILN_ARCHIVE_TIMEOUT_SECS` moves a held
+  snapshot's `state.snap`/`mem.bin` onto a separately configured
+  `SANDKILN_ARCHIVE_DIR` once it's sat unresumed that long, applying to
+  any held snapshot regardless of how it arose. `GET /snapshots` reports
+  `archived_at_unix`. Live-verified end to end, including a real
+  Firecracker constraint found mid-build (the rootfs backing file's path
+  is baked into `state.snap` with no override at resume time — confirmed
+  by an actual resume failure after moving it — so only `state.snap`/
+  `mem.bin` move, `rootfs_path` never does) and a real latent bug it
+  surfaced (two existing snapshot-cleanup code paths derived the
+  directory to remove from a hardcoded hot-root path instead of the
+  snapshot's own current location, which would have silently leaked an
+  archived snapshot's files forever). See `ROADMAP.md`'s "Persistence and
+  snapshotting" section for the full story. 1 new
+  `scripts/integration-test.sh` check (the archive-after-timeout
+  behavior itself needs a differently-configured daemon, verified
+  manually instead — same tradeoff already made for the sqlite-history
+  restart case), 245/245 passing overall.
 - Pre-warmed pools: `max_count` ceiling with queueing (daemon only — no
   SDK/CLI change, nothing to publish). `PoolConfig.max_count` caps the
   total live instances (warm + claimed) a pool's profile may have at

@@ -5,16 +5,28 @@
 //! (VM killed, network lease released, rootfs deleted — see
 //! `crate::routes_sandbox::stop_sandbox_by_id`) past
 //! `SANDKILN_IDLE_TIMEOUT_SECS` (see `config::Config`'s doc comments on
-//! both fields for how the two interact when both are configured). Only
-//! spawned by `main` when at least one of the two is configured —
-//! otherwise sandboxes run until explicitly stopped, same as before either
-//! existed.
+//! both fields for how the two interact when both are configured).
+//!
+//! Also runs the tiered lifecycle's next step past suspend: archiving a
+//! held *snapshot* (however it arose — auto-suspend or a manual
+//! `POST /sandboxes/:id/snapshot`) past `SANDKILN_ARCHIVE_TIMEOUT_SECS`,
+//! moving its files off `snapshots_root()` onto `Config::archive_dir` (see
+//! `crate::routes_snapshot::archive_snapshot_by_id`). Independent of the
+//! two sandbox-side timeouts above — it's about a snapshot's own age, not
+//! a live sandbox's idle time, so it runs whether or not either of those
+//! is even configured.
+//!
+//! Spawned unconditionally by `main` (not gated on any of the three being
+//! configured) — an idle tick where none apply is a cheap no-op scan, the
+//! same reasoning `pool_replenisher` already uses for its own
+//! unconditional spawn.
 
 use crate::routes_sandbox::{stop_sandbox_by_id, StopError};
-use crate::routes_snapshot::{snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
+use crate::routes_snapshot::{archive_snapshot_by_id, snapshot_and_stop, ArchiveError, SnapshotBlocked, SnapshotStopError};
 use crate::state::AppState;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Checking more often than the shortest configured timeout wastes work;
 /// checking only once per timeout risks a sandbox running up to ~2x the
@@ -23,12 +35,21 @@ use std::time::{Duration, Instant};
 /// rarely.
 const MAX_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
-pub async fn run(state: Arc<AppState>, idle_timeout: Option<Duration>, auto_suspend_timeout: Option<Duration>) {
-    let configured_timeouts: Vec<Duration> = [idle_timeout, auto_suspend_timeout].into_iter().flatten().collect();
+pub async fn run(
+    state: Arc<AppState>,
+    idle_timeout: Option<Duration>,
+    auto_suspend_timeout: Option<Duration>,
+    archive_timeout: Option<Duration>,
+    archive_dir: PathBuf,
+) {
+    let configured_timeouts: Vec<Duration> = [idle_timeout, auto_suspend_timeout, archive_timeout].into_iter().flatten().collect();
     let check_interval = compute_check_interval(&configured_timeouts);
     loop {
         tokio::time::sleep(check_interval).await;
         reap_once(&state, idle_timeout, auto_suspend_timeout, Instant::now()).await;
+        if let Some(archive_timeout) = archive_timeout {
+            archive_idle_snapshots(&state, archive_timeout, &archive_dir, SystemTime::now()).await;
+        }
     }
 }
 
@@ -155,6 +176,72 @@ fn idle_sandbox_ids(state: &Arc<AppState>, timeout: Duration, now: Instant) -> V
         .collect()
 }
 
+/// The archive tier: moves every eligible held snapshot's files off
+/// `snapshots_root()` onto `Config::archive_dir` — see
+/// `crate::routes_snapshot::archive_snapshot_by_id`. Eligible means: not
+/// already archived (`archived_at.is_none()`), no live fork
+/// (`forked_into.is_none()` — a fork's `Vm::resume` call is actively using
+/// this snapshot's *current* file paths right now), and old enough
+/// (`is_archive_due`). Independent of the sandbox-side passes above —
+/// this looks at `AppState::snapshots`, not `AppState::sandboxes`, and
+/// applies to a snapshot regardless of how it came to exist.
+async fn archive_idle_snapshots(state: &Arc<AppState>, timeout: Duration, archive_dir: &std::path::Path, now: SystemTime) {
+    for id in due_for_archive_ids(state, timeout, now) {
+        tracing::info!(snapshot_id = %id, "archiving idle snapshot");
+        match archive_snapshot_by_id(state.clone(), id.clone(), archive_dir.to_path_buf()).await {
+            Ok(()) => {
+                tracing::info!(snapshot_id = %id, "archived idle snapshot");
+            }
+            Err(ArchiveError::NotFound) => {
+                // Only realistic cause: it was resumed, forked, deleted,
+                // or already archived by something else between the scan
+                // above and here.
+                tracing::warn!(snapshot_id = %id, "idle snapshot was already gone by the time the reaper tried to archive it");
+            }
+            Err(ArchiveError::Forked) => {
+                // A fork started concurrently, after the scan's own
+                // `forked_into.is_none()` filter already passed — rare,
+                // and correctly left alone rather than archived out from
+                // under the fork now using it. Picked up again next tick
+                // if the fork ends before this snapshot is otherwise
+                // resumed/deleted.
+                tracing::debug!(snapshot_id = %id, "idle snapshot gained a live fork before it could be archived — leaving it alone");
+            }
+            Err(ArchiveError::Io(e)) => {
+                // See `crate::snapshot::move_snapshot_files`'s own doc
+                // comment: a failure here can leave the snapshot with a
+                // genuinely mixed set of old/new file paths, already
+                // reinserted into `AppState::snapshots` exactly as-is by
+                // `archive_snapshot_by_id` — a real, loud signal that
+                // this one needs manual attention, not silently retried
+                // every tick.
+                tracing::warn!(snapshot_id = %id, error = %e, "failed to archive an idle snapshot — its files may now be split across the hot and archive directories");
+            }
+        }
+    }
+}
+
+fn due_for_archive_ids(state: &Arc<AppState>, timeout: Duration, now: SystemTime) -> Vec<String> {
+    let snapshots = state.snapshots.lock().unwrap();
+    snapshots
+        .values()
+        .filter(|snapshot| snapshot.archived_at.is_none() && snapshot.forked_into.is_none())
+        .filter(|snapshot| is_archive_due(snapshot.created_at, now, timeout))
+        .map(|snapshot| snapshot.id.clone())
+        .collect()
+}
+
+/// Pure decision logic, mirroring `is_idle`'s own separation from the
+/// scan/archive plumbing above. `SystemTime`, not `Instant`, since
+/// `Snapshot::created_at` has to survive a daemon restart (persisted as a
+/// unix timestamp) — `Instant` can't be compared across process
+/// lifetimes, let alone serialized. A `created_at` somehow after `now`
+/// (clock skew, or the two racing within the same instant) is treated as
+/// "not due yet" rather than a panic or a nonsensical negative duration.
+fn is_archive_due(created_at: SystemTime, now: SystemTime, timeout: Duration) -> bool {
+    now.duration_since(created_at).is_ok_and(|elapsed| elapsed >= timeout)
+}
+
 /// Pure decision logic, pulled out of the scan/stop plumbing above so it's
 /// directly testable without a real `AppState`/`Sandbox` — same pattern as
 /// `auth::token_matches`.
@@ -165,10 +252,10 @@ fn is_idle(last_activity: Instant, now: Instant, timeout: Duration) -> bool {
 /// Picks how often the reaper wakes to scan, based on the shortest of
 /// whichever timeouts are actually configured — same halve-and-clamp
 /// reasoning as when there was only ever one timeout to consider, just
-/// generalized to more than one independent threshold. `run` only ever
-/// calls this with at least one configured timeout (`main` only spawns
-/// the reaper at all when that holds), so the empty case here only matters
-/// for this function's own testability in isolation.
+/// generalized to more than one independent threshold. `run` is spawned
+/// unconditionally now (see this module's own doc comment), so the empty
+/// case (nothing configured at all, `MAX_CHECK_INTERVAL`) is a real,
+/// common case in practice, not just a testability nicety.
 fn compute_check_interval(configured_timeouts: &[Duration]) -> Duration {
     match configured_timeouts.iter().copied().min() {
         Some(shortest) => (shortest / 2).clamp(Duration::from_secs(1), MAX_CHECK_INTERVAL),
@@ -228,5 +315,42 @@ mod tests {
     #[test]
     fn check_interval_is_clamped_to_the_maximum() {
         assert_eq!(compute_check_interval(&[Duration::from_secs(3600)]), MAX_CHECK_INTERVAL);
+    }
+
+    #[test]
+    fn archive_due_when_elapsed_meets_timeout_exactly() {
+        let now = SystemTime::now();
+        let created_at = now - Duration::from_secs(60);
+        assert!(is_archive_due(created_at, now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn archive_due_when_elapsed_exceeds_timeout() {
+        let now = SystemTime::now();
+        let created_at = now - Duration::from_secs(120);
+        assert!(is_archive_due(created_at, now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn archive_not_due_when_elapsed_under_timeout() {
+        let now = SystemTime::now();
+        let created_at = now - Duration::from_secs(10);
+        assert!(!is_archive_due(created_at, now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn archive_not_due_immediately_after_creation() {
+        let now = SystemTime::now();
+        assert!(!is_archive_due(now, now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn archive_not_due_when_created_at_is_somehow_after_now() {
+        // Clock skew, or the two racing within the same instant --
+        // `duration_since` returns `Err` here, which must read as "not
+        // due yet", not panic or silently treat it as a huge duration.
+        let now = SystemTime::now();
+        let created_at = now + Duration::from_secs(5);
+        assert!(!is_archive_due(created_at, now, Duration::from_secs(1)));
     }
 }

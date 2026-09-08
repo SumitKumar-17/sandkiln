@@ -233,6 +233,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
         created_at: SystemTime::now(),
         name,
         forked_into: None,
+        archived_at: None,
     };
 
     // Persist metadata before this snapshot is visible in `AppState` at
@@ -243,7 +244,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
     // to keep a `Snapshot` alive in memory whose durability contract is
     // already broken.
     let (snapshot, persist_result) = tokio::task::spawn_blocking(move || {
-        let persist_result = snapshot.persist();
+        let persist_result = snapshot.persist(&snapshot_dir(&snapshot.id));
         (snapshot, persist_result)
     })
     .await
@@ -301,6 +302,10 @@ pub struct SnapshotSummary {
     /// `POST /sandboxes/get-or-create` are how a caller finds this
     /// snapshot again by it.
     name: Option<String>,
+    /// When this snapshot's `state.snap`/`mem.bin` were moved onto
+    /// `Config::archive_dir` — `null` means it's still "hot", the only
+    /// state before archiving existed. See `Snapshot::archived_at`.
+    archived_at_unix: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -339,6 +344,7 @@ pub async fn list_snapshots(
             tags: s.tags.clone(),
             forked_into: s.forked_into.clone(),
             name: s.name.clone(),
+            archived_at_unix: s.archived_at.map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()),
         })
         .collect();
     Json(ListSnapshotsResponse { snapshots })
@@ -373,6 +379,13 @@ pub(crate) async fn resume_snapshot_by_id(state: Arc<AppState>, snapshot_id: Str
     };
 
     let new_id = Uuid::new_v4().to_string();
+    // Captured now, before `snapshot.rootfs_path`/etc. are moved into the
+    // `Sandbox` literal below -- `snapshot_path`'s own parent directory,
+    // not a hardcoded `snapshot_dir(&snapshot_id)` (the hot root only),
+    // since an archived snapshot's files live under `Config::archive_dir`
+    // instead and cleaning up the wrong directory would leak the real
+    // files there forever.
+    let old_snapshot_dir = snapshot.snapshot_path.parent().map(|p| p.to_path_buf());
     let result = resume_vm(&state, snapshot.snapshot_path.clone(), snapshot.mem_file_path.clone()).await;
 
     let vm = match result {
@@ -410,7 +423,9 @@ pub(crate) async fn resume_snapshot_by_id(state: Arc<AppState>, snapshot_id: Str
     // Only good for one resume — Firecracker doesn't need these files
     // again once the VM is loaded and running, and the resumed sandbox
     // itself can be snapshotted anew for a fresh save point.
-    let _ = std::fs::remove_dir_all(snapshot_dir(&snapshot_id));
+    if let Some(dir) = old_snapshot_dir {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     Ok(new_id)
 }
@@ -559,12 +574,91 @@ pub(crate) async fn delete_snapshot_by_id(state: Arc<AppState>, id: String) -> R
         move || {
             let _ = state.network.release(snapshot.network);
             let _ = std::fs::remove_file(&snapshot.rootfs_path);
-            let _ = std::fs::remove_dir_all(snapshot_dir(&snapshot.id));
+            // `snapshot.snapshot_path`'s own parent, not a hardcoded
+            // `snapshot_dir(&snapshot.id)` (the hot root only) -- an
+            // archived snapshot's files live under `Config::archive_dir`
+            // instead, and removing the wrong (already-vacated, or never
+            // populated) hot directory here would silently leak the real,
+            // large archived files forever. This is accurate for a hot
+            // snapshot too, since `snapshot_path` there already equals
+            // `snapshot_dir(&snapshot.id).join("state.snap")`.
+            if let Some(dir) = snapshot.snapshot_path.parent() {
+                let _ = std::fs::remove_dir_all(dir);
+            }
         }
     })
     .await;
 
     Ok(())
+}
+
+/// Every way `archive_snapshot_by_id` can fail to archive a snapshot.
+pub(crate) enum ArchiveError {
+    NotFound,
+    /// A live fork exists (`Snapshot::forked_into`) — same exclusion
+    /// `resume`/`fork`/`delete` already apply, since a fork's `Vm::resume`
+    /// call reopens this snapshot's *current* file paths; moving them out
+    /// from under a fork that's using them right now would break it.
+    Forked,
+    Io(std::io::Error),
+}
+
+/// Moves an already-held, unforked snapshot's files from wherever they
+/// currently live (`snapshots_root()` for a hot one — this is never
+/// called on an already-archived one, see `idle_reaper`'s own
+/// `archived_at.is_none()` filter) to `archive_root`, via
+/// `crate::snapshot::move_snapshot_files`. Only ever called from
+/// `idle_reaper`'s archive pass today — there's no `POST
+/// /snapshots/:id/archive` route yet, forcing archiving on demand is a
+/// real, deliberately deferred follow-up (see `crate::pool`'s own
+/// precedent for shipping a narrower first slice and coming back for the
+/// rest).
+///
+/// The snapshot is removed from `AppState::snapshots` for the duration of
+/// the move (same reasoning as `delete_snapshot_by_id`/
+/// `resume_snapshot_by_id`: nothing else should be able to resume/fork/
+/// delete/re-archive it mid-move) and **always** reinserted afterward,
+/// success or failure — a failed archive must never simply lose track of
+/// the snapshot; see `crate::snapshot::move_snapshot_files`'s own doc
+/// comment for why a failure can leave it with a genuinely mixed set of
+/// old/new paths, reinserted exactly as-is for a later `GET /snapshots`
+/// or manual inspection to notice, not guessed at or silently retried.
+pub(crate) async fn archive_snapshot_by_id(state: Arc<AppState>, id: String, archive_root: PathBuf) -> Result<(), ArchiveError> {
+    let snapshot = {
+        let mut snapshots = state.snapshots.lock().unwrap();
+        let existing = snapshots.get(&id).ok_or(ArchiveError::NotFound)?;
+        if existing.forked_into.is_some() {
+            return Err(ArchiveError::Forked);
+        }
+        snapshots.remove(&id).expect("just checked it exists")
+    };
+
+    // Captured before the move mutates `snapshot.snapshot_path` -- once
+    // archiving succeeds, this old directory has nothing left in it but a
+    // now-stale `meta.json` (the state/mem files are already gone from
+    // it). Left behind, that stale file would make a future restart's
+    // `reconcile()` log a false-alarm "incomplete snapshot directory"
+    // warning for a perfectly healthy, successfully-archived snapshot.
+    let old_dir = snapshot.snapshot_path.parent().map(|p| p.to_path_buf());
+
+    let dest_dir = crate::snapshot::archive_snapshot_dir(&archive_root, &id);
+    let (snapshot, result) = spawn_blocking_in_current_span("archive snapshot task panicked", move || {
+        let mut snapshot = snapshot;
+        let result = crate::snapshot::move_snapshot_files(&mut snapshot, &dest_dir).and_then(|()| {
+            snapshot.archived_at = Some(std::time::SystemTime::now());
+            snapshot.persist(&dest_dir)
+        });
+        if result.is_ok() {
+            if let Some(old_dir) = old_dir {
+                let _ = std::fs::remove_dir_all(old_dir);
+            }
+        }
+        (snapshot, result)
+    })
+    .await;
+
+    state.snapshots.lock().unwrap().insert(id, snapshot);
+    result.map_err(ArchiveError::Io)
 }
 
 #[cfg(test)]

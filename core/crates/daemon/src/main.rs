@@ -78,7 +78,7 @@ async fn async_main() {
     // `net_manager`'s free pool (via `NetworkManager::reserve`, called
     // from `reconcile`) before any live `POST /sandboxes` request can
     // race it for the same tap.
-    let reconciled_snapshots = snapshot::reconcile(&net_manager);
+    let reconciled_snapshots = snapshot::reconcile(&net_manager, &config.archive_dir);
     tracing::info!(count = reconciled_snapshots.len(), "reconciled snapshots from disk");
 
     let history = HistoryStore::open(&config.history_db_path)
@@ -122,20 +122,24 @@ async fn async_main() {
     let auth_enabled = config.auth_token.is_some();
     let idle_timeout = config.idle_timeout;
     let auto_suspend_timeout = config.auto_suspend_timeout;
+    let archive_timeout = config.archive_timeout;
+    let archive_dir = config.archive_dir.clone();
     let state = Arc::new(AppState::new(config, net_manager, drives, images, reconciled_snapshots, history));
 
-    if idle_timeout.is_some() || auto_suspend_timeout.is_some() {
-        if let Some(auto_suspend_timeout) = auto_suspend_timeout {
-            tracing::info!(auto_suspend_timeout_secs = auto_suspend_timeout.as_secs(), "idle sandbox auto-suspend enabled");
-        }
-        if let Some(idle_timeout) = idle_timeout {
-            tracing::info!(idle_timeout_secs = idle_timeout.as_secs(), "idle sandbox destroy reaper enabled");
-        }
-        tokio::spawn(idle_reaper::run(state.clone(), idle_timeout, auto_suspend_timeout));
+    if let Some(auto_suspend_timeout) = auto_suspend_timeout {
+        tracing::info!(auto_suspend_timeout_secs = auto_suspend_timeout.as_secs(), "idle sandbox auto-suspend enabled");
     }
-    // Unconditional, unlike the reaper above -- see `pool_replenisher`'s
-    // own doc comment for why an idle tick with no pools configured is
-    // cheap enough not to bother gating behind whether any exist yet.
+    if let Some(idle_timeout) = idle_timeout {
+        tracing::info!(idle_timeout_secs = idle_timeout.as_secs(), "idle sandbox destroy reaper enabled");
+    }
+    if let Some(archive_timeout) = archive_timeout {
+        tracing::info!(archive_timeout_secs = archive_timeout.as_secs(), archive_dir = %archive_dir.display(), "idle snapshot archiving enabled");
+    }
+    // Unconditional -- see `idle_reaper`'s own module doc comment (and
+    // `pool_replenisher`'s identical reasoning below) for why a tick with
+    // nothing configured at all is a cheap no-op scan, not worth gating
+    // behind whether any of the three timeouts are actually set.
+    tokio::spawn(idle_reaper::run(state.clone(), idle_timeout, auto_suspend_timeout, archive_timeout, archive_dir));
     tokio::spawn(pool_replenisher::run(state.clone()));
 
     let sandbox_routes = Router::new()

@@ -112,6 +112,45 @@ pub struct Config {
     /// a configuration where destroy would race ahead of suspend and make
     /// this setting silently pointless.
     pub auto_suspend_timeout: Option<Duration>,
+    /// How long a *held snapshot* (however it was created — auto-suspend,
+    /// a manual `POST /sandboxes/:id/snapshot`, doesn't matter) can sit
+    /// unresumed before the daemon moves its `state.snap`/`mem.bin` from
+    /// `snapshots_root()` to `archive_dir` — the "archive" tier of a
+    /// tiered idle lifecycle (running → suspended → archived), extending
+    /// today's binary auto-suspend rather than replacing it. `None` — the
+    /// env var unset, or set to `0` — disables this entirely, matching
+    /// `idle_timeout`'s opt-in pattern; independent of
+    /// `auto_suspend_timeout`/`idle_timeout` (no ordering requirement
+    /// between them — archiving is about a snapshot's own age, not a live
+    /// sandbox's idle time, so it applies equally whether auto-suspend is
+    /// even configured or not). A snapshot with a live fork
+    /// (`Snapshot::forked_into`) is never archived, same exclusion
+    /// `resume`/`delete` already apply. See `idle_reaper`'s archive pass
+    /// and `crate::snapshot`'s module doc comment.
+    ///
+    /// **Only `state.snap`/`mem.bin` move — the rootfs backing file never
+    /// does, found the hard way** (see
+    /// `crate::snapshot::move_snapshot_files`'s own doc comment for the
+    /// real resume failure that proved it): Firecracker bakes the rootfs
+    /// file's absolute host path into `state.snap` at snapshot time, with
+    /// no override at `/snapshot/load` time, so moving it would silently
+    /// break every future resume/fork. This is a genuine, if partial, win
+    /// rather than the complete one originally hoped for — `mem.bin`
+    /// alone is exactly the guest's configured RAM size, often comparable
+    /// to or larger than the rootfs copy, so archiving still meaningfully
+    /// reduces what an idle snapshot leaves sitting on hot storage
+    /// (`snapshots_root()`'s default location under `$TMPDIR`, often
+    /// tmpfs) — just not all of it. This is also deliberately **not** the
+    /// "remote storage" archive tier `ROADMAP.md` originally sketched
+    /// (moving to an S3-compatible store, which needs the not-yet-built
+    /// remote-storage-mounts feature first) — `archive_dir` is still a
+    /// local filesystem path, just a separately configured one.
+    pub archive_timeout: Option<Duration>,
+    /// Where archived snapshots live — see `archive_timeout`. Only
+    /// meaningful when `archive_timeout` is set, but always has a value
+    /// (same convention as `drives_dir`/`images_dir`) rather than being
+    /// `Option<PathBuf>` for one field to track alongside another.
+    pub archive_dir: PathBuf,
     /// `SANDKILN_LOG_FORMAT=json` switches structured logging to one
     /// JSON object per line, for production log pipelines that expect to
     /// parse fields rather than a human-readable terminal format.
@@ -175,6 +214,7 @@ impl Config {
         if let Err(message) = check_suspend_precedes_destroy(auto_suspend_timeout, idle_timeout) {
             panic!("{message}");
         }
+        let archive_timeout = parse_timeout_secs_env("SANDKILN_ARCHIVE_TIMEOUT_SECS");
 
         Self {
             listen_addr: env_or("SANDKILN_LISTEN_ADDR", "127.0.0.1:7777"),
@@ -198,6 +238,8 @@ impl Config {
             images_dir: expand_home(&env_or("SANDKILN_IMAGES_DIR", "~/sandkiln-tools/images-registered")),
             idle_timeout,
             auto_suspend_timeout,
+            archive_timeout,
+            archive_dir: expand_home(&env_or("SANDKILN_ARCHIVE_DIR", "~/sandkiln-tools/archive")),
             log_format: LogFormat::from_env(),
             preview_timeout: Duration::from_secs(
                 env_or("SANDKILN_PREVIEW_TIMEOUT_SECS", "30").parse().expect("SANDKILN_PREVIEW_TIMEOUT_SECS must be a number"),

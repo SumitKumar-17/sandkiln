@@ -24,7 +24,21 @@ else
 
     status="$(req GET "/snapshots?source_sandbox_id=$SBX4")"
     assert_status "list snapshots filtered by source_sandbox_id" 200 "$status"
-    assert_contains "source_sandbox_id filter finds the snapshot the sandbox became" "$(cat "$WORKDIR/resp.json")" "$SNAP"
+    snapshot_list_body="$(cat "$WORKDIR/resp.json")"
+    assert_contains "source_sandbox_id filter finds the snapshot the sandbox became" "$snapshot_list_body" "$SNAP"
+    # A hot (never-archived) snapshot must report archived_at_unix as
+    # null, not the field being missing entirely -- the actual
+    # archive-after-timeout behavior needs a daemon started with
+    # SANDKILN_ARCHIVE_TIMEOUT_SECS configured, which this shared suite's
+    # already-running daemon isn't; live-verified manually instead (a
+    # real archive, a real restart confirming it reconciles correctly
+    # with archived_at_unix set, and a real resume proving the archived
+    # snapshot is still fully usable) -- see ROADMAP.md's "Persistence
+    # and snapshotting" section for that verification and the real
+    # Firecracker finding (the rootfs backing file can never move) it
+    # surfaced, same "can't fit a real restart into this suite" tradeoff
+    # already made for 16-sandbox-history.sh.
+    assert_contains "hot snapshot reports archived_at_unix as null, not missing" "$snapshot_list_body" '"archived_at_unix":null'
 
     status="$(req GET "/snapshots?source_sandbox_id=not-a-real-sandbox-id")"
     assert_status "list snapshots with a non-matching source_sandbox_id" 200 "$status"
