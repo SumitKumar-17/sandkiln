@@ -306,9 +306,21 @@ outbound HTTP both still work.
   (`SANDKILN_JAILER_ENABLED`, see `SELF_HOSTING.md`'s "Optional:
   jailer-based sandbox boot"). Off by default; the daemon still boots
   every sandbox via a direct Firecracker spawn unless explicitly turned
-  on. Builds and passes unit tests, but the actual chroot/cgroup/uid-drop
-  behavior against a real installed jailer binary hasn't been proven on
-  real hardware yet — verify before relying on it for a genuinely
+  on. Builds and passes unit tests. **First real-hardware attempt this
+  session**: every `POST /sandboxes` failed (`500`,
+  `"<chroot>/root/api.sock" never appeared`) with
+  `SANDKILN_JAILER_ENABLED=1` on the dev box — root-caused via the guest
+  console log to jailer itself failing at
+  `Failed to change owner for .../firecracker: Operation not permitted`.
+  Not a code bug: `SELF_HOSTING.md` already documents that the `jailer`
+  *binary* needs `setuid-root` (`sudo chown root:root` +
+  `sudo chmod u+s` on it — a separate one-time step, not part of
+  `setup.sh`, since it needs an interactive root password) — that step
+  had simply never been applied on this box before this test, and
+  applying it needs a real interactive terminal this session didn't
+  have. **Still not verified on real hardware** — same caveat as
+  before, now with a concrete repro and root cause instead of just
+  "hasn't been tried yet." Verify before relying on it for a genuinely
   adversarial workload. Snapshotting a jailed sandbox isn't supported
   (`400`) — jailer support covers `Vm::boot` only, `Vm::resume` always
   spawns directly.

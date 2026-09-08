@@ -29,7 +29,10 @@ Changelog](https://keepachangelog.com/).
   rule is keyed to the exact old path and won't match the new one —
   re-run `sudo scripts/host-setup/allow-passwordless-cap-grant.sh` once,
   interactively, to restore passwordless `CAP_NET_ADMIN` granting on
-  daemon restart.
+  daemon restart. **Verified live** on the dev box after applying that
+  fix: `sandkilnd-ctl.sh restart` grants the capability cleanly again,
+  and a full `scripts/integration-test.sh` run with `SANDKILN_AUTH_TOKEN`
+  set passes 167/167 (154 base + 8 rate-limit + 5 auth checks).
 
 ## [0.4.0] — 2026-09-08
 
