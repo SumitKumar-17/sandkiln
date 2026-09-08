@@ -259,17 +259,36 @@ Concretely, in this repo:
 - **`scripts/integration-test.sh [base-url]`** — the full daemon API
   exercised end to end against a real running `sandkilnd`: sandbox
   lifecycle, tag filtering, drives (persistence across sandboxes,
-  conflict detection), snapshot/resume, auth, `/metrics`, error cases.
-  Tracks and tears down everything it creates on exit, pass or fail. Run
-  with `SANDKILN_AUTH_TOKEN` set to also exercise auth-rejection cases.
-  **Every new HTTP-facing feature should add a case here** — that's the
-  entire point of it existing instead of staying tribal knowledge in a
-  chat transcript.
+  conflict detection), snapshot/resume/fork, named sandboxes, images,
+  rate limiting, auth, `/metrics`, error cases. Tracks and tears down
+  everything it creates on exit, pass or fail. Run with
+  `SANDKILN_AUTH_TOKEN` set to also exercise auth-rejection cases. This
+  file itself is just the runner (healthz check, cleanup trap, prints the
+  final pass/fail count) — shared `req`/`assert_*`/`section` helpers live
+  in `scripts/lib/integration-test-helpers.sh`, and each topic (lifecycle,
+  drives, snapshots, fork, named sandboxes, images, rate limiting, auth,
+  ...) is its own numbered file under `scripts/integration-tests/`,
+  sourced in order into the same shell process — splitting it up is
+  purely organizational, every helper and global is visible in every
+  topic file exactly as if it were still one script. **Every new
+  HTTP-facing feature should add a case in the topic file it belongs to
+  (or a new numbered file if it doesn't fit an existing one)** — that's
+  the entire point of it existing instead of staying tribal knowledge in
+  a chat transcript.
 - **`scripts/load-test.sh [concurrency] [iterations] [base-url]`** —
   concurrency/latency under load, min/max/mean/p95 per phase.
-- **`cargo bench -p sandkiln-vmm --bench vm_lifecycle`** — boot time and
-  exec latency, against the real Firecracker binary. See `ROADMAP.md`'s
-  Benchmarking section for the env vars needed and the current numbers.
+- **`cargo bench -p sandkiln-vmm --bench vm_lifecycle`** — boot time,
+  exec latency, snapshot-take, and resume-from-snapshot, against the real
+  Firecracker binary. See `ROADMAP.md`'s Benchmarking section for the env
+  vars needed and the current numbers.
+- **`scripts/dev.sh <subcommand>`** — a thin dispatcher in front of the
+  scripts above (`build`/`unit-test`/`bench`/`integration-test`/
+  `load-test`/`preflight`/`setup`/`start`/`stop`/`restart`/`status`/
+  `logs`), each just exec'ing the real script with whatever args follow —
+  run `scripts/dev.sh help` for the full list. Saves remembering which
+  file does what during a normal edit/rebuild/test loop; every script
+  still works standalone with its own full flag set, this doesn't replace
+  any of them.
 
 For behavior involving Firecracker, KVM, networking, or the real daemon,
 use the actual environment (the remote dev box) — "it compiles" is not
