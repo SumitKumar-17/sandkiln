@@ -79,7 +79,19 @@ outbound HTTP both still work.
   [npmjs.com/package/sandkiln](https://www.npmjs.com/package/sandkiln)
   (0.2.0, with signed provenance from the CI build — includes everything
   in this bullet). Still open: streamed logs, once the daemon can stream
-  them.
+  them — the shape worth copying when that's built is a replay-then-
+  live-tail model (reconnecting gets everything since the process
+  started, not just what's emitted from that point on), not just a bare
+  live tail.
+- **Filesystem operations are read-file/write-file only.** No
+  `chmod`/`chown`/`symlink`/`readlink`/`mkdir`/`rename`/`copy`/
+  `truncate`/directory-listing-with-metadata — a caller has to shell out
+  via `runCommand` for anything beyond reading or overwriting one file's
+  full contents. This is a developer-experience gap, not a capability
+  one (the guest agent could expose these as additional vsock commands
+  using the same protocol shape `read_file`/`write_file` already use),
+  but a real one if a workload wants filesystem operations as first-class
+  SDK calls instead of shelled-out commands.
 - **Python (`sandkiln` PyPI package) — working, mirrors the JS SDK
   exactly**, including `resume()`/`fork()`/`snapshot()`/`preview_url()`
   and resource overrides. Zero runtime dependencies (stdlib `urllib`,
@@ -257,6 +269,15 @@ outbound HTTP both still work.
 - The DNS proxy (`start-dns-proxy.sh`) is the natural enforcement point
   for domain-level rules — it already sees every name a sandbox resolves,
   before any connection is made.
+- A richer shape worth designing toward from the start, since retrofitting
+  precedence rules later is worse than deciding it up front: a base mode
+  (allow-all/deny-all) plus a domain allowlist plus *separate* subnet
+  allow and deny lists where deny takes precedence over allow on overlap
+  — not just one flat allow list. Request-level matchers (path, method,
+  query, header) with a rule that either forwards or transforms the
+  request are a further-out stretch beyond that, useful for a proxy
+  sitting in front of a sandbox's own exposed port rather than the
+  sandbox's own outbound egress.
 - Consider a per-sandbox CA + TLS-terminating proxy for HTTPS
   inspection/transformation, mounted into the guest's trust store at
   boot — meaningfully more complex than DNS-level filtering, so it's a
@@ -294,6 +315,17 @@ outbound HTTP both still work.
 - **Done:** network isolation between sandboxes on the shared bridge (see
   the Networking section) — bridge port isolation, no sandbox-to-sandbox
   traffic by default.
+- **Per-sandbox I/O rate limiting is not configured, even though
+  Firecracker already supports it natively.** Firecracker's own device
+  model has a built-in token-bucket rate limiter — separate ops/sec and
+  bandwidth buckets, each with a configurable burst — for both the
+  network interface and each block device, entirely independent of
+  anything sandkiln adds itself. Today nothing in `sandkiln-vmm`'s
+  `VmConfig`/drive-attach path sets one, so every sandbox gets
+  unlimited host bandwidth/IOPS by default. Wiring this through (a
+  `rate_limit` option alongside `vcpu_count`/`mem_size_mib`) is mostly
+  plumbing an existing Firecracker capability, not new isolation
+  mechanics — a comparatively cheap, real gap.
 
 ## Multi-agent isolation
 
@@ -336,12 +368,24 @@ outbound HTTP both still work.
   owning one). WebSocket proxying (dev-server HMR/live-reload) is a real,
   explicitly-scoped-out follow-up, not silently broken — plain HTTP only
   for now.
+- **Alternative worth considering alongside the proxy**: today's
+  `/preview/:port` is a daemon-proxied *path*, not a real routable
+  domain. A dedicated public domain/subdomain per exposed port (the
+  guest reachable at its own URL rather than through a `/preview/:port`
+  path prefix) is a different, also-valid shape used elsewhere — would
+  need real DNS/routing infrastructure this project doesn't have today,
+  so it's a bigger lift than the existing proxy, not a drop-in
+  replacement for it.
 - Fast iterative file sync tuned for dev-server workflows — write many
   small files quickly, ideally with watch-mode support.
 - **Interactive terminal access**: a real PTY inside the sandbox, exposed
   over a WebSocket — distinct from batch `exec` (request in, response
   out); this is a live, bidirectional shell session, what `kiln`'s
   eventual interactive mode and any web-based terminal UI would need.
+  Validated as a real, commonly-offered capability elsewhere, not a
+  fringe idea — not currently in active development. If/when this is
+  built, a per-sandbox concurrent-session cap (a fixed ceiling like 64)
+  is a sane default worth copying rather than leaving unbounded.
 
 ## Tags and sandbox metadata
 
@@ -349,6 +393,17 @@ outbound HTTP both still work.
   caller wants) for filtering and listing.
 - Sqlite-backed sandbox state instead of the current in-memory map, so
   tags, history, and listings survive a daemon restart.
+- **Guest-accessible metadata service**: sandkiln has no way for code
+  running *inside* a sandbox to read its own tags/name/config from the
+  daemon — a caller has to bake anything the guest needs to know about
+  itself into the rootfs at image-build time, or push it in after boot
+  via `write_file`. Firecracker itself documents exactly this gap being
+  solvable: a host-configurable, guest-reachable metadata endpoint the
+  guest can query over its own network path, updatable by the host
+  without a reboot. Not started, but worth designing toward — it's the
+  natural place tags/name would become visible to the workload running
+  inside the sandbox itself, not just to the caller managing it from
+  outside.
 
 ## Benchmarking
 
@@ -405,7 +460,31 @@ outbound HTTP both still work.
   `get-or-create`/create-from-image call can resume one instead of
   cold-booting, with resume latency actually measured against cold-boot
   latency once the benchmark above exists — this is the real lever,
-  not a vaguer "make boot faster."
+  not a vaguer "make boot faster." Shape worth copying from how other
+  pooled-sandbox systems configure this, if/when it's built: pool
+  identity keyed by image+resource-config (not just image), a
+  configurable warm-instance count with `0` meaning scale-to-zero, a
+  separate max-instance ceiling above the warm count, queueing (not
+  rejecting) a claim that arrives at the ceiling, and the pool
+  auto-replacing a claimed instance in the background to keep the warm
+  buffer full rather than refilling only on the next claim.
+- **Snapshot lineage**: today a daemon only ever knows "the current
+  snapshot" a sandbox became — there's no way to ask "what snapshot did
+  *this* snapshot get forked from, and what else was forked from it."
+  Walking that ancestry (a tree, not just a single pointer) would need
+  `Snapshot` to record its own parent snapshot id when created via
+  `fork`/`resume`, not just `Sandbox::source_snapshot_id`'s current
+  one-hop pointer. Not started.
+- **Fan-out cloning**: cloning one snapshot into *several* new live
+  sandboxes at once (not just one) is a real, documented pattern
+  elsewhere, but it directly conflicts with the one-live-fork-per-snapshot
+  constraint above (`Snapshot::forked_into`) — that constraint exists
+  because Firecracker has no verified way to give two live descendants
+  of one snapshot independent rootfs backing files or guest IP/MAC (see
+  the fork bullet above). Genuine fan-out would need that same unsolved
+  problem solved first, not a new API layered on top of today's fork;
+  tracked here as a restatement of the existing gap in fan-out terms,
+  not a separate, independently-achievable item.
 - These numbers are from one manual run on one shared dev box, not
   isolated hardware — treat them as directionally useful, not authoritative.
   Automating re-runs so regressions are visible over time is still open.
@@ -475,8 +554,47 @@ The primitive is only as useful as what's built on top of it:
   workflow" — but it belongs in a separate project/library built against
   this one's API, not merged into the daemon.
 
+## Ideas explicitly not started, kept honest rather than silent
+
+Two capabilities other sandbox platforms document that sandkiln has
+zero coverage of — each closer to a separate product surface than a
+small extension of what exists, called out deliberately (same reasoning
+as the GPU-passthrough note above) rather than left as a silent gap:
+
+- **Desktop/GUI automation**: a managed desktop environment inside a
+  sandbox (a windowing environment plus a browser, reachable over VNC or
+  a browser-based remote-desktop client), with a screenshot-capture API
+  and a full keyboard/mouse input-control API, plus reconnecting to an
+  already-running desktop sandbox by id without killing the VM. Real,
+  documented use cases: browser-based agent automation, computer-use
+  agent evals. This is a meaningfully different product surface than
+  "run untrusted code and read/write files" — it needs its own base
+  image work (a desktop environment, a VNC server, input-injection
+  tooling inside the guest) well beyond today's universal image.
+- **Git-native sandbox filesystem**: version-controlled sandbox state as
+  a first-class concept — workspaces as private branches mounted as
+  POSIX directories, a snapshot doubling as a commit, merging by moving
+  a pointer rather than copying data, and read-only mounts for sharing
+  common tooling across many sandboxes either following a moving head or
+  pinned to one snapshot. A substantial new subsystem (a real git
+  server/object store this project doesn't have any of today), not a
+  small extension of `snapshot`/`resume`/`fork` — those stay path-based
+  and single-lineage; this would be a different persistence model
+  layered alongside them, not a replacement.
+
+Both are plausible future directions for this project specifically
+because it's a personal project without a fixed roadmap deadline, not
+because either is a small lift — treat this section as "worth doing
+eventually if there's appetite," not "next."
+
 ## Documentation and examples
 
-- A docs site with runnable examples covering both SDKs and the CLI.
+- **Done**: a full docs site (`website/docs/`, Astro + Starlight) —
+  Getting Started, Core Concepts, Guides, Reference (daemon HTTP API,
+  JS/TS SDK, Python SDK, CLI), and Architecture, covering both SDKs and
+  the CLI with runnable examples throughout. Deployed three ways: as a
+  `/docs` subpath of the main site (GitHub Pages and the merged Vercel
+  build) and standalone at its own domain root
+  (sandkiln-docs.vercel.app) — see `website/AGENTS.md`.
 - Example projects: **done** — code playground (JS/TS), AI-agent sandbox
   runner (Python), and dev-server preview (JS/TS), see `examples/`.
