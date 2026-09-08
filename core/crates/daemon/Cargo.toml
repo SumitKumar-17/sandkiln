@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 sandkiln-protocol = { path = "../protocol" }
 sandkiln-vmm = { path = "../vmm" }
+sandkiln-store = { path = "../store" }
 axum = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
 serde = { version = "1", features = ["derive"] }

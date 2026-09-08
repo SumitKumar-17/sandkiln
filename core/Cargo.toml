@@ -5,6 +5,7 @@ members = [
     "crates/vmm",
     "crates/guest-agent",
     "crates/daemon",
+    "crates/store",
 ]
 
 [workspace.package]

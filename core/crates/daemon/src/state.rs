@@ -5,6 +5,7 @@ use crate::sandbox::Sandbox;
 use crate::snapshot::Snapshot;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
+use sandkiln_store::HistoryStore;
 use sandkiln_vmm::drive::DriveStore;
 use sandkiln_vmm::image::ImageStore;
 use sandkiln_vmm::jailer::JailerIdPool;
@@ -62,6 +63,11 @@ pub struct AppState {
     /// (and, for a WebSocket-using dev server later, from a client
     /// already wired for keep-alive) every time.
     pub preview_client: PreviewClient,
+    /// Durable sandbox-lifecycle history (`sandkiln-store`) — a
+    /// completely separate concern from `sandboxes`/`snapshots` above;
+    /// see that crate's own module doc comment for exactly what it does
+    /// and does not solve.
+    pub history: HistoryStore,
 }
 
 impl AppState {
@@ -76,6 +82,7 @@ impl AppState {
         drives: DriveStore,
         images: ImageStore,
         snapshots: HashMap<String, Snapshot>,
+        history: HistoryStore,
     ) -> Self {
         let jailer_ids = config.jailer.as_ref().map(|j| JailerIdPool::new(j.uid_gid_range.clone()));
         Self {
@@ -90,6 +97,7 @@ impl AppState {
             pending_image_boots: Mutex::new(HashMap::new()),
             metrics: Metrics::new(),
             preview_client: build_preview_client(),
+            history,
         }
     }
 
@@ -418,6 +426,7 @@ mod tests {
             auth_token: None,
             drives_dir: dir.join("drives"),
             images_dir: dir.join("images"),
+            history_db_path: dir.join("history.db"),
             idle_timeout: None,
             auto_suspend_timeout: None,
             log_format: LogFormat::Pretty,
@@ -427,7 +436,8 @@ mod tests {
         let network = NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", Vec::<String>::new());
         let drives = DriveStore::new(dir.join("drives")).expect("create test drives dir");
         let images = ImageStore::new(dir.join("images")).expect("create test images dir");
-        Arc::new(AppState::new(config, network, drives, images, HashMap::new()))
+        let history = HistoryStore::open_in_memory().expect("create in-memory test history store");
+        Arc::new(AppState::new(config, network, drives, images, HashMap::new(), history))
     }
 
     #[test]
@@ -573,13 +583,15 @@ mod tests {
                 auth_token: None,
                 drives_dir: dir.join("drives"),
                 images_dir: dir.join("images"),
+                history_db_path: dir.join("history.db"),
                 idle_timeout: None,
                 auto_suspend_timeout: None,
                 log_format: LogFormat::Pretty,
                 preview_timeout: Duration::from_secs(30),
                 jailer: None,
             };
-            let state = AppState::new(config, network, drives, images, HashMap::new());
+            let history = HistoryStore::open_in_memory().expect("create in-memory test history store");
+            let state = AppState::new(config, network, drives, images, HashMap::new(), history);
             Self { state, dir }
         }
     }

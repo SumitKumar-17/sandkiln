@@ -210,7 +210,9 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
 
     let snapshot = Snapshot {
         id: snapshot_id.clone(),
-        source_sandbox_id: id,
+        // Cloned rather than moved -- `id` is still needed below to
+        // record this sandbox's ended-by-snapshot history entry.
+        source_sandbox_id: id.clone(),
         snapshot_path,
         mem_file_path,
         rootfs_path,
@@ -250,6 +252,10 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
     }
 
     state.snapshots.lock().unwrap().insert(snapshot_id.clone(), snapshot);
+
+    if let Err(e) = state.history.record_ended(&id, SystemTime::now(), sandkiln_store::EndReason::Snapshotted, Some(&snapshot_id)) {
+        tracing::warn!(error = %e, sandbox_id = %id, "failed to record sandbox snapshot in history store");
+    }
 
     Ok(snapshot_id)
 }

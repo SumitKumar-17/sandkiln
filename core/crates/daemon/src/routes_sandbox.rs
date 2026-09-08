@@ -289,6 +289,14 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
     })
     .await?;
 
+    let created_at = SystemTime::now();
+    // Best-effort: the sandbox has already actually booted by this point
+    // (a real, running VM) — failing the whole request over a history-DB
+    // write error would waste it for no benefit, so this only warns.
+    if let Err(e) = state.history.record_created(&id, request.name.as_deref(), &request.tags, request.image_id.as_deref(), created_at) {
+        tracing::warn!(error = %e, sandbox_id = %id, "failed to record sandbox creation in history store");
+    }
+
     let sandbox = Sandbox {
         id: id.clone(),
         vm,
@@ -298,7 +306,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
         image_id: request.image_id,
         jail_id,
         tags: request.tags,
-        created_at: SystemTime::now(),
+        created_at,
         last_activity: std::sync::Mutex::new(std::time::Instant::now()),
         source_snapshot_id: None,
         name: request.name,
@@ -347,6 +355,63 @@ pub async fn list_sandboxes(
         })
         .collect();
     Json(ListSandboxesResponse { sandboxes })
+}
+
+#[derive(Serialize)]
+pub struct HistoryRecordBody {
+    id: String,
+    name: Option<String>,
+    tags: HashMap<String, String>,
+    image_id: Option<String>,
+    created_at_unix: u64,
+    ended_at_unix: Option<u64>,
+    end_reason: Option<String>,
+    final_snapshot_id: Option<String>,
+}
+
+impl From<sandkiln_store::HistoryRecord> for HistoryRecordBody {
+    fn from(r: sandkiln_store::HistoryRecord) -> Self {
+        Self {
+            id: r.id,
+            name: r.name,
+            tags: r.tags,
+            image_id: r.image_id,
+            created_at_unix: r.created_at_unix,
+            ended_at_unix: r.ended_at_unix,
+            end_reason: r.end_reason,
+            final_snapshot_id: r.final_snapshot_id,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct SandboxHistoryResponse {
+    history: Vec<HistoryRecordBody>,
+}
+
+/// Durable sandbox lifecycle history, independent of the live
+/// `sandboxes` map — survives a daemon restart, unlike `GET /sandboxes`.
+/// See `sandkiln-store`'s module doc comment for exactly what this does
+/// and doesn't mean (it cannot bring a stopped sandbox back to life).
+/// `?live_only=true`/`?live_only=false` filters; `?limit=<n>` caps the
+/// row count (defaults to `sandkiln_store::DEFAULT_LIST_LIMIT`). Always
+/// newest-created first.
+pub async fn sandbox_history(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<SandboxHistoryResponse>, AppError> {
+    let live_only = query.get("live_only").map(|v| v == "true");
+    let limit = query.get("limit").and_then(|v| v.parse::<u32>().ok());
+    let filter = sandkiln_store::HistoryFilter { live_only, limit };
+
+    let records = spawn_blocking_in_current_span("history list task panicked", {
+        let state = state.clone();
+        move || state.history.list(&filter)
+    })
+    .await
+    .map_err(|e| AppError::Internal(std::io::Error::other(e.to_string())))?;
+
+    Ok(Json(SandboxHistoryResponse { history: records.into_iter().map(HistoryRecordBody::from).collect() }))
 }
 
 /// Whether stopping preserves this sandbox's state (the default) or
@@ -543,6 +608,10 @@ async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopO
         if let Some(snapshot) = state.snapshots.lock().unwrap().get_mut(&snapshot_id) {
             snapshot.forked_into = None;
         }
+    }
+
+    if let Err(e) = state.history.record_ended(&id, SystemTime::now(), sandkiln_store::EndReason::Destroyed, None) {
+        tracing::warn!(error = %e, sandbox_id = %id, "failed to record sandbox destruction in history store");
     }
 
     Ok(StopOutcome::Destroyed)

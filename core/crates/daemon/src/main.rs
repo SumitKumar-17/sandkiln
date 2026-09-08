@@ -22,6 +22,7 @@ use axum::middleware;
 use axum::routing::{any, delete, get, post};
 use axum::Router;
 use config::{Config, LogFormat};
+use sandkiln_store::HistoryStore;
 use sandkiln_vmm::drive::DriveStore;
 use sandkiln_vmm::image::ImageStore;
 use sandkiln_vmm::network::{self, NetworkManager};
@@ -76,6 +77,19 @@ async fn async_main() {
     let reconciled_snapshots = snapshot::reconcile(&net_manager);
     tracing::info!(count = reconciled_snapshots.len(), "reconciled snapshots from disk");
 
+    let history = HistoryStore::open(&config.history_db_path)
+        .expect("open/create the sandbox history database (SANDKILN_HISTORY_DB_PATH)");
+    // Same reasoning as reconciling snapshots above, before the listener
+    // binds: any record still marked "live" at this point belongs to a
+    // daemon process that is no longer running, and its Firecracker
+    // process (if it even still exists) is unconditionally orphaned —
+    // see sandkiln-store's own module doc comment for why this isn't a
+    // heuristic.
+    let orphaned_count = history
+        .mark_unended_as_orphaned_on_startup(std::time::SystemTime::now())
+        .expect("mark orphaned sandbox history records at startup");
+    tracing::info!(count = orphaned_count, "marked orphaned sandbox history records from a prior daemon run");
+
     match &config.jailer {
         Some(jailer_cfg) => {
             std::fs::create_dir_all(&jailer_cfg.chroot_base_dir)
@@ -104,7 +118,7 @@ async fn async_main() {
     let auth_enabled = config.auth_token.is_some();
     let idle_timeout = config.idle_timeout;
     let auto_suspend_timeout = config.auto_suspend_timeout;
-    let state = Arc::new(AppState::new(config, net_manager, drives, images, reconciled_snapshots));
+    let state = Arc::new(AppState::new(config, net_manager, drives, images, reconciled_snapshots, history));
 
     if idle_timeout.is_some() || auto_suspend_timeout.is_some() {
         if let Some(auto_suspend_timeout) = auto_suspend_timeout {
@@ -118,6 +132,7 @@ async fn async_main() {
 
     let sandbox_routes = Router::new()
         .route("/sandboxes", post(routes_sandbox::create_sandbox).get(routes_sandbox::list_sandboxes))
+        .route("/sandboxes/history", get(routes_sandbox::sandbox_history))
         .route("/sandboxes/get-or-create", post(routes_sandbox_name::get_or_create_sandbox))
         .route("/sandboxes/by-name/:name", get(routes_sandbox_name::get_sandbox_by_name))
         .route("/sandboxes/:id", delete(routes_sandbox::stop_sandbox))

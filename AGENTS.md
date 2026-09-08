@@ -19,6 +19,7 @@ benchmarks:
 core/crates/protocol/    wire format shared by host and guest
 core/crates/guest-agent/ static musl binary, runs inside the VM
 core/crates/vmm/         drives Firecracker + networking (host side)
+core/crates/store/       durable sandbox-lifecycle history (sqlite)
 core/crates/daemon/      axum HTTP API (sandkilnd)
 packages/sdk/            sandkiln npm package (TypeScript)
 packages/python/         sandkiln PyPI package (Python)

@@ -69,7 +69,8 @@ already hit and fixed once.
 - **`core/`** — Rust workspace: `sandkiln-protocol` (the wire format
   shared by host and guest), `sandkiln-guest-agent` (a static binary that
   runs inside each microVM), `sandkiln-vmm` (drives Firecracker and
-  networking), `sandkiln-daemon` (the HTTP API, `sandkilnd`).
+  networking), `sandkiln-store` (durable sandbox-lifecycle history,
+  sqlite), `sandkiln-daemon` (the HTTP API, `sandkilnd`).
 - **`packages/sdk`** — [`sandkiln`](https://www.npmjs.com/package/sandkiln)
   on npm, the JS/TS client.
 - **`packages/python`** — `sandkiln` on PyPI (not yet published), the

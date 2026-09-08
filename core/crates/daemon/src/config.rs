@@ -67,6 +67,12 @@ pub struct Config {
     /// share a storage shape, and keeping them apart avoids an `<id>.ext4`
     /// collision between the two id namespaces.
     pub images_dir: PathBuf,
+    /// Where the durable sandbox-lifecycle history database lives (see
+    /// `sandkiln_store::HistoryStore`) — its own file rather than living
+    /// under `drives_dir`/`images_dir`, since it's neither a drive nor
+    /// an image but a third, unrelated resource kind that happens to
+    /// also want a default path under `~/sandkiln-tools`.
+    pub history_db_path: PathBuf,
     /// How long a sandbox can go without any exec/read-file/write-file
     /// activity before the daemon stops it automatically — VM killed,
     /// network lease released, rootfs deleted, state gone for good (see
@@ -188,6 +194,7 @@ impl Config {
             tap_pool_size: env_or("SANDKILN_TAP_POOL_SIZE", "32").parse().expect("SANDKILN_TAP_POOL_SIZE must be a number"),
             auth_token: std::env::var("SANDKILN_AUTH_TOKEN").ok(),
             drives_dir: expand_home(&env_or("SANDKILN_DRIVES_DIR", "~/sandkiln-tools/drives")),
+            history_db_path: expand_home(&env_or("SANDKILN_HISTORY_DB_PATH", "~/sandkiln-tools/history.db")),
             images_dir: expand_home(&env_or("SANDKILN_IMAGES_DIR", "~/sandkiln-tools/images-registered")),
             idle_timeout,
             auto_suspend_timeout,

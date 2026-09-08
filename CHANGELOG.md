@@ -22,6 +22,16 @@ Changelog](https://keepachangelog.com/).
   real sandbox — 5 new `scripts/integration-test.sh` checks, 194/194
   passing. See `ROADMAP.md`'s "Tags and sandbox metadata" section for
   the `Accept: application/json` header requirement and other details.
+- Durable sandbox history (daemon/new `sandkiln-store` crate only — no
+  SDK/CLI change, nothing to publish): `GET /sandboxes/history`
+  (`?live_only=`, `?limit=`) backed by a new sqlite database, surviving
+  a daemon restart unlike `GET /sandboxes`. Explicitly does **not** mean
+  live sandboxes survive a restart — nothing can make that true today —
+  see `ROADMAP.md`'s "Tags and sandbox metadata" section for exactly
+  what this does and doesn't solve, and the real restart test that
+  verified it (a live record correctly flips to `orphaned_by_restart`
+  with its tags intact; already-ended records are untouched). 15 new
+  `scripts/integration-test.sh` checks, 209/209 passing overall.
 
 ## [0.5.0] — 2026-09-08
 

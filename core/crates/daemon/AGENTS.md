@@ -40,8 +40,14 @@ should mostly be: parse a request, call into `vmm`, shape a response.
 - `state.rs` — `AppState`: the daemon's config, `NetworkManager`, an
   optional `JailerIdPool` (`Some` only when `config.jailer` is set), and
   in-memory sandbox map (`Mutex<HashMap<String, Sandbox>>`). This map
-  *is* the daemon's entire notion of sandbox state — it doesn't survive a
-  restart (see `ROADMAP.md`'s sqlite-backed-state item). Also owns naming:
+  *is* the daemon's entire notion of *live* sandbox state — it doesn't
+  survive a restart, and per `sandkiln-store`'s own module doc comment
+  there's no way it realistically ever could (a live `Sandbox` owns a
+  real OS process with no re-adoption mechanism). `AppState::history`
+  (a `sandkiln_store::HistoryStore`) is the separate, durable answer to
+  a related but different question — not "is this sandbox still
+  running" but "did this sandbox exist, and how did it end" — see
+  `ROADMAP.md`'s "Tags and sandbox metadata" section. Also owns naming:
   `name_holder`/`resolve_name` find whichever of a live sandbox or a held
   snapshot currently carries a given name (live wins if both do — see
   `Sandbox::name`'s doc comment on why that's not a conflict), and
@@ -65,7 +71,16 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   sandbox booted jailed, released back to `state.jailer_ids` on stop —
   and `name`, the caller-given identity carried across the
   sandbox<->snapshot boundary).
-- `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop.
+- `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop/
+  history (`GET /sandboxes/history`, reading `AppState::history` — the
+  only read path for it; every write happens as a side effect of
+  create/destroy/snapshot, not a caller action of its own).
+  `create_sandbox_core` calls `state.history.record_created` right
+  after a boot actually succeeds, and `destroy_sandbox_by_id` calls
+  `state.history.record_ended` (`routes_snapshot::snapshot_and_stop`
+  calls the equivalent for the snapshotted case) — both best-effort
+  (a warning log, not a failed request, if the history write itself
+  fails; the sandbox operation already succeeded by that point).
   `stop_sandbox_by_id()` is the shared stop entry point used by both the
   `DELETE` route and `idle_reaper`; it defaults to preserving state
   (snapshot-then-stop, via `routes_snapshot::snapshot_and_stop`) rather

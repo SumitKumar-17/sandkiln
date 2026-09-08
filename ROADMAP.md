@@ -441,8 +441,36 @@ outbound HTTP both still work.
 
 - Key/value tags on sandboxes (environment, team, owner, whatever the
   caller wants) for filtering and listing.
-- Sqlite-backed sandbox state instead of the current in-memory map, so
-  tags, history, and listings survive a daemon restart.
+- **Done: durable sandbox history (sqlite), scoped honestly** — new
+  `sandkiln-store` crate (`rusqlite`, bundled), a `GET /sandboxes/history`
+  route, and `AppState::history: HistoryStore`. **This is not, and
+  cannot be, "the in-memory map becomes sqlite" in the sense of live
+  sandboxes surviving a restart** — a live `Sandbox` owns a real
+  Firecracker `Child` process with open API/vsock sockets, and there is
+  no re-adoption mechanism anywhere in this project (jailer included) to
+  reattach to one after the daemon that spawned it is gone. Confirmed
+  directly: today a daemon restart of any kind (kill, crash,
+  `systemctl restart`) orphans every live sandbox's process
+  unconditionally — `scripts/sandkilnd-ctl.sh` already does its own
+  best-effort orphan `pkill` for exactly this reason, and
+  `SELF_HOSTING.md`'s troubleshooting section already documented the
+  symptom before this existed. What sqlite actually buys, honestly: a
+  durable record of *every sandbox that ever existed* — id, name, tags,
+  image, created-at, and how it ended (`destroyed`, `snapshotted` with
+  the resulting snapshot id, or `orphaned_by_restart`) — queryable
+  (`?live_only=`, `?limit=`) across restarts, which the existing
+  in-memory map and even `Snapshot`'s own flat-file durability (which
+  only covers sandboxes that got that far) don't give you. At daemon
+  startup, any record still marked live is unconditionally marked
+  `orphaned_by_restart` — not a heuristic, since nothing can make it
+  genuinely still live at that point. **Live-verified end to end**,
+  including the actual restart case: created a sandbox, confirmed its
+  live history entry, restarted the real daemon, confirmed it flipped to
+  `orphaned_by_restart` with its tags intact, while separately-recorded
+  destroyed/snapshotted entries from before the restart were untouched.
+  15 new `scripts/integration-test.sh` checks (the create/destroy/
+  snapshot recording path — the restart case itself needs a real daemon
+  restart mid-test, verified manually instead), 209/209 passing overall.
 - **Done: guest-accessible metadata service**, via Firecracker's own
   native MMDS (Microvm Metadata Service) rather than anything
   sandkiln-built — every sandbox with a name and/or tags automatically
