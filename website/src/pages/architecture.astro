@@ -2,6 +2,7 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
+import BootDiagram from "../components/BootDiagram.astro";
 ---
 
 <BaseLayout title="Architecture — sandkiln">
@@ -48,6 +49,7 @@ import Footer from "../components/Footer.astro";
         <div class="eyebrow">Boot lifecycle</div>
         <h2 style="font-size:24px;">What happens inside 33 milliseconds</h2>
       </div>
+      <BootDiagram />
       <div class="lifecycle">
         <div class="life-step"><div class="idx">01</div><h4>Lease</h4><p>A tap device and IP are leased from the pool, attached to the bridge.</p></div>
         <div class="life-step"><div class="idx">02</div><h4>Boot</h4><p>Firecracker starts, boot-source/drive/machine-config/vsock are configured over its API socket.</p></div>

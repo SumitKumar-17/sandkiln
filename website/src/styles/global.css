@@ -155,18 +155,75 @@ nav.topnav a[aria-current="page"] { color: var(--accent); }
   border: 1px solid var(--border); text-decoration: none; display: inline-block;
   color: var(--text);
 }
-.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
-.btn.ghost { background: transparent; }
+.btn.primary {
+  background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600;
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+  transition: box-shadow 0.25s ease, transform 0.15s ease;
+}
+.btn.primary:hover { box-shadow: 0 0 26px 2px color-mix(in srgb, var(--accent) 55%, transparent); transform: translateY(-1px); }
+.btn.ghost { background: transparent; transition: border-color 0.2s ease, color 0.2s ease; }
+.btn.ghost:hover { border-color: var(--accent); color: var(--accent); }
 
-/* ---------- terminal panel ---------- */
+/* ---------- pyrometer (the kiln's own temperature dial, repurposed as
+   the boot-time readout — a real gauge, not a flat number, because a
+   kiln's whole identity is "the thing with the dial on the front") ---------- */
+.pyro { display: flex; align-items: center; gap: 14px; }
+.pyro svg { display: block; overflow: visible; }
+.pyro .dial-track { fill: none; stroke: var(--border); stroke-width: 5; }
+.pyro .dial-value { fill: none; stroke: var(--accent); stroke-width: 5; stroke-linecap: round; filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent) 70%, transparent)); }
+.pyro .needle { transform-origin: 32px 32px; animation: pyro-settle 1.3s cubic-bezier(0.2, 0.9, 0.25, 1) both; animation-delay: 0.4s; }
+@keyframes pyro-settle { from { transform: rotate(-108deg); } }
+@media (prefers-reduced-motion: reduce) { .pyro .needle { animation: none; } }
+.pyro-read b { display: block; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 26px; font-weight: 600; color: var(--accent); line-height: 1; }
+.pyro-read span { font-size: 12px; color: var(--text-faint); letter-spacing: 0.02em; }
+
+/* ---------- terminal panel ----------
+   The kiln's own firebox glass: a hot glow escaping the seams, a faint
+   phosphor scanline sweep over the glass, embers drifting up behind it.
+   This is the one place the page spends its whole visual "budget" —
+   every other panel on the page stays flat and quiet by comparison. */
 .term {
   background: var(--code-bg); color: var(--code-text);
   border: 1px solid var(--border);
   font-family: var(--mono); font-size: 12.6px; line-height: 1.65;
   padding: 20px 22px; height: 360px; overflow: hidden;
-  box-shadow: var(--shadow);
+  box-shadow:
+    var(--shadow),
+    0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent),
+    0 30px 70px -25px color-mix(in srgb, var(--accent) 55%, transparent);
   position: relative;
+  isolation: isolate;
 }
+.term::before {
+  /* phosphor scanlines drifting slowly down the glass */
+  content: "";
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--accent-glow) 7%, transparent) 0px,
+    transparent 1px,
+    transparent 3px
+  );
+  background-size: 100% 6px;
+  animation: scan-drift 9s linear infinite;
+  pointer-events: none;
+  z-index: 2;
+  mix-blend-mode: overlay;
+}
+.term::after {
+  /* the fire itself: a low ember bloom breathing at the base of the glass */
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: 0; height: 55%;
+  background: radial-gradient(ellipse at 30% 100%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 65%),
+              radial-gradient(ellipse at 78% 100%, color-mix(in srgb, var(--accent-glow) 22%, transparent), transparent 60%);
+  animation: ember-breathe 4.5s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+@keyframes scan-drift { from { background-position-y: 0; } to { background-position-y: 120px; } }
+@keyframes ember-breathe { 0%, 100% { opacity: 0.7; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .term::before, .term::after { animation: none; } }
+.term-bar, .term > pre, .term > canvas { position: relative; z-index: 1; }
 .term-bar { display: flex; align-items: center; gap: 8px; margin: -20px -22px 16px; padding: 10px 16px; border-bottom: 1px solid color-mix(in srgb, var(--code-text) 12%, transparent); }
 .term-bar span { width: 9px; height: 9px; border-radius: 50%; background: color-mix(in srgb, var(--code-text) 20%, transparent); }
 .term-bar b { font-weight: 500; color: var(--code-dim); font-size: 11.5px; margin-left: 6px; letter-spacing: 0.04em; }

@@ -1,0 +1,73 @@
+---
+// A literal diagram of what actually happens on `POST /sandboxes`, not a
+// decorative animation bolted onto the page — the four nodes below are
+// exactly the four steps enumerated in prose right below this component
+// (see architecture.astro), and the traveling pulse is the request
+// itself moving through the real system: your call reaches the daemon,
+// the daemon leases a tap device and boots a real Firecracker process,
+// the guest kernel comes up and starts the agent, the agent binds vsock
+// and the sandbox is ready. Grounded in the actual architecture, the way
+// a product's real diagram should be — not an abstract flourish.
+const nodes = [
+  { x: 60, label: "Your call", sub: "POST /sandboxes" },
+  { x: 220, label: "sandkilnd", sub: "leases tap + IP" },
+  { x: 380, label: "Firecracker", sub: "boots a real kernel" },
+  { x: 540, label: "guest-agent", sub: "binds vsock — ready" },
+];
+---
+
+<div class="boot-diagram">
+  <svg viewBox="0 0 600 110" role="img" aria-label="A request travels from your code, through the sandkiln daemon, into a booting Firecracker microVM, to the guest agent inside it.">
+    <line x1="60" y1="40" x2="540" y2="40" class="rail" />
+    {nodes.map((n) => (
+      <g class="node" style={`--nx:${n.x}px`}>
+        <circle cx={n.x} cy="40" r="7" class="node-ring" />
+        <circle cx={n.x} cy="40" r="3" class="node-core" />
+        <text x={n.x} y="70" class="node-label" text-anchor="middle">{n.label}</text>
+        <text x={n.x} y="86" class="node-sub" text-anchor="middle">{n.sub}</text>
+      </g>
+    ))}
+    <circle r="4.5" class="pulse" />
+  </svg>
+</div>
+
+<style>
+  .boot-diagram { margin: 0 0 48px; }
+  .boot-diagram svg { width: 100%; height: auto; overflow: visible; }
+  .rail { stroke: var(--border); stroke-width: 2; }
+  .node-ring { fill: none; stroke: var(--border); stroke-width: 2; }
+  .node-core { fill: var(--text-faint); }
+  .node-label { font-family: var(--mono); font-size: 11.5px; font-weight: 600; fill: var(--text); }
+  .node-sub { font-family: var(--mono); font-size: 9.5px; fill: var(--text-faint); }
+
+  .pulse {
+    fill: var(--accent-glow);
+    filter: drop-shadow(0 0 6px var(--accent-glow));
+    offset-path: path("M60,40 L540,40");
+    offset-rotate: 0deg;
+    animation: travel 4.8s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+  }
+  @keyframes travel {
+    0% { offset-distance: 0%; opacity: 0; }
+    4% { opacity: 1; }
+    92% { opacity: 1; }
+    100% { offset-distance: 100%; opacity: 0; }
+  }
+
+  /* Each node's ring catches fire in sequence as the pulse reaches it —
+     timed to the same 4.8s loop, one quarter apart, so the diagram reads
+     as cause and effect rather than four independent decorations. */
+  .node:nth-child(2) .node-ring, .node:nth-child(2) .node-core { animation: node-hit 4.8s ease-in-out infinite; animation-delay: 0.05s; }
+  .node:nth-child(3) .node-ring, .node:nth-child(3) .node-core { animation: node-hit 4.8s ease-in-out infinite; animation-delay: 1.35s; }
+  .node:nth-child(4) .node-ring, .node:nth-child(4) .node-core { animation: node-hit 4.8s ease-in-out infinite; animation-delay: 2.65s; }
+  .node:nth-child(5) .node-ring, .node:nth-child(5) .node-core { animation: node-hit 4.8s ease-in-out infinite; animation-delay: 3.95s; }
+  @keyframes node-hit {
+    0%, 96% { stroke: var(--border); fill: var(--text-faint); filter: none; }
+    2%, 10% { stroke: var(--accent); fill: var(--accent-glow); filter: drop-shadow(0 0 5px var(--accent-glow)); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pulse { display: none; }
+    .node .node-ring, .node .node-core { animation: none !important; }
+  }
+</style>
