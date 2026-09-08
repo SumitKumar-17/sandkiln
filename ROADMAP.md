@@ -92,15 +92,32 @@ outbound HTTP both still work.
   live-tail model (reconnecting gets everything since the process
   started, not just what's emitted from that point on), not just a bare
   live tail.
-- **Filesystem operations are read-file/write-file only.** No
-  `chmod`/`chown`/`symlink`/`readlink`/`mkdir`/`rename`/`copy`/
-  `truncate`/directory-listing-with-metadata — a caller has to shell out
-  via `runCommand` for anything beyond reading or overwriting one file's
-  full contents. This is a developer-experience gap, not a capability
-  one (the guest agent could expose these as additional vsock commands
-  using the same protocol shape `read_file`/`write_file` already use),
-  but a real one if a workload wants filesystem operations as first-class
-  SDK calls instead of shelled-out commands.
+- **Done: full filesystem operations** — `chmod`/`chown`/`mkdir`
+  (with `-p`-style `parents`)/`rename`/`copy`/`symlink`/`readlink`/
+  `truncate`/directory listing with metadata (name, is-dir, is-symlink,
+  size, permission bits, mtime), as new vsock protocol commands
+  alongside `exec`/`read_file`/`write_file`. Also closes a
+  previously-undocumented gap: `list_dir` already existed in the
+  protocol and guest agent but was never wired up above that layer (no
+  daemon route, no SDK, no CLI) — it's now exposed too, with richer
+  metadata than its original bare-filename-list shape (nothing
+  depended on that shape yet, so it was widened in place rather than
+  adding a separate variant). Exposed as
+  `sandbox.chmod/chown/mkdir/rename/copy/symlink/readlink/truncate/listDir`
+  in both SDKs and `kiln sandbox chmod|chown|mkdir|rename|cp|symlink|
+  readlink|truncate|ls-dir` in the CLI. No path validation on any of
+  these (same as `read_file`/`write_file` already had none) — a
+  deliberate consistency choice, not an oversight: the guest agent is a
+  "dumb executor" by design (see its own `AGENTS.md`), and a path is
+  scoped to whatever it resolves to inside that one microVM's own
+  filesystem, not the real host. **Live guest-side verification
+  pending**: needs the guest agent rebuilt and re-injected into the
+  base rootfs (`images/inject-agent.sh`, or a fresh `scripts/setup.sh`
+  run) before these actually work against a real sandbox — confirmed
+  the daemon-side routing/serialization is correct by calling `mkdir`
+  against the *old* agent and getting back a clean, informative 400
+  ("unknown variant `mkdir`") rather than a hang or crash, with the
+  sandbox still fully usable afterward.
 - **Python (`sandkiln` PyPI package) — working, mirrors the JS SDK
   exactly**, including `resume()`/`fork()`/`snapshot()`/`preview_url()`
   and resource overrides. Zero runtime dependencies (stdlib `urllib`,

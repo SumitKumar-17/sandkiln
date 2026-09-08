@@ -2,9 +2,15 @@ import { decodeBase64, encodeBase64 } from "./base64.js";
 import { resolveClient, type ClientContext } from "./client.js";
 import { request } from "./http.js";
 import type {
+  ChmodRequestBody,
+  ChownRequestBody,
+  CopyRequestBody,
   CreateSandboxOptions,
   CreateSandboxRequestBody,
   CreateSandboxResponseBody,
+  DirEntry,
+  DriveAttachmentOptions,
+  DriveAttachmentRequestBody,
   ExecRequestBody,
   ExecResponseBody,
   ExecResult,
@@ -12,17 +18,21 @@ import type {
   GetOrCreateSandboxOptions,
   GetOrCreateSandboxRequestBody,
   GetOrCreateSandboxResponseBody,
+  ListDirRequestBody,
+  ListDirResponseBody,
   ListSandboxesOptions,
   ListSandboxesResponseBody,
   ListSnapshotsOptions,
   ListSnapshotsResponseBody,
-  DriveAttachmentOptions,
-  DriveAttachmentRequestBody,
+  MkdirRequestBody,
   PreviewUrlOptions,
   RateLimitOptions,
   RateLimitRequestBody,
   ReadFileRequestBody,
   ReadFileResponseBody,
+  ReadlinkRequestBody,
+  ReadlinkResponseBody,
+  RenameRequestBody,
   ResumeSnapshotResponseBody,
   SandboxByNameResponseBody,
   SandboxInfo,
@@ -30,6 +40,8 @@ import type {
   SnapshotInfo,
   SnapshotSandboxResponseBody,
   StopSandboxResponseBody,
+  SymlinkRequestBody,
+  TruncateRequestBody,
   WriteFileRequestBody,
 } from "./types.js";
 
@@ -175,6 +187,81 @@ export class Sandbox {
       path: `/sandboxes/${encodeURIComponent(this.id)}/write-file`,
       body: requestBody,
     });
+  }
+
+  /** `mode` is raw permission bits (e.g. `0o644`), the same shape POSIX
+   * `chmod(2)` takes — not a symbolic string like the `chmod` shell
+   * command accepts. */
+  async chmod(path: string, mode: number): Promise<void> {
+    const requestBody: ChmodRequestBody = { path, mode };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/chmod`, body: requestBody });
+  }
+
+  async chown(path: string, uid: number, gid: number): Promise<void> {
+    const requestBody: ChownRequestBody = { path, uid, gid };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/chown`, body: requestBody });
+  }
+
+  /** `parents: true` behaves like `mkdir -p` (creates missing parent
+   * directories, succeeds if the target already exists); omitted/`false`
+   * behaves like plain `mkdir` — fails if the parent is missing or the
+   * target already exists. */
+  async mkdir(path: string, options: { parents?: boolean } = {}): Promise<void> {
+    const requestBody: MkdirRequestBody = { path, parents: options.parents };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/mkdir`, body: requestBody });
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    const requestBody: RenameRequestBody = { from, to };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/rename`, body: requestBody });
+  }
+
+  /** A full byte-for-byte copy to a new path — `from` is left untouched,
+   * unlike `rename`. */
+  async copy(from: string, to: string): Promise<void> {
+    const requestBody: CopyRequestBody = { from, to };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/copy`, body: requestBody });
+  }
+
+  async symlink(target: string, linkPath: string): Promise<void> {
+    const requestBody: SymlinkRequestBody = { target, link_path: linkPath };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/symlink`, body: requestBody });
+  }
+
+  /** The target a symlink points at, exactly as stored — not
+   * resolved/canonicalized. */
+  async readlink(path: string): Promise<string> {
+    const requestBody: ReadlinkRequestBody = { path };
+    const body = await request<ReadlinkResponseBody>({
+      ...this.client,
+      method: "POST",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/readlink`,
+      body: requestBody,
+    });
+    return body.target;
+  }
+
+  async truncate(path: string, size: number): Promise<void> {
+    const requestBody: TruncateRequestBody = { path, size };
+    await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/truncate`, body: requestBody });
+  }
+
+  async listDir(path: string): Promise<DirEntry[]> {
+    const requestBody: ListDirRequestBody = { path };
+    const body = await request<ListDirResponseBody>({
+      ...this.client,
+      method: "POST",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/list-dir`,
+      body: requestBody,
+    });
+    return body.entries.map((e) => ({
+      name: e.name,
+      isDir: e.is_dir,
+      isSymlink: e.is_symlink,
+      size: e.size,
+      mode: e.mode,
+      mtime: new Date(e.mtime_unix * 1000),
+    }));
   }
 
   /**

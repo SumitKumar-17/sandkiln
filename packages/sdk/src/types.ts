@@ -143,6 +143,79 @@ export interface WriteFileRequestBody {
   content_base64: string;
 }
 
+export interface ChmodRequestBody {
+  path: string;
+  mode: number;
+}
+
+export interface ChownRequestBody {
+  path: string;
+  uid: number;
+  gid: number;
+}
+
+export interface MkdirRequestBody {
+  path: string;
+  parents?: boolean;
+}
+
+export interface RenameRequestBody {
+  from: string;
+  to: string;
+}
+
+export interface CopyRequestBody {
+  from: string;
+  to: string;
+}
+
+export interface SymlinkRequestBody {
+  target: string;
+  link_path: string;
+}
+
+export interface ReadlinkRequestBody {
+  path: string;
+}
+
+export interface ReadlinkResponseBody {
+  target: string;
+}
+
+export interface TruncateRequestBody {
+  path: string;
+  size: number;
+}
+
+export interface ListDirRequestBody {
+  path: string;
+}
+
+export interface DirEntryBody {
+  name: string;
+  is_dir: boolean;
+  is_symlink: boolean;
+  size: number;
+  mode: number;
+  mtime_unix: number;
+}
+
+export interface ListDirResponseBody {
+  entries: DirEntryBody[];
+}
+
+/** One entry from `Sandbox.listDir()` — `mode` is permission bits only
+ * (e.g. `0o644`), the same shape `Sandbox.chmod()` takes, so an entry's
+ * `mode` can be handed straight back to `chmod()`. */
+export interface DirEntry {
+  name: string;
+  isDir: boolean;
+  isSymlink: boolean;
+  size: number;
+  mode: number;
+  mtime: Date;
+}
+
 export interface PreviewUrlOptions {
   /** Path within the guest's server to preview, e.g. `/api/health`.
    * Defaults to `/`. A value with no leading slash gets one added. */

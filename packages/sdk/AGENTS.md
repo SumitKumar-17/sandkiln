@@ -16,7 +16,14 @@ this package only ever catches up to what the daemon actually does.
 
 - `sandbox.ts` — the `Sandbox` class: `create`/`attach`/`list`/`resume`/
   `fork`/`byName`/`getOrCreate` (static), `runCommand`/`readFile`/
-  `writeFile`/`stop`/`snapshot`/`previewUrl` (instance). Every instance
+  `writeFile`/`chmod`/`chown`/`mkdir`/`rename`/`copy`/`symlink`/
+  `readlink`/`truncate`/`listDir`/`stop`/`snapshot`/`previewUrl`
+  (instance). `chmod`/`chown`/.../`listDir` all follow the exact same
+  shape as `readFile`/`writeFile` — build a request body, `request<T>()`,
+  map any snake_case response fields back to camelCase — and forward
+  `path`/`from`/`to`/etc. completely unvalidated, same as `readFile`/
+  `writeFile` already do (validation, if ever added, belongs on the
+  daemon or guest-agent side, not duplicated here). Every instance
   method reuses the `baseUrl`/`authToken` the sandbox was created/attached
   with — see the `ClientContext` pattern. `resume`/`fork`/`byName` are
   static (not instance methods) because none acts on an already-existing
@@ -45,6 +52,11 @@ this package only ever catches up to what the daemon actually does.
   shape, including `guestAgentVerified`/`verificationHint` on every
   result (always `false` — the daemon can never verify this itself, see
   that file's module doc comment).
+- `drive.ts` — the `Drive` class: `create`/`list`/`delete`, all static —
+  same static-namespace shape as `image.ts` (a drive has no instance
+  behavior besides delete). Attach one at create time via
+  `CreateSandboxOptions.drives`, not through this class — `Drive` only
+  covers the drive resource itself (create/list/delete), not attachment.
 - `client.ts` — `ClientContext`/`resolveClient`, pulled out of
   `sandbox.ts` once `image.ts` needed the exact same
   `baseUrl`/`authToken` resolution.

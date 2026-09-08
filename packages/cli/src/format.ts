@@ -1,5 +1,5 @@
 import { InvalidArgumentError } from "commander";
-import type { DriveInfo, ImageInfo, SandboxInfo, SnapshotInfo } from "sandkiln";
+import type { DirEntry, DriveInfo, ImageInfo, SandboxInfo, SnapshotInfo } from "sandkiln";
 
 /**
  * A plain `Error` here crashes with a raw stack trace instead of the
@@ -52,6 +52,34 @@ export function parsePositiveInt(flag: string): (value: string) => number {
     const parsed = Number(value);
     if (!Number.isInteger(parsed) || parsed <= 0) {
       throw new InvalidArgumentError(`${flag} expects a positive whole number, got: ${value}`);
+    }
+    return parsed;
+  };
+}
+
+/**
+ * Returns a commander argument parser for `chmod`'s `<mode>` — always
+ * parsed as octal digits with no `0o`/`0` prefix required, matching the
+ * `chmod` shell command's own convention (`chmod 644 file`, not
+ * `chmod 0o644 file`).
+ */
+export function parseOctalMode(value: string): number {
+  if (!/^[0-7]{1,4}$/.test(value)) {
+    throw new InvalidArgumentError(`<mode> expects 1-4 octal digits (e.g. 644), got: ${value}`);
+  }
+  return parseInt(value, 8);
+}
+
+/**
+ * Like `parsePositiveInt`, but allows `0` — for flags where zero is a
+ * meaningful value (e.g. `truncate`'s `<size>`, unlike `--vcpu`/`--mem`
+ * where `0` is always meaningless).
+ */
+export function parseNonNegativeInt(flag: string): (value: string) => number {
+  return (value: string): number => {
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      throw new InvalidArgumentError(`${flag} expects a non-negative whole number, got: ${value}`);
     }
     return parsed;
   };
@@ -111,4 +139,17 @@ export function formatDriveList(drives: DriveInfo[]): string {
     return "no drives\n";
   }
   return drives.map(formatDriveLine).join("\n") + "\n";
+}
+
+function formatDirEntryLine(entry: DirEntry): string {
+  const kind = entry.isDir ? "d" : entry.isSymlink ? "l" : "-";
+  const mode = entry.mode.toString(8).padStart(3, "0");
+  return `${kind}${mode}  ${entry.size}  ${entry.mtime.toISOString()}  ${entry.name}`;
+}
+
+export function formatDirEntryList(entries: DirEntry[]): string {
+  if (entries.length === 0) {
+    return "empty directory\n";
+  }
+  return entries.map(formatDirEntryLine).join("\n") + "\n";
 }

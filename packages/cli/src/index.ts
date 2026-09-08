@@ -2,11 +2,14 @@ import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
 import { Drive, Image, Sandbox, SandkilnApiError } from "sandkiln";
 import {
+  formatDirEntryList,
   formatDriveList,
   formatImageList,
   formatSandboxList,
   formatSnapshotList,
   parseDriveAttachment,
+  parseNonNegativeInt,
+  parseOctalMode,
   parsePositiveInt,
   parseTag,
 } from "./format.js";
@@ -239,6 +242,124 @@ sandbox
       const content = readFileSync(localFile);
       await attachSandbox(id, baseUrl, token).writeFile(path, content);
       process.stdout.write(`wrote ${localFile} -> ${id}:${path}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("chmod <id> <path> <mode>")
+  .description("Change a file's permission bits. <mode> is octal digits (e.g. 644), same as the chmod shell command.")
+  .action(async function (this: Command, id: string, path: string, mode: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).chmod(path, parseOctalMode(mode));
+      process.stdout.write(`chmod ${mode} ${id}:${path}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("chown <id> <path> <uid> <gid>")
+  .description("Change a file's owning uid/gid.")
+  .action(async function (this: Command, id: string, path: string, uid: string, gid: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).chown(path, parsePositiveInt("<uid>")(uid), parsePositiveInt("<gid>")(gid));
+      process.stdout.write(`chown ${uid}:${gid} ${id}:${path}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("mkdir <id> <path>")
+  .description("Create a directory inside a sandbox.")
+  .option("-p, --parents", "create missing parent directories, like mkdir -p; succeed if the target already exists")
+  .action(async function (this: Command, id: string, path: string, opts: { parents?: boolean }) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).mkdir(path, { parents: opts.parents });
+      process.stdout.write(`${id}:${path}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("rename <id> <from> <to>")
+  .description("Rename/move a file or directory inside a sandbox.")
+  .action(async function (this: Command, id: string, from: string, to: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).rename(from, to);
+      process.stdout.write(`${id}:${from} -> ${id}:${to}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("cp <id> <from> <to>")
+  .description("Copy a file to a new path inside a sandbox, leaving the original in place.")
+  .action(async function (this: Command, id: string, from: string, to: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).copy(from, to);
+      process.stdout.write(`${id}:${from} -> ${id}:${to}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("symlink <id> <target> <link-path>")
+  .description("Create a symlink at <link-path> pointing at <target>, both inside the sandbox.")
+  .action(async function (this: Command, id: string, target: string, linkPath: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).symlink(target, linkPath);
+      process.stdout.write(`${id}:${linkPath} -> ${target}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("readlink <id> <path>")
+  .description("Print the target a symlink points at, exactly as stored (not resolved).")
+  .action(async function (this: Command, id: string, path: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const target = await attachSandbox(id, baseUrl, token).readlink(path);
+      process.stdout.write(`${target}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("truncate <id> <path> <size>")
+  .description("Resize a file to exactly <size> bytes, padding with zeros or discarding trailing data as needed.")
+  .action(async function (this: Command, id: string, path: string, size: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).truncate(path, parseNonNegativeInt("<size>")(size));
+      process.stdout.write(`${id}:${path} -> ${size} bytes\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("ls-dir <id> <path>")
+  .description("List a directory's contents inside a sandbox, with size/permissions/mtime.")
+  .action(async function (this: Command, id: string, path: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const entries = await attachSandbox(id, baseUrl, token).listDir(path);
+      process.stdout.write(formatDirEntryList(entries));
     } catch (error) {
       await handleApiError(error);
     }

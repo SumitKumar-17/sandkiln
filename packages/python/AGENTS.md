@@ -36,6 +36,12 @@ a dependency the JS SDK's equivalent doesn't need either (it uses native
   `packages/sdk/src/image.ts`: `register`/`list`/`delete` are all
   classmethods, no instance state — an image has no behavior besides
   delete, and delete only ever needs an id.
+- `drive.py` — the `Drive` class, `DriveInfo`/`DriveHolder` dataclasses.
+  Mirrors `packages/sdk/src/drive.ts` the same way `image.py` mirrors
+  `image.ts` — same static-classmethod shape, no instance state. Attach
+  a drive at create time via `Sandbox.create`'s `drives` argument
+  (`DriveAttachment` dataclass, defined in `sandbox.py` since it's
+  create-time input, not a `Drive`-class operation).
 - `_http.py` — the one place `urllib.request` gets called. Leading
   underscore: not part of the public API, same convention as `_config.py`.
 - `_config.py` — env var fallback resolution

@@ -100,9 +100,19 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   cannot loop-mount a candidate image to check the agent is baked in;
   `scripts/preflight-check.sh --root-checks --rootfs-image <path>` is
   the only way to get that confirmation, out of band, before registering.
-- `routes_exec.rs` — exec/read-file/write-file handlers. `call_agent()`
-  is the shared helper all three use — extend it, don't duplicate its
-  pattern. It's also what bumps a sandbox's `last_activity`.
+- `routes_exec.rs` — exec/read-file/write-file handlers. `pub(crate) async fn
+  call_agent()` is the shared helper every route in both this file and
+  `routes_fs.rs` uses — extend it, don't duplicate its pattern. It's
+  also what bumps a sandbox's `last_activity`.
+- `routes_fs.rs` — filesystem metadata/structure handlers: chmod, chown,
+  mkdir, rename, copy, symlink, readlink, truncate, directory listing.
+  Split out of `routes_exec.rs` (2026-09-08) once adding all of these
+  there would have pushed it well past this crate's usual size range —
+  data transfer (`routes_exec`) vs. filesystem structure (`routes_fs`)
+  is the seam. No path validation on any handler here, same as
+  `routes_exec::read_file`/`write_file` already have none — see this
+  file's own module doc comment for why that's a deliberate consistency
+  choice, not an oversight.
 - `idle_reaper.rs` — background task (spawned from `main.rs` whenever
   `SANDKILN_IDLE_TIMEOUT_SECS` and/or `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`
   is set) that reclaims idle sandboxes two ways: auto-suspend (pause +

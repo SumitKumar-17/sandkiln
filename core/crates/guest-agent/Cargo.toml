@@ -12,3 +12,7 @@ path = "src/main.rs"
 sandkiln-protocol = { path = "../protocol" }
 vsock = "0.5"
 base64 = "0.22"
+# Only needed for chown(2) -- std has no equivalent. Kept as this one
+# minimal, musl-friendly dependency rather than pulling in `nix` for a
+# single syscall wrapper.
+libc = "0.2"

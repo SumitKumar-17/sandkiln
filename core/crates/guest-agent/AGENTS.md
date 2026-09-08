@@ -8,8 +8,9 @@ is scoped to this one crate.
 A ~700KB static binary that runs *inside* every microVM as a systemd
 service, listening on vsock port `sandkiln_protocol::AGENT_PORT` and
 answering `Request`s from `sandkiln-protocol` (exec, read/write file,
-list directory). This is the only code that ever runs inside the guest —
-everything else (`vmm`, `daemon`) is host-side.
+directory listing with metadata, chmod/chown/mkdir/rename/copy/symlink/
+readlink/truncate). This is the only code that ever runs inside the
+guest — everything else (`vmm`, `daemon`) is host-side.
 
 Built for `x86_64-unknown-linux-musl` specifically (static linking, no
 libc dependency on the guest's exact glibc version) — see root
@@ -25,8 +26,16 @@ time.
   response, repeat until the peer disconnects.
 - `handler.rs` — the actual implementation of each `Request` variant.
   This is genuinely simple (thin wrappers over `std::process::Command`
-  and `std::fs`) by design — don't add business logic here that belongs
-  on the host side instead. The guest agent should stay a dumb executor.
+  and `std::fs`, plus one raw `libc::chown` call — std has no chown
+  equivalent, and `libc` was chosen over `nix` as the one dependency
+  needed for a single syscall wrapper) by design — don't add business
+  logic here that belongs on the host side instead. The guest agent
+  should stay a dumb executor: no path validation of any kind on any
+  operation (not `..`-rejection, not an absolute-path requirement, not
+  canonicalization) — whatever the guest's own kernel permits, this
+  does. That's deliberate, not a gap to fix here; a path is scoped to
+  whatever it resolves to inside that one microVM's own filesystem
+  regardless.
 
 ## Building
 

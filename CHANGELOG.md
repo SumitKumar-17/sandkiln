@@ -13,6 +13,25 @@ Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+Not yet published to npm — the filesystem-ops entry below still needs
+live guest-side verification (see its own note) before a version bump.
+
+### Added
+- Persistent drives exposed in both SDKs and the CLI for the first time
+  (`Drive.create/list/delete`, attach at create time via `drives`/
+  `--drive <id[:ro]>`) — previously daemon-HTTP-API-only.
+- Full filesystem operations: `chmod`/`chown`/`mkdir`/`rename`/`copy`/
+  `symlink`/`readlink`/`truncate`/directory listing with metadata, as
+  new vsock protocol commands plus daemon routes, both SDKs, and the
+  CLI. Also exposes `list_dir`, which existed in the protocol/guest
+  agent already but was never wired up above that layer. **Live
+  guest-side verification pending** — needs the guest agent rebuilt and
+  re-injected into the base rootfs (`images/inject-agent.sh`, or a
+  fresh `scripts/setup.sh` run); daemon-side routing/serialization
+  confirmed correct against the *old* agent (clean 400, sandbox stays
+  healthy), but the actual filesystem operations need the new agent
+  binary in place to run for real.
+
 ### Changed
 - Reorganized `scripts/`: one-time host-provisioning steps
   (`create-tap-pool.sh`, `grant-net-admin.sh`, `install-firecracker.sh`,

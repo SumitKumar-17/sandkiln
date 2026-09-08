@@ -31,6 +31,20 @@ class ExecResult:
 
 
 @dataclass(frozen=True)
+class DirEntry:
+    """One entry from `Sandbox.list_dir()` - `mode` is permission bits
+    only (e.g. `0o644`), the same shape `Sandbox.chmod()` takes, so an
+    entry's `mode` can be handed straight back to `chmod()`."""
+
+    name: str
+    is_dir: bool
+    is_symlink: bool
+    size: int
+    mode: int
+    mtime: datetime
+
+
+@dataclass(frozen=True)
 class SandboxInfo:
     id: str
     created_at: datetime
@@ -262,6 +276,56 @@ class Sandbox:
         raw = content.encode("utf-8") if isinstance(content, str) else content
         body = {"path": path, "content_base64": base64.b64encode(raw).decode("ascii")}
         self._request("POST", f"/sandboxes/{self.id}/write-file", body)
+
+    def chmod(self, path: str, mode: int) -> None:
+        """`mode` is raw permission bits (e.g. `0o644`), the same shape
+        POSIX `chmod(2)` takes - not a symbolic string like the `chmod`
+        shell command accepts."""
+        self._request("POST", f"/sandboxes/{self.id}/chmod", {"path": path, "mode": mode})
+
+    def chown(self, path: str, uid: int, gid: int) -> None:
+        self._request("POST", f"/sandboxes/{self.id}/chown", {"path": path, "uid": uid, "gid": gid})
+
+    def mkdir(self, path: str, parents: bool = False) -> None:
+        """`parents=True` behaves like `mkdir -p` (creates missing parent
+        directories, succeeds if the target already exists); `False`
+        (the default) behaves like plain `mkdir` - fails if the parent is
+        missing or the target already exists."""
+        self._request("POST", f"/sandboxes/{self.id}/mkdir", {"path": path, "parents": parents})
+
+    def rename(self, from_path: str, to_path: str) -> None:
+        self._request("POST", f"/sandboxes/{self.id}/rename", {"from": from_path, "to": to_path})
+
+    def copy(self, from_path: str, to_path: str) -> None:
+        """A full byte-for-byte copy to a new path - `from_path` is left
+        untouched, unlike `rename`."""
+        self._request("POST", f"/sandboxes/{self.id}/copy", {"from": from_path, "to": to_path})
+
+    def symlink(self, target: str, link_path: str) -> None:
+        self._request("POST", f"/sandboxes/{self.id}/symlink", {"target": target, "link_path": link_path})
+
+    def readlink(self, path: str) -> str:
+        """The target a symlink points at, exactly as stored - not
+        resolved/canonicalized."""
+        response = self._request("POST", f"/sandboxes/{self.id}/readlink", {"path": path})
+        return response["target"]
+
+    def truncate(self, path: str, size: int) -> None:
+        self._request("POST", f"/sandboxes/{self.id}/truncate", {"path": path, "size": size})
+
+    def list_dir(self, path: str) -> list[DirEntry]:
+        response = self._request("POST", f"/sandboxes/{self.id}/list-dir", {"path": path})
+        return [
+            DirEntry(
+                name=e["name"],
+                is_dir=e["is_dir"],
+                is_symlink=e["is_symlink"],
+                size=e["size"],
+                mode=e["mode"],
+                mtime=datetime.fromtimestamp(e["mtime_unix"], tz=timezone.utc),
+            )
+            for e in response["entries"]
+        ]
 
     def stop(self, keep: bool | None = None) -> StopResult:
         """Stops this sandbox. By default (`keep` omitted, or `True`) this

@@ -18,6 +18,62 @@ pub enum Request {
     ListDir {
         path: String,
     },
+    /// `mode` is the raw permission bits (e.g. `0o644`), same as the
+    /// argument to POSIX `chmod(2)` — not a symbolic string like the
+    /// `chmod` shell command accepts.
+    Chmod {
+        path: String,
+        mode: u32,
+    },
+    Chown {
+        path: String,
+        uid: u32,
+        gid: u32,
+    },
+    /// `parents: true` behaves like `mkdir -p` (creates missing parent
+    /// directories, succeeds if the target already exists); `false`
+    /// (the default) behaves like plain `mkdir` — fails if the parent is
+    /// missing or the target already exists.
+    Mkdir {
+        path: String,
+        #[serde(default)]
+        parents: bool,
+    },
+    Rename {
+        from: String,
+        to: String,
+    },
+    /// A full byte-for-byte copy to a new path — `from` is left
+    /// untouched, unlike `Rename`.
+    Copy {
+        from: String,
+        to: String,
+    },
+    Symlink {
+        target: String,
+        link_path: String,
+    },
+    Readlink {
+        path: String,
+    },
+    Truncate {
+        path: String,
+        size: u64,
+    },
+}
+
+/// One entry from a `ListDir` response — enough metadata to distinguish
+/// files/dirs/symlinks and their size/permissions/mtime without a
+/// separate round trip per entry.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub is_symlink: bool,
+    pub size: u64,
+    /// Permission bits only (e.g. `0o644`), same shape `Chmod::mode` takes.
+    pub mode: u32,
+    pub mtime_unix: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -32,7 +88,12 @@ pub enum Response {
         content_base64: String,
     },
     Dir {
-        entries: Vec<String>,
+        entries: Vec<DirEntry>,
+    },
+    /// The result of `Readlink` — the target a symlink points at,
+    /// exactly as stored (not resolved/canonicalized).
+    Link {
+        target: String,
     },
     Ok,
     Error {
@@ -87,10 +148,100 @@ mod tests {
     }
 
     #[test]
+    fn chmod_request_wire_shape() {
+        let req = Request::Chmod { path: "/tmp/x".to_string(), mode: 0o644 };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"cmd":"chmod","path":"/tmp/x","mode":420}"#);
+    }
+
+    #[test]
+    fn chown_request_wire_shape() {
+        let req = Request::Chown { path: "/tmp/x".to_string(), uid: 1000, gid: 1000 };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"cmd":"chown","path":"/tmp/x","uid":1000,"gid":1000}"#);
+    }
+
+    #[test]
+    fn mkdir_request_wire_shape() {
+        let req = Request::Mkdir { path: "/tmp/x".to_string(), parents: true };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"cmd":"mkdir","path":"/tmp/x","parents":true}"#);
+    }
+
+    #[test]
+    fn mkdir_request_parents_defaults_to_false_when_omitted() {
+        let req: Request = serde_json::from_str(r#"{"cmd":"mkdir","path":"/tmp/x"}"#).unwrap();
+        let Request::Mkdir { path, parents } = req else { panic!("expected Mkdir") };
+        assert_eq!(path, "/tmp/x");
+        assert!(!parents);
+    }
+
+    #[test]
+    fn rename_request_wire_shape() {
+        let req = Request::Rename { from: "/a".to_string(), to: "/b".to_string() };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"cmd":"rename","from":"/a","to":"/b"}"#);
+    }
+
+    #[test]
+    fn copy_request_wire_shape() {
+        let req = Request::Copy { from: "/a".to_string(), to: "/b".to_string() };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"cmd":"copy","from":"/a","to":"/b"}"#);
+    }
+
+    #[test]
+    fn symlink_request_wire_shape() {
+        let req = Request::Symlink { target: "/a".to_string(), link_path: "/b".to_string() };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"cmd":"symlink","target":"/a","link_path":"/b"}"#);
+    }
+
+    #[test]
+    fn readlink_request_wire_shape() {
+        let req = Request::Readlink { path: "/a".to_string() };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"cmd":"readlink","path":"/a"}"#);
+    }
+
+    #[test]
+    fn truncate_request_wire_shape() {
+        let req = Request::Truncate { path: "/a".to_string(), size: 1024 };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"cmd":"truncate","path":"/a","size":1024}"#);
+    }
+
+    #[test]
     fn exec_response_wire_shape() {
         let resp = Response::Exec { stdout: "out".to_string(), stderr: "err".to_string(), exit_code: 1 };
         let json = serde_json::to_string(&resp).unwrap();
         assert_eq!(json, r#"{"status":"exec","stdout":"out","stderr":"err","exit_code":1}"#);
+    }
+
+    #[test]
+    fn dir_response_wire_shape() {
+        let resp = Response::Dir {
+            entries: vec![DirEntry {
+                name: "a.txt".to_string(),
+                is_dir: false,
+                is_symlink: false,
+                size: 12,
+                mode: 0o644,
+                mtime_unix: 1700000000,
+            }],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert_eq!(
+            json,
+            r#"{"status":"dir","entries":[{"name":"a.txt","is_dir":false,"is_symlink":false,"size":12,"mode":420,"mtime_unix":1700000000}]}"#
+        );
+    }
+
+    #[test]
+    fn link_response_wire_shape() {
+        let resp = Response::Link { target: "/a".to_string() };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert_eq!(json, r#"{"status":"link","target":"/a"}"#);
     }
 
     #[test]
@@ -111,6 +262,14 @@ mod tests {
             Request::ReadFile { path: "/a".to_string() },
             Request::WriteFile { path: "/a".to_string(), content_base64: "x".to_string() },
             Request::ListDir { path: "/a".to_string() },
+            Request::Chmod { path: "/a".to_string(), mode: 0o644 },
+            Request::Chown { path: "/a".to_string(), uid: 0, gid: 0 },
+            Request::Mkdir { path: "/a".to_string(), parents: true },
+            Request::Rename { from: "/a".to_string(), to: "/b".to_string() },
+            Request::Copy { from: "/a".to_string(), to: "/b".to_string() },
+            Request::Symlink { target: "/a".to_string(), link_path: "/b".to_string() },
+            Request::Readlink { path: "/a".to_string() },
+            Request::Truncate { path: "/a".to_string(), size: 0 },
         ];
         for req in requests {
             let json = serde_json::to_vec(&req).unwrap();

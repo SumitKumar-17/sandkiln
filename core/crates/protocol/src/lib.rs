@@ -7,7 +7,7 @@ mod framing;
 mod messages;
 
 pub use framing::{read_message, write_message};
-pub use messages::{Request, Response};
+pub use messages::{DirEntry, Request, Response};
 
 /// The vsock port the guest agent listens on, and the host connects to.
 /// Lives here so the two sides can't drift out of sync on it.

@@ -4,6 +4,7 @@ export { Drive } from "./drive.js";
 export { SandkilnApiError } from "./errors.js";
 export type {
   CreateSandboxOptions,
+  DirEntry,
   DriveAttachmentOptions,
   DriveHolder,
   DriveInfo,
