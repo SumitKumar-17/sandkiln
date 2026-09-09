@@ -14,6 +14,29 @@ Changelog](https://keepachangelog.com/).
 ## Unreleased
 
 ### Added
+- Per-sandbox egress (outbound network) policy (daemon only — no SDK/CLI
+  change, nothing to publish yet). A new `egress: { mode, allow_cidrs,
+  deny_cidrs }` field on `POST /sandboxes`/`POST /sandboxes/get-or-create`
+  — `mode` is `allow_all` or `deny_all`, enforced via one dedicated
+  iptables chain per sandbox (`sandkiln_vmm::egress`) with deny always
+  beating allow on overlap via rule ordering, not special-casing. Applied
+  once a lease goes live (boot, pool claim, resume, fork) and removed
+  only when the lease is finally released, so it survives a plain
+  snapshot-and-stop the same way the underlying tap device does, and
+  persists correctly across snapshot/resume/fork (re-applied fresh each
+  time, with a re-apply failure on resume/fork treated as a loud warning
+  rather than fatal, since both are one-way operations). See
+  `ROADMAP.md`'s "Firewall and egress policy" section for the full design
+  and what's still deferred (domain/port-level rules, SDK/CLI exposure).
+  Live-verified against the real dev box: `deny_all`/`allow_cidrs`/
+  `deny_cidrs`/deny-wins-on-overlap all behave correctly, gateway-bound
+  (DNS) traffic stays reachable regardless of policy, and a policy
+  survives snapshot/resume/fork and is fully torn down on destroy. 12 new
+  `scripts/integration-test.sh` checks (the actual allow/deny behavior
+  needs a second real LAN address to test against, not guaranteed on
+  every machine this suite runs on, so that part is verified manually
+  instead — same tradeoff already made for the daemon-restart case
+  below), 257/257 passing overall.
 - Tiered idle lifecycle, archive tier (daemon only — no SDK/CLI change,
   nothing to publish): `SANDKILN_ARCHIVE_TIMEOUT_SECS` moves a held
   snapshot's `state.snap`/`mem.bin` onto a separately configured

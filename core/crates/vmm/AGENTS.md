@@ -105,6 +105,39 @@ not in `daemon`.
   doc comment at the top — it explains *why* a pool of pre-created tap
   devices exists instead of creating them on demand (ambient
   `CAP_NET_ADMIN` doesn't cover the `TUNSETIFF` ioctl, only netlink ops).
+  `NetworkManager::uplink()` exposes the uplink interface name so
+  `egress::apply`/`remove` can scope a sandbox's rules to it, mirroring
+  this file's own bridge-wide `FORWARD` rule's `-o <uplink>` scoping.
+- `egress.rs` — per-sandbox outbound network policy: `EgressPolicy`
+  (`mode: AllowAll|DenyAll`, `allow_cidrs`, `deny_cidrs`) plus
+  `apply()`/`remove()`, which manage one dedicated iptables chain per
+  sandbox (named `SK-EG-<tap_device>`) with a single jump rule inserted
+  ahead of `network.rs`'s existing bridge-wide `FORWARD` `ACCEPT` rule, so
+  only that sandbox's own traffic is affected. Within a chain, every
+  `deny_cidrs` rule is appended before every `allow_cidrs` rule, before
+  the base mode's own default (`ACCEPT` for `AllowAll`, `DROP` for
+  `DenyAll`) — iptables' first-match-wins evaluation order makes deny
+  always beat allow on overlap, no special-casing needed. Rules match
+  only traffic actually leaving via `-o <uplink>` (matching the existing
+  bridge-wide rule's own scoping), which has a load-bearing side effect:
+  gateway-bound traffic (DNS to the bridge's own IP) never transits the
+  uplink at all, so it's structurally exempt from any policy without an
+  allowlist entry — live-verified (see `ROADMAP.md`'s "Firewall and
+  egress policy" entry). `apply()` is idempotent (flushes-and-repopulates
+  an already-existing chain) so callers (fresh boot, pool claim, resume,
+  fork) can call it unconditionally without distinguishing "chain
+  survived a plain daemon restart" (iptables state lives in the kernel,
+  independent of the daemon process) from "chain was wiped by an actual
+  host reboot." `remove()` is best-effort and safe to call even if
+  nothing was ever applied. `validate_cidr()` only checks the STRING
+  format (iptables itself understands CIDR notation natively) — plain
+  `std::net::Ipv4Addr::from_str` plus manual prefix-length bounds
+  checking, no new crate dependency. Enforcement is tied to the
+  sandbox's *lease*, not its VM — see `sandkiln-daemon/AGENTS.md`'s
+  `routes_sandbox.rs`/`routes_snapshot.rs` entries for where `apply`/
+  `remove` actually get called across the create/destroy/snapshot/
+  resume/fork lifecycle. IPv4 only, matching every other networking type
+  in this crate.
 - `vsock_client.rs` — the host-side vsock connection, mediated through
   Firecracker's Unix-socket vsock bridging (`CONNECT <port>\n` handshake,
   then the connection is a raw byte stream to the guest agent). Also

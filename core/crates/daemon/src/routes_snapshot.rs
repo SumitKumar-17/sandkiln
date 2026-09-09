@@ -181,7 +181,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
             pool.record_release();
         }
     }
-    let Sandbox { vm, network, rootfs_path, attached_drives, image_id, tags, name, .. } = sandbox;
+    let Sandbox { vm, network, rootfs_path, attached_drives, image_id, tags, name, egress, .. } = sandbox;
     // Only a forked descendant (rejected above) ever has `network: None`.
     let network = network.expect("non-fork sandboxes always hold a network lease");
 
@@ -211,6 +211,12 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
         let _ = std::fs::remove_dir_all(&dir);
         let cleanup_state = state.clone();
         spawn_blocking_in_current_span("cleanup task panicked", move || {
+            // Same reasoning as `destroy_sandbox_by_id`'s teardown: the
+            // lease (and so this sandbox's egress chain, if any) is being
+            // fully released here, not left dormant, so the chain must go
+            // with it. `remove` is a harmless no-op if this sandbox never
+            // had a policy.
+            sandkiln_vmm::egress::remove(network.config.guest_ip, &network.config.tap_device, cleanup_state.network.uplink());
             let _ = cleanup_state.network.release(network);
             let _ = std::fs::remove_file(&rootfs_path);
         })
@@ -234,6 +240,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
         name,
         forked_into: None,
         archived_at: None,
+        egress,
     };
 
     // Persist metadata before this snapshot is visible in `AppState` at
@@ -396,6 +403,12 @@ pub(crate) async fn resume_snapshot_by_id(state: Arc<AppState>, snapshot_id: Str
         }
     };
 
+    // Captured before `snapshot.network`/`snapshot.egress` are moved into
+    // the `Sandbox` literal below.
+    let egress = snapshot.egress.clone();
+    let guest_ip = snapshot.network.config.guest_ip;
+    let tap_device = snapshot.network.config.tap_device.clone();
+
     let sandbox = Sandbox {
         id: new_id.clone(),
         vm,
@@ -417,8 +430,25 @@ pub(crate) async fn resume_snapshot_by_id(state: Arc<AppState>, snapshot_id: Str
         // function, then overwrites this field) ties a resume back to a
         // pool. See `crate::pool`'s module doc comment.
         source_pool_id: None,
+        egress: egress.clone(),
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
+
+    // Re-applied (idempotently — see `sandkiln_vmm::egress::apply`'s doc
+    // comment) rather than assumed still installed: correct either way,
+    // whether the chain survived from before (a plain daemon restart) or
+    // needs recreating from scratch (a host reboot wiped it). Unlike
+    // `claim_from_pool`'s treatment of a *new* claim, a failure here is
+    // a loud warning, not fatal — this snapshot was just consumed
+    // (resume is one-way), so destroying the freshly resumed sandbox
+    // over an iptables hiccup would mean real, irreversible data loss
+    // for what's a best-effort security hardening layer, not a hard
+    // guarantee.
+    if let Some(policy) = &egress {
+        if let Err(e) = sandkiln_vmm::egress::apply(guest_ip, &tap_device, state.network.uplink(), policy) {
+            tracing::error!(sandbox_id = %new_id, error = %e, "failed to re-apply this sandbox's egress policy after resume — it is running WITHOUT its configured network restrictions enforced");
+        }
+    }
 
     // Only good for one resume — Firecracker doesn't need these files
     // again once the VM is loaded and running, and the resumed sandbox
@@ -487,13 +517,13 @@ pub async fn fork_snapshot(
         }
     };
 
-    let sandbox = {
+    let (sandbox, egress, guest_ip, tap_device) = {
         let snapshots = state.snapshots.lock().unwrap();
         // Can't have been removed: `delete_snapshot` and `resume_snapshot`
         // both refuse while `forked_into` is set, and it's set to
         // `new_id` for the duration of this call.
         let snapshot = snapshots.get(&snapshot_id).expect("reserved by this call above");
-        Sandbox {
+        let sandbox = Sandbox {
             id: new_id.clone(),
             vm,
             network: None,
@@ -518,9 +548,28 @@ pub async fn fork_snapshot(
             // A fork isn't a pool claim either -- see the same field on
             // `resume_snapshot_by_id`'s own `Sandbox` construction above.
             source_pool_id: None,
-        }
+            // Not owned by this `Sandbox` record either — same
+            // `network: None` ownership convention just above: the
+            // underlying iptables chain is tied to the lease, which the
+            // *snapshot* still owns for a fork. See `Snapshot::egress`
+            // for the copy that's actually (re-)applied, just below.
+            egress: None,
+        };
+        (sandbox, snapshot.egress.clone(), snapshot.network.config.guest_ip, snapshot.network.config.tap_device.clone())
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
+
+    // Same reasoning as `resume_snapshot_by_id`'s own re-application: a
+    // failure here is a loud warning, not fatal — unlike a consuming
+    // resume this doesn't lose the snapshot (it's still there,
+    // unconsumed), but tearing down a freshly forked sandbox over an
+    // iptables hiccup is still a worse outcome than a security warning
+    // for what remains a best-effort hardening layer.
+    if let Some(policy) = &egress {
+        if let Err(e) = sandkiln_vmm::egress::apply(guest_ip, &tap_device, state.network.uplink(), policy) {
+            tracing::error!(sandbox_id = %new_id, error = %e, "failed to re-apply this sandbox's egress policy after forking — it is running WITHOUT its configured network restrictions enforced");
+        }
+    }
 
     Ok(Json(ForkSnapshotResponse { id: new_id }))
 }
@@ -572,6 +621,10 @@ pub(crate) async fn delete_snapshot_by_id(state: Arc<AppState>, id: String) -> R
     spawn_blocking_in_current_span("delete task panicked", {
         let state = state.clone();
         move || {
+            // Same lease-release-tied teardown as `destroy_sandbox_by_id`
+            // -- a held snapshot still owns its lease (and so its chain)
+            // until it's actually deleted.
+            sandkiln_vmm::egress::remove(snapshot.network.config.guest_ip, &snapshot.network.config.tap_device, state.network.uplink());
             let _ = state.network.release(snapshot.network);
             let _ = std::fs::remove_file(&snapshot.rootfs_path);
             // `snapshot.snapshot_path`'s own parent, not a hardcoded

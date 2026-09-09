@@ -1,4 +1,5 @@
 use crate::state::AttachedDrive;
+use sandkiln_vmm::egress::EgressPolicy;
 use sandkiln_vmm::network::Lease;
 use sandkiln_vmm::vm::Vm;
 use std::collections::HashMap;
@@ -94,4 +95,13 @@ pub struct Sandbox {
     /// event, matched against whatever pool applies at that time, not
     /// tied back to this one forever.
     pub source_pool_id: Option<String>,
+    /// This sandbox's egress (outbound network) policy, if it was given
+    /// one at create time — see `sandkiln_vmm::egress`'s module doc
+    /// comment for the full design. `None` for a forked sandbox
+    /// (`source_snapshot_id.is_some()`), same ownership convention as
+    /// `network`: the underlying iptables chain is tied to the lease,
+    /// which the *snapshot* owns for a fork, not this `Sandbox` record —
+    /// see `Snapshot::egress` for the copy that actually gets
+    /// (re-)applied on resume/fork.
+    pub egress: Option<EgressPolicy>,
 }

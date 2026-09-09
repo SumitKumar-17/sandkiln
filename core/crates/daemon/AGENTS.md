@@ -82,7 +82,10 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   boundary — and `pty_session_count`, an `Arc<AtomicU32>` so a
   `PtySessionGuard` (see `routes_pty.rs`) can outlive the `state.sandboxes`
   lock it was incremented under and still decrement the right counter on
-  drop).
+  drop, and `egress`, `None` for a forked sandbox — mirroring `network`'s
+  own `None`-for-fork convention, since the underlying iptables chain is
+  tied to the *lease*, which the snapshot, not the forked `Sandbox`
+  record, owns).
 - `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop/
   history (`GET /sandboxes/history`, reading `AppState::history` — the
   only read path for it; every write happens as a side effect of
@@ -134,6 +137,23 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   factored-out boot mechanics, shared by both the `ColdSlot` and
   unattributed paths) into `Sandbox::source_pool_id`, committing the
   `PoolClaimGuard` on success.
+  `resolve_egress_policy` validates every CIDR in a request's optional
+  `egress` field up front (one clear `400` naming the exact bad entry,
+  via `sandkiln_vmm::egress::validate_cidr`) and converts it to a
+  `sandkiln_vmm::egress::EgressPolicy`. Unlike `drives`/`rate_limit`, an
+  egress policy does NOT disqualify a request from a pool claim — it's
+  enforced entirely via host-side iptables applied after boot/resume, not
+  baked into Firecracker's own snapshotted state, so `claim_from_pool`
+  applies it fresh after a successful claim rather than treating it as
+  pool-incompatible. Failure to apply is fatal (tear down) in both
+  `create_sandbox_cold` and `claim_from_pool` — safe to be strict since
+  both have a fallback or just fail the one request — but only a loud
+  warning in `routes_snapshot::resume_snapshot_by_id`/`fork_snapshot`,
+  since both are one-way operations where destroying a freshly
+  resumed/forked sandbox over a rare iptables hiccup would be worse than
+  the (best-effort, not a hard guarantee) security regression of leaving
+  it unenforced. See `sandkiln_vmm::egress`'s own module doc comment for
+  the actual chain/rule design.
 - `routes_sandbox_name.rs` — name-based lookup and get-or-create:
   `GET /sandboxes/by-name/:name` (live sandboxes only — a name currently
   held by a snapshot is a `409` pointing at get-or-create, not a silent
@@ -233,6 +253,13 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   `DriveStore::list()` uses for drives. A snapshot directory missing any
   of its three files is treated as a crash-mid-write (or crash mid-
   archive) and skipped with a warning rather than guessed at.
+  `Snapshot.egress`/`SnapshotMeta.egress` (`#[serde(default)]`, so
+  metadata written before this field existed still loads) is the actual
+  source of truth `routes_snapshot::resume_snapshot_by_id`/`fork_snapshot`
+  read to decide what egress policy (if any) to re-apply — carried
+  through persistence deliberately, unlike some other purely-convenience
+  fields, since silently losing a security policy across a snapshot cycle
+  would be a real regression, not just a lost convenience.
   `reconcile()` also calls `NetworkManager::reserve()` for each
   reconciled snapshot's held tap device/host octet so a live `lease()`
   call afterward can't hand the same tap to a second sandbox — see

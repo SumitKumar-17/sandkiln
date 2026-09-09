@@ -67,6 +67,14 @@ impl NetworkManager {
         }
     }
 
+    /// The uplink interface this manager NATs sandbox traffic out
+    /// through — exposed so `crate::egress::apply`/`remove` can scope a
+    /// per-sandbox policy's rules to it, matching the existing
+    /// bridge-wide `FORWARD` rule's own `-o <uplink>` scoping.
+    pub fn uplink(&self) -> &str {
+        &self.uplink
+    }
+
     /// Idempotent: creates the bridge and NAT rules if they don't already
     /// exist, and verifies every pooled tap device is actually present.
     /// Call once at daemon startup before leasing any tap devices.
@@ -243,7 +251,7 @@ fn ensure_iptables_rule(args: &[&str]) -> io::Result<()> {
     run("iptables", args)
 }
 
-fn run(program: &str, args: &[&str]) -> io::Result<()> {
+pub(crate) fn run(program: &str, args: &[&str]) -> io::Result<()> {
     let output = Command::new(program).args(args).output()?;
     if !output.status.success() {
         return Err(io::Error::other(format!(

@@ -1,6 +1,7 @@
 //! Firecracker microVM lifecycle management.
 
 pub mod drive;
+pub mod egress;
 mod firecracker_api;
 pub mod image;
 pub mod jailer;

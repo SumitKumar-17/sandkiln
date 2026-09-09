@@ -96,6 +96,8 @@ pub struct GetOrCreateSandboxRequest {
     mem_size_mib: Option<u32>,
     #[serde(default)]
     rate_limit: Option<crate::routes_sandbox::RateLimitRequest>,
+    #[serde(default)]
+    egress: Option<crate::routes_sandbox::EgressPolicyRequest>,
 }
 
 #[derive(Serialize)]
@@ -147,6 +149,7 @@ pub async fn get_or_create_sandbox(
                 mem_size_mib: request.mem_size_mib,
                 image_id: None,
                 rate_limit: request.rate_limit,
+                egress: request.egress,
             };
             let id = create_sandbox_core(&state, create_request).await?;
             Ok(Json(GetOrCreateSandboxResponse { id, created: true }))

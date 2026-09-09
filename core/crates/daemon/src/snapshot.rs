@@ -1,4 +1,5 @@
 use crate::state::AttachedDrive;
+use sandkiln_vmm::egress::EgressPolicy;
 use sandkiln_vmm::network::{Lease, NetworkManager};
 use sandkiln_vmm::vm::NetworkConfig;
 use serde::{Deserialize, Serialize};
@@ -85,6 +86,13 @@ pub struct Snapshot {
     /// point, hot or archived, with no code-path difference either way.
     /// See `crate::idle_reaper`'s archive pass and `Config::archive_timeout`.
     pub archived_at: Option<SystemTime>,
+    /// The egress policy the sandbox this came from had, if any — carried
+    /// through so `routes_snapshot::resume_snapshot_by_id`/`fork_snapshot`
+    /// can (re-)apply it via `sandkiln_vmm::egress::apply`. Without this,
+    /// a protected sandbox's firewall would silently disappear the moment
+    /// it's ever snapshotted and resumed — a real security regression,
+    /// not just a lost convenience.
+    pub egress: Option<EgressPolicy>,
 }
 
 /// On-disk mirror of everything about a `Snapshot` that isn't already
@@ -124,6 +132,11 @@ struct SnapshotMeta {
     /// was never archived.
     #[serde(default)]
     archived_at_unix: Option<u64>,
+    /// Same "defaults cleanly on upgrade" reasoning as `name` — absent in
+    /// metadata written before egress policies existed, or for a
+    /// snapshot whose sandbox never had one.
+    #[serde(default)]
+    egress: Option<EgressPolicy>,
 }
 
 impl Snapshot {
@@ -153,6 +166,7 @@ impl Snapshot {
             created_at_unix: self.created_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
             name: self.name.clone(),
             archived_at_unix: self.archived_at.map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()),
+            egress: self.egress.clone(),
         };
         let json = serde_json::to_vec_pretty(&meta).map_err(|e| io::Error::other(format!("serializing snapshot metadata: {e}")))?;
         write_atomically(&meta_path(dir), &json)
@@ -450,6 +464,7 @@ fn load_one(dir: &Path, id: &str, network: &NetworkManager) -> Option<Snapshot> 
         // reconciled snapshot always starts with no live fork.
         forked_into: None,
         archived_at: meta.archived_at_unix.map(|secs| UNIX_EPOCH + Duration::from_secs(secs)),
+        egress: meta.egress,
     })
 }
 
@@ -504,6 +519,7 @@ mod tests {
             created_at_unix: 1_700_000_000,
             name: Some("sample-snapshot".to_string()),
             archived_at_unix: None,
+            egress: None,
         }
     }
 
@@ -595,6 +611,7 @@ mod tests {
             name: Some("round-trip-name".to_string()),
             forked_into: None,
             archived_at: None,
+            egress: None,
         };
 
         snapshot.persist(&real.dir).unwrap();
@@ -823,6 +840,7 @@ mod tests {
             name: None,
             forked_into: None,
             archived_at: None,
+            egress: None,
         };
 
         move_snapshot_files(&mut snapshot, &archive).unwrap();

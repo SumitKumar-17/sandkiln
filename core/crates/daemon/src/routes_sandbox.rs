@@ -68,6 +68,18 @@ pub struct CreateSandboxRequest {
     /// silently no-op" convention as `vcpu_count`/`mem_size_mib`.
     #[serde(default)]
     pub(crate) rate_limit: Option<RateLimitRequest>,
+    /// Outbound network policy for this sandbox — see
+    /// `sandkiln_vmm::egress`'s module doc comment for the full design.
+    /// Omitted means today's behavior, unchanged: unrestricted outbound
+    /// through the shared bridge's existing catch-all rule. Unlike
+    /// `drives`/`rate_limit`, this can still match a pre-warmed pool (see
+    /// `crate::pool`) — egress is enforced via host-side iptables rules
+    /// applied *after* boot/resume, never baked into Firecracker's own
+    /// VM/snapshot state, so it's compatible with any warm snapshot
+    /// regardless of what policy (if any) the pool's own replenishment
+    /// boot used.
+    #[serde(default)]
+    pub(crate) egress: Option<EgressPolicyRequest>,
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -76,6 +88,26 @@ pub struct RateLimitRequest {
     pub(crate) bandwidth_bytes_per_sec: Option<u64>,
     #[serde(default)]
     pub(crate) ops_per_sec: Option<u64>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct EgressPolicyRequest {
+    pub(crate) mode: EgressModeRequest,
+    /// IPv4 CIDRs (`"10.0.0.0/8"`) — validated in `resolve_egress_policy`,
+    /// not here, so a malformed one gets one clear `400` covering every
+    /// entry in both lists rather than whichever `serde` error format a
+    /// custom `Deserialize` impl would produce.
+    #[serde(default)]
+    pub(crate) allow_cidrs: Vec<String>,
+    #[serde(default)]
+    pub(crate) deny_cidrs: Vec<String>,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum EgressModeRequest {
+    AllowAll,
+    DenyAll,
 }
 
 #[derive(Serialize)]
@@ -179,6 +211,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
         resolve_resource_override(request.mem_size_mib, state.config.mem_size_mib, state.config.max_mem_size_mib, "mem_size_mib")
             .map_err(AppError::BadRequest)?;
     let rate_limit = resolve_rate_limit(&request.rate_limit).map_err(AppError::BadRequest)?;
+    let egress = resolve_egress_policy(&request.egress).map_err(AppError::BadRequest)?;
 
     // A matching, ready pre-warmed pool (see `crate::pool`) lets this
     // resume a warm snapshot instead of paying full cold-create cost —
@@ -209,7 +242,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
             match resolve_pool_claim(state, &key).await? {
                 PoolClaim::Warm { pool_id, snapshot_id } => {
                     let guard = PoolClaimGuard::new(state.clone(), Some(pool_id.clone()));
-                    match claim_from_pool(state, snapshot_id, pool_id, &request).await {
+                    match claim_from_pool(state, snapshot_id, pool_id, &request, egress.clone()).await {
                         Ok(id) => {
                             guard.commit();
                             return Ok(id);
@@ -231,14 +264,14 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
                     // either committed to the resulting live `Sandbox` or
                     // released on any failure (`PoolClaimGuard`,
                     // constructed inside).
-                    return create_sandbox_cold(state, request, Some(pool_id), vcpu_count, mem_size_mib, rate_limit).await;
+                    return create_sandbox_cold(state, request, Some(pool_id), vcpu_count, mem_size_mib, rate_limit, egress).await;
                 }
                 PoolClaim::NoPool => break, // no pool configured for this profile at all — today's original, totally unattributed behavior.
             }
         }
     }
 
-    create_sandbox_cold(state, request, None, vcpu_count, mem_size_mib, rate_limit).await
+    create_sandbox_cold(state, request, None, vcpu_count, mem_size_mib, rate_limit, egress).await
 }
 
 /// How many times a failed warm claim retries against the same pool
@@ -358,6 +391,7 @@ async fn create_sandbox_cold(
     vcpu_count: u8,
     mem_size_mib: u32,
     rate_limit: Option<RateLimiter>,
+    egress: Option<sandkiln_vmm::egress::EgressPolicy>,
 ) -> Result<String, AppError> {
     let pool_guard = PoolClaimGuard::new(state.clone(), pool_id.clone());
 
@@ -409,6 +443,7 @@ async fn create_sandbox_cold(
         let state = state.clone();
         let rootfs_path = rootfs_path.clone();
         let base_rootfs_source = base_rootfs_source.clone();
+        let egress = egress.clone();
         move || -> std::io::Result<(Vm, Lease, Option<u32>)> {
             let span = tracing::Span::current();
             // Copying the rootfs and leasing a network are independent —
@@ -465,6 +500,23 @@ async fn create_sandbox_cold(
             match vm {
                 Ok(vm) => {
                     state.metrics.record_boot_duration_ms(boot_started.elapsed().as_secs_f64() * 1000.0);
+                    // Applied after boot succeeds, before this sandbox is
+                    // ever visible to a caller -- a requested policy that
+                    // fails to apply must not silently leave the sandbox
+                    // unrestricted, so this is treated exactly like a
+                    // failed `Vm::boot`: tear everything down and return
+                    // the error rather than let a broken-but-unenforced
+                    // policy through.
+                    if let Some(policy) = &egress {
+                        if let Err(e) = sandkiln_vmm::egress::apply(lease.config.guest_ip, &lease.config.tap_device, state.network.uplink(), policy) {
+                            let _ = vm.stop();
+                            let _ = state.network.release(lease);
+                            if let (Some(id), Some(pool)) = (jail_id, &state.jailer_ids) {
+                                pool.release(id);
+                            }
+                            return Err(e);
+                        }
+                    }
                     Ok((vm, lease, jail_id))
                 }
                 Err(e) => {
@@ -502,6 +554,7 @@ async fn create_sandbox_cold(
         name: request.name,
         pty_session_count: Default::default(),
         source_pool_id: pool_id,
+        egress,
     };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
     state.metrics.record_sandbox_created();
@@ -547,7 +600,13 @@ async fn create_sandbox_cold(
 /// needs an explicit live Firecracker API call to fix, not just editing
 /// the daemon's own `Sandbox` record; see
 /// `sandkiln_vmm::vm::Vm::update_metadata`'s doc comment.
-async fn claim_from_pool(state: &Arc<AppState>, snapshot_id: String, pool_id: String, request: &CreateSandboxRequest) -> Result<String, AppError> {
+async fn claim_from_pool(
+    state: &Arc<AppState>,
+    snapshot_id: String,
+    pool_id: String,
+    request: &CreateSandboxRequest,
+    egress: Option<sandkiln_vmm::egress::EgressPolicy>,
+) -> Result<String, AppError> {
     let id = resume_snapshot_by_id(state.clone(), snapshot_id).await?;
 
     let health_check = spawn_blocking_in_current_span("pool claim health check task panicked", {
@@ -569,6 +628,23 @@ async fn claim_from_pool(state: &Arc<AppState>, snapshot_id: String, pool_id: St
 
     let created_at = SystemTime::now();
     let metadata = serde_json::json!({ "id": id, "name": &request.name, "tags": &request.tags });
+    let egress_target = {
+        let sandboxes = state.sandboxes.lock().unwrap();
+        let sandbox = sandboxes.get(&id).expect("resume_snapshot_by_id above just inserted this id");
+        sandbox.network.as_ref().map(|network| (network.config.guest_ip, network.config.tap_device.clone()))
+    };
+    // Unlike MMDS staleness below, a requested egress policy failing to
+    // apply is treated as fatal, not a warning — a caller asking for
+    // network restrictions and silently getting an unrestricted sandbox
+    // instead is a real security gap, not a cosmetic one. Applied outside
+    // `state.sandboxes`'s lock (a real, potentially-slow `iptables`
+    // shell-out, unlike the quick in-memory field writes below).
+    if let (Some(policy), Some((guest_ip, tap_device))) = (&egress, &egress_target) {
+        if let Err(e) = sandkiln_vmm::egress::apply(*guest_ip, tap_device, state.network.uplink(), policy) {
+            destroy_unhealthy_claim(state, id).await;
+            return Err(AppError::from(e));
+        }
+    }
     {
         let mut sandboxes = state.sandboxes.lock().unwrap();
         let sandbox = sandboxes.get_mut(&id).expect("resume_snapshot_by_id above just inserted this id");
@@ -583,6 +659,7 @@ async fn claim_from_pool(state: &Arc<AppState>, snapshot_id: String, pool_id: St
         sandbox.tags = request.tags.clone();
         sandbox.name = request.name.clone();
         sandbox.created_at = created_at;
+        sandbox.egress = egress;
         // The slot `resolve_pool_claim` reserved for this claim is now
         // durably owned by this live `Sandbox` — released later by
         // `destroy_sandbox_by_id`/`snapshot_and_stop`, matching how
@@ -907,6 +984,12 @@ async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopO
         move || {
             let _ = sandbox.vm.stop();
             if let Some(network) = sandbox.network {
+                // Lease is about to be released back to the free pool --
+                // this sandbox's dedicated chain (if any) has to go first,
+                // matching the "removed only when the lease is finally
+                // released" lifecycle. Safe to call even if no policy was
+                // ever applied -- see `egress::remove`'s own doc comment.
+                sandkiln_vmm::egress::remove(network.config.guest_ip, &network.config.tap_device, state.network.uplink());
                 let _ = state.network.release(network);
             }
             if owns_rootfs {
@@ -985,6 +1068,21 @@ fn resolve_rate_limit(requested: &Option<RateLimitRequest>) -> Result<Option<Rat
         bandwidth: to_bucket("bandwidth_bytes_per_sec", req.bandwidth_bytes_per_sec)?,
         ops: to_bucket("ops_per_sec", req.ops_per_sec)?,
     }))
+}
+
+/// Validates every CIDR in a requested egress policy up front — one clear
+/// `400` naming the exact bad entry, rather than a cryptic iptables
+/// failure surfacing later from deep inside a boot task.
+fn resolve_egress_policy(requested: &Option<EgressPolicyRequest>) -> Result<Option<sandkiln_vmm::egress::EgressPolicy>, String> {
+    let Some(req) = requested else { return Ok(None) };
+    for cidr in req.allow_cidrs.iter().chain(&req.deny_cidrs) {
+        sandkiln_vmm::egress::validate_cidr(cidr)?;
+    }
+    let mode = match req.mode {
+        EgressModeRequest::AllowAll => sandkiln_vmm::egress::EgressMode::AllowAll,
+        EgressModeRequest::DenyAll => sandkiln_vmm::egress::EgressMode::DenyAll,
+    };
+    Ok(Some(sandkiln_vmm::egress::EgressPolicy { mode, allow_cidrs: req.allow_cidrs.clone(), deny_cidrs: req.deny_cidrs.clone() }))
 }
 
 /// Returns the first item that's already been seen, if any.
@@ -1082,6 +1180,46 @@ mod tests {
     fn first_duplicate_none_when_all_unique() {
         assert_eq!(first_duplicate(["a", "b", "c"].into_iter()), None);
         assert_eq!(first_duplicate(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn resolve_egress_policy_returns_none_when_omitted() {
+        assert_eq!(resolve_egress_policy(&None), Ok(None));
+    }
+
+    #[test]
+    fn resolve_egress_policy_accepts_well_formed_cidrs_in_both_lists() {
+        let requested = Some(EgressPolicyRequest {
+            mode: EgressModeRequest::DenyAll,
+            allow_cidrs: vec!["10.0.0.0/8".to_string()],
+            deny_cidrs: vec!["192.168.1.1/32".to_string()],
+        });
+        let policy = resolve_egress_policy(&requested).unwrap().unwrap();
+        assert_eq!(policy.mode, sandkiln_vmm::egress::EgressMode::DenyAll);
+        assert_eq!(policy.allow_cidrs, vec!["10.0.0.0/8".to_string()]);
+        assert_eq!(policy.deny_cidrs, vec!["192.168.1.1/32".to_string()]);
+    }
+
+    #[test]
+    fn resolve_egress_policy_rejects_a_malformed_allow_cidr() {
+        let requested = Some(EgressPolicyRequest {
+            mode: EgressModeRequest::AllowAll,
+            allow_cidrs: vec!["not-a-cidr".to_string()],
+            deny_cidrs: vec![],
+        });
+        let err = resolve_egress_policy(&requested).unwrap_err();
+        assert!(err.contains("not-a-cidr"), "message was: {err}");
+    }
+
+    #[test]
+    fn resolve_egress_policy_rejects_a_malformed_deny_cidr() {
+        let requested = Some(EgressPolicyRequest {
+            mode: EgressModeRequest::AllowAll,
+            allow_cidrs: vec![],
+            deny_cidrs: vec!["10.0.0.0/33".to_string()],
+        });
+        let err = resolve_egress_policy(&requested).unwrap_err();
+        assert!(err.contains("10.0.0.0/33"), "message was: {err}");
     }
 
     #[test]
