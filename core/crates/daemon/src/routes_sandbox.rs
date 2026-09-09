@@ -555,6 +555,9 @@ async fn create_sandbox_cold(
         pty_session_count: Default::default(),
         source_pool_id: pool_id,
         egress,
+        // A cold create -- fresh boot or a pool's own warm-replenishment
+        // boot -- is always a root of its own lineage.
+        parent_snapshot_id: None,
     };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
     state.metrics.record_sandbox_created();

@@ -181,7 +181,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
             pool.record_release();
         }
     }
-    let Sandbox { vm, network, rootfs_path, attached_drives, image_id, tags, name, egress, .. } = sandbox;
+    let Sandbox { vm, network, rootfs_path, attached_drives, image_id, tags, name, egress, parent_snapshot_id, .. } = sandbox;
     // Only a forked descendant (rejected above) ever has `network: None`.
     let network = network.expect("non-fork sandboxes always hold a network lease");
 
@@ -241,6 +241,14 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
         forked_into: None,
         archived_at: None,
         egress,
+        // The snapshot this sandbox itself was resumed/forked from, if
+        // any -- `None` for a sandbox that was cold-booted, making this
+        // new snapshot a root of its own lineage. See
+        // `Snapshot::parent_snapshot_id`'s doc comment -- deliberately
+        // `Sandbox::parent_snapshot_id`, not `Sandbox::source_snapshot_id`
+        // (the latter is `None` on resume by design, see that field's own
+        // doc comment).
+        parent_snapshot_id,
     };
 
     // Persist metadata before this snapshot is visible in `AppState` at
@@ -313,6 +321,12 @@ pub struct SnapshotSummary {
     /// `Config::archive_dir` — `null` means it's still "hot", the only
     /// state before archiving existed. See `Snapshot::archived_at`.
     archived_at_unix: Option<u64>,
+    /// The snapshot this one was forked/resumed from, if any — see
+    /// `Snapshot::parent_snapshot_id`. Answers "what did this snapshot
+    /// come from"; `?parent_snapshot_id=<id>` on this same listing answers
+    /// the reverse ("what came from this snapshot"), together enough to
+    /// walk a full lineage tree in either direction one hop at a time.
+    parent_snapshot_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -332,11 +346,28 @@ pub struct ListSnapshotsResponse {
 /// gone) and "one match" both need to be representable without a 404
 /// forcing every poller to treat "not found yet" as an error to retry
 /// around.
+///
+/// Optional `?parent_snapshot_id=<id>` is the same idea in the other
+/// direction: "what snapshot(s) were ever forked/resumed from this one" —
+/// unlike `source_sandbox_id`, more than one can genuinely match over
+/// time (a snapshot can be forked, that fork snapshotted and torn down,
+/// then forked again into a sibling line — `Snapshot::forked_into` only
+/// ever limits how many *live* descendants exist at once, not how many
+/// have ever existed), so this is a real multi-result filter, not just a
+/// convenience over an at-most-one case. Combined with `parent_snapshot_id`
+/// on each returned `SnapshotSummary`, a caller can walk a full lineage
+/// tree in either direction, one hop (one request) at a time — see
+/// `ROADMAP.md`'s "Snapshot lineage" entry for why that's the deliberately
+/// narrow shape here rather than a dedicated tree-shaped endpoint: this
+/// listing already only reflects snapshots that currently exist, so a
+/// deleted intermediate snapshot breaks the chain at that point either way,
+/// no matter how the daemon exposes it.
 pub async fn list_snapshots(
     State(state): State<Arc<AppState>>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Json<ListSnapshotsResponse> {
     let source_sandbox_id_filter = query.get("source_sandbox_id").map(String::as_str);
+    let parent_snapshot_id_filter = query.get("parent_snapshot_id").map(String::as_str);
 
     let snapshots = state
         .snapshots
@@ -344,6 +375,7 @@ pub async fn list_snapshots(
         .unwrap()
         .values()
         .filter(|s| source_sandbox_id_filter.is_none_or(|wanted| s.source_sandbox_id == wanted))
+        .filter(|s| parent_snapshot_id_filter.is_none_or(|wanted| s.parent_snapshot_id.as_deref() == Some(wanted)))
         .map(|s| SnapshotSummary {
             id: s.id.clone(),
             source_sandbox_id: s.source_sandbox_id.clone(),
@@ -352,6 +384,7 @@ pub async fn list_snapshots(
             forked_into: s.forked_into.clone(),
             name: s.name.clone(),
             archived_at_unix: s.archived_at.map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()),
+            parent_snapshot_id: s.parent_snapshot_id.clone(),
         })
         .collect();
     Json(ListSnapshotsResponse { snapshots })
@@ -431,6 +464,12 @@ pub(crate) async fn resume_snapshot_by_id(state: Arc<AppState>, snapshot_id: Str
         // pool. See `crate::pool`'s module doc comment.
         source_pool_id: None,
         egress: egress.clone(),
+        // Unlike `source_snapshot_id` above (deliberately `None` here so
+        // this resumed sandbox stays snapshottable), lineage tracking
+        // wants this sandbox's real origin recorded regardless — see
+        // `Sandbox::parent_snapshot_id`'s doc comment for why these two
+        // fields can't be the same one.
+        parent_snapshot_id: Some(snapshot_id.clone()),
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
 
@@ -554,6 +593,12 @@ pub async fn fork_snapshot(
             // *snapshot* still owns for a fork. See `Snapshot::egress`
             // for the copy that's actually (re-)applied, just below.
             egress: None,
+            // Same value as `source_snapshot_id` above for a fork
+            // specifically (unlike resume, where the two deliberately
+            // diverge) — see `Sandbox::parent_snapshot_id`'s doc comment
+            // for why this is still tracked as its own field rather than
+            // reusing `source_snapshot_id` directly.
+            parent_snapshot_id: Some(snapshot_id.clone()),
         };
         (sandbox, snapshot.egress.clone(), snapshot.network.config.guest_ip, snapshot.network.config.tap_device.clone())
     };

@@ -104,4 +104,22 @@ pub struct Sandbox {
     /// see `Snapshot::egress` for the copy that actually gets
     /// (re-)applied on resume/fork.
     pub egress: Option<EgressPolicy>,
+    /// The snapshot this sandbox was resumed or forked from, if any —
+    /// purely informational, carried onto `Snapshot::parent_snapshot_id`
+    /// if/when this sandbox is itself snapshotted (see
+    /// `routes_snapshot::snapshot_and_stop`). **Deliberately a separate
+    /// field from `source_snapshot_id` above, not a reuse of it**:
+    /// `source_snapshot_id` being `Some` is specifically what
+    /// `check_snapshottable` reads to *refuse* snapshotting a forked
+    /// sandbox (it shares its snapshot's live rootfs file), and stays
+    /// `None` on resume specifically so a resumed sandbox — which owns
+    /// its rootfs outright — remains snapshottable. Lineage needs the
+    /// opposite shape: `Some` on **both** resume and fork (both really do
+    /// descend from that snapshot), `None` only for a genuinely
+    /// cold-booted sandbox. Reusing `source_snapshot_id` for this would
+    /// have silently made every resumed sandbox's lineage a dead end,
+    /// since a resumed sandbox is exactly the common case that *can* be
+    /// snapshotted again — this was caught live, not on paper (see
+    /// `ROADMAP.md`'s "Snapshot lineage" entry).
+    pub parent_snapshot_id: Option<String>,
 }

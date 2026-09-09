@@ -93,6 +93,20 @@ pub struct Snapshot {
     /// it's ever snapshotted and resumed — a real security regression,
     /// not just a lost convenience.
     pub egress: Option<EgressPolicy>,
+    /// The snapshot the sandbox that produced this one was itself
+    /// resumed or forked from, if any — carried straight over from
+    /// `Sandbox::source_snapshot_id` at the moment this snapshot was
+    /// taken. `None` means this snapshot's source sandbox was cold-booted
+    /// (from the base rootfs or a registered image), making this snapshot
+    /// a root of its own lineage rather than a link in a longer chain.
+    /// This is a *parent* pointer, not a live reference — the parent
+    /// snapshot named here may since have been deleted, in which case the
+    /// chain simply ends at this snapshot as far as `GET /snapshots`
+    /// (`?parent_snapshot_id=`) can still see. See `ROADMAP.md`'s
+    /// "Snapshot lineage" entry for why a pointer (walkable in both
+    /// directions via that filter) rather than a fuller durable ancestry
+    /// tree is the deliberately narrow first slice here.
+    pub parent_snapshot_id: Option<String>,
 }
 
 /// On-disk mirror of everything about a `Snapshot` that isn't already
@@ -137,6 +151,11 @@ struct SnapshotMeta {
     /// snapshot whose sandbox never had one.
     #[serde(default)]
     egress: Option<EgressPolicy>,
+    /// Same "defaults cleanly on upgrade" reasoning as `name` — absent in
+    /// metadata written before lineage tracking existed, or for a root
+    /// snapshot with no parent.
+    #[serde(default)]
+    parent_snapshot_id: Option<String>,
 }
 
 impl Snapshot {
@@ -167,6 +186,7 @@ impl Snapshot {
             name: self.name.clone(),
             archived_at_unix: self.archived_at.map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()),
             egress: self.egress.clone(),
+            parent_snapshot_id: self.parent_snapshot_id.clone(),
         };
         let json = serde_json::to_vec_pretty(&meta).map_err(|e| io::Error::other(format!("serializing snapshot metadata: {e}")))?;
         write_atomically(&meta_path(dir), &json)
@@ -465,6 +485,7 @@ fn load_one(dir: &Path, id: &str, network: &NetworkManager) -> Option<Snapshot> 
         forked_into: None,
         archived_at: meta.archived_at_unix.map(|secs| UNIX_EPOCH + Duration::from_secs(secs)),
         egress: meta.egress,
+        parent_snapshot_id: meta.parent_snapshot_id,
     })
 }
 
@@ -520,6 +541,7 @@ mod tests {
             name: Some("sample-snapshot".to_string()),
             archived_at_unix: None,
             egress: None,
+            parent_snapshot_id: None,
         }
     }
 
@@ -612,6 +634,7 @@ mod tests {
             forked_into: None,
             archived_at: None,
             egress: None,
+            parent_snapshot_id: Some("snap-parent-1".to_string()),
         };
 
         snapshot.persist(&real.dir).unwrap();
@@ -636,6 +659,7 @@ mod tests {
         assert_eq!(loaded.created_at.duration_since(UNIX_EPOCH).unwrap().as_secs(), 1_700_000_123);
         assert_eq!(loaded.name.as_deref(), Some("round-trip-name"));
         assert_eq!(loaded.archived_at, None);
+        assert_eq!(loaded.parent_snapshot_id.as_deref(), Some("snap-parent-1"));
 
         // The reconciled snapshot's tap must be pulled out of the fresh
         // manager's free pool — the actual double-lease-prevention
@@ -672,6 +696,33 @@ mod tests {
         let network = test_network(["tapA".to_string()]);
         let loaded = load_one(&dir, "snap-no-name", &network).expect("must reconcile despite the missing name key");
         assert_eq!(loaded.name, None);
+    }
+
+    #[test]
+    fn load_one_defaults_parent_snapshot_id_to_none_for_metadata_written_before_lineage_existed() {
+        let t = TempDir::new("no-parent-snapshot-id-key");
+        let dir = t.path.join("snap-no-parent");
+        fs::create_dir_all(&dir).unwrap();
+        let meta_without_parent = serde_json::json!({
+            "id": "snap-no-parent",
+            "source_sandbox_id": "sandbox-1",
+            "rootfs_path": "/tmp/sandkiln-rootfs-1.ext4",
+            "tap_device": "tapA",
+            "guest_ip": "172.16.0.5",
+            "gateway_ip": "172.16.0.1",
+            "guest_mac": "AA:FC:00:00:05:05",
+            "host_octet": 5,
+            "attached_drives": [{"drive_id": "d1", "read_only": false}],
+            "tags": {},
+            "created_at_unix": 1_700_000_000u64,
+        });
+        fs::write(meta_path(&dir), serde_json::to_vec(&meta_without_parent).unwrap()).unwrap();
+        fs::write(state_path(&dir), b"state").unwrap();
+        fs::write(mem_path(&dir), b"mem").unwrap();
+
+        let network = test_network(["tapA".to_string()]);
+        let loaded = load_one(&dir, "snap-no-parent", &network).expect("must reconcile despite the missing parent_snapshot_id key");
+        assert_eq!(loaded.parent_snapshot_id, None);
     }
 
     #[test]
@@ -841,6 +892,7 @@ mod tests {
             forked_into: None,
             archived_at: None,
             egress: None,
+            parent_snapshot_id: None,
         };
 
         move_snapshot_files(&mut snapshot, &archive).unwrap();

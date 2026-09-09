@@ -42,12 +42,13 @@ hardware, not just code that compiles.
   opt-in Firecracker jailer hardening; full filesystem operations;
   persistent drives with read-only sharing; a guest-accessible metadata
   service; durable sandbox history; per-sandbox egress (outbound network)
-  policy enforced via dedicated iptables chains. All exposed through both
-  SDKs and the CLI (interactive PTY: JS/TS SDK and CLI only; idle-lifecycle
-  archiving: daemon-operator config only, no client surface; egress
-  policy: daemon HTTP API only so far, no SDK/CLI surface yet — see the
-  Firewall and egress policy section),
-  live-verified via `scripts/integration-test.sh` (257 checks, 0 failing,
+  policy enforced via dedicated iptables chains; snapshot lineage
+  (parent-pointer ancestry, queryable in both directions). All exposed
+  through both SDKs and the CLI (interactive PTY: JS/TS SDK and CLI only;
+  idle-lifecycle archiving: daemon-operator config only, no client
+  surface; egress policy and snapshot lineage: daemon HTTP API only so
+  far, no SDK/CLI surface yet — see their respective sections),
+  live-verified via `scripts/integration-test.sh` (267 checks, 0 failing,
   with `SANDKILN_AUTH_TOKEN` set — see that script's own usage
   comment for what's skipped without one).
 
@@ -800,13 +801,42 @@ outbound HTTP both still work.
       A genuinely pathological run of 3 consecutive bad resumes still
       falls through unattributed at the end — an accepted, rare residual
       edge case, not a claim this closes completely.
-- **Snapshot lineage**: today a daemon only ever knows "the current
-  snapshot" a sandbox became — there's no way to ask "what snapshot did
-  *this* snapshot get forked from, and what else was forked from it."
-  Walking that ancestry (a tree, not just a single pointer) would need
-  `Snapshot` to record its own parent snapshot id when created via
-  `fork`/`resume`, not just `Sandbox::source_snapshot_id`'s current
-  one-hop pointer. Not started.
+- **Done: snapshot lineage.** `Snapshot.parent_snapshot_id` records the
+  snapshot a new snapshot's own source sandbox was itself resumed/forked
+  from, if any — `None` marks a lineage root (a cold-booted source
+  sandbox). `GET /snapshots` exposes it on every `SnapshotSummary`
+  (answers "what did this come from") and gained a second filter,
+  `?parent_snapshot_id=<id>` (answers "what came from this," and unlike
+  the existing `?source_sandbox_id=` filter can genuinely match more than
+  one snapshot, since a snapshot can be forked, that fork snapshotted and
+  torn down, then forked again into a sibling line over time) — together
+  enough to walk a full lineage tree in either direction, one request at
+  a time, without a dedicated tree-shaped endpoint. Persists through
+  `meta.json` the same way `name`/`egress` do. **A real bug caught live,
+  not on paper, while wiring this up**: the obvious first implementation
+  sourced the new pointer from the already-existing
+  `Sandbox::source_snapshot_id` field — which turned out to be *only*
+  ever set on a forked sandbox, deliberately left `None` on resume so a
+  resumed sandbox (which owns its rootfs outright) stays eligible to be
+  snapshotted again by `check_snapshottable`'s own `ForkedFrom` guard.
+  Since a forked sandbox is exactly the one kind of sandbox that guard
+  then refuses to let be snapshotted at all, reusing that field would
+  have made every *resumed* sandbox's lineage — the actually-common,
+  observable case — silently dead-ended, while producing correct-looking
+  code that compiled and passed every test written against it up to that
+  point. Live-tested against the real daemon before this was caught: a
+  resume-then-snapshot chain queried by `?parent_snapshot_id=` came back
+  empty. Fixed with a second, separate `Sandbox::parent_snapshot_id`
+  field — `Some` on both resume and fork (both genuinely descend from
+  that snapshot), `None` only for a real cold boot — decoupled entirely
+  from `source_snapshot_id`'s unrelated rootfs-sharing-guard purpose. 10
+  new `scripts/integration-test.sh` checks, 267/267 passing overall.
+  **Deliberately narrow**: lineage is a parent *pointer*, not a durable
+  ancestry record — a deleted intermediate snapshot breaks the visible
+  chain at that point, since `GET /snapshots` only ever reflects
+  snapshots that currently exist. A fully durable ancestry table (surviving
+  every deletion in between) would be a real extension, not a bug fix, if
+  it's ever needed.
 - **Fan-out cloning**: cloning one snapshot into *several* new live
   sandboxes at once (not just one) is a real, documented pattern
   elsewhere, but it directly conflicts with the one-live-fork-per-snapshot

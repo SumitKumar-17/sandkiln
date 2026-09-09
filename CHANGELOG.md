@@ -14,6 +14,25 @@ Changelog](https://keepachangelog.com/).
 ## Unreleased
 
 ### Added
+- Snapshot lineage (daemon only — no SDK/CLI change, nothing to publish
+  yet). `Snapshot.parent_snapshot_id` records the snapshot a new
+  snapshot's source sandbox was itself resumed/forked from, `None` for a
+  lineage root (a cold-booted source sandbox). Exposed on every `GET
+  /snapshots` result and queryable in the other direction too, via a new
+  `?parent_snapshot_id=<id>` filter (can genuinely match more than one
+  snapshot over time, unlike the existing `?source_sandbox_id=` filter) —
+  together enough to walk a full lineage tree in either direction without
+  a dedicated tree-shaped endpoint. Found and fixed a real bug live while
+  building this: the first version sourced the new pointer from the
+  already-existing `Sandbox::source_snapshot_id`, which is deliberately
+  `None` on resume (so a resumed sandbox stays eligible to be snapshotted
+  again) and only ever `Some` on a fork (which, by existing design, can
+  *never* be snapshotted again) — reusing it would have silently
+  dead-ended lineage for the common resume case while compiling and
+  passing every test written against it. Fixed with a second, dedicated
+  `Sandbox::parent_snapshot_id` field. See `ROADMAP.md`'s "Persistence
+  and snapshotting" section for the full story. 10 new
+  `scripts/integration-test.sh` checks, 267/267 passing overall.
 - Per-sandbox egress (outbound network) policy (daemon only — no SDK/CLI
   change, nothing to publish yet). A new `egress: { mode, allow_cidrs,
   deny_cidrs }` field on `POST /sandboxes`/`POST /sandboxes/get-or-create`

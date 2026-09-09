@@ -85,7 +85,15 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   drop, and `egress`, `None` for a forked sandbox — mirroring `network`'s
   own `None`-for-fork convention, since the underlying iptables chain is
   tied to the *lease*, which the snapshot, not the forked `Sandbox`
-  record, owns).
+  record, owns, and `parent_snapshot_id` — see its own doc comment for
+  why this is a **separate** field from `source_snapshot_id` just above,
+  not a reuse of it: `source_snapshot_id` being `Some` is what
+  `routes_snapshot::check_snapshottable` reads to *refuse* re-snapshotting
+  a forked sandbox, and stays `None` on resume specifically so a resumed
+  sandbox remains snapshottable — lineage tracking needs the opposite
+  shape (`Some` on both resume and fork), and conflating the two was a
+  real bug caught live, not on paper, while building snapshot lineage —
+  see `ROADMAP.md`'s "Persistence and snapshotting" section).
 - `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop/
   history (`GET /sandboxes/history`, reading `AppState::history` — the
   only read path for it; every write happens as a side effect of
@@ -260,6 +268,13 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   through persistence deliberately, unlike some other purely-convenience
   fields, since silently losing a security policy across a snapshot cycle
   would be a real regression, not just a lost convenience.
+  `Snapshot.parent_snapshot_id`/`SnapshotMeta.parent_snapshot_id` (also
+  `#[serde(default)]`) is the snapshot lineage parent pointer — set at
+  snapshot-creation time in `routes_snapshot::snapshot_and_stop` from the
+  source sandbox's own `Sandbox::parent_snapshot_id` (**not**
+  `source_snapshot_id` — see that field's doc comment in `sandbox.rs` for
+  why conflating them was a real live-caught bug). `None` marks a
+  lineage root.
   `reconcile()` also calls `NetworkManager::reserve()` for each
   reconciled snapshot's held tap device/host octet so a live `lease()`
   call afterward can't hand the same tap to a second sandbox — see
