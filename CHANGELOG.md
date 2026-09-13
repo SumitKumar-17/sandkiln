@@ -496,7 +496,8 @@ lifecycle, networking, auth, and tooling.
 
 ## Known gaps (tracked in `ROADMAP.md`)
 
-Current as of 0.3.0 — check there for anything that's landed since:
+Current as of 0.7.0 plus the unreleased work above — check `ROADMAP.md`
+for anything that's landed since:
 
 - No streamed exec output, no `kiln logs -f`.
 - No true simultaneous parallel snapshot forking — at most one live fork
@@ -508,15 +509,25 @@ Current as of 0.3.0 — check there for anything that's landed since:
 - Jailer's actual chroot/cgroup/uid-drop behavior hasn't been proven
   against a real installed jailer binary on real hardware yet — opt-in,
   not recommended as-is for adversarial workloads until verified.
-- No per-sandbox seccomp filters, firewall/egress policy, or disk-size
-  ceiling.
+- Egress policy covers IP/CIDR allow/deny only. No domain-level rules
+  and no port matching — both need the shared DNS proxy to become
+  source-IP-aware first.
+- No per-sandbox seccomp filters and no disk-size ceiling.
+- Three daemon capabilities have no SDK or CLI wrapper yet, and are
+  reachable only over the raw HTTP API: remote storage mounts, snapshot
+  history / time-travel restore, and per-sandbox egress policy.
+- Remote storage mounts additionally need a guest kernel built with
+  `CONFIG_FUSE_FS` and `rclone`/`fusermount3` in the rootfs; they are
+  not re-applied after resume, fork, or restore; and they have been
+  verified against a local S3-compatible fixture rather than a hosted
+  object store.
+- Time-travel restore has no automatic expiry — retained history grows
+  disk usage until deleted explicitly.
 - On ext4 (no copy-on-write), sandbox creation still pays real rootfs
   copy time — needs a CoW-capable filesystem or a device-mapper layer to
   actually eliminate, not just overlap with other work.
 - Python SDK not yet published to PyPI (code-side ready; needs the
-  account owner's one-time trusted-publisher registration on pypi.org).
-- Drives (attach at create, read-only sharing) aren't exposed in either
-  SDK or the CLI yet — the raw daemon HTTP API only.
+  account owner's one-time trusted-publisher registration).
 - Snapshot storage lives under `$TMPDIR` — durable across a daemon
   restart, not necessarily a host reboot (depends on whether `/tmp` is
   tmpfs on that host).

@@ -8,7 +8,7 @@
 
     <div class="code-block"><pre><span class="kw">import</span> {'{'} Sandbox {'}'} <span class="kw">from</span> <span class="str">"sandkiln"</span>;
 
-<span class="c1">// Boots a real Firecracker microVM — ~33ms, own kernel, own network.</span>
+<span class="c1">// Boots a real Firecracker microVM — own kernel, own filesystem, own network.</span>
 <span class="kw">const</span> sandbox = <span class="kw">await</span> Sandbox.create({'{'}
   tags: {'{'} env: <span class="str">"ci"</span>, owner: <span class="str">"pipeline"</span> {'}'},
 {'}'});

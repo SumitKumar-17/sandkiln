@@ -52,6 +52,29 @@ That's a real, working daemon end to end — but booting from the small Firecrac
 scripts/setup.sh --production
 ```
 
+## 3b. Remote storage mounts (optional)
+
+Skip this unless you want sandboxes to mount an S3-compatible bucket into their own filesystem (`POST /sandboxes/:id/mounts` — see [Remote storage mounts](../../concepts/remote-storage/)). Nothing above sets it up, and the feature needs two extra pieces.
+
+**A guest kernel built with `CONFIG_FUSE_FS`.** Firecracker's own default/CI kernel builds — including the one `setup.sh` fetches — don't enable FUSE, and guest kernels can't load modules at runtime, so it has to be compiled in:
+
+```bash
+sudo apt-get install -y build-essential flex bison libelf-dev bc
+images/build-guest-kernel.sh 5.10.223 ~/sandkiln-tools/images/vmlinux-5.10.223-fuse
+```
+
+It takes a few minutes. Point the daemon at the result with `SANDKILN_KERNEL_PATH=~/sandkiln-tools/images/vmlinux-5.10.223-fuse` — that replaces the default kernel for *every* sandbox, not just ones using mounts, so there's no reason not to use the FUSE-enabled one everywhere once you've built it.
+
+**`rclone` and `fusermount3` baked into the rootfs**, injected as binaries the same way the guest agent is (`rclone mount` is what actually talks to the bucket from inside the guest). Download a static `rclone` build for your architecture, then:
+
+```bash
+scripts/dev.sh inject-rclone <path-to-a-static-rclone-binary> [rootfs-path]
+```
+
+`rootfs-path` defaults the same way the guest-agent injection does. `fusermount3` comes along from this host's own `/bin/fusermount3` — install the `fuse3` package here if it's missing. rclone's Linux FUSE backend always execs it to perform the mount, even though the guest agent runs as root, so it isn't optional.
+
+There's no preflight check for either piece: the mount routes are always registered, so a host missing them fails at mount time with a `400` carrying rclone's own error output.
+
 ## 4. Verify it worked
 
 ```bash

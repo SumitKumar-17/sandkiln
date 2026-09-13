@@ -1,0 +1,64 @@
+/*
+  Maps Starlight's own token set onto this site's palette (tokens.css,
+  loaded immediately before this file by the customCss list) so the docs
+  read as the same product as the marketing pages rather than "default
+  theme, accent swapped" — and so a palette change happens in one file,
+  not two. Every value here is a var(), never a hex literal.
+*/
+@import url("https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+:root {
+  --sl-font: var(--body);
+  --sl-font-mono: var(--mono);
+
+  --sl-color-accent-low: var(--accent-wash);
+  --sl-color-accent: var(--accent);
+  --sl-color-accent-high: var(--accent-deep);
+
+  /* Starlight names these for its dark-first default: --sl-color-white is
+     the strongest foreground, --sl-color-black the page ground. In light
+     mode that inverts, which is why these look backwards. */
+  --sl-color-white: var(--text);
+  --sl-color-gray-1: var(--surface-2);
+  --sl-color-gray-2: var(--text-dim);
+  --sl-color-gray-3: var(--text-faint);
+  --sl-color-gray-4: #98a1b2;
+  --sl-color-gray-5: var(--border);
+  --sl-color-gray-6: var(--surface-2);
+  --sl-color-gray-7: var(--bg);
+  --sl-color-black: var(--surface);
+
+  --sl-color-bg: var(--bg);
+  --sl-color-bg-nav: var(--surface);
+  --sl-color-bg-sidebar: var(--surface);
+  --sl-color-bg-inline-code: var(--surface-2);
+  --sl-color-hairline-light: var(--border);
+  --sl-color-hairline: var(--border);
+  --sl-color-hairline-shade: var(--border);
+}
+
+:root[data-theme="dark"] {
+  --sl-color-gray-1: var(--text);
+  --sl-color-gray-4: #4a5464;
+  --sl-color-black: var(--bg);
+}
+
+/* Headings use the same face and tightened tracking as the marketing pages'
+   section titles, so moving between the two halves of the site never feels
+   like leaving it. */
+h1, h2, h3, h4 {
+  font-family: var(--display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* Code blocks are read constantly here, so they get a rule rather than a
+   glow — same flat, ruled treatment as the instrument panels on the
+   marketing pages. */
+.expressive-code .frame {
+  box-shadow: none !important;
+  border: 1px solid var(--sl-color-hairline) !important;
+}
+
+/* Measured numbers keep their tabular alignment wherever they appear. */
+.sl-markdown-content table { font-variant-numeric: tabular-nums; }

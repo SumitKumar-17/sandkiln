@@ -9,6 +9,8 @@ Not yet published to PyPI — install from the repository:
 pip install ./packages/python
 ```
 
+Everything this SDK wraps is listed below. One daemon feature has no wrapper yet: remote storage mounts (an S3-compatible bucket mounted inside a sandbox) are available on the daemon HTTP API only — see [Daemon HTTP API](../http-api/#remote-storage-mounts).
+
 ## Configuration
 
 - **Daemon URL**: pass `base_url=` to any method, or set `SANDKILN_DAEMON_URL`. Defaults to `http://127.0.0.1:7777`.

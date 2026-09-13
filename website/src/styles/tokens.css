@@ -1,0 +1,105 @@
+/*
+  Design brief: sandkiln's distinguishing fact is measurement — a whole
+  machine, its own kernel, up in tens of milliseconds, from a project that
+  prints its own caveats next to its own numbers. So the page is built to
+  read as a lab instrument rather than a forge: a measured baseline, hairline
+  axes, tabular numerals, square corners, and exactly one "signal" color that
+  behaves like a trace on a screen.
+
+  Cool on purpose. The palette this replaced was fired-clay cream and ember
+  orange, which fought the subject (nothing here is hot) and is the single
+  most over-used combination in generated layouts.
+
+  Status uses one scale, not three unrelated hues: --verified is the trace at
+  full strength, --pending is it attenuated. A reader should be able to tell
+  shipped from partial without reading the legend.
+
+  Single source of truth for both halves of the site: the marketing pages
+  import this via global.css, the docs pages via Starlight's customCss, and
+  starlight.css maps Starlight's own --sl-* variables onto these rather than
+  restating any value twice.
+
+  Three theme states have to agree: no data-theme attribute (follow the OS),
+  data-theme="light", and data-theme="dark". Starlight's toggle writes the
+  latter two; the marketing pages only ever see the first.
+*/
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eceff4;
+  --border: #dde1e8;
+  --border-strong: #c3cad6;
+  --text: #10131a;
+  --text-dim: #515a6b;
+  --text-faint: #7d8698;
+
+  --accent: #4739c9;
+  --accent-glow: #6455e8;
+  --accent-deep: #2e2490;
+  --accent-wash: #e6e3fb;
+  --accent-ink: #ffffff;
+
+  --verified: #0f7a63;
+  --verified-dim: #3f9d88;
+  --pending: #9a6206;
+
+  --code-bg: #0d1016;
+  --code-text: #e7eaf0;
+  --code-dim: #6d778a;
+
+  --display: "Archivo", -apple-system, "Segoe UI", sans-serif;
+  --body: "Archivo", -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1016;
+    --surface: #141922;
+    --surface-2: #1c222d;
+    --border: #262d3a;
+    --border-strong: #3a4354;
+    --text: #e7eaf0;
+    --text-dim: #a2acbd;
+    --text-faint: #6d778a;
+
+    --accent: #8e82ff;
+    --accent-glow: #a99fff;
+    --accent-deep: #c7c0ff;
+    --accent-wash: #221e46;
+    --accent-ink: #0d1016;
+
+    --verified: #45c3a4;
+    --verified-dim: #2f8f77;
+    --pending: #dca94a;
+
+    --code-bg: #090c11;
+    --code-text: #e7eaf0;
+    --code-dim: #6d778a;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0d1016;
+  --surface: #141922;
+  --surface-2: #1c222d;
+  --border: #262d3a;
+  --border-strong: #3a4354;
+  --text: #e7eaf0;
+  --text-dim: #a2acbd;
+  --text-faint: #6d778a;
+
+  --accent: #8e82ff;
+  --accent-glow: #a99fff;
+  --accent-deep: #c7c0ff;
+  --accent-wash: #221e46;
+  --accent-ink: #0d1016;
+
+  --verified: #45c3a4;
+  --verified-dim: #2f8f77;
+  --pending: #dca94a;
+
+  --code-bg: #090c11;
+  --code-text: #e7eaf0;
+  --code-dim: #6d778a;
+}

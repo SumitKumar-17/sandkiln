@@ -44,27 +44,28 @@ import Footer from "../components/Footer.astro";
         </div>
         <div class="bench-card">
           <div class="label">Load test throughput</div>
-          <div class="value">5.59<span style="font-size:16px;">/sec</span></div>
-          <div class="ctx">4 concurrent workers, 20 cycles, 0 errors</div>
+          <div class="value">5.38<span style="font-size:16px;">/sec</span></div>
+          <div class="ctx">4 concurrent workers × 5 cycles each, 0 errors</div>
         </div>
       </div>
 
-      <div class="table-scroll" style="margin-bottom: 32px;">
+      <div class="table-scroll" style="margin-bottom: 12px;">
         <table class="lat-table">
-          <thead><tr><th>Phase</th><th>Min</th><th>Mean</th><th>P95</th><th>Max</th></tr></thead>
+          <thead><tr><th>Phase</th><th>Min</th><th>Mean</th><th>P95</th></tr></thead>
           <tbody>
-            <tr><td>create</td><td>137ms</td><td>211ms</td><td>577ms</td><td>581ms</td></tr>
-            <tr><td>exec</td><td>1ms</td><td>366ms</td><td>440ms</td><td>447ms</td></tr>
-            <tr><td>delete</td><td>96ms</td><td>131ms</td><td>153ms</td><td>159ms</td></tr>
+            <tr><td>create</td><td>137ms</td><td>211ms</td><td>577ms</td></tr>
+            <tr><td>exec</td><td>—</td><td>366ms</td><td>—</td></tr>
+            <tr><td>delete</td><td>—</td><td>131ms</td><td>—</td></tr>
           </tbody>
         </table>
       </div>
+      <p class="table-note">A dash means the run didn't record that figure, not that it was zero. Only the numbers written down at the time appear here.</p>
 
       <div class="callout">
         <p><b>What we measured:</b> cold boot via <code>criterion</code> at 32.3–33.1ms, an exec round-trip on an already-open vsock connection at 225–275µs, and a load test of 4 concurrent workers running 5 cycles each of create → exec → delete against the live daemon.</p>
         <p><b>What we found:</b> the load test's <code>create</code> phase had a mean of 369ms (p95 588ms) — far above the ~33ms cold-boot figure sitting right next to it. The gap traced to the ~300MB rootfs copy, run synchronously right after the network lease, dominating the whole phase even though boot itself was fast.</p>
-        <p><b>What we fixed:</b> the rootfs copy and the network lease are independent work with no reason to serialize — they now run concurrently on separate threads — and the copy itself switched to <code>cp --reflink=auto</code>, an instant copy-on-write clone on a filesystem that supports it. Re-measured: <code>create</code> mean dropped to 211ms, a real, repeatable win.</p>
-        <p><b>What's still open:</b> this dev box runs ext4, which has no copy-on-write, so <code>--reflink=auto</code> silently falls back to an ordinary copy — the remaining ~180ms is real file-copy time that needs a CoW-capable filesystem (XFS, Btrfs) or a device-mapper layer to close. Every figure on this page is from one manual run on one shared, variable-load dev box, not isolated hardware — directionally useful, not authoritative; automating re-runs so regressions become visible over time is still on the roadmap.</p>
+        <p><b>What we fixed:</b> the rootfs copy and the network lease are independent work with no reason to serialize — they now run concurrently on separate threads — and the copy itself switched to <code>cp --reflink=auto</code>, an instant copy-on-write clone on a filesystem that supports it. Re-measured: <code>create</code> mean dropped from 369ms to 211ms, a real, repeatable win. Throughput barely moved (5.59 → 5.38 cycles/sec) because <code>create</code> is only one phase of a cycle and both runs are small samples on a variable-load box — the <code>create</code>-specific improvement is the result, not the throughput figure.</p>
+        <p><b>What's still open:</b> this dev box runs ext4, which has no copy-on-write, so <code>--reflink=auto</code> silently falls back to an ordinary copy — the remaining ~180ms is real file-copy time that needs a CoW-capable filesystem (XFS, Btrfs) or a device-mapper layer to close.</p>
       </div>
     </div>
   </section>

@@ -9,6 +9,8 @@ npm install -g sandkiln-cli   # installs the `kiln` command
 
 Global options, available on every subcommand: `--base-url <url>` (default: `SANDKILN_DAEMON_URL` or `http://127.0.0.1:7777`), `--token <token>` (default: `SANDKILN_AUTH_TOKEN`).
 
+One daemon feature has no `kiln` command yet: remote storage mounts (an S3-compatible bucket mounted inside a sandbox) are available on the daemon HTTP API only — see [Daemon HTTP API](../http-api/#remote-storage-mounts).
+
 ## A complete session
 
 ```bash

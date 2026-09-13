@@ -5,17 +5,48 @@ interface Props {
 const { active } = Astro.props as Props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 const link = (path: string) => (path === "" ? `${base}/` : `${base}/${path}/`);
+
+const nav = [
+  { label: "Architecture", path: "architecture", key: "architecture" },
+  { label: "Performance", path: "performance", key: "performance" },
+  { label: "Roadmap", path: "roadmap", key: "roadmap" },
+  { label: "Docs", path: "docs", key: "docs" },
+];
 ---
 
 <header class="top">
   <div class="topbar">
     <a class="brand" href={link("")}><span>sandkiln</span><span class="dot">.</span></a>
     <nav class="topnav">
-      <a href={link("")} aria-current={active === "home" ? "page" : undefined}>Home</a>
-      <a href={link("architecture")} aria-current={active === "architecture" ? "page" : undefined}>Architecture</a>
-      <a href={link("performance")} aria-current={active === "performance" ? "page" : undefined}>Performance</a>
-      <a href={link("roadmap")} aria-current={active === "roadmap" ? "page" : undefined}>Roadmap</a>
-      <a href={link("docs")}>Docs</a>
+      {nav.map((item) => (
+        <a href={link(item.path)} aria-current={active === item.key ? "page" : undefined}>{item.label}</a>
+      ))}
     </nav>
+    <button class="theme-toggle" type="button" aria-label="Switch between light and dark theme">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8">
+        <circle cx="12" cy="12" r="4.2" />
+        <path d="M12 2.6v2.3M12 19.1v2.3M2.6 12h2.3M19.1 12h2.3M5.3 5.3l1.7 1.7M17 17l1.7 1.7M18.7 5.3L17 7M7 17l-1.7 1.7" stroke-linecap="round" />
+      </svg>
+    </button>
   </div>
 </header>
+
+<script>
+  // Writes the same localStorage key Starlight's own toggle uses, so the
+  // choice carries in both directions across the two halves of the site.
+  (function () {
+    var button = document.querySelector(".theme-toggle");
+    if (!(button instanceof HTMLButtonElement)) return;
+    button.addEventListener("click", function () {
+      var root = document.documentElement;
+      var isDark = root.dataset.theme
+        ? root.dataset.theme === "dark"
+        : window.matchMedia("(prefers-color-scheme: dark)").matches;
+      var next = isDark ? "light" : "dark";
+      root.dataset.theme = next;
+      try {
+        localStorage.setItem("starlight-theme", next);
+      } catch {}
+    });
+  })();
+</script>

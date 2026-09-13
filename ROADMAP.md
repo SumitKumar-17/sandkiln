@@ -370,8 +370,9 @@ outbound HTTP both still work.
     matching the same "narrower first slice, come back for the rest"
     precedent `max_count` set for pre-warmed pools above. Also not the
     "remote storage" archive tier originally imagined (an S3-compatible
-    store, which needs the not-yet-built remote-storage-mounts feature
-    first) — `SANDKILN_ARCHIVE_DIR` is still a local filesystem path,
+    store — remote storage mounts have since shipped, so the dependency
+    is gone, but nothing wires archiving onto them yet)
+    — `SANDKILN_ARCHIVE_DIR` is still a local filesystem path,
     just a separately configured one (the real, concrete win available
     today: pointing it at a real disk instead of `snapshots_root()`'s
     default location under `$TMPDIR`, often tmpfs).

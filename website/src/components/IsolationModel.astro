@@ -12,7 +12,7 @@
         <tbody>
           <tr><td>Kernel</td><td>Shared with the host</td><td class="win">Dedicated per sandbox</td></tr>
           <tr><td>Isolation boundary</td><td>Namespaces + cgroups</td><td class="win">Hardware virtualization (KVM)</td></tr>
-          <tr><td>Cold start</td><td>~100ms–1s+</td><td class="win">32.7ms, measured</td></tr>
+          <tr><td>Cold start</td><td>~100ms–1s+</td><td class="win">32.3–33.1ms, measured</td></tr>
           <tr><td>Escape surface</td><td>Shared syscall table</td><td class="win">microVM boundary</td></tr>
           <tr><td>Filesystem</td><td>Overlay on host FS</td><td class="win">Dedicated virtio-blk device</td></tr>
           <tr><td>Good for</td><td>Packaging trusted code</td><td class="win">Running code you don't trust</td></tr>

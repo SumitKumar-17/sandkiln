@@ -10,6 +10,9 @@ const {
   title = "sandkiln",
   description = "A compute primitive for safely running untrusted or AI-generated code — hardware-isolated Firecracker microVMs, real benchmarks, SDKs for JS/TS, Python, and a CLI.",
 } = Astro.props;
+
+const favicon =
+  'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="%234739c9"/><path d="M4 22h6l4-12 4 16 4-10h6" fill="none" stroke="white" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/></svg>';
 ---
 
 <!doctype html>
@@ -19,10 +22,23 @@ const {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{title}</title>
   <meta name="description" content={description} />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔥</text></svg>" />
+  <link rel="icon" href={favicon} />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800;900&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  {/* Starlight owns the theme toggle and persists the choice under its own
+      localStorage key. These pages aren't rendered by Starlight, so without
+      this they'd ignore that choice and snap back to the OS setting the
+      moment a reader crossed from the docs — one site, two themes. Runs
+      before first paint to avoid a flash of the wrong one. */}
+  <script is:inline>
+    try {
+      const stored = localStorage.getItem("starlight-theme");
+      if (stored === "dark" || stored === "light") {
+        document.documentElement.dataset.theme = stored;
+      }
+    } catch {}
+  </script>
 </head>
 <body>
   <slot />

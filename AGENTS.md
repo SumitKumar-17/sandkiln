@@ -26,7 +26,7 @@ packages/python/         sandkiln PyPI package (Python)
 packages/cli/            kiln CLI, wraps the JS/TS SDK
 images/                  rootfs/kernel build + agent-injection scripts
 scripts/                 one-command dev-box bootstrap + daemon lifecycle control, plus tap pool, network bridge, DNS proxy, sync, integration/load tests, preflight checks, systemd install
-website/                 the project site (GitHub Pages + a live mirror) and, in website/docs/, the full docs site
+website/                 the whole public site — one Astro project holding both the marketing pages and, under /docs, the full Starlight docs
 examples/                runnable reference projects (code playground, agent runner)
 ```
 
@@ -125,9 +125,9 @@ complete website architecture, identify the actual limitation, implement
 the appropriate solution — including restructuring, changing the build
 approach, or rewriting major portions if that's genuinely the best
 engineering solution. `website/AGENTS.md` has this project's specific
-structure (a multi-page Astro marketing site plus an Astro+Starlight
-docs site in `website/docs/`, the two-deploy-target base-path handling,
-and where content belongs on which site).
+structure (one Astro project serving the marketing pages and the
+Starlight docs together, the base-path handling for the two deploy
+targets, and where content belongs on which surface).
 
 ### Performance / optimization
 

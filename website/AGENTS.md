@@ -1,155 +1,151 @@
 # AGENTS.md — website/
 
 Read the root `AGENTS.md` first for project-wide conventions. This
-directory holds two separate Astro static sites: the marketing site
-(this directory's own `src/`) and the docs site (`docs/`, its own
-Astro+Starlight project). Both deploy together — see "Deployment
-targets" below.
+directory is **one** Astro project that serves the whole public site:
+the marketing pages at the root, and the full Starlight documentation
+under `/docs`. There is no second project and no second lockfile.
 
 ## What this is for
 
 The project's public face: architecture, real (not aspirational)
-benchmark numbers, an honest shipped-vs-planned feature grid, an SDK
-usage example, and a startup-latency research write-up — plus a full
-docs site (getting started, core concepts, guides, and reference for
-the daemon's HTTP API and both SDKs/the CLI). Both are meant to stay
-**accurate as the project changes**, not be a one-time snapshot — treat
-stale content here as a bug, the same way a stale doc comment in code
-would be.
+benchmark numbers, an honest shipped-vs-planned feature grid, SDK usage
+examples, and a startup-latency write-up — plus the docs (getting
+started, core concepts, task guides, and reference for the daemon's HTTP
+API, both SDKs, and the CLI). It is meant to stay **accurate as the
+project changes**, not be a one-time snapshot: treat stale content here
+as a bug, exactly like a stale doc comment in code.
 
 ## Structure
 
-- **Marketing site** (`package.json`, `astro.config.mjs`, `src/`) — a
-  multi-page Astro project: `src/pages/index.astro` (hero, isolation
-  pitch, feature grid, SDK example, links out), `src/pages/architecture
-  .astro` (four-crate breakdown, boot lifecycle, links into the docs
-  site's deeper essays), `src/pages/performance.astro` (real benchmark
-  numbers plus the current startup-latency research), `src/pages/
-  roadmap.astro` (a real roadmap page, not a footer strip). Shared
-  design tokens/styles live in `src/styles/global.css`, imported once
-  by `src/layouts/BaseLayout.astro`. **Deliberately not a single
-  giant scrolling page** — a long page buries exactly the content
-  (benchmarks, roadmap depth) worth surfacing; each of those gets its
-  own page instead.
-- **Docs site** (`docs/`) — Astro + Starlight, its own `package.json`/
-  lockfile (not part of the root npm workspace, so its toolchain can't
-  drift the SDK/CLI's own dependency versions). Content lives in
-  `docs/src/content/docs/`, organized as Getting Started → Core
-  Concepts → Guides (task-oriented) → Reference (CLI, HTTP API, both
-  SDKs) → Architecture (the deep design-rationale essays, moved here
-  from the marketing site since they belong next to the API they
-  explain, not on a landing page). Sidebar structure is configured in
-  `docs/astro.config.mjs`, not auto-generated from the file tree.
+- `src/pages/` — the marketing pages: `index.astro` (hero readout,
+  isolation argument, feature manifest, SDK example, links out),
+  `architecture.astro` (five-crate breakdown, boot lifecycle, links into
+  the docs' deeper essays), `performance.astro` (measured numbers plus
+  the startup-latency research), `roadmap.astro`. Also `llms.txt.ts` and
+  `llms-full.txt.ts`, which generate the plain-text site index from the
+  docs collection at build time.
+- `src/content/docs/` — every docs page. Organized Getting Started →
+  Core Concepts → Guides (task-oriented) → Reference → Architecture (the
+  deep design-rationale essays, which live here rather than on a
+  marketing page because they belong next to the API they explain).
+- `src/components/`, `src/layouts/` — shared marketing-page pieces.
+  `DocsSiteTitle.astro` overrides Starlight's site title so the docs
+  header carries the same top-level nav; without it the docs are a
+  one-way trip out of the marketing pages.
+- `src/styles/tokens.css` — **the** palette and type scale, imported by
+  both surfaces. `global.css` (marketing) and `starlight.css` (docs,
+  via `customCss`) both consume it; `starlight.css` maps Starlight's own
+  `--sl-*` variables onto these tokens and contains no hex literals. Add
+  a color here or nowhere, or it will break in one theme or on one half
+  of the site.
 
-## The two-deploy-target base-path problem
+**Deliberately not a single scrolling page.** Benchmarks and roadmap
+depth are the content most worth surfacing, and a long homepage buries
+exactly those; each gets its own page instead.
 
-GitHub Pages serves this as a *project* page (a subpath —
-`sumitkumar-17.github.io/sandkiln/`); Vercel serves it at its own
-domain root (`sandkiln.vercel.app/`). One static build can't have two
-different asset base paths baked in at once, so both `astro.config.mjs`
-files read `ASTRO_BASE` at build time (default `"/"`, so a plain `npm
-run build`/`astro dev` — and Vercel's own build — just works without
-ceremony) — the Pages workflow (`.github/workflows/deploy-pages.yml`)
-is the one place that sets `ASTRO_BASE=/sandkiln` before building both
-projects. The docs site's own base is always `${ASTRO_BASE}/docs` — it
-is deployed as a `/docs` subpath of the *same* site, not a separate
-one, so its build output gets copied into the marketing site's own
-`dist/docs/` before either deploy target uploads anything. If you add a new internal link **inside docs page content** (markdown
-body text, not the sidebar config), it needs the full base-relative
-path *including* the leading `/docs` — e.g. `[Drives](/docs/concepts/
-drives/)`, not `/concepts/drives/`. This is the opposite of what you'd
-guess from Starlight's own sidebar: `docs/astro.config.mjs`'s sidebar
-`slug` values (`"getting-started/introduction"`, no leading slash, no
-`/docs`) *do* get auto-prefixed with the configured `base` when
-Starlight renders the nav, but a plain markdown link you write in a
-page's own body is passed through untouched — verified by actually
-building and curling the rendered page's real `href`, not by reading
-the source markdown, after this exact confusion produced ~50 silently
-broken links across every content page on the first pass. Cross-links
-from a docs page back to the *marketing* site (e.g. mentioning the
-Roadmap page) can't be fixed with a path at all — the two sites don't
-share a build, so those stay plain text, not a link.
+## How the docs get their `/docs` prefix
+
+`src/content.config.ts` passes a `generateId` to Starlight's
+`docsLoader()` that prefixes every entry id with `docs/`. So
+`src/content/docs/concepts/drives.md` serves at `/docs/concepts/drives/`
+without the file tree needing a second literal `docs/` directory, and
+the prefix is stated in exactly one place. Two consequences:
+
+- Sidebar entries in `astro.config.mjs` must use the prefixed slug. The
+  `docs()` helper at the top of that file does it — use it.
+- Starlight and `src/pages/` share one route namespace. A marketing page
+  and a docs page can't claim the same path.
+
+**Internal links inside docs page content must be relative to the
+current page** (`../concepts/drives/`), never absolute (`/docs/...`,
+`/concepts/...`). Relative links survive the base-path change below;
+absolute ones silently break on one deploy target. A previous version of
+this site shipped ~50 broken links by getting this wrong, and the build
+does not catch it — verify a changed link by curling the rendered
+`href`, not by reading the markdown source.
+
+## The base-path problem
+
+GitHub Pages serves this as a *project* page (a subpath,
+`sumitkumar-17.github.io/sandkiln/`); a mirror serves it at a domain
+root. One static build can't bake in both, so `astro.config.mjs` reads
+`ASTRO_BASE` (default `"/"`, so plain `npm run dev`/`npm run build` and
+any root-served deploy work with no ceremony). The Pages workflow
+(`.github/workflows/deploy-pages.yml`) is the single place that sets
+`ASTRO_BASE=/sandkiln`. `ASTRO_SITE` separately sets the origin used for
+absolute URLs (sitemap, canonicals, `llms.txt`).
+
+Because the docs are part of this project, one `astro build` emits both
+halves — `dist/` and `dist/docs/`. There is nothing to merge afterwards
+and no second `npm ci` in CI.
+
+## Integration order
+
+Starlight registers `astro-expressive-code`, which must be set up before
+`mdx()`. The integrations array is `[starlight(), mdx()]` for that
+reason; reversing it fails the build with an explicit message.
 
 ## Node version
 
-Astro 7 requires Node **≥22.12** — noticeably newer than this repo's
-Rust/CLI-side minimum (`>=18`, see `packages/*/package.json`). The dev
-box's `nvm` default had to be bumped to pick this up; `scripts/remote.sh`
-sources whatever `nvm`'s current default is, so this only needed fixing
-once per host, not per build.
+Astro 7 requires Node **≥22.12** — newer than this repo's Rust/CLI-side
+minimum (`>=18`, see `packages/*/package.json`).
 
 ## Rules for editing content
 
-- **Every claim needs to be true right now**, not aspirational. A
-  feature card/roadmap row says "Shipped" only if it's actually
-  verified working on real hardware (see root `AGENTS.md`'s
-  verification standard) — not because code was written that's
-  *supposed* to do it. Mark genuinely unfinished things "Planned," not
-  "Shipped" with a footnote.
+- **Every claim must be true right now**, not aspirational. A feature
+  row says "Shipped" only if it is actually verified working on real
+  hardware (root `AGENTS.md`'s verification standard) — not because code
+  exists that is supposed to do it. The feature manifest has three
+  states on purpose: `done`, `partial` (built, with a stated gap), and
+  `planned`. Reach for `partial` rather than overstating; several rows
+  were wrong in both directions before that state existed.
 - **Benchmark numbers are re-measured, not carried forward by
-  assumption** — when underlying performance-relevant code changes,
-  re-run the relevant benchmark/load-test and update the numbers on
-  `src/pages/performance.astro` (and the docs site's
-  `architecture/startup-latency.md`, which cites the same numbers),
-  don't leave stale figures next to new code.
-- Respects light/dark mode via CSS custom properties defined once in
-  `src/styles/global.css` (`:root`, then overridden for dark via
-  `prefers-color-scheme` and `[data-theme]`) — if you add a new color
-  anywhere, add it as a token in both places, not a one-off literal, or
-  it'll break in one theme. The docs site's `docs/src/styles/custom.css`
-  mirrors the same accent color into Starlight's own CSS variables so
-  the two sites feel like one product.
+  assumption.** When performance-relevant code changes, re-run the
+  relevant criterion bench or load test and update
+  `src/pages/performance.astro` and the docs' `architecture/
+  startup-latency.md`, which cite the same figures. Re-running them
+  needs a Firecracker binary plus a built kernel and rootfs — a checkout
+  alone cannot reproduce them, so if you cannot actually run them, say
+  the numbers were carried forward rather than implying a fresh
+  measurement.
+- **Publish only numbers that exist in a recorded run.** No rounded
+  midpoints of a measured range, no filling in a table cell that was
+  never recorded — a dash and a note are correct, an invented figure is
+  not. Ranges get published as ranges.
+- Respects light and dark mode through the tokens described above.
+  Three theme states must agree: no `data-theme` (follow the OS),
+  `data-theme="light"`, and `data-theme="dark"` (Starlight's toggle
+  writes the latter two).
 - Never name a competing platform or company anywhere in this
-  directory's content — describe techniques/patterns generically.
+  directory's content — describe techniques and patterns generically.
 
 ## Verifying a change
 
-Both projects have a real build step now — `astro build` in `website/`
-and `website/docs/` respectively, run via `scripts/remote.sh run` per
-this session's established workflow (see root `AGENTS.md`). `astro
-build` succeeding is necessary but not sufficient — actually start
-`astro preview` and curl (or screenshot) the changed page before
-calling a content change done; a broken internal link or a template
-error (an unescaped `{ }` in a `.astro` file gets parsed as a live JS
-expression, not literal text — this bit the SDK code sample once)
-won't always fail the build loudly.
+`npm run build` succeeding is necessary but not sufficient: a broken
+internal link or a template error (an unescaped `{ }` in a `.astro` file
+is parsed as a live JS expression, not literal text — this bit an SDK
+code sample once) will not always fail it loudly. Actually run
+`npm run preview` and curl the changed page.
 
-## Deployment targets
+```
+cd website
+npm install
+npm run dev        # or: npm run build && npm run preview
+```
+
+## Deployment
 
 GitHub Pages (`.github/workflows/deploy-pages.yml`, on every push to
-`main` touching this directory) is the primary deploy
-(https://sumitkumar-17.github.io/sandkiln/). `vercel.json` (repo root)
-makes the same merged build deployable on any platform that imports
-this repo and reads that file. A second live mirror is up at
-https://sandkiln.vercel.app, auto-deployed on every push to `main` via
-that platform's own GitHub integration (not a workflow file in this
-repo — the Vercel project's own Root Directory/Build/Output/Install
-Command settings are auto-detect, so `vercel.json` stays the single
-source of truth; they drifted to a stale `Root Directory: website`
-leftover from the old single-file site once, silently breaking every
-deploy until caught by actually inspecting the deployment logs, not
-just the dashboard's green checkmark). Same content as Pages; if the
-two ever visibly disagree, Pages is the source of truth
-(`deploy-pages.yml` is the one deploy this repo directly controls and
-verifies).
+`main` touching this directory) is the primary deploy and the source of
+truth. `vercel.json` at the repo root makes the same single build
+deployable on any platform that imports this repo and reads that file; a
+live mirror auto-deploys from `main` that way. If the two ever visibly
+disagree, Pages wins — it is the one deploy this repo directly controls
+and verifies.
 
-`website/docs/` is **also** deployed a third way: standalone, at its
-own domain root, as a separate Vercel project ("sandkiln-docs", not
-"sandkiln") aliased to https://sandkiln-docs.vercel.app — for anyone
-who wants a clean docs-only link instead of the merged site's `/docs`
-subpath. That project's Root Directory is `website/docs` and it sets
-`ASTRO_DOCS_STANDALONE=true` (a production environment variable
-configured on the project, not in any committed file), which
-`website/docs/astro.config.mjs` reads to serve at base `"/"` instead of
-computing `${ASTRO_BASE}/docs` — every internal link in this site's own
-content is written as a path relative to the current page for exactly
-this reason, so the same markdown works unmodified under both base
-values; verify a content change against **both** builds
-(`npm run build` and `ASTRO_DOCS_STANDALONE=true npm run build`), not
-just one, before calling it done. `docs.sandkiln.vercel.app` (a
-subdomain of the main site's own `*.vercel.app` alias) is **not**
-available — Vercel only grants an account `*.vercel.app` and
-`*.<team>.vercel.app`, not arbitrary subdomains of another alias it
-already owns — that's why this one is `sandkiln-docs.vercel.app`
-instead. This project auto-deploys on push same as the main one
-(`vercel git connect`, done once from the CLI).
+The docs previously had a third, standalone deploy at their own domain
+root, which required an `ASTRO_DOCS_STANDALONE` env var and a second
+build of a second project. Consolidating into one project removed both
+that deploy and the whole class of base-path bugs it kept producing. Do
+not reintroduce a separate docs project without a concrete reason that
+outweighs that.

@@ -7,6 +7,8 @@ description: Every Sandbox and Image method, with runnable examples.
 npm install sandkiln
 ```
 
+Everything this SDK wraps is listed below. One daemon feature has no wrapper yet: remote storage mounts (an S3-compatible bucket mounted inside a sandbox) are available on the daemon HTTP API only — see [Daemon HTTP API](../http-api/#remote-storage-mounts).
+
 ## Configuration
 
 - **Daemon URL**: pass `baseUrl` to any method, or set `SANDKILN_DAEMON_URL`. Defaults to `http://127.0.0.1:7777`.

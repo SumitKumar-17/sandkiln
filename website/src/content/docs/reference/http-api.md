@@ -91,6 +91,18 @@ curl -s -X POST "$BASE/sandboxes/get-or-create" \
 | `GET /drives` | List drives, including current holders (`attached_to`) and their `read_only` flag. |
 | `DELETE /drives/:id` | Delete a drive. `409` while anything still references it. |
 
+## Remote storage mounts
+
+Daemon-only — no SDK or CLI wrapper yet. Needs a FUSE-capable guest kernel and `rclone`/`fusermount3` in the rootfs; there's no preflight check, so a host missing either surfaces it as a `400` from the create call. See [Remote storage mounts](../../concepts/remote-storage/).
+
+| Route | What it does |
+|---|---|
+| `POST /sandboxes/:id/mounts` | Mount an S3-compatible bucket inside the sandbox. Body: `bucket`, `endpoint` (full URL of the S3-compatible endpoint, required, never defaulted), `access_key`, `secret_key`, `mount_path` (created with `mkdir -p` if absent), `read_only?` (defaults `false`). Returns `200` with `{"id", "bucket", "endpoint", "mount_path", "read_only"}` — credentials are never echoed back. |
+| `GET /sandboxes/:id/mounts` | List this sandbox's mounts: `{"mounts": [...]}`, same object shape as above. |
+| `DELETE /sandboxes/:id/mounts/:mount_id` | Unmount and forget it (`204`). Best-effort past the bookkeeping: removed from daemon state whether or not the guest-side `umount` succeeded, with a warning logged if it didn't. |
+
+Errors on create: `400` for any empty required field, for a failed mount (`rclone mount failed (exit N): <stderr><stdout>`), or for any guest-agent error; `404` for an unknown sandbox id; `409` if something is already mounted at that `mount_path` (the message names the existing bucket, its path, and the `DELETE` URL); `500` if rclone exits `0` but `mountpoint -q <path>` disagrees — the daemon unmounts and removes the config before returning. `DELETE` returns `404` for an unknown sandbox or mount id.
+
 ## Images
 
 | Route | What it does |
