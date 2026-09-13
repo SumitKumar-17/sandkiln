@@ -1,9 +1,9 @@
 ---
 title: "Engineering notebook: real bugs found building this"
-description: What broke building interactive terminals, pre-warmed pools, snapshot lineage, and time-travel restore, how each was actually found, and what's still genuinely unresolved.
+description: What broke building interactive terminals, pre-warmed pools, snapshot lineage, time-travel restore, remote storage mounts, and streamed exec sessions — how each was actually found, and what's still genuinely unresolved.
 ---
 
-`architecture/bug-hunt-vsock-timeout` tells one story in detail — a stop that could hang forever, found by actually running the failure case rather than in review. This page collects the others, from building interactive terminal access, pre-warmed pools, snapshot lineage, and time-travel restore. Same rule as everywhere else on this site: nothing here is stated unless it was actually observed running against real Firecracker/KVM hardware.
+`architecture/bug-hunt-vsock-timeout` tells one story in detail — a stop that could hang forever, found by actually running the failure case rather than in review. This page collects the others, from building interactive terminal access, pre-warmed pools, snapshot lineage, time-travel restore, remote storage mounts, and a stale performance assumption caught before it became a wasted feature. Same rule as everywhere else on this site: nothing here is stated unless it was actually observed running against real Firecracker/KVM hardware.
 
 ## The PTY session that hung for exactly 10 seconds
 
@@ -65,6 +65,28 @@ Not a code bug — a tooling gap that caused a real mistake during this project'
 
 **The fix** was at the tooling level, not just "be more careful": a single `scripts/dev.sh inject-agent` command that resolves the daemon's own actual configured default rootfs path automatically, so this specific class of mistake — updating the wrong file because a path had to be remembered by hand — can't recur.
 
+## The guest kernel that had never heard of FUSE
+
+Building remote storage mounts (an S3-compatible bucket mounted into a sandbox via `rclone mount`) looked, on paper, like it needed nothing new at the protocol level — just `Mkdir`/`WriteFile`/`Chmod`/`Exec`, requests the daemon already had. The first real test inside an actual sandbox refused to cooperate: `modprobe fuse` failed with "Module fuse not found," and `/dev/fuse` simply didn't exist.
+
+The cause wasn't a missing package — it was the guest kernel itself. Firecracker guest kernels have no loadable-module support at all (everything has to be compiled in statically), and this project's kernel — fetched pre-built from Firecracker's own public CI artifacts, with no local build pipeline behind it — had never been compiled with `CONFIG_FUSE_FS` in the first place. No installable fix existed; the kernel had to be rebuilt.
+
+**The fix**: fetch Firecracker's own actual, currently-published recommended kernel config (which does set `CONFIG_FUSE_FS=y`), apply it against matching vanilla kernel source, reconcile with `make olddefconfig`, and build. The whole rebuild took about 35 seconds on the dev box's 32 cores. Verified by booting a real sandbox against the new kernel and confirming `/dev/fuse` existed with `fuse`/`fuseblk`/`fusectl` registered in `/proc/filesystems` — not just that the build succeeded.
+
+Then a second, unrelated surprise showed up right behind it: with a real FUSE-capable kernel and `rclone` injected into the guest, the mount still failed — `fusermount: exec: "fusermount3": executable file not found in $PATH`. The assumption going in was that running as root (which the guest agent does) would let `rclone` call `mount(2)` directly, bypassing the userspace helper `fusermount3` normally exists to let *non-root* users mount FUSE filesystems. That assumption was wrong: rclone's Linux FUSE backend always execs `fusermount3` to do the actual mount, root or not — there's no direct-`mount(2)` code path in that library at all. **The fix**: inject `fusermount3` into the rootfs the same way `rclone` itself is (a near-static binary — `ldd` shows it depends on nothing but libc), rather than assume privilege alone would be enough.
+
+## A response that looked right and wasn't
+
+The first version of the mounts feature's `create_mount` handler called the guest's `Mkdir` request and checked its result the same way an `Exec` result gets checked — matching on `Response::Exec { stdout, stderr, exit_code }`. It compiled, the types lined up, and it was still wrong: `Mkdir`/`WriteFile`/`Chmod` all report success as a bare `Response::Ok`, not `Response::Exec` — a different variant of the same enum, since they aren't shell commands with output to capture. Every real mount attempt failed instantly with `"unexpected agent response: Ok"`, caught the moment this was actually run against a live sandbox rather than assumed correct because it type-checked. **The fix**: a small `expect_ok` helper matching the exact pattern `routes_fs.rs` already used for the same three request types — this project had already solved this once, in a different file, and the fix was just reusing that pattern rather than inventing a new one.
+
+## The optimization that didn't optimize anything
+
+The Benchmarking work had flagged a specific, plausible-sounding next step: sandbox creation clones the base rootfs with `cp --reflink=auto`, which is an instant copy-on-write clone on a filesystem that supports it (XFS, Btrfs) — but this project's dev box runs ext4, which has no CoW at all, so the theory was that switching rootfs storage to a CoW-capable filesystem would close a real, measured ~180ms gap in sandbox-create latency.
+
+Rather than assume the theory was right, it got tested: a real 10GiB XFS filesystem, built as a loopback image on the same dev box, with the daemon's base rootfs pointed at it. The CoW clone itself was confirmed genuine — cloning the same 300MiB rootfs four times used a measured ~4MiB of real disk space total, not ~1.2GiB, and the raw `cp --reflink=auto` call dropped from ~110ms to close to 0ms. And then the actual thing that mattered — five real, timed `POST /sandboxes` calls — came back **unchanged**: ~160-170ms either way, XFS or ext4.
+
+The reason was sitting in a comment in the same function, half-right: the rootfs copy already runs *concurrently* with the network lease, specifically so neither one pays for the other serially. That concurrency is exactly what made the fix inert — collapsing the copy side to ~0ms doesn't shorten a `thread::scope` join that's still waiting on whichever side is slower, and the lease side was apparently never the copy's inferior. A device-mapper/thin-provisioning layer, the harder alternative the same section had proposed as a fallback, would have hit the identical wall for the identical reason — building it would have optimized an operation that was never actually on the critical path once measured, not assumed. It's still a real, worthwhile disk-space win on its own (four rootfs clones costing ~4MiB instead of ~1.2GiB is not nothing), which is why `scripts/preflight-check.sh` reports it now — just not the latency fix it looked like on paper.
+
 ## Currently open
 
 Honest status on what's still unresolved, not swept into a changelog and forgotten:
@@ -74,4 +96,5 @@ Honest status on what's still unresolved, not swept into a changelog and forgott
 - **Jailer hardening is opt-in and still not proven on real hardware.** The first real-hardware attempt failed outright (every sandbox create returned `500`) because the `jailer` binary itself needs a one-time `setuid-root` step that hadn't been applied yet — root-caused via the same console-log capture used above, not guessed at. Not recommended as-is for a genuinely adversarial workload until it's actually verified end to end.
 - **Why `/mmds/config` sometimes rejects a post-resume call is unconfirmed.** The retry above closes the practical failure, not the open question — whether it's a genuine settling-window race in Firecracker's own internal state machine, or something more specific to this dev box's load characteristics, is an informed guess, not a diagnosis.
 - **Retired checkpoints (time-travel restore) have no automatic expiry.** Every resume keeps a full guest-memory dump plus a private rootfs copy by default, with no size or age-based cleanup — `DELETE /snapshots/history/:id` exists for manual reclaim, but nothing manages this automatically yet. See [Persistence model](../persistence-model/) for how much disk this can actually consume if ignored.
+- **Where the remaining ~130-160ms of sandbox-create latency actually goes is unconfirmed.** The rootfs copy is ruled out (see "The optimization that didn't optimize anything" above) — the two live candidates that haven't been measured in isolation yet are the network lease's own `ip`/`bridge` subprocess calls and Firecracker's own sequential per-VM API configuration calls. Stated as an open question rather than another guess dressed up as a finding.
 - See the Roadmap page on the main site and the repository's own `ROADMAP.md` for the full, current list of what's shipped, partial, and not started — this page covers what broke and got fixed, not the complete feature status.
