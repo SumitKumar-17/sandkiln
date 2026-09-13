@@ -34,9 +34,13 @@ A pool's `warm_count` is a target size, not a hard cap on how many live instance
 
 - **Pool configuration is in-memory only**, not durable across a daemon restart the way snapshot records are — a caller has to re-`POST /pools` afterward, and a restart can orphan an already-warm snapshot with no pool left to claim or clean it up.
 
-## What's next: the rootfs copy, not boot or resume
+## What's next: not the rootfs copy, measured
 
-Snapshot-take (~322ms) and resume (~25.8ms) are both already small — resume was never the bottleneck once measured directly. The ~180ms gap between a ~32ms boot and a full cold create's ~211ms mean lives in the surrounding per-create setup, dominated by the rootfs copy: this dev box runs ext4, which has no copy-on-write, so `cp --reflink=auto` silently falls back to an ordinary copy. A CoW-capable filesystem (XFS, Btrfs) would make that same call an instant clone with no code change; a device-mapper/thin-provisioning layer would close the same gap a different way if the host filesystem can't change. This is the concrete next lever for every create the pool above doesn't already serve from a warm snapshot — see the Performance page for a few further ideas, explicitly flagged as brainstorming rather than shipped or verified work.
+Snapshot-take (~322ms) and resume (~25.8ms) are both already small — resume was never the bottleneck once measured directly. The remaining ~130–160ms between a ~32ms boot and a full cold create lives in the surrounding per-create setup.
+
+This section previously named the rootfs copy as that bottleneck and a copy-on-write filesystem — or failing that a device-mapper/thin-provisioning layer — as the next thing to build. Measuring it directly showed that was wrong. A real XFS loopback filesystem was set up on the dev box with `SANDKILN_BASE_ROOTFS` pointed at it. The clone is genuinely copy-on-write: cloning the same 300MiB rootfs four times added about 4MiB of real disk usage by `df` rather than ~1.2GiB, and `cp --reflink=auto` itself dropped from ~110ms on ext4 to ~0ms on XFS. **End-to-end `POST /sandboxes` latency was unchanged** — ~160–170ms either way, across five creates on each filesystem — because the copy already runs concurrently with the network lease, so shrinking it to nothing only moves the join onto the lease side. It stopped being the critical path the moment that concurrency landed, and a device-mapper layer would not have helped either, for the same reason.
+
+What remains is most likely the network lease step's own `ip`/`bridge` subprocess calls (`NetworkManager::attach_tap`), or Firecracker's own per-VM configuration calls — boot-source, drives, network-interfaces and machine-config, each a separate synchronous PUT to its API socket. Neither has been isolated yet, so the honest next step is a profiling pass of `Vm::boot` itself rather than another storage-layer change. `scripts/preflight-check.sh` still reports whether rootfs storage sits on a CoW-capable filesystem, which remains a real disk-space win — just not a latency one.
 
 ## What Firecracker itself already buys, for free
 

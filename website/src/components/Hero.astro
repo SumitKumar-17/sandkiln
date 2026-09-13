@@ -1,15 +1,19 @@
 ---
-// Every figure here is one recorded in ROADMAP.md's Benchmarking section. No
-// rounded midpoints: a range is published as a range, because the single
-// prettier number in the middle of it was never actually measured.
-const readout = [
-  { label: "Cold boot", value: "32.3–33.1", unit: "ms", note: "criterion, spawn to InstanceStart" },
-  { label: "Exec round-trip", value: "225–275", unit: "µs", note: "over an open vsock connection" },
-  { label: "Resume from snapshot", value: "25.5–26.2", unit: "ms", note: "criterion" },
-  { label: "Full create, under load", value: "211", unit: "ms", note: "mean, 4 concurrent workers" },
+import { ticks, markStyle, type Measurement } from "../lib/scale";
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+// Every figure is one recorded in ROADMAP.md's Benchmarking section. No
+// rounded midpoints: a range is published as a range, because the prettier
+// single number in the middle of it was never actually measured.
+const readout: Measurement[] = [
+  { label: "Cold boot", lo: 32.3, hi: 33.1, value: "32.3–33.1", unit: "ms", source: "criterion — spawn to InstanceStart" },
+  { label: "Exec round-trip", lo: 0.225, hi: 0.275, value: "225–275", unit: "µs", source: "criterion — over an open vsock connection" },
+  { label: "Resume from snapshot", lo: 25.5, hi: 26.2, value: "25.5–26.2", unit: "ms", source: "criterion" },
+  { label: "Full create, under load", lo: 211, hi: 211, value: "211", unit: "ms", source: "mean — 4 concurrent workers, 0 errors" },
 ];
 
-const console_lines = [
+const consoleLines = [
   { t: "[    0.000000] Linux version 5.10.223 (gcc 11.4.0) #1 SMP", c: "dim" },
   { t: "[    0.000000] Command line: console=ttyS0 reboot=k panic=1", c: "dim" },
   { t: "[    0.000000] Hypervisor detected: KVM", c: "sig" },
@@ -27,34 +31,104 @@ const console_lines = [
 ];
 ---
 
-<section class="hero" id="top">
-  <div class="wrap hero-grid">
-    <div class="hero-copy">
-      <h1>Run untrusted code<br />without flinching.</h1>
-      <p class="tagline">A compute primitive for safely executing untrusted or AI-generated code. Every run gets its own Firecracker microVM — its own kernel, its own filesystem, its own network.</p>
-      <p class="lede">Built from the metal up: a Rust VMM, a static guest agent talking over vsock, an HTTP daemon driving it all. No shell scripts in the hot path, no container escape surface.</p>
+<section class="hero">
+  <div class="shell hero-grid">
+    <div>
+      <h1>Run untrusted code on hardware you control.</h1>
+      <p class="hero-sub">
+        Every execution gets its own Firecracker microVM — its own kernel, its own filesystem,
+        its own network. Not a container with extra steps.
+      </p>
+      <p class="hero-fine">
+        A Rust VMM, a static guest agent talking over vsock, an HTTP daemon driving both.
+        Self-hosted, MIT licensed, and benchmarked in the open.
+      </p>
 
-      <div class="cta-row">
-        <a class="btn primary" href="#code">npm install sandkiln</a>
-        <a class="btn ghost" href="architecture/">Read the architecture</a>
+      <div class="actions">
+        <button class="btn btn-primary copy-install" type="button" data-copy="npm install sandkiln">
+          <span class="copy-label">npm install sandkiln</span>
+        </button>
+        <a class="btn btn-quiet" href={`${base}/docs/getting-started/self-hosting/`}>Self-hosting quickstart</a>
       </div>
+      <p class="sr-live" role="status" aria-live="polite"></p>
     </div>
 
-    <div class="panel-stack">
-      <div class="readout" role="group" aria-label="Measured latency">
-        {readout.map((r) => (
-          <div class="readout-row">
-            <span class="r-label">{r.label}</span>
-            <span class="r-value">{r.value}<span class="r-unit">{r.unit}</span></span>
-            <span class="r-note">{r.note}</span>
-          </div>
-        ))}
+    <div class="stack-2">
+      <div class="panel">
+        <div class="panel-head">
+          <span>measured latency</span>
+          <span>one dev box, single node</span>
+        </div>
+
+        <div class="readout">
+          {readout.map((m) => (
+            <div class="read-row">
+              <span class="read-name">{m.label}</span>
+              <span class="read-val">{m.value}<span class="read-unit">{m.unit}</span></span>
+              <span class="read-src">{m.source}</span>
+              <span class="read-track" aria-hidden="true"><span class={`read-mark${m.lo === m.hi ? " read-mark-point" : ""}`} style={markStyle(m)}></span></span>
+            </div>
+          ))}
+        </div>
+
+        <div class="axis" aria-hidden="true">
+          {ticks.map((t) => (
+            <span class="axis-tick" style={`left:${t.at}%`}>{t.label}</span>
+          ))}
+        </div>
       </div>
 
-      <div class="console">
-        <div class="console-bar"><span class="console-title">guest console</span><span class="console-meta">ttyS0</span></div>
-        <pre>{console_lines.map((l) => <div class={l.c}>{l.t || " "}</div>)}</pre>
+      <div class="tty">
+        <div class="tty-head"><span>guest console</span><span>ttyS0</span></div>
+        <pre>{consoleLines.map((l) => <div class={l.c}>{l.t || " "}</div>)}</pre>
       </div>
     </div>
   </div>
 </section>
+
+<script>
+  // The install command is the first thing a reader wants out of this page,
+  // so the button hands it over rather than scrolling them somewhere to
+  // select it by hand. The label states what happened, in the same words.
+  (function () {
+    var button = document.querySelector(".copy-install");
+    if (!(button instanceof HTMLButtonElement)) return;
+    var label = button.querySelector(".copy-label");
+    var live = document.querySelector(".sr-live");
+    var command = button.dataset.copy || "";
+    var original = label ? label.textContent : "";
+    var timer: number | undefined;
+
+    button.addEventListener("click", function () {
+      navigator.clipboard.writeText(command).then(
+        function () {
+          if (label) label.textContent = "Copied";
+          if (live) live.textContent = "Copied " + command + " to the clipboard";
+          window.clearTimeout(timer);
+          timer = window.setTimeout(function () {
+            if (label) label.textContent = original;
+            if (live) live.textContent = "";
+          }, 2000);
+        },
+        function () {
+          if (live) live.textContent = "Couldn't copy. The command is: " + command;
+        },
+      );
+    });
+  })();
+</script>
+
+<style>
+  .copy-install {
+    min-width: 218px;
+    justify-content: flex-start;
+  }
+  .sr-live {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+</style>

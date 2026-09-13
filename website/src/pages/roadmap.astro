@@ -11,16 +11,16 @@ interface Row {
 
 const persistence: Row[] = [
   { name: "Snapshot / resume / fork", desc: "Save a running microVM's full state and boot a new one from it, consuming the snapshot or not — durable across a daemon restart.", status: "done" },
-  { name: "Persistent-by-default stop", desc: "Stopping a sandbox snapshots it by default instead of destroying; ?keep=false opts back into full destruction.", status: "done" },
-  { name: "Named sandboxes", desc: "Create/resume by a caller-given name via get-or-create, race-safe under a per-name lock.", status: "done" },
+  { name: "Persistent-by-default stop", desc: "Stopping a sandbox snapshots it by default instead of destroying it; ?keep=false opts back into full destruction.", status: "done" },
+  { name: "Named sandboxes", desc: "Create or resume by a caller-given name via get-or-create, race-safe under a per-name lock.", status: "done" },
   { name: "Auto-suspend on idle", desc: "An idle sandbox is paused and snapshotted automatically, freeing resources while staying resumable.", status: "done" },
   { name: "Custom/managed images", desc: "Register an already-built rootfs and boot from it. OCI/Docker-image conversion is not done.", status: "partial" },
   { name: "Non-consuming snapshot fork", desc: "Fork a snapshot without consuming it. Not true parallel forking — at most one live fork of a given snapshot at a time.", status: "partial" },
   { name: "Durable sandbox history", desc: "A sqlite-backed record of every sandbox that ever existed and how it ended, surviving a daemon restart — deliberately not the same thing as live sandboxes surviving one, which nothing can make true today.", status: "done" },
-  { name: "Pre-warmed snapshot pool", desc: "A matching sandbox create resumes a ready snapshot instead of cold-booting — transparent, no special call. An optional max_count caps total live instances, queueing a claim at capacity instead of exceeding it. Real, honestly-measured caveat: resuming a snapshot has a real, non-rare guest-kernel-panic failure mode a health check catches and falls back from. See the Performance page.", status: "partial" },
-  { name: "Tiered idle lifecycle", desc: "Extend auto-suspend into named tiers — suspend, then archive, then delete — each with its own configurable window. The archive tier ships, moving a held snapshot to a separately configured local directory past its timeout. The delete-after-archive tier was deliberately left out of that slice, and archiving to a remote object store rather than a local path isn't built either.", status: "partial" },
-  { name: "Time-travel restore", desc: "Resuming retains the checkpoint instead of deleting it by default — restorable again later, as many times as wanted, via the snapshot history API. Sequential, not branching: refuses while anything sharing that checkpoint's network identity is live or held. Real cost: unbounded disk usage with no automatic expiry yet, a delete endpoint is the mitigation so far.", status: "partial" },
-  { name: "Snapshot lineage", desc: "Every snapshot records the snapshot its own source sandbox was resumed/forked from, queryable in both directions — walk a full ancestry tree, one request at a time, without a dedicated tree-shaped endpoint.", status: "done" },
+  { name: "Pre-warmed snapshot pool", desc: "A matching sandbox create resumes a ready snapshot instead of cold-booting — transparent, no special call. An optional max_count caps total live instances, queueing a claim at capacity instead of exceeding it. Honestly-measured caveat: resuming has a real, non-rare guest-kernel-panic failure mode that a health check catches and falls back from. See the Performance page.", status: "partial" },
+  { name: "Tiered idle lifecycle", desc: "Extends auto-suspend into named tiers — suspend, then archive, then delete — each with its own window. The archive tier ships, moving a held snapshot to a separately configured local directory past its timeout. The delete-after-archive tier was deliberately left out of that slice, and archiving to a remote object store rather than a local path isn't built either.", status: "partial" },
+  { name: "Time-travel restore", desc: "Resuming retains the checkpoint instead of deleting it, restorable again later as many times as wanted via the snapshot history API. Sequential, not branching: refuses while anything sharing that checkpoint's network identity is live or held. Real cost: unbounded disk usage with no automatic expiry yet, a delete endpoint being the mitigation so far.", status: "partial" },
+  { name: "Snapshot lineage", desc: "Every snapshot records the snapshot its own source sandbox was resumed or forked from, queryable in both directions — walk a full ancestry tree one request at a time, without a dedicated tree-shaped endpoint.", status: "done" },
   { name: "Fan-out cloning", desc: "Cloning one snapshot into several live sandboxes at once needs the same unsolved independent-rootfs problem as parallel forking above — not a separately achievable feature.", status: "planned" },
 ];
 
@@ -28,76 +28,107 @@ const security: Row[] = [
   { name: "Isolation model", desc: "Every sandbox is a real Firecracker microVM with its own kernel — the strongest available isolation for untrusted code.", status: "done" },
   { name: "Bearer-token auth", desc: "A single shared-secret token gates every /sandboxes* route. Off by default, warns loudly if left off.", status: "done" },
   { name: "Network isolation", desc: "Bridge port isolation between sandboxes — no sandbox-to-sandbox traffic by default, verified.", status: "done" },
-  { name: "Resource ceilings", desc: "Per-sandbox vcpu/memory overrides, rejected outright rather than silently clamped if out of range.", status: "done" },
+  { name: "Resource ceilings", desc: "Per-sandbox vcpu and memory overrides, rejected outright rather than silently clamped if out of range.", status: "done" },
   { name: "Jailer hardening", desc: "Firecracker's jailer (chroot, cgroups v2, unprivileged uid), opt-in. Not yet proven against a real jailer binary on hardware.", status: "partial" },
   { name: "Multi-agent isolation", desc: "Separate Linux users with private home directories, baked into the base image build.", status: "done" },
   { name: "Egress firewall", desc: "Per-sandbox IP/CIDR allow/deny policy, one dedicated iptables chain per sandbox, deny always winning over allow on overlap. Domain-level rules and port-level matching are not built yet — still needs the shared DNS proxy to become source-IP-aware.", status: "partial" },
-  { name: "Per-sandbox I/O rate limiting", desc: "Firecracker's own token-bucket rate limiter (ops/sec + bandwidth), applied per sandbox to every drive and the network interface — unlimited by default, capped with one field on create.", status: "done" },
+  { name: "Per-sandbox I/O rate limiting", desc: "Firecracker's own token-bucket rate limiter (ops/sec plus bandwidth), applied per sandbox to every drive and the network interface — unlimited by default, capped with one field on create.", status: "done" },
   { name: "Seccomp filters, disk-size ceilings", desc: "Per-sandbox syscall filtering and a hard disk quota — neither exists yet.", status: "planned" },
 ];
 
 const platform: Row[] = [
   { name: "Read-only shared drives", desc: "A drive attached read-only may be shared by arbitrarily many sandboxes at once; read-write still needs exclusive access. Drive.create/list/delete in both SDKs and kiln drive.", status: "done" },
-  { name: "Remote storage mounts", desc: "FUSE-mount an S3-compatible bucket into a sandbox and read/write it like local disk, via rclone running inside the guest — POST/GET/DELETE /sandboxes/:id/mounts, credentials written in as a 0600 config file rather than a command line. Daemon-only: no SDK or CLI wrapper yet. Needs a guest kernel built with CONFIG_FUSE_FS and rclone/fusermount3 in the rootfs, neither of which a stock setup has. Verified end-to-end against a local S3-compatible test fixture, not against a hosted object store. Mounts are not re-applied after resume/fork/restore.", status: "partial" },
+  { name: "Remote storage mounts", desc: "FUSE-mount an S3-compatible bucket into a sandbox and read or write it like local disk, via rclone running inside the guest — credentials written in as a 0600 config file rather than a command line. Daemon-only: no SDK or CLI wrapper yet. Needs a guest kernel built with CONFIG_FUSE_FS and rclone/fusermount3 in the rootfs, neither of which a stock setup has. Verified end to end against a local S3-compatible test fixture, not against a hosted object store. Mounts are not re-applied after resume, fork or restore.", status: "partial" },
   { name: "Streamed output", desc: "kiln logs -f and streamed exec output, once the daemon can stream a response.", status: "planned" },
-  { name: "PTY / interactive terminal", desc: "A real, bidirectional shell session over WebSocket, distinct from batch exec. kiln sandbox pty and Sandbox.pty() (JS/TS SDK). A per-sandbox concurrent-session cap (64) is enforced daemon-side. No live resize yet.", status: "done" },
-  { name: "Guest-accessible metadata service", desc: "Every sandbox with a name and/or tags serves its own {id, name, tags} to itself via Firecracker's native MMDS at 169.254.169.254 — no daemon call needed from inside the guest.", status: "done" },
-  { name: "Full filesystem API surface", desc: "chmod, chown, mkdir, rename, copy, symlink, readlink, truncate, and directory listing with real metadata — the full set, in both SDKs and the CLI, alongside read-file/write-file.", status: "done" },
-  { name: "Public URL per exposed port", desc: "An alternative to the proxied /preview/:port path — a real routable domain per port. Needs DNS/routing infra this project doesn't have; a bigger lift than the existing proxy.", status: "planned" },
+  { name: "PTY / interactive terminal", desc: "A real, bidirectional shell session over WebSocket, distinct from batch exec. kiln sandbox pty and Sandbox.pty() in the JS/TS SDK. A per-sandbox concurrent-session cap of 64 is enforced daemon-side. No live resize yet.", status: "done" },
+  { name: "Guest-accessible metadata service", desc: "Every sandbox with a name or tags serves its own id, name and tags to itself via Firecracker's native MMDS at 169.254.169.254 — no daemon call needed from inside the guest.", status: "done" },
+  { name: "Full filesystem API surface", desc: "chmod, chown, mkdir, rename, copy, symlink, readlink, truncate, and directory listing with real metadata — the full set, in both SDKs and the CLI, alongside read-file and write-file.", status: "done" },
+  { name: "Public URL per exposed port", desc: "An alternative to the proxied /preview/:port path — a real routable domain per port. Needs DNS and routing infrastructure this project doesn't have; a bigger lift than the existing proxy.", status: "planned" },
   { name: "GPU passthrough", desc: "Explicitly not planned — Firecracker has no GPU device model, and adding one is a different project from this one.", status: "planned" },
-  { name: "System-privileged workloads", desc: "Docker-in-VM and VPN clients inside the guest — still needs base-image and kernel-config work more than daemon changes. The FUSE half of this is now done: the guest kernel build enables CONFIG_FUSE_FS and the rootfs can carry a FUSE userspace, which is what remote storage mounts run on.", status: "planned" },
+  { name: "System-privileged workloads", desc: "Docker-in-VM and VPN clients inside the guest — still needs base-image and kernel-config work more than daemon changes. The FUSE half is done: the guest kernel build enables CONFIG_FUSE_FS and the rootfs can carry a FUSE userspace, which is what remote storage mounts run on.", status: "planned" },
   { name: "Multi-node & regions", desc: "More than one daemon, more than one box, a routing layer — deliberately last, after single-node is fully solid.", status: "planned" },
 ];
 
 const bigIdeas: Row[] = [
-  { name: "Desktop/GUI automation", desc: "A managed desktop inside a sandbox — screenshot capture, full keyboard/mouse control, reconnect without killing the VM. A meaningfully different product surface, not a small extension.", status: "planned" },
+  { name: "Desktop/GUI automation", desc: "A managed desktop inside a sandbox — screenshot capture, full keyboard and mouse control, reconnect without killing the VM. A meaningfully different product surface, not a small extension.", status: "planned" },
   { name: "Git-native sandbox filesystem", desc: "Version-controlled sandbox state as a first-class concept — branches as mounted directories, a snapshot doubling as a commit. A substantial new subsystem alongside snapshot/resume/fork, not a replacement for them.", status: "planned" },
 ];
 
 const documentation: Row[] = [
-  { name: "Full docs site", desc: "Getting started, core concepts, guides, and reference for the HTTP API and both SDKs/the CLI — this site.", status: "done" },
+  { name: "Full docs site", desc: "Getting started, core concepts, guides, and reference for the HTTP API, both SDKs and the CLI — this site.", status: "done" },
   { name: "Example projects", desc: "A code playground (JS/TS), an AI-agent sandbox runner (Python), a dev-server preview reference, an interactive-terminal reference, and a pre-warmed-pool reference that reports real results honestly instead of a single lucky run — see examples/ in the repository.", status: "done" },
 ];
 
-const sections: { title: string; rows: Row[] }[] = [
-  { title: "Persistence & performance", rows: persistence },
-  { title: "Security & isolation", rows: security },
-  { title: "Platform & storage", rows: platform },
-  { title: "Documentation", rows: documentation },
-  { title: "Ideas explicitly not started, kept honest rather than silent", rows: bigIdeas },
+const sections = [
+  { id: "persistence", title: "Persistence & performance", rows: persistence },
+  { id: "security", title: "Security & isolation", rows: security },
+  { id: "platform", title: "Platform & storage", rows: platform },
+  { id: "docs", title: "Documentation", rows: documentation },
+  { id: "ideas", title: "Not started, kept honest rather than silent", rows: bigIdeas },
 ];
 
-const statusLabel: Record<Row["status"], string> = { done: "Shipped", partial: "Partial", planned: "Planned" };
+const statusLabel: Record<Row["status"], string> = { done: "shipped", partial: "partial", planned: "planned" };
+
+const all = sections.flatMap((s) => s.rows);
+const tally = (["done", "partial", "planned"] as const).map((status) => ({
+  status,
+  label: statusLabel[status],
+  n: all.filter((r) => r.status === status).length,
+}));
 ---
 
 <BaseLayout title="Roadmap — sandkiln">
   <Header active="roadmap" />
 
-  <section class="page-hero">
-    <div class="wrap">
-      <h1>The plan, not a promise.</h1>
-      <p>Rewritten as we learn things. Every item below is scoped, not vague — see the full reasoning behind each in <code>ROADMAP.md</code> in the repository, which this page tracks.</p>
-    </div>
-  </section>
-
-  <section>
-    <div class="wrap">
-      {sections.map((s) => (
-        <div class="roadmap-section">
-          <h3>{s.title}</h3>
-          <div class="road">
-            {s.rows.map((r) => (
-              <div class={`road-row ${r.status === "done" ? "done" : r.status === "partial" ? "partial" : ""}`}>
-                <div class="name">{r.name}</div>
-                <div class="desc">{r.desc}</div>
-                <div class={`stat status ${r.status}`}>{statusLabel[r.status]}</div>
-              </div>
-            ))}
-          </div>
+  <main>
+    <section class="page-hero">
+      <div class="shell">
+        <h1>The plan, not a promise.</h1>
+        <p class="lede prose">
+          Rewritten as we learn things — including when a measurement overturns an item outright.
+          Every entry is scoped rather than vague; <code>ROADMAP.md</code> in the repository carries
+          the full reasoning this page tracks.
+        </p>
+        <div class="tally" style="margin-top:var(--s-5)">
+          {tally.map((t) => (
+            <span class="tally-item">
+              <span class={`mark mark-${t.status}`}></span>
+              <span class="tally-n">{t.n}</span> {t.label}
+            </span>
+          ))}
+          {/* A wider set than the homepage's capability list: this one also
+              tracks ideas deliberately not started, so the two tallies count
+              different things and should say so. */}
+          <span class="tally-item">across {all.length} tracked items, ideas included</span>
         </div>
-      ))}
-    </div>
-  </section>
+      </div>
+    </section>
+
+    {/* One band, not five: five stacked sections paid the full section rhythm
+        four extra times and turned a reference table into a long scroll. The
+        rail becomes a table of contents for the same reason. */}
+    <section class="band band-ruled">
+      <div class="shell grid">
+        <nav class="rail rail-toc" aria-label="Roadmap sections">
+          {sections.map((s) => <a href={`#${s.id}`}>{s.id}</a>)}
+        </nav>
+        <div class="col">
+          {sections.map((s) => (
+            <div class="rgroup" id={s.id}>
+              <div class="rgroup-head">{s.title}</div>
+              {s.rows.map((r) => (
+                <div class="rrow">
+                  <div class="rname">{r.name}</div>
+                  <div class="rdesc">{r.desc}</div>
+                  <div class="rstat"><span class={`mark mark-${r.status}`}></span>{statusLabel[r.status]}</div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  </main>
 
   <Footer />
 </BaseLayout>

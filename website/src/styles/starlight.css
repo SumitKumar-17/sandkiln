@@ -1,64 +1,138 @@
 /*
-  Maps Starlight's own token set onto this site's palette (tokens.css,
-  loaded immediately before this file by the customCss list) so the docs
-  read as the same product as the marketing pages rather than "default
-  theme, accent swapped" — and so a palette change happens in one file,
-  not two. Every value here is a var(), never a hex literal.
+  Maps Starlight's own token set onto this site's design system (tokens.css,
+  loaded immediately before this file by the customCss list) so the docs read
+  as the same product as the marketing pages rather than "default theme,
+  accent swapped" — and so a change happens in one file, not two. Every value
+  here is a var(), never a hex literal.
 */
-@import url("https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
 
 :root {
-  --sl-font: var(--body);
+  --sl-font: var(--sans);
   --sl-font-mono: var(--mono);
 
-  --sl-color-accent-low: var(--accent-wash);
-  --sl-color-accent: var(--accent);
-  --sl-color-accent-high: var(--accent-deep);
+  --sl-color-accent-low: var(--signal-wash);
+  --sl-color-accent: var(--signal);
+  --sl-color-accent-high: var(--signal-soft);
 
   /* Starlight names these for its dark-first default: --sl-color-white is
      the strongest foreground, --sl-color-black the page ground. In light
      mode that inverts, which is why these look backwards. */
-  --sl-color-white: var(--text);
-  --sl-color-gray-1: var(--surface-2);
-  --sl-color-gray-2: var(--text-dim);
-  --sl-color-gray-3: var(--text-faint);
-  --sl-color-gray-4: #98a1b2;
-  --sl-color-gray-5: var(--border);
-  --sl-color-gray-6: var(--surface-2);
-  --sl-color-gray-7: var(--bg);
-  --sl-color-black: var(--surface);
+  --sl-color-white: var(--ink);
+  --sl-color-gray-1: var(--well-2);
+  --sl-color-gray-2: var(--ink-2);
+  --sl-color-gray-3: var(--ink-3);
+  --sl-color-gray-4: var(--rule-strong);
+  --sl-color-gray-5: var(--rule);
+  --sl-color-gray-6: var(--well);
+  --sl-color-gray-7: var(--well-2);
+  --sl-color-black: var(--ground);
 
-  --sl-color-bg: var(--bg);
-  --sl-color-bg-nav: var(--surface);
-  --sl-color-bg-sidebar: var(--surface);
-  --sl-color-bg-inline-code: var(--surface-2);
-  --sl-color-hairline-light: var(--border);
-  --sl-color-hairline: var(--border);
-  --sl-color-hairline-shade: var(--border);
+  --sl-color-bg: var(--ground);
+  --sl-color-bg-nav: var(--ground);
+  --sl-color-bg-sidebar: var(--ground);
+  --sl-color-bg-inline-code: var(--well-2);
+  --sl-color-hairline-light: var(--rule);
+  --sl-color-hairline: var(--rule);
+  --sl-color-hairline-shade: var(--rule);
+
+  /* Starlight's default heading scale runs considerably larger than the
+     marketing pages'. Restating it in terms of the same type roles is what
+     keeps a docs page and a marketing page recognisably one site. */
+  --sl-text-h1: var(--t-title);
+  --sl-text-h2: var(--t-h2);
+  --sl-text-h3: 1.3125rem;
+  --sl-text-h4: var(--t-h3);
+  --sl-text-h5: var(--t-body);
+  --sl-text-code: 0.8125rem;
+  --sl-text-code-sm: 0.75rem;
 }
 
-:root[data-theme="dark"] {
-  --sl-color-gray-1: var(--text);
-  --sl-color-gray-4: #4a5464;
-  --sl-color-black: var(--bg);
+:root[data-theme="dark"],
+:root:not([data-theme="light"]) {
+  --sl-color-gray-1: var(--well-2);
 }
 
-/* Headings use the same face and tightened tracking as the marketing pages'
-   section titles, so moving between the two halves of the site never feels
-   like leaving it. */
-h1, h2, h3, h4 {
-  font-family: var(--display);
-  font-weight: 700;
-  letter-spacing: -0.02em;
+/* Headings carry the same tightened tracking as the marketing pages, so
+   crossing between the two halves never feels like leaving the site. */
+:is(h1, h2, h3, h4) {
+  font-family: var(--sans);
+  font-weight: 600;
+  letter-spacing: -0.022em;
 }
 
-/* Code blocks are read constantly here, so they get a rule rather than a
-   glow — same flat, ruled treatment as the instrument panels on the
-   marketing pages. */
+.sl-markdown-content h1,
+.content-panel h1 {
+  letter-spacing: -0.028em;
+}
+
+/* Square corners and hairlines, matching the rest of the site: no radius and
+   no shadow are defined anywhere in this design system. */
 .expressive-code .frame {
   box-shadow: none !important;
-  border: 1px solid var(--sl-color-hairline) !important;
+  border: 1px solid var(--rule) !important;
+}
+
+.expressive-code .frame pre,
+.expressive-code .frame .header,
+.expressive-code figure {
+  border-radius: 0 !important;
+}
+
+.sl-markdown-content :is(pre, code, blockquote, table, img, .starlight-aside) {
+  border-radius: 0;
+}
+
+.starlight-aside {
+  border-inline-start-width: 2px;
 }
 
 /* Measured numbers keep their tabular alignment wherever they appear. */
-.sl-markdown-content table { font-variant-numeric: tabular-nums; }
+.sl-markdown-content table {
+  font-variant-numeric: tabular-nums;
+  border-collapse: collapse;
+}
+
+.sl-markdown-content :is(th, td) {
+  border-color: var(--rule);
+}
+
+.sl-markdown-content th {
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+}
+
+/* No radius is defined anywhere in this design system, so every Starlight
+   control that ships with one is squared off rather than left as the one
+   rounded thing on the page. */
+:is(
+  .sl-link-button,
+  .sl-link-card,
+  .pagination-links a,
+  site-search button,
+  site-search dialog,
+  site-search .dialog-frame,
+  starlight-theme-select select,
+  mobile-starlight-toc nav,
+  .sidebar-pane summary,
+  kbd,
+  .sl-badge
+) {
+  border-radius: 0 !important;
+}
+
+/* The sidebar's current page is marked the same way the marketing nav marks
+   it — a rule in the signal colour, not a filled block. */
+.sidebar-content a[aria-current="page"] {
+  background: transparent;
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--signal);
+}
+
+a.site-title {
+  text-decoration: none;
+}

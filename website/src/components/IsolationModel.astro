@@ -1,23 +1,48 @@
-<section id="thesis">
-  <div class="wrap">
-    <div class="section-head">
-      <div class="eyebrow">Why a microVM</div>
-      <h2>Containers share a kernel. Sandboxes can't afford to.</h2>
-      <p>Running code you didn't write — agent output, user uploads, third-party scripts — next to your own systems is a bad idea if the isolation boundary is a namespace. A compromised container can still be a compromised kernel. A compromised microVM is a compromised microVM.</p>
-    </div>
+---
+const rows = [
+  { axis: "Kernel", them: "Shared with the host", us: "Dedicated per sandbox" },
+  { axis: "Isolation boundary", them: "Namespaces and cgroups", us: "Hardware virtualization (KVM)" },
+  { axis: "Cold start", them: "~100ms–1s+", us: "32.3–33.1ms, measured" },
+  { axis: "Escape surface", them: "Shared syscall table", us: "The microVM boundary" },
+  { axis: "Filesystem", them: "Overlay on the host filesystem", us: "Dedicated virtio-blk device" },
+  { axis: "Suited to", them: "Packaging code you wrote", us: "Running code you didn't" },
+];
+---
 
-    <div class="table-scroll">
-      <table class="cmp">
-        <thead><tr><th></th><th>Containers</th><th>sandkiln</th></tr></thead>
-        <tbody>
-          <tr><td>Kernel</td><td>Shared with the host</td><td class="win">Dedicated per sandbox</td></tr>
-          <tr><td>Isolation boundary</td><td>Namespaces + cgroups</td><td class="win">Hardware virtualization (KVM)</td></tr>
-          <tr><td>Cold start</td><td>~100ms–1s+</td><td class="win">32.3–33.1ms, measured</td></tr>
-          <tr><td>Escape surface</td><td>Shared syscall table</td><td class="win">microVM boundary</td></tr>
-          <tr><td>Filesystem</td><td>Overlay on host FS</td><td class="win">Dedicated virtio-blk device</td></tr>
-          <tr><td>Good for</td><td>Packaging trusted code</td><td class="win">Running code you don't trust</td></tr>
-        </tbody>
-      </table>
+<section class="band band-ruled" id="isolation">
+  <div class="shell grid">
+    <a class="rail" href="#isolation">isolation</a>
+    <div class="col">
+      <h2 class="head">Containers share a kernel. Sandboxes can't afford to.</h2>
+      <p class="lede prose">
+        Running code you didn't write — agent output, user uploads, third-party scripts —
+        beside your own systems is a bad bet when the boundary is a namespace. A compromised
+        container can still be a compromised kernel. A compromised microVM is a compromised microVM.
+      </p>
+
+      <div class="scroller">
+        <table class="matrix">
+          <thead>
+            <tr><th><span class="sr-only">Property</span></th><th>A container</th><th>A sandkiln sandbox</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr><td>{r.axis}</td><td>{r.them}</td><td class="ours">{r.us}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 </section>
+
+<style>
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+</style>

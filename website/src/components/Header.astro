@@ -1,6 +1,6 @@
 ---
 interface Props {
-  active?: "home" | "architecture" | "performance" | "roadmap";
+  active?: "home" | "architecture" | "performance" | "roadmap" | "docs";
 }
 const { active } = Astro.props as Props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -14,20 +14,37 @@ const nav = [
 ];
 ---
 
-<header class="top">
-  <div class="topbar">
-    <a class="brand" href={link("")}><span>sandkiln</span><span class="dot">.</span></a>
-    <nav class="topnav">
+<header class="masthead">
+  <div class="shell masthead-in">
+    <a class="wordmark" href={link("")}>sandkiln<span class="stop">.</span></a>
+
+    <nav class="nav" aria-label="Main">
       {nav.map((item) => (
         <a href={link(item.path)} aria-current={active === item.key ? "page" : undefined}>{item.label}</a>
       ))}
     </nav>
-    <button class="theme-toggle" type="button" aria-label="Switch between light and dark theme">
-      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8">
-        <circle cx="12" cy="12" r="4.2" />
-        <path d="M12 2.6v2.3M12 19.1v2.3M2.6 12h2.3M19.1 12h2.3M5.3 5.3l1.7 1.7M17 17l1.7 1.7M18.7 5.3L17 7M7 17l-1.7 1.7" stroke-linecap="round" />
+
+    <button class="icon-btn theme-toggle" type="button" aria-label="Switch between light and dark theme">
+      <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7">
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2.8v2.2M12 19v2.2M2.8 12h2.2M19 12h2.2M5.5 5.5l1.6 1.6M16.9 16.9l1.6 1.6M18.5 5.5l-1.6 1.6M7.1 16.9l-1.6 1.6" stroke-linecap="round" />
       </svg>
     </button>
+
+    {/* Below the nav breakpoint the marketing pages previously had no
+        navigation at all. A disclosure keeps that fix JavaScript-free. */}
+    <details class="menu">
+      <summary aria-label="Open navigation">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7">
+          <path d="M4 7h16M4 12h16M4 17h16" stroke-linecap="round" />
+        </svg>
+      </summary>
+      <div class="menu-sheet">
+        {nav.map((item) => (
+          <a href={link(item.path)} aria-current={active === item.key ? "page" : undefined}>{item.label}</a>
+        ))}
+      </div>
+    </details>
   </div>
 </header>
 
@@ -48,5 +65,15 @@ const nav = [
         localStorage.setItem("starlight-theme", next);
       } catch {}
     });
+
+    var menu = document.querySelector(".menu");
+    if (menu instanceof HTMLDetailsElement) {
+      document.addEventListener("click", function (event) {
+        if (menu.open && event.target instanceof Node && !menu.contains(event.target)) menu.open = false;
+      });
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && menu.open) menu.open = false;
+      });
+    }
   })();
 </script>

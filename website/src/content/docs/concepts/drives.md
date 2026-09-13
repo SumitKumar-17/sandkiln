@@ -23,6 +23,6 @@ A drive attached read-only may be attached to arbitrarily many sandboxes (and he
 
 ## What's not done yet
 
-A drive is local block storage — a `virtio-blk` device backed by a file on the daemon's own host, which the guest formats and mounts itself. If what you want is an S3-compatible bucket read and written as a directory inside the sandbox, that's a different feature: see [Remote storage mounts](./remote-storage/). Mounts have no exclusivity rules and aren't backed by host disk, but they need extra guest setup (a FUSE-capable kernel and `rclone` in the rootfs) and are daemon-API-only for now.
+A drive is local block storage — a `virtio-blk` device backed by a file on the daemon's own host, which the guest formats and mounts itself. If what you want is an S3-compatible bucket read and written as a directory inside the sandbox, that's a different feature: see [Remote storage mounts](../remote-storage/). Mounts have no exclusivity rules and aren't backed by host disk, but they need extra guest setup (a FUSE-capable kernel and `rclone` in the rootfs) and are daemon-API-only for now.
 
 A drive can only be attached when a sandbox is created — there's no hot-attach to a running sandbox, and no explicit detach route either (detaching happens implicitly when the sandbox is stopped, which leaves the drive's backing file untouched). Drives also can't be resized after creation; `POST /drives`, `GET /drives`, and `DELETE /drives/:id` are the whole surface. See the project's Roadmap page for full status.

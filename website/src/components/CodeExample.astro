@@ -1,30 +1,121 @@
-<section id="code">
-  <div class="wrap">
-    <div class="section-head">
-      <div class="eyebrow">SDK</div>
-      <h2>A thin, fully-typed client. Nothing more.</h2>
-      <p>The daemon's HTTP API is the source of truth — every SDK method is a thin wrapper over it, verified against a live daemon, not designed in isolation.</p>
-    </div>
+---
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-    <div class="code-block"><pre><span class="kw">import</span> {'{'} Sandbox {'}'} <span class="kw">from</span> <span class="str">"sandkiln"</span>;
+const tabs = [
+  { id: "js", label: "JS/TS" },
+  { id: "py", label: "Python" },
+  { id: "cli", label: "CLI" },
+];
+---
 
-<span class="c1">// Boots a real Firecracker microVM — own kernel, own filesystem, own network.</span>
-<span class="kw">const</span> sandbox = <span class="kw">await</span> Sandbox.create({'{'}
-  tags: {'{'} env: <span class="str">"ci"</span>, owner: <span class="str">"pipeline"</span> {'}'},
+<section class="band band-ruled" id="sdk">
+  <div class="shell grid">
+    <a class="rail" href="#sdk">client</a>
+    <div class="col">
+      <h2 class="head">A thin, fully-typed client. Nothing more.</h2>
+      <p class="lede prose">
+        The daemon's HTTP API is the source of truth. Every SDK method is a thin wrapper over
+        it, verified against a live daemon rather than designed in isolation — so the same
+        four calls read the same way in all three.
+      </p>
+
+      <div>
+        <div class="tabs" role="tablist" aria-label="SDK examples">
+          {tabs.map((t, i) => (
+            <button
+              class="tab"
+              role="tab"
+              type="button"
+              id={`tab-${t.id}`}
+              aria-controls={`panel-${t.id}`}
+              aria-selected={i === 0 ? "true" : "false"}
+              tabindex={i === 0 ? 0 : -1}
+            >{t.label}</button>
+          ))}
+        </div>
+
+        <div class="codeblock tabpanel" role="tabpanel" id="panel-js" aria-labelledby="tab-js" tabindex="0"><pre><span class="k">import</span> {'{'} Sandbox {'}'} <span class="k">from</span> <span class="s">"sandkiln"</span>;
+
+<span class="c">// Boots a real Firecracker microVM — own kernel, own filesystem, own network.</span>
+<span class="k">const</span> sandbox = <span class="k">await</span> Sandbox.create({'{'}
+  tags: {'{'} env: <span class="s">"ci"</span>, owner: <span class="s">"pipeline"</span> {'}'},
 {'}'});
 
-<span class="kw">const</span> result = <span class="kw">await</span> sandbox.runCommand(<span class="str">"python3"</span>, [<span class="str">"analyze.py"</span>]);
+<span class="k">const</span> result = <span class="k">await</span> sandbox.runCommand(<span class="s">"python3"</span>, [<span class="s">"analyze.py"</span>]);
 console.log(result.stdout, result.exitCode);
 
-<span class="kw">const</span> running = <span class="kw">await</span> Sandbox.list();
-<span class="c1">// → [{'{'} id, createdAt, name, tags: {'{'} env: "ci", owner: "pipeline" {'}'} {'}'}]</span>
+<span class="k">await</span> sandbox.stop(); <span class="c">// preserved as a resumable snapshot by default</span></pre></div>
 
-<span class="kw">await</span> sandbox.stop(); <span class="c1">// preserved as a resumable snapshot by default</span></pre></div>
+        <div class="codeblock tabpanel" role="tabpanel" id="panel-py" aria-labelledby="tab-py" tabindex="0" hidden><pre><span class="k">from</span> sandkiln <span class="k">import</span> Sandbox
 
-    <p style="margin-top:20px;font-size:13.5px;color:var(--text-faint);">
-      Same operations in <a href="docs/getting-started/python/" style="color:var(--accent);">Python</a> and the
-      <a href="docs/getting-started/cli/" style="color:var(--accent);">kiln CLI</a> — see the
-      <a href="docs/" style="color:var(--accent);">full docs</a> for every method.
-    </p>
+<span class="c"># Boots a real Firecracker microVM — own kernel, own filesystem, own network.</span>
+sandbox = Sandbox.create(tags={'{'}<span class="s">"env"</span>: <span class="s">"ci"</span>, <span class="s">"owner"</span>: <span class="s">"pipeline"</span>{'}'})
+
+result = sandbox.run_command(<span class="s">"python3"</span>, [<span class="s">"analyze.py"</span>])
+print(result.stdout, result.exit_code)
+
+sandbox.stop()  <span class="c"># preserved as a resumable snapshot by default</span></pre></div>
+
+        <div class="codeblock tabpanel" role="tabpanel" id="panel-cli" aria-labelledby="tab-cli" tabindex="0" hidden><pre>npm install -g sandkiln-cli   <span class="c"># installs the `kiln` command</span>
+
+<span class="c"># Boots a real Firecracker microVM — own kernel, own filesystem, own network.</span>
+kiln sandbox create --tag env=ci --tag owner=pipeline
+
+kiln sandbox exec &lt;id&gt; python3 analyze.py
+kiln sandbox ls --tag env=ci
+
+kiln sandbox rm &lt;id&gt;           <span class="c"># preserves state as a snapshot by default</span></pre></div>
+      </div>
+
+      <p class="fine prose">
+        Quickstarts for <a href={`${base}/docs/getting-started/js/`}>JS/TS</a>,{" "}
+        <a href={`${base}/docs/getting-started/python/`}>Python</a> and{" "}
+        <a href={`${base}/docs/getting-started/cli/`}>the CLI</a>, or the{" "}
+        <a href={`${base}/docs/reference/http-api/`}>daemon HTTP API</a> that every one of them wraps.
+      </p>
+    </div>
   </div>
 </section>
+
+<script>
+  // Roving tabindex with the arrow-key behaviour the tab pattern expects.
+  // Panels render visible-by-default so the examples are readable with
+  // JavaScript unavailable; the first click of setup hides the inactive ones.
+  (function () {
+    var list = document.querySelector('[role="tablist"]');
+    if (!list) return;
+    var tabs = Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));
+    if (!tabs.length) return;
+
+    function panelFor(tab: Element) {
+      var id = tab.getAttribute("aria-controls");
+      return id ? document.getElementById(id) : null;
+    }
+
+    function select(index: number, focus: boolean) {
+      tabs.forEach(function (tab, i) {
+        var active = i === index;
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+        tab.setAttribute("tabindex", active ? "0" : "-1");
+        var panel = panelFor(tab);
+        if (panel) panel.hidden = !active;
+      });
+      if (focus) (tabs[index] as HTMLElement).focus();
+    }
+
+    tabs.forEach(function (tab, i) {
+      tab.addEventListener("click", function () {
+        select(i, false);
+      });
+      tab.addEventListener("keydown", function (event) {
+        var key = (event as KeyboardEvent).key;
+        var next = key === "ArrowRight" ? i + 1 : key === "ArrowLeft" ? i - 1 : key === "Home" ? 0 : key === "End" ? tabs.length - 1 : -1;
+        if (next < 0 && key !== "Home") return;
+        event.preventDefault();
+        select((next + tabs.length) % tabs.length, true);
+      });
+    });
+
+    select(0, false);
+  })();
+</script>

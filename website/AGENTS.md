@@ -32,12 +32,43 @@ as a bug, exactly like a stale doc comment in code.
   `DocsSiteTitle.astro` overrides Starlight's site title so the docs
   header carries the same top-level nav; without it the docs are a
   one-way trip out of the marketing pages.
-- `src/styles/tokens.css` — **the** palette and type scale, imported by
-  both surfaces. `global.css` (marketing) and `starlight.css` (docs,
-  via `customCss`) both consume it; `starlight.css` maps Starlight's own
+- `src/lib/scale.ts` — the shared log axis behind the homepage latency
+  readout. Positions are derived from the measurements themselves, so
+  correcting a figure moves its mark too; nothing hard-codes a
+  percentage. A measured range renders as a range and a single recorded
+  figure renders as a tick, which is the publish-ranges-as-ranges rule
+  below made visible rather than merely stated.
+- `src/styles/tokens.css` — **the** design system, imported by both
+  surfaces. `global.css` (marketing) and `starlight.css` (docs, via
+  `customCss`) both consume it; `starlight.css` maps Starlight's own
   `--sl-*` variables onto these tokens and contains no hex literals. Add
   a color here or nowhere, or it will break in one theme or on one half
   of the site.
+
+## The design system's own rules
+
+Stated in `tokens.css`'s header comment, repeated here because breaking
+one of them is easy and invisible in a single-page diff:
+
+- **Colour means data.** `--signal` marks a measured number or a
+  verified status; `--caution` marks something not built. Chrome — nav,
+  headings, body, rules, buttons — is achromatic, which is why the
+  primary button is ink-filled and prose links are underlined rather
+  than coloured. Spending the accent on furniture drains it of meaning.
+- **Panels are recessed wells, not raised cards.** No shadow is defined
+  anywhere in the system, and none should be added; depth is a fill
+  difference plus a hairline.
+- **Radius is 0 everywhere**, including on Starlight's own controls,
+  which `starlight.css` squares off explicitly.
+- **Mono means literal** — a value, a path, an API name, or code. Mono
+  labels are lowercase, never tracked-out caps.
+- **Section separation is whitespace.** A rule appears only where it
+  marks real structure; a divider under every section flattens the page
+  into identical slabs.
+- **One non-user-triggered animation exists on the whole site** — the
+  boot diagram's pulse, which traces the real four-step create path.
+  Everything else animates only in response to a person's action, and
+  `prefers-reduced-motion` removes the pulse entirely.
 
 **Deliberately not a single scrolling page.** Benchmarks and roadmap
 depth are the content most worth surfacing, and a long homepage buries

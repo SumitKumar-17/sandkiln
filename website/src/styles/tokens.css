@@ -1,105 +1,117 @@
 /*
-  Design brief: sandkiln's distinguishing fact is measurement — a whole
-  machine, its own kernel, up in tens of milliseconds, from a project that
-  prints its own caveats next to its own numbers. So the page is built to
-  read as a lab instrument rather than a forge: a measured baseline, hairline
-  axes, tabular numerals, square corners, and exactly one "signal" color that
-  behaves like a trace on a screen.
+  The design system for both halves of the site. The marketing pages import
+  this via global.css, the docs via Starlight's customCss; starlight.css maps
+  Starlight's own --sl-* variables onto these and holds no hex literal of its
+  own. Add a value here or nowhere, or it breaks in one theme or on one half.
 
-  Cool on purpose. The palette this replaced was fired-clay cream and ember
-  orange, which fought the subject (nothing here is hot) and is the single
-  most over-used combination in generated layouts.
+  The organising rule: COLOUR MEANS DATA. Chrome — nav, buttons, headings,
+  body, rules — is achromatic. --signal appears only on a number someone
+  measured or a status someone verified; --caution only on something not
+  built yet. That is why the primary button is ink-filled rather than
+  accent-filled, and why links in prose are underlined rather than coloured:
+  spending the accent on ordinary furniture would make it stop meaning
+  anything. Greys are desaturated cyan and --signal is saturated cyan, so the
+  whole palette is one axis and the lone ochre reads as the exception it is.
 
-  Status uses one scale, not three unrelated hues: --verified is the trace at
-  full strength, --pending is it attenuated. A reader should be able to tell
-  shipped from partial without reading the legend.
+  Panels are recessed wells, not raised cards, which is why no shadow is
+  defined anywhere in this system and none should be added.
 
-  Single source of truth for both halves of the site: the marketing pages
-  import this via global.css, the docs pages via Starlight's customCss, and
-  starlight.css maps Starlight's own --sl-* variables onto these rather than
-  restating any value twice.
-
-  Three theme states have to agree: no data-theme attribute (follow the OS),
+  Three theme states have to agree: no data-theme (follow the OS),
   data-theme="light", and data-theme="dark". Starlight's toggle writes the
   latter two; the marketing pages only ever see the first.
 */
 :root {
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --surface-2: #eceff4;
-  --border: #dde1e8;
-  --border-strong: #c3cad6;
-  --text: #10131a;
-  --text-dim: #515a6b;
-  --text-faint: #7d8698;
+  --ground: #ffffff;
+  --well: #f1f4f5;
+  --well-2: #e6ebed;
+  --rule: #dbe2e5;
+  --rule-strong: #b7c3c8;
 
-  --accent: #4739c9;
-  --accent-glow: #6455e8;
-  --accent-deep: #2e2490;
-  --accent-wash: #e6e3fb;
-  --accent-ink: #ffffff;
+  --ink: #0a1114;
+  --ink-2: #455960;
+  --ink-3: #6e838b;
 
-  --verified: #0f7a63;
-  --verified-dim: #3f9d88;
-  --pending: #9a6206;
+  --signal: #0b6c74;
+  --signal-soft: #3e8e95;
+  --signal-wash: #e0eef0;
+  --caution: #8a5410;
 
-  --code-bg: #0d1016;
-  --code-text: #e7eaf0;
-  --code-dim: #6d778a;
+  /* The one surface that is dark in both themes: it quotes a real serial
+     console, and inverting it is what makes it read as one. */
+  --tty-bg: #060a0b;
+  --tty-fg: #cfdbdd;
+  --tty-dim: #5a6e74;
+  --tty-signal: #59c8ce;
+  --tty-ok: #57b894;
 
-  --display: "Archivo", -apple-system, "Segoe UI", sans-serif;
-  --body: "Archivo", -apple-system, "Segoe UI", sans-serif;
+  --sans: "Instrument Sans", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --t-display: clamp(2.5rem, 1.3rem + 3.9vw, 4rem);
+  --t-title: clamp(1.75rem, 1.1rem + 2.1vw, 2.5rem);
+  --t-h2: clamp(1.5rem, 1.2rem + 1.1vw, 1.9rem);
+  --t-h3: 1.125rem;
+  --t-lead: 1.0625rem;
+  --t-body: 1rem;
+  --t-sm: 0.875rem;
+  --t-xs: 0.8125rem;
+  --t-micro: 0.75rem;
+  --t-data: 1.375rem;
+  --t-data-lg: clamp(1.75rem, 1.2rem + 1.6vw, 2.25rem);
+
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+  --s-9: 96px;
+  --s-10: 128px;
+
+  --section-y: clamp(56px, 7.5vw, 104px);
+  --shell: 1200px;
+  --rail: 152px;
+  --rail-gap: 48px;
+  --measure: 68ch;
+
+  --motion: 110ms;
+  --ease: cubic-bezier(0.32, 0.08, 0.24, 1);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0d1016;
-    --surface: #141922;
-    --surface-2: #1c222d;
-    --border: #262d3a;
-    --border-strong: #3a4354;
-    --text: #e7eaf0;
-    --text-dim: #a2acbd;
-    --text-faint: #6d778a;
+    --ground: #0d1517;
+    --well: #05090b;
+    --well-2: #141d20;
+    --rule: #1c272b;
+    --rule-strong: #33454b;
 
-    --accent: #8e82ff;
-    --accent-glow: #a99fff;
-    --accent-deep: #c7c0ff;
-    --accent-wash: #221e46;
-    --accent-ink: #0d1016;
+    --ink: #dce6e8;
+    --ink-2: #93a5ab;
+    --ink-3: #65787e;
 
-    --verified: #45c3a4;
-    --verified-dim: #2f8f77;
-    --pending: #dca94a;
-
-    --code-bg: #090c11;
-    --code-text: #e7eaf0;
-    --code-dim: #6d778a;
+    --signal: #49bcc2;
+    --signal-soft: #2c8087;
+    --signal-wash: #0b2529;
+    --caution: #d2a055;
   }
 }
 
 :root[data-theme="dark"] {
-  --bg: #0d1016;
-  --surface: #141922;
-  --surface-2: #1c222d;
-  --border: #262d3a;
-  --border-strong: #3a4354;
-  --text: #e7eaf0;
-  --text-dim: #a2acbd;
-  --text-faint: #6d778a;
+  --ground: #0d1517;
+  --well: #05090b;
+  --well-2: #141d20;
+  --rule: #1c272b;
+  --rule-strong: #33454b;
 
-  --accent: #8e82ff;
-  --accent-glow: #a99fff;
-  --accent-deep: #c7c0ff;
-  --accent-wash: #221e46;
-  --accent-ink: #0d1016;
+  --ink: #dce6e8;
+  --ink-2: #93a5ab;
+  --ink-3: #65787e;
 
-  --verified: #45c3a4;
-  --verified-dim: #2f8f77;
-  --pending: #dca94a;
-
-  --code-bg: #090c11;
-  --code-text: #e7eaf0;
-  --code-dim: #6d778a;
+  --signal: #49bcc2;
+  --signal-soft: #2c8087;
+  --signal-wash: #0b2529;
+  --caution: #d2a055;
 }

@@ -1,10 +1,15 @@
-<footer>
-  <div class="wrap foot-row">
+---
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+---
+
+<footer class="foot">
+  <div class="shell foot-in">
     <span>sandkiln — MIT licensed</span>
-    <span>
-      <a href="https://www.npmjs.com/package/sandkiln" style="color:inherit;">sandkiln on npm</a>
-      · <a href="https://www.npmjs.com/package/sandkiln-cli" style="color:inherit;">sandkiln-cli on npm</a>
-      · <a href="https://github.com/SumitKumar-17/sandkiln" style="color:inherit;">GitHub</a>
+    <span class="foot-links">
+      <a href={`${base}/docs/`}>Docs</a>
+      <a href="https://www.npmjs.com/package/sandkiln">sandkiln</a>
+      <a href="https://www.npmjs.com/package/sandkiln-cli">sandkiln-cli</a>
+      <a href="https://github.com/SumitKumar-17/sandkiln">Source</a>
     </span>
   </div>
 </footer>

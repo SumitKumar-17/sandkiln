@@ -3,89 +3,132 @@ import BaseLayout from "../layouts/BaseLayout.astro";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
 import BootDiagram from "../components/BootDiagram.astro";
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+// Five crates are a dependency stack, not a sequence, so the structural fact
+// worth stating is what each one depends on — not an ordinal. The `uses`
+// column is the real edge set from each crate's Cargo.toml.
+const crates = [
+  {
+    name: "sandkiln-protocol",
+    role: "The wire format shared by host and guest — length-prefixed JSON, kept dependency-light so neither side reaches into the other.",
+    uses: "nothing",
+  },
+  {
+    name: "sandkiln-guest-agent",
+    role: "Runs inside the microVM as a systemd service. Listens on vsock and answers exec, read, write and list. A static musl binary.",
+    uses: "protocol",
+  },
+  {
+    name: "sandkiln-vmm",
+    role: "Drives Firecracker directly: boot, snapshot and resume, network leasing, drives, the vsock client. A hand-rolled HTTP client talks to Firecracker's API socket.",
+    uses: "protocol",
+  },
+  {
+    name: "sandkiln-store",
+    role: "A small sqlite-backed crate for durable sandbox history — the record of every sandbox that ever existed and how it ended, surviving a daemon restart the live sandbox map never could.",
+    uses: "nothing",
+  },
+  {
+    name: "sandkiln-daemon",
+    role: "The axum + tokio HTTP API wrapping the lifecycle — create, exec, list, stop, snapshot, images, drives, pools — with auth, tags and tracing built in from the start.",
+    uses: "protocol · vmm · store",
+  },
+];
+
+const steps = [
+  { n: "01", title: "Lease", body: "A tap device and IP are leased from the pool and attached to the bridge — concurrently with the rootfs clone, not after it." },
+  { n: "02", title: "Boot", body: "Firecracker starts; boot-source, drive, machine-config and vsock are configured over its API socket." },
+  { n: "03", title: "Agent up", body: "The guest kernel boots, systemd starts the guest agent, and it binds its vsock port." },
+  { n: "04", title: "Ready", body: "The host's vsock client connects. The sandbox can now run anything you send it." },
+];
+
+const essays = [
+  { kind: "Privilege model", href: `${base}/docs/architecture/privilege-model/`, name: "Ambient CAP_NET_ADMIN, a static tap pool, and a root that stays out of the hot path" },
+  { kind: "Wire protocol", href: `${base}/docs/architecture/wire-protocol/`, name: "vsock, a length-prefixed JSON frame, and a client that doesn't reach for a full HTTP stack" },
+  { kind: "Persistence", href: `${base}/docs/architecture/persistence-model/`, name: "Sandbox versus session — and why a snapshot points at paths instead of carrying values" },
+  { kind: "Bug hunt", href: `${base}/docs/architecture/bug-hunt-vsock-timeout/`, name: "The vsock timeout that could hang a stop forever" },
+];
 ---
 
 <BaseLayout title="Architecture — sandkiln">
   <Header active="architecture" />
 
-  <section class="page-hero">
-    <div class="wrap">
-      <h1>Five crates. No crate reaches into another's internals.</h1>
-      <p>The core is a Rust workspace, kept deliberately modular — the daemon can change without touching the guest agent, and the guest agent ships as its own static binary independent of everything that talks to it.</p>
-    </div>
-  </section>
+  <main>
+    <section class="page-hero">
+      <div class="shell">
+        <h1>Five crates. None reaches into another's internals.</h1>
+        <p class="lede">
+          The core is a Rust workspace kept deliberately modular: the daemon can change without
+          touching the guest agent, and the guest agent ships as its own static binary,
+          independent of everything that talks to it.
+        </p>
+      </div>
+    </section>
 
-  <section>
-    <div class="wrap">
-      <div class="arch">
-        <div class="crate">
-          <div class="n">01</div>
-          <h3>sandkiln-protocol</h3>
-          <p>The wire format shared by host and guest — length-prefixed JSON, kept dependency-light so neither side reaches into the other.</p>
-        </div>
-        <div class="crate">
-          <div class="n">02</div>
-          <h3>sandkiln-guest-agent</h3>
-          <p>Runs inside the microVM as a systemd service. Listens on vsock, answers exec / read / write / list — a static musl binary.</p>
-        </div>
-        <div class="crate">
-          <div class="n">03</div>
-          <h3>sandkiln-vmm</h3>
-          <p>Drives Firecracker directly: boot, snapshot/resume, network leasing, drives, the vsock client. A hand-rolled HTTP client talks to Firecracker's API socket.</p>
-        </div>
-        <div class="crate">
-          <div class="n">04</div>
-          <h3>sandkiln-daemon</h3>
-          <p>axum + tokio HTTP API wrapping the lifecycle — create, exec, list, stop, snapshot, images, drives, pools — with auth, tags, and tracing built in from day one.</p>
-        </div>
-        <div class="crate">
-          <div class="n">05</div>
-          <h3>sandkiln-store</h3>
-          <p>A small sqlite-backed crate for durable sandbox history — the record of every sandbox that ever existed and how it ended, surviving a daemon restart the live sandbox map itself never could.</p>
+    <section class="band band-ruled" id="crates">
+      <div class="shell grid">
+        <a class="rail" href="#crates">workspace</a>
+        <div class="col">
+          <h2 class="head">What each crate owns.</h2>
+          <div class="stack">
+            <div class="crate crate-legend">
+              <span>crate</span><span>what it owns</span><span class="crate-uses">depends on</span>
+            </div>
+            {crates.map((c) => (
+              <div class="crate">
+                <span class="crate-name">{c.name}</span>
+                <span class="crate-role">{c.role}</span>
+                <span class="crate-uses">{c.uses}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
+    </section>
 
-      <div class="section-head" style="margin-bottom:28px;">
-        <div class="eyebrow">Boot lifecycle</div>
-        <h2 style="font-size:24px;">What happens inside 33 milliseconds</h2>
+    <section class="band band-ruled" id="boot">
+      <div class="shell grid">
+        <a class="rail" href="#boot">lifecycle</a>
+        <div class="col">
+          <h2 class="head">What happens inside a create.</h2>
+          <BootDiagram />
+          <div class="steps">
+            {steps.map((s) => (
+              <div class="step">
+                <div class="step-n">{s.n}</div>
+                <h3>{s.title}</h3>
+                <p>{s.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
-      <BootDiagram />
-      <div class="lifecycle">
-        <div class="life-step"><div class="idx">01</div><h4>Lease</h4><p>A tap device and IP are leased from the pool, attached to the bridge.</p></div>
-        <div class="life-step"><div class="idx">02</div><h4>Boot</h4><p>Firecracker starts, boot-source/drive/machine-config/vsock are configured over its API socket.</p></div>
-        <div class="life-step"><div class="idx">03</div><h4>Agent up</h4><p>The guest kernel boots, systemd starts the guest agent, it binds its vsock port.</p></div>
-        <div class="life-step"><div class="idx">04</div><h4>Ready</h4><p>The host's vsock client connects — the sandbox can now run anything you send it.</p></div>
-      </div>
-    </div>
-  </section>
+    </section>
 
-  <section>
-    <div class="wrap">
-      <div class="section-head">
-        <div class="eyebrow">Design rationale</div>
-        <h2>Why it's built this way, and what broke before it was.</h2>
-        <p>The full essays — the privilege model behind ambient <code>CAP_NET_ADMIN</code>, the vsock wire protocol, why a snapshot points at paths instead of carrying values, and a real bug hunt (the vsock timeout that could hang a stop forever) — live in the docs site, where they belong alongside the API reference they explain.</p>
+    <section class="band band-ruled" id="rationale">
+      <div class="shell grid">
+        <a class="rail" href="#rationale">rationale</a>
+        <div class="col">
+          <h2 class="head">Why it's built this way, and what broke before it was.</h2>
+          <p class="lede prose">
+            The full essays live in the docs, next to the API they explain — the privilege model
+            behind ambient <code>CAP_NET_ADMIN</code>, the vsock wire protocol, why a snapshot
+            points at paths instead of carrying values, and a real bug hunt.
+          </p>
+          <div class="jump">
+            {essays.map((e) => (
+              <a href={e.href}>
+                <span class="jump-kind">{e.kind}</span>
+                <span class="jump-name">{e.name}</span>
+              </a>
+            ))}
+          </div>
+        </div>
       </div>
-      <div class="note-links">
-        <a href="../docs/architecture/privilege-model/">
-          <span><span class="tag">Privilege model</span><span class="name">Ambient CAP_NET_ADMIN, a static tap pool, and a root that stays out of the hot path</span></span>
-          <span class="arrow">→</span>
-        </a>
-        <a href="../docs/architecture/wire-protocol/">
-          <span><span class="tag">Wire protocol</span><span class="name">vsock, a length-prefixed JSON frame, and a client that doesn't reach for a full HTTP stack</span></span>
-          <span class="arrow">→</span>
-        </a>
-        <a href="../docs/architecture/persistence-model/">
-          <span><span class="tag">Persistence model</span><span class="name">Sandbox vs. session — and why a snapshot points at paths instead of carrying values</span></span>
-          <span class="arrow">→</span>
-        </a>
-        <a href="../docs/architecture/bug-hunt-vsock-timeout/">
-          <span><span class="tag">Bug hunt</span><span class="name">Case study: the vsock timeout that could hang a stop forever</span></span>
-          <span class="arrow">→</span>
-        </a>
-      </div>
-    </div>
-  </section>
+    </section>
+  </main>
 
   <Footer />
 </BaseLayout>

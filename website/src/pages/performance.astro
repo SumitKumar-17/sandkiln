@@ -2,133 +2,232 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+// Every figure here is one recorded in ROADMAP.md's Benchmarking section.
+// Ranges are published as ranges; a dash means the run did not record that
+// figure, not that it was zero.
+const metrics = [
+  { label: "Cold boot", value: "10.5–10.9", unit: "ms", ctx: "Process spawn to InstanceStart acknowledged — was 32.3–33.1ms before fixing a 20ms fixed-sleep poll below" },
+  { label: "Exec round-trip", value: "220–250", unit: "µs", ctx: "Over an already-open vsock connection" },
+  { label: "Resume from snapshot", value: "6.5–7.7", unit: "ms", ctx: "Was 25.5–26.2ms — shares the same fixed socket wait" },
+  { label: "Snapshot take", value: "309.6–335.0", unit: "ms", ctx: "Pause plus a full synchronous write of guest memory" },
+];
+
+const phases = [
+  { phase: "create", min: "137ms", mean: "211ms", p95: "577ms" },
+  { phase: "exec", min: "—", mean: "366ms", p95: "—" },
+  { phase: "delete", min: "—", mean: "131ms", p95: "—" },
+];
+
+// From a later, dedicated per-phase profiling pass: 20 isolated cold
+// creates, one at a time, nothing else on the box. Percentages are share
+// of the post-fix ~144ms mean create.
+const createPhases = [
+  { phase: "rootfs clone (cp --reflink=auto)", share: "74.0%" },
+  { phase: "Vm::boot total", share: "20.3%" },
+  { phase: "— wait for the API socket (fixed below; was 12.0%)", share: "0.5%" },
+  { phase: "— InstanceStart", share: "7.1%" },
+  { phase: "— configuration PUTs, all 7 combined", share: "1.0%" },
+  { phase: "history-store write", share: "5.5%" },
+  { phase: "network lease (fully concurrent with the clone)", share: "~0.1%" },
+];
 ---
 
 <BaseLayout title="Performance — sandkiln">
   <Header active="performance" />
 
-  <section class="page-hero">
-    <div class="wrap">
-      <h1>Real numbers from real hardware.</h1>
-      <p>Every figure here came from <code>criterion</code> benchmarks or a scripted load test against a live daemon on real KVM — not a spec sheet claim. This page also covers the concrete next lever for startup latency, and why it's the right one to build next rather than a vaguer "make it faster."</p>
-    </div>
-  </section>
-
-  <section>
-    <div class="wrap">
-      <div class="section-head">
-        <div class="eyebrow">Measured, not estimated</div>
-        <h2>Cold boot, exec, and a full lifecycle under load.</h2>
+  <main>
+    <section class="page-hero">
+      <div class="shell">
+        <h1>Real numbers from real hardware.</h1>
+        <p class="lede prose">
+          Every figure came from a <code>criterion</code> benchmark or a scripted load test
+          against a live daemon on real KVM. One shared dev box, single node — directional,
+          not authoritative.
+        </p>
       </div>
+    </section>
 
-      <div class="bench-grid">
-        <div class="bench-card">
-          <div class="label">Cold boot (criterion)</div>
-          <div class="value">10.5–10.9<span style="font-size:16px;">ms</span></div>
-          <div class="ctx">Process spawn to InstanceStart acknowledged — was 32.3–33.1ms before fixing a 20ms fixed-sleep poll, see below</div>
+    <section class="band band-ruled" id="measured">
+      <div class="shell grid">
+        <a class="rail" href="#measured">measured</a>
+        <div class="col">
+          <div class="subhead">criterion, against the real Firecracker binary</div>
+          <div class="metrics">
+            {metrics.map((m) => (
+              <div class="metric">
+                <div class="metric-label">{m.label}</div>
+                <div class="metric-val">{m.value}<span class="u">{m.unit}</span></div>
+                <div class="metric-ctx">{m.ctx}</div>
+              </div>
+            ))}
+          </div>
+
+          <div class="subhead">load test — 4 workers × 5 cycles, 0 errors, 5.38 cycles/sec</div>
+          <div class="scroller">
+            <table class="datatable">
+              <thead><tr><th>Phase</th><th>Min</th><th>Mean</th><th>P95</th></tr></thead>
+              <tbody>
+                {phases.map((p) => (
+                  <tr><td>{p.phase}</td><td>{p.min}</td><td>{p.mean}</td><td>{p.p95}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p class="fine">A dash means the run didn't record that figure, not that it was zero. This table predates the fix below and hasn't been cleanly re-run yet (a live rerun this session was corrupted by unrelated load on the shared dev box).</p>
         </div>
-        <div class="bench-card">
-          <div class="label">Exec round-trip (criterion)</div>
-          <div class="value">220–250<span style="font-size:16px;">µs</span></div>
-          <div class="ctx">Over an already-open vsock connection</div>
+      </div>
+    </section>
+
+    <section class="band band-ruled" id="rootfs">
+      <div class="shell grid">
+        <a class="rail" href="#rootfs">correction</a>
+        <div class="col">
+          <h2 class="head">A measurement that overturned the plan.</h2>
+          <p class="lede prose">
+            <code>create</code> averaged 369ms against a ~33ms cold boot. Closing that gap took
+            two attempts, and the second one proved the first explanation wrong.
+          </p>
+
+          <div class="finding finding-signal">
+            <p>
+              <span class="term">Fixed.</span> The ~300MB rootfs copy ran synchronously after the
+              network lease. They are independent work, so they now run concurrently, and the copy
+              switched to <code>cp --reflink=auto</code>. <code>create</code>'s mean fell from 369ms
+              to 211ms — real and repeatable. Throughput barely moved (5.59 → 5.38 cycles/sec),
+              because <code>create</code> is one phase of a cycle and both runs are small samples.
+            </p>
+            <p>
+              <span class="term">Then re-measured, and wrong the first time.</span> The plan said the
+              rest needed a copy-on-write filesystem, or failing that a device-mapper layer. A real
+              XFS loopback was set up and <code>SANDKILN_BASE_ROOTFS</code> pointed at it. The clone
+              is genuinely CoW — four clones of a 300MiB rootfs added ~4MiB of real disk by
+              <code>df</code>, not ~1.2GiB, and a standalone copy dropped from ~110ms to ~0ms. But
+              end-to-end <code>POST /sandboxes</code> stayed at ~160–170ms either way. The explanation
+              offered at the time — the copy was already hidden behind the network lease — turned out
+              to be wrong, caught by the next step below rather than by re-reading the reasoning.
+            </p>
+            <p>
+              <span class="term">A full per-phase profiling pass, not another guess.</span> 20
+              isolated cold creates, one at a time, nothing else on the box, broke{" "}
+              <b>167.65ms</b> down completely — 0.32ms unaccounted for:
+            </p>
+            <div class="scroller">
+              <table class="datatable">
+                <thead><tr><th>Phase</th><th>Share of a cold create</th></tr></thead>
+                <tbody>
+                  {createPhases.map((p) => (
+                    <tr><td>{p.phase}</td><td>{p.share}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p>
+              The network lease — three <code>ip</code>/<code>bridge</code> subprocess calls, the
+              thing blamed above — measured <b>~4.36ms</b>, not ~130ms. The rootfs clone measured{" "}
+              <b>124.09ms, 74% of the whole create</b>. The two were swapped: the clone was never
+              hidden behind the lease, because the lease was never big enough to hide anything
+              behind.
+            </p>
+            <p>
+              <span class="term">What that same pass found and fixed.</span>{" "}
+              <code>Vm::boot</code>'s wait for Firecracker's freshly spawned API socket used a fixed{" "}
+              <code>sleep(20ms)</code> before ever trying to connect — measured <b>20.11ms on every
+              single one of the 20 boots</b> (min 20.04, max 20.18), the signature of a sleep nobody
+              needed to wait that long for. Replaced with a real connect-retry on a 200µs→5ms
+              backoff, which also closes a genuine race the file-existence check had (the socket file
+              appears at <code>bind()</code>, a moment before <code>listen()</code>). Re-measured:
+              boot <b>34.00ms → 11.22/11.44ms</b>, cold create <b>167.65ms → 144.59/143.56ms</b> — a
+              real <b>~14%</b> cut to every cold create, and to snapshot resume too, since it shares
+              the same code path.
+            </p>
+            <p>
+              <span class="term">The correction, stated plainly.</span> The CoW filesystem test was
+              real and its numbers stand — only the explanation attached to them was wrong. The
+              leading replacement, <b>not yet re-verified</b>: the per-sandbox clone always lands in{" "}
+              <code>std::env::temp_dir()</code> regardless of where the base image lives, so the
+              earlier test's clone could never have actually reflinked even though the base image sat
+              on XFS. A device-mapper layer would have hit the identical wall for the identical
+              reason and remains not planned. See{" "}
+              <a href={`${base}/docs/architecture/engineering-notebook/`}>the engineering notebook</a>{" "}
+              for the full story, including this project's own mistake in reaching the wrong
+              conclusion the first time.
+            </p>
+          </div>
         </div>
-        <div class="bench-card">
-          <div class="label">Resume from snapshot (criterion)</div>
-          <div class="value">6.5–7.7<span style="font-size:16px;">ms</span></div>
-          <div class="ctx">Was 25.5–26.2ms — shares the same fixed socket-wait boot fixed below</div>
+      </div>
+    </section>
+
+    <section class="band band-ruled" id="pools">
+      <div class="shell grid">
+        <a class="rail" href="#pools">pools</a>
+        <div class="col">
+          <h2 class="head">Pre-warmed pools: a modest win, and a real failure mode.</h2>
+          <p class="lede prose">
+            <code>POST /pools</code> configures a pool, a replenisher keeps resumable snapshots
+            ready, and a matching <code>Sandbox.create()</code> claims one instead of cold-booting.
+            A claim that resumes cleanly measured 70–200ms against a cold create's 160–200ms.
+          </p>
+
+          <div class="finding finding-caution">
+            <p>
+              <span class="term">The clean case is not the common case.</span> Building a pool means
+              resuming far more often than any manual test had, and a resumed guest kernel can panic
+              early in boot — an early-boot divide-by-zero trap in the console driver, caught through
+              Firecracker's captured console log. Measured repeatedly across clean isolated runs, the
+              failure rate ran from roughly 1 in 3 to 2 in 3 resumes. The existing integration check
+              still passes every run, because one resume isn't enough attempts to hit it.
+            </p>
+            <p>
+              <span class="term">Handled, not hidden.</span> Root cause is still open — plausibly TSC
+              or clock-source drift between snapshot and restore, but that's a guess, not a
+              diagnosis. Every claim runs a post-resume health check, and a failed check tears the
+              sandbox down and falls back to a cold create. A caller never receives a dead sandbox
+              id. The full investigation is in the{" "}
+              <a href={`${base}/docs/architecture/engineering-notebook/`}>engineering notebook</a>.
+            </p>
+          </div>
         </div>
-        <div class="bench-card">
-          <div class="label">Snapshot take (criterion)</div>
-          <div class="value">~322<span style="font-size:16px;">ms</span></div>
-          <div class="ctx">Pause + write full memory/state to disk</div>
+      </div>
+    </section>
+
+    <section class="band band-ruled" id="next">
+      <div class="shell grid">
+        <a class="rail" href="#next">next</a>
+        <div class="col">
+          <h2 class="head">Where the remaining gap actually lives, now that it's measured.</h2>
+          <p class="lede prose">
+            The rootfs clone is <b>74% of a cold create</b> — the genuine dominant cost, confirmed by
+            direct measurement rather than assumption. Whether a CoW-capable filesystem actually
+            closes that gap is still open (see the correction above): the clone always lands in{" "}
+            <code>std::env::temp_dir()</code> regardless of where the base image lives, so today's
+            config has no way to put both on the same filesystem to test cleanly. The real next step
+            is a configurable clone destination, then a clean re-measurement — not another filesystem
+            swap without fixing that first.
+          </p>
+          <div class="finding finding-caution">
+            <p>
+              <span class="term">Also unexamined:</span> a synchronous history-store write sits on
+              the create critical path at <b>9.24ms, 5.5%</b> of a create — for a write its own code
+              already treats as best-effort. Looks like an easy, real win; not yet attempted or
+              measured as a change.
+            </p>
+            <p>
+              <span class="term">Ideas, not results:</span> whether jailer's chroot hard-linking adds
+              measurable overhead is unbenchmarked, since jailer hasn't been proven on real hardware
+              at all yet (see the Roadmap page).
+            </p>
+          </div>
+          <p class="fine prose">
+            Deeper write-up:{" "}
+            <a href={`${base}/docs/architecture/startup-latency/`}>Startup latency & the pre-warmed pool</a>.
+          </p>
         </div>
-        <div class="bench-card">
-          <div class="label">Load test throughput</div>
-          <div class="value">5.38<span style="font-size:16px;">/sec</span></div>
-          <div class="ctx">4 concurrent workers × 5 cycles each, 0 errors</div>
-        </div>
       </div>
-
-      <div class="table-scroll" style="margin-bottom: 12px;">
-        <table class="lat-table">
-          <thead><tr><th>Phase</th><th>Min</th><th>Mean</th><th>P95</th></tr></thead>
-          <tbody>
-            <tr><td>create</td><td>137ms</td><td>211ms</td><td>577ms</td></tr>
-            <tr><td>exec</td><td>—</td><td>366ms</td><td>—</td></tr>
-            <tr><td>delete</td><td>—</td><td>131ms</td><td>—</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p class="table-note">A dash means the run didn't record that figure, not that it was zero. Only the numbers written down at the time appear here.</p>
-
-      <div class="callout">
-        <p><b>What we measured:</b> cold boot via <code>criterion</code> at 10.5–10.9ms, an exec round-trip on an already-open vsock connection at 220–250µs, and a load test of 4 concurrent workers running 5 cycles each of create → exec → delete against the live daemon.</p>
-        <p><b>What we found:</b> the load test's <code>create</code> phase had a mean of 369ms (p95 588ms) — far above the ~33ms cold-boot figure sitting right next to it. The gap traced to the ~300MB rootfs copy, run synchronously right after the network lease, dominating the whole phase even though boot itself was fast.</p>
-        <p><b>What we fixed:</b> the rootfs copy and the network lease are independent work with no reason to serialize — they now run concurrently on separate threads — and the copy itself switched to <code>cp --reflink=auto</code>, an instant copy-on-write clone on a filesystem that supports it. Re-measured: <code>create</code> mean dropped from 369ms to 211ms, a real, repeatable win.</p>
-        <p><b>What we found next, from a full per-phase profiling pass:</b> 20 isolated cold creates broke <b>167.65ms</b> down completely (0.32ms unaccounted) — the rootfs clone was <b>74.0%</b> of it (124.09ms), boot itself <b>20.3%</b> (34.00ms), and a synchronous history-store write <b>5.5%</b> (9.24ms). The network lease this project had suspected — three <code>ip</code>/<code>bridge</code> subprocess calls — turned out to be <b>~4.36ms</b>, not the bottleneck at all.</p>
-        <p><b>What we fixed from that:</b> 20.11ms of every single boot (min 20.04, max 20.18 — the signature of one quantized sleep, not real waiting) was a fixed <code>sleep(20ms)</code> polling for Firecracker's API socket to exist. Replaced with a real connect-retry on a 200µs→5ms backoff — which also closes a genuine race the file-existence poll had (the socket file appears at <code>bind()</code>, a moment before <code>listen()</code>). Re-measured: boot <b>34.00ms → 11.22/11.44ms</b>, cold create <b>167.65ms → 144.59/143.56ms</b> — a real <b>~14%</b> cut to every cold create, and to snapshot resume too, which shares the same code path.</p>
-        <p><b>A correction, made honestly:</b> this page previously concluded the remaining gap "needs a CoW-capable filesystem or a device-mapper layer" — tested live on a real XFS filesystem, which confirmed a genuine copy-on-write clone but changed <i>nothing</i> about end-to-end create latency. The explanation offered at the time (the copy was already hidden behind the network lease) turns out to be wrong — the lease is only ~4ms. The leading replacement explanation, <b>not yet re-verified</b>: the per-sandbox rootfs clone's destination is always <code>/tmp</code> (ext4), regardless of where the base image lives, so a cross-filesystem <code>--reflink=auto</code> could never have actually reflinked even when the source was on XFS. See <a href="../docs/architecture/engineering-notebook/">the engineering notebook</a> for the full story, including the mistake in our own earlier measurement.</p>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <div class="wrap">
-      <div class="section-head">
-        <div class="eyebrow">Shipped: pre-warmed pools</div>
-        <h2>The mechanism already existed. Now it's proactive.</h2>
-        <p>Firecracker's own published numbers document sub-second, even sub-125ms, boot times and under-5MiB per-VM memory overhead — sandkiln's own measured 32.3–33.1ms cold boot is consistent with that. Production Firecracker users solve cold-start latency the same way: not booting from scratch at all, but snapshotting a VM that's already past initialization and restoring that instead. sandkiln had the primitive (<code>snapshot</code>/<code>resume</code>/<code>fork</code>, auto-suspend) for a while before it had the proactive half — a <b><code>POST /pools</code></b> configures a pool, a background replenisher keeps a target number of resumable snapshots ready per pool, and a plain <code>Sandbox.create()</code> matching one resumes it automatically instead of cold-booting. No special call — <code>Pool.create/list/delete</code> configures it, everything else about creating a sandbox stays the same.</p>
-      </div>
-
-      <div class="note-block">
-        <span class="tag">What we measured</span>
-        <h3>A real, modest win on a clean claim — not a clean, unconditional one</h3>
-        <p>A claim that resumes cleanly measured at roughly <b>70–200ms</b> against a cold create's own <b>~160–200ms</b> on the same box — a real, repeatable win at this sample size, consistent with resume's own ~25.8ms criterion number sitting well under cold boot's ~32ms. But that clean case is <b>not</b> the reliable common case on this dev box today — see the finding below, which is the more important result this work actually produced.</p>
-      </div>
-
-      <div class="note-block">
-        <span class="tag">What we found — the more significant result</span>
-        <h3>Resuming a snapshot has a real, non-rare failure mode</h3>
-        <p>Building a pool means resuming far more often than any prior manual test ever had, and that surfaced something real: a resumed guest kernel can panic early in boot (an early-boot divide-by-zero trap in the console driver, caught via Firecracker's own captured console log — built specifically so a guest crash before vsock comes up isn't invisible). Measured directly, repeatedly, across clean isolated test runs: the failure rate ranged from roughly <b>1 in 3 to 2 in 3</b> resumes — not a rare edge case. The existing snapshot/resume integration check still passes every run, because one resume in a row isn't enough attempts to reliably hit it.</p>
-        <p>Root cause is still an open question — plausibly TSC/clock-source drift between snapshot-time and restore-time, but that's an informed guess, not a confirmed diagnosis; see <a href="../docs/architecture/engineering-notebook/">the engineering notebook</a> for the full investigation. Handled either way: every claim runs a real post-resume health check before being handed to a caller, and a failed check tears the sandbox down and falls back to a normal cold create — a caller never receives a dead sandbox id, confirmed via repeated stress tests showing zero caller-visible failures across every run.</p>
-      </div>
-
-      <div class="section-head" style="margin-top:48px;">
-        <div class="eyebrow">What's next</div>
-        <h2>The remaining latency gap, and where it actually lives.</h2>
-        <p>A complete phase breakdown of a 144ms cold create (post-fix), from 20 isolated, controlled measurements:</p>
-      </div>
-
-      <div class="table-scroll" style="margin-bottom: 24px;">
-        <table class="lat-table">
-          <thead><tr><th>Phase</th><th>Share of a cold create</th></tr></thead>
-          <tbody>
-            <tr><td>rootfs clone (<code>cp --reflink=auto</code>)</td><td>74.0%</td></tr>
-            <tr><td>Vm::boot total</td><td>20.3%</td></tr>
-            <tr><td>— wait for the API socket (now fixed, was 12.0%)</td><td>0.5%</td></tr>
-            <tr><td>— InstanceStart</td><td>7.1%</td></tr>
-            <tr><td>— configuration PUTs (all 7 combined)</td><td>1.0%</td></tr>
-            <tr><td>history-store write</td><td>5.5%</td></tr>
-            <tr><td>network lease (fully concurrent with the clone)</td><td>~0.1%</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="note-block">
-        <span class="tag">The concrete next lever, if the reflink hypothesis holds</span>
-        <h3>Give the per-sandbox rootfs clone a configurable destination</h3>
-        <p>The rootfs clone is <b>74% of a cold create</b> — genuinely the dominant cost, confirmed by direct measurement, not assumption. Whether a CoW-capable filesystem actually closes that gap is <b>not yet re-verified</b> (see the correction above) — the clone always lands in <code>std::env::temp_dir()</code> regardless of where the base image lives, so today's config has no way to put both on the same filesystem to test cleanly. That's the next real step: a configurable clone destination, then a clean re-measurement — not another filesystem swap without fixing the destination first.</p>
-      </div>
-
-      <div class="note-block">
-        <span class="tag">Ideas — not shipped, not verified</span>
-        <h3>A few more directions worth a real look</h3>
-        <p>Flagged explicitly as brainstorming, not results, per this project's own standard of never stating an unverified claim as fact:</p>
-        <p><b>Whether jailer's chroot hard-linking adds measurable overhead.</b> Jailer boots via a chroot with hard-linked kernel/rootfs/drive copies rather than the direct paths a non-jailed boot uses — nobody has benchmarked whether that link step itself is visible next to boot time, since jailer hasn't been proven on real hardware yet at all (see the Roadmap page).</p>
-        <p><b>Moving the history-store write off the create critical path.</b> Measured at 9.24ms (5.5% of a create) for a write its own code already treats as best-effort. Looks like an easy, real win — not yet attempted or measured as a change.</p>
-      </div>
-    </div>
-  </section>
+    </section>
+  </main>
 
   <Footer />
 </BaseLayout>

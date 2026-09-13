@@ -12,7 +12,7 @@ const {
 } = Astro.props;
 
 const favicon =
-  'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="%234739c9"/><path d="M4 22h6l4-12 4 16 4-10h6" fill="none" stroke="white" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+  'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="%230b6c74"/><path d="M4 22h6l4-12 4 16 4-10h6" fill="none" stroke="white" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/></svg>';
 ---
 
 <!doctype html>
@@ -22,10 +22,14 @@ const favicon =
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{title}</title>
   <meta name="description" content={description} />
+  <meta name="color-scheme" content="light dark" />
   <link rel="icon" href={favicon} />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
   {/* Starlight owns the theme toggle and persists the choice under its own
       localStorage key. These pages aren't rendered by Starlight, so without
       this they'd ignore that choice and snap back to the OS setting the
