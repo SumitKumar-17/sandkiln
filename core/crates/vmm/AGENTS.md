@@ -24,7 +24,7 @@ not in `daemon`.
   `Vm::boot`/`is_jailed`/`call`/`open_pty`/`open_exec_stream`/
   `update_metadata`/`stop`/`force_stop`, plus the shared helpers both submodules below depend on
   (`console_log_path`/`console_log_stdio`/`annotate_with_console_log`/
-  `wait_for_socket`/`path_str`/`put_checked`). The spawned process's
+  `connect_api_with_retry`/`path_str`/`put_checked`). The spawned process's
   stdout/stderr (the guest's `console=ttyS0` serial output) is captured
   to `/tmp/sandkiln-fc-<id>.log` rather than discarded —
   `annotate_with_console_log` appends that path to a boot failure's error
@@ -66,7 +66,18 @@ not in `daemon`.
   `spawn_jailed` resolve the process to spawn and the paths Firecracker's
   API calls should use (host paths for a direct boot, in-jail paths like
   `/kernel` for a jailed one — see `jailer.rs`); `configure_and_start`
-  runs the same API PUT sequence either way, including inserting
+  runs the same API PUT sequence either way. That sequence is built as an
+  ordered `(path, body)` list by `configuration_requests` and then issued
+  in a timed loop, rather than built-and-issued inline call by call —
+  that split is what lets each PUT be measured individually (they land in
+  the debug-level `"vm boot phase breakdown"` event, alongside
+  spawn/socket-wait/`InstanceStart`) without threading an `Instant`
+  through the whole sequence. `InstanceStart` is issued and timed
+  separately from the configuration PUTs because it's a different kind of
+  cost: the others only record intent in Firecracker's in-memory config,
+  while that one actually starts the vCPUs. Ordering constraints still
+  live in `configuration_requests` (notably: MMDS must come after
+  `/network-interfaces`). Includes inserting
   `rate_limit` (see `insert_rate_limiter`) into the drive/network-
   interface bodies when set. Also configures `VmConfig::metadata` (if
   set) via Firecracker's own MMDS — `PUT /mmds/config` then `PUT /mmds`,
@@ -108,6 +119,13 @@ not in `daemon`.
   `NetworkManager::uplink()` exposes the uplink interface name so
   `egress::apply`/`remove` can scope a sandbox's rules to it, mirroring
   this file's own bridge-wide `FORWARD` rule's `-o <uplink>` scoping.
+  `attach_tap` times each of its three `ip`/`bridge` calls separately
+  into the debug-level `"attached tap device"` event — they're
+  `fork`+`exec` of a real binary, not syscalls, so "how much of a lease
+  is process-spawn overhead" is the question worth being able to answer,
+  and one aggregate number can't. Measured at ~1.4ms each / ~4.3ms total,
+  which is why batching them or moving to direct netlink isn't planned —
+  see `ROADMAP.md`'s Benchmarking section.
 - `egress.rs` — per-sandbox outbound network policy: `EgressPolicy`
   (`mode: AllowAll|DenyAll`, `allow_cidrs`, `deny_cidrs`) plus
   `apply()`/`remove()`, which manage one dedicated iptables chain per

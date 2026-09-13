@@ -14,6 +14,34 @@ Changelog](https://keepachangelog.com/).
 ## Unreleased
 
 ### Changed
+- **Cold sandbox creates are ~14% faster** (daemon/core crates only, not
+  an npm release): `167.65ms → ~144ms` end-to-end on the dev box, and
+  `Vm::boot` itself `34.00ms → ~11.3ms`. A per-phase profiling pass found
+  that `wait_for_socket` polled for Firecracker's API socket with a fixed
+  `sleep(20ms)` and so measured a flat **20.11ms on every single boot**
+  (min 20.04, max 20.18 over 20 boots — one quantized sleep, not real
+  waiting), when Firecracker is actually ready in **~0.7ms**. Replaced
+  with `connect_api_with_retry`, which retries the *connect* on a
+  200µs→5ms backoff instead of polling for the socket file to exist —
+  which also closes a real race that faster polling would otherwise have
+  opened, since the file appears at `bind()`, a moment before `listen()`.
+  Snapshot resume uses the same helper and gets the same win. Verified
+  with the full `scripts/integration-test.sh` (300/300, snapshot/resume/
+  time-travel included).
+- Corrected a second stale assumption about where the *rest* of a
+  create's time goes. Both live candidates were wrong, and by a wide
+  margin: `NetworkManager::lease`'s three `ip`/`bridge` subprocess calls
+  total **~4.4ms** (and, running concurrently with the rootfs clone,
+  contribute ~0.17ms to the critical path), and Firecracker's seven
+  per-VM configuration PUTs total **~1.6ms**. Batching those calls or
+  switching to direct netlink would buy single-digit milliseconds off a
+  167ms create — **not planned; no netlink crate is being added.** The
+  rootfs copy is in fact the dominant cost at **124ms (74%)**, which the
+  entry below had concluded it wasn't. See `ROADMAP.md`'s Benchmarking
+  section for the full breakdown (it accounts for 167.33ms of the
+  measured 167.65ms), the leading — and explicitly unverified —
+  hypothesis for why the earlier XFS experiment showed no change, and the
+  9.24ms synchronous sqlite write also found sitting on the critical path.
 - Corrected a stale assumption about sandbox-create latency: the rootfs
   copy was believed to be the dominant remaining cost after boot, with a
   CoW-capable filesystem (XFS/Btrfs) or a device-mapper layer proposed as
@@ -32,6 +60,18 @@ Changelog](https://keepachangelog.com/).
   lease/API-call path instead of storage).
 
 ### Added
+- Per-phase cold-create timings, so where a create's latency goes doesn't
+  have to be rediscovered by hand. `/metrics` gains
+  `create_phase_duration_ms{phase="rootfs_clone"|"network_lease"|"setup"|"total"}`
+  (`boot_duration_ms` is unchanged and stays its own metric). Finer-grained
+  detail stays debug-level `tracing` rather than becoming metrics —
+  `"cold create setup phases"`/`"cold create complete"`,
+  `"vm boot phase breakdown"` (with each Firecracker PUT timed
+  individually), and `"attached tap device"` (with each `ip`/`bridge`
+  subprocess timed individually). `scripts/dev-tools/profile-cold-create.sh`
+  drives a repeatable sequential-create run against a live daemon. Note
+  the `RUST_LOG` target is the binary name, `sandkilnd`, not the package
+  name `sandkiln-daemon`.
 - Streamed background exec sessions (`kiln sandbox exec-stream`/`kiln
   sandbox logs`), plus `Sandbox.execStream()`/`.listExecStreams()`/
   `.attachLogs()` in the JS/TS SDK (not published under a new npm

@@ -94,8 +94,7 @@ impl Vm {
             .stderr(stderr)
             .spawn()?;
 
-        let result = super::wait_for_socket(&api_socket, Duration::from_secs(2)).and_then(|()| {
-            let mut api = ApiClient::connect(&api_socket)?;
+        let result = super::connect_api_with_retry(&api_socket, Duration::from_secs(2)).and_then(|mut api| {
             put_checked(
                 &mut api,
                 "/snapshot/load",

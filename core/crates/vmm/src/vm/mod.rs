@@ -328,15 +328,42 @@ pub(crate) fn annotate_with_console_log(err: io::Error, log_path: &Path) -> io::
     io::Error::other(format!("{err} (guest console log: {})", log_path.display()))
 }
 
-fn wait_for_socket(path: &Path, timeout: Duration) -> io::Result<()> {
+/// Connects to a freshly spawned Firecracker's API socket, retrying with
+/// a backoff until it actually accepts a connection or `timeout` elapses.
+///
+/// Retries the *connect* rather than waiting for the socket file to
+/// exist and then connecting once. The file appears at `bind()`, which
+/// is a moment before `listen()`, so a poll that only checks existence
+/// can win that race and hand the caller an `ECONNREFUSED`. Polling the
+/// thing actually needed has no such window — which is what makes it
+/// safe to poll this fast.
+///
+/// The interval starts far below the socket's real appearance time
+/// deliberately: the fixed 20ms poll this replaced measured a flat
+/// ~20.1ms on *every* boot (min 20.04, max 20.18 over 20 boots — the
+/// signature of one quantized sleep, not of real waiting), which was
+/// more than half of a ~34ms boot. See ROADMAP.md's Benchmarking section.
+fn connect_api_with_retry(path: &Path, timeout: Duration) -> io::Result<ApiClient> {
+    const INITIAL_POLL: Duration = Duration::from_micros(200);
+    const MAX_POLL: Duration = Duration::from_millis(5);
+
     let deadline = Instant::now() + timeout;
-    while !path.exists() {
-        if Instant::now() >= deadline {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, format!("{path:?} never appeared")));
+    let mut interval = INITIAL_POLL;
+    loop {
+        match ApiClient::connect(path) {
+            Ok(api) => return Ok(api),
+            Err(e) if Instant::now() >= deadline => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("{path:?} never accepted a connection within {timeout:?}: {e}"),
+                ));
+            }
+            Err(_) => {
+                std::thread::sleep(interval);
+                interval = (interval * 2).min(MAX_POLL);
+            }
         }
-        std::thread::sleep(Duration::from_millis(20));
     }
-    Ok(())
 }
 
 fn path_str(p: &Path) -> &str {
@@ -347,6 +374,57 @@ fn path_str(p: &Path) -> &str {
 mod tests {
     use super::*;
     use std::io::Read;
+
+    /// A path nothing is ever going to listen on must fail as a timeout
+    /// rather than hanging or succeeding, and must take at least roughly
+    /// the timeout it was given — a backoff bug that exits the loop early
+    /// would otherwise look like a clean, fast failure.
+    #[test]
+    fn connect_api_with_retry_times_out_on_a_socket_nothing_ever_binds() {
+        let path = std::env::temp_dir().join(format!("sandkiln-never-bound-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let started = Instant::now();
+        // `ApiClient` isn't `Debug`, so `unwrap_err()` isn't available.
+        let err = match connect_api_with_retry(&path, Duration::from_millis(150)) {
+            Ok(_) => panic!("connected to a socket nothing ever bound"),
+            Err(e) => e,
+        };
+        let elapsed = started.elapsed();
+
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut, "error was: {err}");
+        assert!(elapsed >= Duration::from_millis(150), "returned after only {elapsed:?}, before the timeout elapsed");
+    }
+
+    #[test]
+    fn connect_api_with_retry_connects_to_an_already_listening_socket() {
+        let path = std::env::temp_dir().join(format!("sandkiln-already-listening-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+
+        assert!(connect_api_with_retry(&path, Duration::from_secs(2)).is_ok());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The real case this exists for: the socket isn't there yet when the
+    /// first attempt runs, and shows up partway through. This is also
+    /// what a plain file-existence poll gets wrong — see the function's
+    /// own doc comment on the `bind()`/`listen()` window.
+    #[test]
+    fn connect_api_with_retry_waits_for_a_socket_that_appears_late() {
+        let path = std::env::temp_dir().join(format!("sandkiln-late-listener-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let bind_path = path.clone();
+        let binder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            std::os::unix::net::UnixListener::bind(&bind_path).unwrap()
+        });
+
+        assert!(connect_api_with_retry(&path, Duration::from_secs(2)).is_ok());
+        drop(binder.join().unwrap());
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn console_log_path_is_keyed_by_vm_id() {

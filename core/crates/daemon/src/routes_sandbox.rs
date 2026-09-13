@@ -7,6 +7,7 @@
 //! ~300-line-ish shape for no structural reason.
 
 use crate::error::AppError;
+use crate::metrics::CreatePhase;
 use crate::pool_claim::{claim_from_pool, resolve_pool_claim, MAX_POOL_CLAIM_ATTEMPTS, PoolClaim, PoolClaimGuard};
 use crate::routes_drives::DriveAttachment;
 use crate::routes_snapshot::{snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
@@ -24,7 +25,7 @@ use sandkiln_vmm::vm::{DriveConfig, RateLimiter, TokenBucket, Vm, VmConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 #[derive(Deserialize, Default)]
@@ -282,6 +283,7 @@ async fn create_sandbox_cold(
     rate_limit: Option<RateLimiter>,
     egress: Option<sandkiln_vmm::egress::EgressPolicy>,
 ) -> Result<String, AppError> {
+    let create_started = Instant::now();
     let pool_guard = PoolClaimGuard::new(state.clone(), pool_id.clone());
 
     // Checked and reserved before the (slow) boot starts, not just relied
@@ -337,26 +339,40 @@ async fn create_sandbox_cold(
             let span = tracing::Span::current();
             // Copying the rootfs and leasing a network are independent —
             // running them concurrently overlaps whichever one is slower
-            // with the other instead of paying for both serially. **Which
-            // one actually dominates depends on the host's filesystem**:
-            // on ext4 (no CoW) the rootfs copy is a real full-file copy
-            // and was the visible cost this concurrency was originally
-            // added to hide; on a CoW-capable filesystem (XFS, Btrfs)
-            // `clone_rootfs`'s `cp --reflink=auto` is close to free, and
-            // this join's cost shifts almost entirely onto the lease side
-            // instead — confirmed live (see ROADMAP.md's Benchmarking
-            // section): moving `SANDKILN_BASE_ROOTFS` onto XFS produced a
-            // real, measured, disk-space-free CoW clone but did **not**
-            // reduce end-to-end `POST /sandboxes` latency at all on this
-            // dev box, exactly because the copy was already hidden behind
-            // the lease here, not on the critical path to begin with.
-            // Don't assume the rootfs copy is "the" bottleneck without
-            // re-measuring on whatever filesystem is actually in play.
-            let (copy_result, lease_result) = std::thread::scope(|scope| {
-                let copy_handle = scope.spawn(|| span.in_scope(|| clone_rootfs(&base_rootfs_source, &rootfs_path)));
-                let lease_handle = scope.spawn(|| span.in_scope(|| state.network.lease()));
+            // with the other instead of paying for both serially. The
+            // clone dominates this join overwhelmingly: profiled on this
+            // dev box's ext4 at ~124ms for the copy against ~4ms for the
+            // lease, so the lease adds ~0.2ms to the critical path and
+            // the concurrency is, in practice, hiding nothing. It stays
+            // because it costs nothing and stops being a no-op the moment
+            // `cp --reflink=auto` can actually reflink (see
+            // `clone_rootfs`) — but note the *destination* here is
+            // `std::env::temp_dir()`, and reflink silently degrades to a
+            // full byte copy when source and destination are on different
+            // filesystems. See ROADMAP.md's Benchmarking section: that
+            // detail is the leading (still unverified) explanation for
+            // why an earlier XFS experiment measured no end-to-end
+            // improvement at all.
+            let setup_started = Instant::now();
+            let ((copy_result, copy_elapsed), (lease_result, lease_elapsed)) = std::thread::scope(|scope| {
+                let copy_handle = scope.spawn(|| span.in_scope(|| timed(|| clone_rootfs(&base_rootfs_source, &rootfs_path))));
+                let lease_handle = scope.spawn(|| span.in_scope(|| timed(|| state.network.lease())));
                 (copy_handle.join().expect("rootfs copy thread panicked"), lease_handle.join().expect("lease thread panicked"))
             });
+            let setup_elapsed = setup_started.elapsed();
+            // Recorded before the `?`s below so a create that fails *in*
+            // one of these two phases still contributes the timings it
+            // did produce — a lease that takes a second and then fails is
+            // exactly the case worth seeing in the histogram.
+            state.metrics.record_create_phase_ms(CreatePhase::RootfsClone, ms(copy_elapsed));
+            state.metrics.record_create_phase_ms(CreatePhase::NetworkLease, ms(lease_elapsed));
+            state.metrics.record_create_phase_ms(CreatePhase::Setup, ms(setup_elapsed));
+            tracing::debug!(
+                rootfs_clone_us = copy_elapsed.as_micros(),
+                network_lease_us = lease_elapsed.as_micros(),
+                setup_join_us = setup_elapsed.as_micros(),
+                "cold create setup phases"
+            );
             copy_result?;
             let lease = lease_result?;
 
@@ -401,7 +417,7 @@ async fn create_sandbox_cold(
             });
             match vm {
                 Ok(vm) => {
-                    state.metrics.record_boot_duration_ms(boot_started.elapsed().as_secs_f64() * 1000.0);
+                    state.metrics.record_boot_duration_ms(ms(boot_started.elapsed()));
                     // Applied after boot succeeds, before this sandbox is
                     // ever visible to a caller -- a requested policy that
                     // fails to apply must not silently leave the sandbox
@@ -432,14 +448,17 @@ async fn create_sandbox_cold(
         }
     })
     .await?;
+    let boot_task_elapsed = create_started.elapsed();
 
     let created_at = SystemTime::now();
     // Best-effort: the sandbox has already actually booted by this point
     // (a real, running VM) — failing the whole request over a history-DB
     // write error would waste it for no benefit, so this only warns.
+    let before_history = Instant::now();
     if let Err(e) = state.history.record_created(&id, request.name.as_deref(), &request.tags, request.image_id.as_deref(), created_at) {
         tracing::warn!(error = %e, sandbox_id = %id, "failed to record sandbox creation in history store");
     }
+    let history_elapsed = before_history.elapsed();
 
     let sandbox = Sandbox {
         id: id.clone(),
@@ -473,7 +492,36 @@ async fn create_sandbox_cold(
     // guard, which would otherwise release it right back on drop here.
     pool_guard.commit();
 
+    let total = create_started.elapsed();
+    state.metrics.record_create_phase_ms(CreatePhase::Total, ms(total));
+    // `boot_task_us` covers the whole `spawn_blocking` closure — setup
+    // join, jail-id lease, `Vm::boot`, egress apply — so the difference
+    // between it and `total` is the daemon-side tail (history write,
+    // taking the sandbox map lock) plus whatever the blocking pool made
+    // this task wait before it started.
+    tracing::debug!(
+        sandbox_id = %id,
+        boot_task_us = boot_task_elapsed.as_micros(),
+        history_write_us = history_elapsed.as_micros(),
+        total_us = total.as_micros(),
+        "cold create complete"
+    );
+
     Ok(id)
+}
+
+/// Runs `f`, returning its value alongside how long it took. Exists so
+/// the two concurrently-spawned setup phases can each time themselves on
+/// their own thread — the joining thread only sees when *both* finished,
+/// which is the one thing a timer around the join can't tell you.
+fn timed<T>(f: impl FnOnce() -> T) -> (T, Duration) {
+    let started = Instant::now();
+    let value = f();
+    (value, started.elapsed())
+}
+
+fn ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
 }
 
 #[derive(Serialize)]

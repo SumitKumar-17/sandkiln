@@ -780,19 +780,124 @@ outbound HTTP both still work.
     CoW-capable filesystem or a device-mapper layer to close the gap"
     framing was based on an assumption (the copy is *the* bottleneck)
     that turned out not to hold once actually measured on a real
-    CoW filesystem — **a device-mapper/thin-provisioning layer would not
-    meaningfully help either, for the same reason, and isn't planned
-    now.** `scripts/preflight-check.sh` still reports whether rootfs
-    storage is on a CoW-capable filesystem (real, still a correct thing
-    to want — a disk-space-free clone is a genuine win on its own even
-    though it doesn't move today's measured latency), but the actual
-    remaining ~130-160ms gap after boot is most likely in the network
-    lease step's own `ip`/`bridge` subprocess calls (`NetworkManager::attach_tap`)
-    or in Firecracker's own per-VM API configuration calls
-    (boot-source/drives/network-interfaces/machine-config, each a
-    separate synchronous PUT) — not yet isolated further; a real
-    profiling pass of `Vm::boot` itself is the honest next step, not
-    another storage-layer change.
+    CoW filesystem. `scripts/preflight-check.sh` still reports whether
+    rootfs storage is on a CoW-capable filesystem (real, still a correct
+    thing to want — a disk-space-free clone is a genuine win on its own).
+    **The reasoning in this entry for *why* XFS didn't help is itself
+    wrong — see the profiling pass immediately below, which measured the
+    network lease at ~4ms and so rules out "the join now waits on the
+    lease side instead" as an explanation.** The entry is left standing
+    rather than edited because the measurements in it (the CoW clone is
+    real; end-to-end latency didn't move) are correct and reproducible —
+    only the causal story attached to them was guesswork.
+- **Done: a real per-phase profiling pass of the cold-create path**, the
+  "honest next step" the entry above asked for. Instrumented every
+  sub-step of `create_sandbox_cold` and `Vm::boot` (see "Instrumentation"
+  at the end of this entry) and ran 20 sequential `POST /sandboxes`
+  creates on the dev box, one at a time, each sandbox destroyed before
+  the next, with nothing else running on the box.
+  - **What we measured.** Means over 20 creates (ext4, 300MiB base
+    rootfs, no jailer, 2 vCPU / 512MiB, `POST /sandboxes` with an empty
+    body). Total **167.65ms** (min 161.41, max 179.10):
+
+    | phase | mean | share |
+    | --- | --- | --- |
+    | rootfs clone (`cp --reflink=auto`) | 124.09ms | 74.0% |
+    | `Vm::boot` total | 34.00ms | 20.3% |
+    | — process spawn | 0.34ms | 0.2% |
+    | — wait for the API socket | 20.11ms | 12.0% |
+    | — the 7 configuration PUTs | 1.61ms | 1.0% |
+    | — `InstanceStart` | 11.87ms | 7.1% |
+    | history-store sqlite write | 9.24ms | 5.5% |
+    | network lease (concurrent) | 4.36ms | ~0.1% of the critical path |
+
+    Those add to 167.33ms of the measured 167.65ms — **0.32ms
+    unaccounted**, so this is a complete breakdown, not a partial one.
+  - **What we found — the two live hypotheses going in were both wrong,
+    and in the same direction.** `NetworkManager::lease` is **~4.36ms**,
+    not the ~130ms it was suspected of: its three `ip`/`bridge`
+    subprocess calls measure 1.39ms / 1.46ms / 1.46ms, and because the
+    lease runs concurrently with the rootfs clone it contributes only
+    **~0.17ms** to the critical path (setup join 124.26ms vs. the clone's
+    own 124.09ms). Firecracker's per-VM API configuration is **~1.61ms**
+    across all seven PUTs — the slowest single one is
+    `/network-interfaces/eth0` at 0.51ms. Batching the `ip`/`bridge`
+    calls or replacing them with direct netlink would therefore buy at
+    most a couple of milliseconds off a 167ms create; **a netlink crate
+    is not worth adding for this, and isn't planned.**
+  - **The rootfs copy *is* the dominant cost after all — 74% of a cold
+    create** — which is what the entry above set out to disprove. Both
+    entries are measured and both are correct; what was wrong was the
+    *explanation* offered above for the XFS null result. The copy was
+    never "hidden behind the lease", because the lease is ~4ms.
+  - **Leading hypothesis for the XFS null result, explicitly not yet
+    verified.** `clone_rootfs` copies *into* `std::env::temp_dir()`, and
+    `cp --reflink=auto` silently falls back to a full byte copy when
+    source and destination are on different filesystems. The XFS
+    experiment moved only `SANDKILN_BASE_ROOTFS` onto the XFS loopback;
+    the destination stayed on `/tmp` (ext4), so the daemon's actual clone
+    could never have reflinked, even though a standalone `cp` *within*
+    the XFS mount did. That fits every number in both entries, but it has
+    **not** been re-tested: the XFS loopback no longer exists on the box
+    and mounting one needs root. Treat it as the next thing to check, not
+    as established.
+  - **What's still open.** If that hypothesis holds, the fix is to give
+    the per-sandbox rootfs copy a configurable destination directory so
+    it can be placed on the same filesystem as the base image, instead of
+    always landing in `std::env::temp_dir()`. That is a config-surface
+    change that also touches snapshot/archive path assumptions, so it was
+    deliberately **not** attempted in this pass — and on this ext4-only
+    box its payoff can't be measured at all, which is exactly the
+    situation that produced the wrong conclusion above. Also unexamined:
+    the **9.24ms synchronous sqlite write** (`history.record_created`)
+    sitting on the critical path, 5.5% of a create, for a write whose own
+    doc comment already calls it best-effort. Moving it off the request
+    path looks easy and worth ~9ms, but wasn't measured as a change here.
+  - **What we fixed: the API-socket wait.** `wait_for_socket` polled for
+    Firecracker's API socket with a fixed `sleep(20ms)`. It measured
+    **20.11ms on every single boot** (min 20.04, max 20.18 across 20) —
+    the signature of one quantized sleep rather than of real waiting.
+    Replaced with `connect_api_with_retry`, which retries the *connect*
+    (not a file-existence check) on a 200µs→5ms backoff. Retrying the
+    connect also closes a real race the faster polling would otherwise
+    have opened: the socket file appears at `bind()`, a moment before
+    `listen()`, so a fast existence-poll can win that race and get
+    `ECONNREFUSED`.
+    - **Measured after, same methodology, 2×20 creates:** socket wait
+      **20.11ms → 0.67ms / 0.69ms** (so Firecracker really is ready in
+      well under 1ms, and ~19.4ms of every boot was dead sleep);
+      `boot_duration_ms` **34.00ms → 11.22ms / 11.44ms**; end-to-end
+      create **167.65ms → 144.59ms / 143.56ms**. A **~23ms (~14%)** cut
+      to every cold create, and it applies to snapshot resume too, which
+      used the same helper. `InstanceStart` also read lower afterwards
+      (11.87ms → 8.75/9.13ms); that wasn't the target of the change and
+      isn't confidently attributed to it.
+    - Verified with the full `scripts/integration-test.sh` — snapshot,
+      resume, and time-travel restore all pass. One run out of four
+      failed a pool-claim MMDS assertion; the three runs after it were
+      300/300 clean, and the code path that assertion covers
+      (`Vm::update_metadata`) is untouched by this change, so this reads
+      as the already-documented intermittent resume failure below rather
+      than a regression — stated as a reading of the evidence, not as
+      something proven.
+  - **Instrumentation left behind**, so none of this has to be
+    rediscovered by hand: `/metrics` gains
+    `create_phase_duration_ms{phase="rootfs_clone"|"network_lease"|"setup"|"total"}`
+    (`boot_duration_ms` stays its own metric, unchanged). Finer detail is
+    debug-level `tracing` rather than metrics — nobody alerts on "one
+    `ip` exec took 1.4ms", and `sandkiln-vmm` has no access to the
+    daemon's `Metrics` anyway: `"cold create setup phases"` and
+    `"cold create complete"` (`sandkilnd::routes_sandbox`),
+    `"vm boot phase breakdown"` with per-endpoint PUT timings
+    (`sandkiln_vmm::vm::boot`), and `"attached tap device"` with each
+    subprocess call timed separately (`sandkiln_vmm::network`).
+    `scripts/dev-tools/profile-cold-create.sh` drives the run. Note the
+    log filter is the **binary** name: `RUST_LOG=sandkilnd=debug`, not
+    `sandkiln_daemon=debug`, which silently matches nothing.
+  - **Caveat, same as every number in this section:** a shared dev box,
+    small samples, one create at a time. The phase *shares* are large and
+    consistent enough to act on; the absolute totals move a few percent
+    run to run.
 - **Done: snapshot/resume benchmarked** (`bench_snapshot_take`/
   `bench_resume` in `core/crates/vmm/benches/vm_lifecycle.rs`, alongside
   the existing `bench_cold_boot`/`bench_exec_roundtrip`). Real numbers,
@@ -810,7 +915,8 @@ outbound HTTP both still work.
     gap between a ~32ms boot and the measured 211ms full-create (see
     "What works today" above) isn't in the boot/resume step at all —
     both are ~25–32ms either way — it's in the surrounding per-create
-    setup (rootfs prep, network lease). A pre-warmed pool's real value
+    setup (rootfs prep, network lease; since profiled, and it is almost
+    entirely the rootfs prep — the lease is ~4ms). A pre-warmed pool's real value
     is pre-doing *that* setup ahead of a request, not shaving boot
     latency itself, which was never the bottleneck. Worth re-measuring
     once a pool exists, rather than assumed up front.

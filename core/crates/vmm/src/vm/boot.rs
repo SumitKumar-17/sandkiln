@@ -6,8 +6,7 @@
 //! that back `Vm::boot`, same reasoning [`super::snapshot`] already gives
 //! for itself.
 
-use super::{console_log_stdio, path_str, put_checked, wait_for_socket, RateLimiter, Vm, VmConfig};
-use crate::firecracker_api::ApiClient;
+use super::{connect_api_with_retry, console_log_stdio, path_str, put_checked, RateLimiter, Vm, VmConfig};
 use crate::jailer::{self, JailLaunch};
 use serde_json::json;
 use std::io;
@@ -42,6 +41,26 @@ struct BootTarget {
     jail_instance_dir: Option<PathBuf>,
 }
 
+/// Where a boot's wall-clock time actually went, for the profiling
+/// breakdown `boot` logs at debug level. Kept as a struct rather than a
+/// tuple so the phases stay named at the one call site that reads them.
+struct BootPhases {
+    /// Waiting for Firecracker's API socket to accept a connection — see
+    /// [`connect_api_with_retry`], whose poll interval sets the
+    /// granularity of what this can measure.
+    socket_wait: Duration,
+    /// Every pre-`InstanceStart` configuration PUT.
+    api_config: Duration,
+    /// The `InstanceStart` action alone — where vCPUs and the guest
+    /// kernel actually start.
+    instance_start: Duration,
+    /// Per-endpoint `api_config` detail, pre-rendered as
+    /// `"/path=NNNus /path=NNNus ..."`. A string because the set of
+    /// endpoints varies per VM (extra drives, optional network/MMDS) and
+    /// a `tracing` event's fields can't.
+    per_put: String,
+}
+
 /// Boots a new microVM for `Vm::boot`: spawns the child (direct or
 /// jailed), runs the Firecracker API configuration sequence, and cleans
 /// up the spawned process/chroot on any failure partway through — a boot
@@ -54,27 +73,45 @@ pub(super) fn boot(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<Vm
         None => spawn_direct(config, id, log_path)?,
         Some(jail) => spawn_jailed(config, jail, id, log_path)?,
     };
+    let spawn = started.elapsed();
 
-    if let Err(e) = configure_and_start(config, &mut target) {
-        // A boot that fails partway through the API PUT sequence still
-        // has a live child process (jailer, or firecracker directly)
-        // holding the console log fds and — for a jailed boot — a real
-        // chroot directory with hard-linked copies of the kernel/rootfs/
-        // drives. Leaving either behind is a resource leak (an orphaned
-        // process for a direct boot) or a real information-disclosure
-        // surface (a leftover world-readable chroot for a jailed one),
-        // not just untidy state — clean up exactly like
-        // `snapshot::resume` already does for the equivalent failure.
-        let _ = target.child.kill();
-        let _ = target.child.wait();
-        let _ = std::fs::remove_file(&target.api_socket);
-        let _ = std::fs::remove_file(&target.vsock_socket);
-        if let Some(dir) = &target.jail_instance_dir {
-            let _ = std::fs::remove_dir_all(dir);
+    let phases = match configure_and_start(config, &mut target) {
+        Ok(phases) => phases,
+        Err(e) => {
+            // A boot that fails partway through the API PUT sequence
+            // still has a live child process (jailer, or firecracker
+            // directly) holding the console log fds and — for a jailed
+            // boot — a real chroot directory with hard-linked copies of
+            // the kernel/rootfs/drives. Leaving either behind is a
+            // resource leak (an orphaned process for a direct boot) or a
+            // real information-disclosure surface (a leftover
+            // world-readable chroot for a jailed one), not just untidy
+            // state — clean up exactly like `snapshot::resume` already
+            // does for the equivalent failure.
+            let _ = target.child.kill();
+            let _ = target.child.wait();
+            let _ = std::fs::remove_file(&target.api_socket);
+            let _ = std::fs::remove_file(&target.vsock_socket);
+            if let Some(dir) = &target.jail_instance_dir {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            return Err(e);
         }
-        return Err(e);
-    }
+    };
 
+    // Split out from the `vm booted` event below rather than folded into
+    // it: `boot_ms` is the number an operator watches, while this
+    // breakdown only matters when someone is actually profiling where a
+    // boot's milliseconds go (see ROADMAP.md's Benchmarking section).
+    tracing::debug!(
+        vm_id = id,
+        spawn_us = spawn.as_micros(),
+        socket_wait_us = phases.socket_wait.as_micros(),
+        api_config_us = phases.api_config.as_micros(),
+        instance_start_us = phases.instance_start.as_micros(),
+        per_put = %phases.per_put,
+        "vm boot phase breakdown"
+    );
     tracing::info!(
         vm_id = id,
         pid = target.child.id(),
@@ -179,23 +216,57 @@ fn spawn_jailed_inner(
 /// only the paths in `target` differ, already resolved by
 /// `spawn_direct`/`spawn_jailed` into whatever Firecracker itself needs
 /// to see them as.
-fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result<()> {
-    wait_for_socket(&target.api_socket, Duration::from_secs(2))?;
-    let mut api = ApiClient::connect(&target.api_socket)?;
+///
+/// The bodies are built up front by [`configuration_requests`] and issued
+/// here in a loop, rather than built and issued one at a time inline.
+/// That split is what makes each PUT individually timeable without
+/// scattering an `Instant` through the sequence, and it keeps the
+/// ordering constraints (see `configuration_requests`) expressed as one
+/// readable list.
+fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result<BootPhases> {
+    let before_socket = Instant::now();
+    let mut api = connect_api_with_retry(&target.api_socket, Duration::from_secs(2))?;
+    let socket_wait = before_socket.elapsed();
+
+    let requests = configuration_requests(config, target)?;
+
+    let before_api_config = Instant::now();
+    let mut per_put = Vec::with_capacity(requests.len());
+    for (path, body) in &requests {
+        let before_put = Instant::now();
+        put_checked(&mut api, path, body)?;
+        per_put.push(format!("{path}={}us", before_put.elapsed().as_micros()));
+    }
+    let api_config = before_api_config.elapsed();
+
+    // Separated from the configuration PUTs above because it is a
+    // different kind of cost: the others only record intent in
+    // Firecracker's in-memory config, while this one is where the vCPU
+    // threads and the guest kernel actually start.
+    let before_instance_start = Instant::now();
+    put_checked(&mut api, "/actions", &json!({"action_type": "InstanceStart"}))?;
+    let instance_start = before_instance_start.elapsed();
+
+    Ok(BootPhases { socket_wait, api_config, instance_start, per_put: per_put.join(" ") })
+}
+
+/// Every pre-`InstanceStart` configuration PUT, in the order Firecracker
+/// requires them, as `(path, body)` pairs.
+fn configuration_requests(config: &VmConfig, target: &BootTarget) -> io::Result<Vec<(String, serde_json::Value)>> {
+    let mut requests: Vec<(String, serde_json::Value)> = Vec::new();
 
     let mut boot_args = "console=ttyS0 reboot=k panic=1 pci=off".to_string();
     if let Some(net) = &config.network {
         boot_args.push_str(&format!(" ip={}::{}:255.255.255.0::eth0:off", net.guest_ip, net.gateway_ip));
     }
 
-    put_checked(
-        &mut api,
-        "/boot-source",
-        &json!({
+    requests.push((
+        "/boot-source".to_string(),
+        json!({
             "kernel_image_path": path_str(&target.kernel_image_path),
             "boot_args": boot_args,
         }),
-    )?;
+    ));
 
     let mut rootfs_body = json!({
         "drive_id": "rootfs",
@@ -204,7 +275,7 @@ fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result
         "is_read_only": false,
     });
     insert_rate_limiter(&mut rootfs_body, "rate_limiter", &config.rate_limit);
-    put_checked(&mut api, "/drives/rootfs", &rootfs_body)?;
+    requests.push(("/drives/rootfs".to_string(), rootfs_body));
 
     for (drive, path) in config.extra_drives.iter().zip(target.drive_paths.iter()) {
         let mut drive_body = json!({
@@ -214,17 +285,16 @@ fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result
             "is_read_only": drive.read_only,
         });
         insert_rate_limiter(&mut drive_body, "rate_limiter", &config.rate_limit);
-        put_checked(&mut api, &format!("/drives/{}", drive.drive_id), &drive_body)?;
+        requests.push((format!("/drives/{}", drive.drive_id), drive_body));
     }
 
-    put_checked(
-        &mut api,
-        "/machine-config",
-        &json!({
+    requests.push((
+        "/machine-config".to_string(),
+        json!({
             "vcpu_count": config.vcpu_count,
             "mem_size_mib": config.mem_size_mib,
         }),
-    )?;
+    ));
 
     if let Some(net) = &config.network {
         let mut net_body = json!({
@@ -234,7 +304,7 @@ fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result
         });
         insert_rate_limiter(&mut net_body, "rx_rate_limiter", &config.rate_limit);
         insert_rate_limiter(&mut net_body, "tx_rate_limiter", &config.rate_limit);
-        put_checked(&mut api, "/network-interfaces/eth0", &net_body)?;
+        requests.push(("/network-interfaces/eth0".to_string(), net_body));
     }
 
     if let Some(metadata) = &config.metadata {
@@ -244,22 +314,20 @@ fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result
         // Pre-boot only, and only valid once the interface it names is
         // itself configured -- must come after the /network-interfaces
         // PUT above, not before.
-        put_checked(&mut api, "/mmds/config", &json!({ "network_interfaces": ["eth0"], "version": "V2" }))?;
-        put_checked(&mut api, "/mmds", metadata)?;
+        requests.push(("/mmds/config".to_string(), json!({ "network_interfaces": ["eth0"], "version": "V2" })));
+        requests.push(("/mmds".to_string(), metadata.clone()));
     }
 
-    put_checked(
-        &mut api,
-        "/vsock",
-        &json!({
+    requests.push((
+        "/vsock".to_string(),
+        json!({
             "vsock_id": "vsock0",
             "guest_cid": 3,
             "uds_path": path_str(&target.vsock_uds_path),
         }),
-    )?;
+    ));
 
-    put_checked(&mut api, "/actions", &json!({"action_type": "InstanceStart"}))?;
-    Ok(())
+    Ok(requests)
 }
 
 /// Inserts `rate_limit` (if set) into `body` under `key` — `key` is
