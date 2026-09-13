@@ -450,6 +450,7 @@ async fn create_sandbox_cold(
         // A fresh boot never has any remote storage mounted yet -- see
         // `crate::routes_mounts`.
         mounts: Vec::new(),
+        log_sessions: Default::default(),
     };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
     state.metrics.record_sandbox_created();

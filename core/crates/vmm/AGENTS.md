@@ -21,8 +21,8 @@ not in `daemon`.
   If you need a new Firecracker API call, add a method here following
   the existing `put`/`patch` pattern.
 - `vm/mod.rs` — `Vm`/`VmConfig`: the public API surface only —
-  `Vm::boot`/`is_jailed`/`call`/`open_pty`/`update_metadata`/`stop`/
-  `force_stop`, plus the shared helpers both submodules below depend on
+  `Vm::boot`/`is_jailed`/`call`/`open_pty`/`open_exec_stream`/
+  `update_metadata`/`stop`/`force_stop`, plus the shared helpers both submodules below depend on
   (`console_log_path`/`console_log_stdio`/`annotate_with_console_log`/
   `wait_for_socket`/`path_str`/`put_checked`). The spawned process's
   stdout/stderr (the guest's `console=ttyS0` serial output) is captured
@@ -150,6 +150,13 @@ not in `daemon`.
   keystrokes). `Vm::open_pty` (in `vm/mod.rs`) wraps this the same way
   `Vm::call` wraps the request/response path — retrying for up to 5s
   while the guest agent's second listener comes up.
+- Also `open_exec_stream` — same shape as `open_pty` (a long-lived
+  `UnixStream` handed back after one handshake, timeouts cleared), but
+  against `sandkiln_protocol::EXEC_STREAM_PORT` with an
+  `ExecStreamHandshake { command, args }`, and the caller keeps reading
+  framed `ExecStreamEvent`s off it rather than raw bytes (see
+  `sandkiln-protocol`'s own `AGENTS.md`). `Vm::open_exec_stream` wraps it
+  with the same retry-for-5s pattern.
 
 ## Building and testing
 

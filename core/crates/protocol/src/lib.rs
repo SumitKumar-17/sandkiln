@@ -7,7 +7,7 @@ mod framing;
 mod messages;
 
 pub use framing::{read_message, write_message};
-pub use messages::{DirEntry, PtyHandshake, Request, Response};
+pub use messages::{DirEntry, ExecStreamEvent, ExecStreamHandshake, PtyHandshake, Request, Response};
 
 /// The vsock port the guest agent listens on for exec/file-op requests,
 /// and the host connects to. Lives here so the two sides can't drift out
@@ -24,6 +24,18 @@ pub const AGENT_PORT: u32 = 5000;
 /// byte either side writes after that goes straight to the pty, no more
 /// framing, no more JSON.
 pub const PTY_PORT: u32 = 5001;
+
+/// A third, separate vsock port for streamed background exec sessions
+/// ("`kiln logs -f`" — see `ROADMAP.md`'s CLI section) — a different
+/// connection shape from both of the others: like `PTY_PORT` it's one
+/// long-lived connection per session rather than `AGENT_PORT`'s
+/// one-request-one-response-then-close, but unlike `PTY_PORT` it never
+/// drops to a raw byte passthrough — every message after the initial
+/// [`ExecStreamHandshake`] stays framed JSON (an [`ExecStreamEvent`]),
+/// because a caller needs structured output (which stream it came from,
+/// and the process's exit code at the end), not just an undifferentiated
+/// byte stream the way a terminal's own input/output is.
+pub const EXEC_STREAM_PORT: u32 = 5002;
 
 /// The wire encoding (JSON) is an implementation detail; this alias lets
 /// callers handle codec errors without depending on serde_json directly.
@@ -63,6 +75,30 @@ pub fn encode_pty_handshake(handshake: &PtyHandshake) -> Result<Vec<u8>, CodecEr
 /// Decodes a [`PtyHandshake`] from a message payload — used by the guest
 /// agent's `PTY_PORT` connection handler.
 pub fn decode_pty_handshake(payload: &[u8]) -> Result<PtyHandshake, CodecError> {
+    serde_json::from_slice(payload)
+}
+
+/// Encodes the one handshake message an [`EXEC_STREAM_PORT`] connection
+/// starts with — used by the host-side client that opens it.
+pub fn encode_exec_stream_handshake(handshake: &ExecStreamHandshake) -> Result<Vec<u8>, CodecError> {
+    serde_json::to_vec(handshake)
+}
+
+/// Decodes an [`ExecStreamHandshake`] from a message payload — used by
+/// the guest agent's `EXEC_STREAM_PORT` connection handler.
+pub fn decode_exec_stream_handshake(payload: &[u8]) -> Result<ExecStreamHandshake, CodecError> {
+    serde_json::from_slice(payload)
+}
+
+/// Encodes one [`ExecStreamEvent`] — used by the guest agent as it
+/// streams a spawned process's output back.
+pub fn encode_exec_stream_event(event: &ExecStreamEvent) -> Result<Vec<u8>, CodecError> {
+    serde_json::to_vec(event)
+}
+
+/// Decodes an [`ExecStreamEvent`] from a message payload — used by the
+/// host-side client reading a running `EXEC_STREAM_PORT` connection.
+pub fn decode_exec_stream_event(payload: &[u8]) -> Result<ExecStreamEvent, CodecError> {
     serde_json::from_slice(payload)
 }
 

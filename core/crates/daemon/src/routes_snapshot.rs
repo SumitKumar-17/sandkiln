@@ -659,6 +659,7 @@ pub(crate) async fn resume_snapshot_by_id(
         // everything else in the snapshotted memory image. See
         // `crate::routes_mounts`'s module doc comment.
         mounts: snapshot.mounts,
+        log_sessions: Default::default(),
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
 
@@ -821,6 +822,7 @@ pub async fn fork_snapshot(
             // Carried straight over, not re-applied -- see
             // `resume_snapshot_by_id`'s identical field above.
             mounts: snapshot.mounts.clone(),
+            log_sessions: Default::default(),
         };
         (sandbox, snapshot.egress.clone(), snapshot.network.config.guest_ip, snapshot.network.config.tap_device.clone())
     };

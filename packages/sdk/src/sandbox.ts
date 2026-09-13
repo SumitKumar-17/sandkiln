@@ -14,12 +14,14 @@ import type {
   ExecRequestBody,
   ExecResponseBody,
   ExecResult,
+  ExecStreamSession,
   ForkSnapshotResponseBody,
   GetOrCreateSandboxOptions,
   GetOrCreateSandboxRequestBody,
   GetOrCreateSandboxResponseBody,
   ListDirRequestBody,
   ListDirResponseBody,
+  ListExecStreamsResponseBody,
   ListSandboxesOptions,
   ListSandboxesResponseBody,
   ListSnapshotsOptions,
@@ -40,6 +42,8 @@ import type {
   SandboxOptions,
   SnapshotInfo,
   SnapshotSandboxResponseBody,
+  StartExecStreamRequestBody,
+  StartExecStreamResponseBody,
   StopSandboxResponseBody,
   SymlinkRequestBody,
   TruncateRequestBody,
@@ -300,6 +304,74 @@ export class Sandbox {
     const url = new URL(`${wsBaseUrl}/sandboxes/${encodeURIComponent(this.id)}/pty`);
     url.searchParams.set("cols", String(cols));
     url.searchParams.set("rows", String(rows));
+    if (this.client.authToken !== undefined) {
+      url.searchParams.set("token", this.client.authToken);
+    }
+    return new WebSocket(url);
+  }
+
+  /**
+   * Starts `command` running detached inside this sandbox and returns
+   * immediately with a session id — unlike `runCommand()`, this does not
+   * wait for it to finish, so it's the way to run something long-running
+   * (a build, a server, anything you want to watch without holding one
+   * HTTP request open for its whole lifetime). The command's output is
+   * captured by the daemon from the moment it starts, independent of
+   * whether anything is attached — call `attachLogs(sessionId)` any
+   * number of times, whenever you want, to see everything captured so
+   * far plus a live tail of anything new. See `ROADMAP.md`'s CLI section
+   * for the feature this backs (`kiln logs`/`kiln sandbox exec-stream`).
+   *
+   * Not carried across `resume()`/`fork()`/a restored checkpoint, and
+   * doesn't survive the daemon restarting — see
+   * `routes_logs`'s own module doc comment in the daemon for why.
+   */
+  async execStream(command: string, args: string[] = []): Promise<string> {
+    const requestBody: StartExecStreamRequestBody = { command, args };
+    const body = await request<StartExecStreamResponseBody>({
+      ...this.client,
+      method: "POST",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/exec-stream`,
+      body: requestBody,
+    });
+    return body.id;
+  }
+
+  /** Lists every streamed background exec session currently tracked
+   * against this sandbox (see `execStream()`), whether still running or
+   * already finished. */
+  async listExecStreams(): Promise<ExecStreamSession[]> {
+    const body = await request<ListExecStreamsResponseBody>({
+      ...this.client,
+      method: "GET",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/exec-stream`,
+    });
+    return body.sessions.map((s) => ({
+      id: s.id,
+      command: s.command,
+      args: s.args,
+      startedAt: new Date(s.started_at_unix * 1000),
+      exitCode: s.exit_code,
+    }));
+  }
+
+  /**
+   * Attaches to one `execStream()` session's output: the returned
+   * `WebSocket` first replays everything captured since the session
+   * started, then live-tails anything new, whether or not the process
+   * has already finished by the time you attach — reconnecting later
+   * (even after this connection closes) sees the same full history
+   * again, since the daemon does the buffering, not this connection.
+   * Same runtime requirement as `pty()` (Node.js >= 22, or a browser).
+   */
+  attachLogs(sessionId: string): WebSocket {
+    if (typeof WebSocket === "undefined") {
+      throw new Error(
+        "Sandbox.attachLogs() requires a runtime with a global WebSocket implementation (Node.js >= 22, or any browser) — this runtime doesn't have one.",
+      );
+    }
+    const wsBaseUrl = this.client.baseUrl.replace(/^http/, "ws");
+    const url = new URL(`${wsBaseUrl}/sandboxes/${encodeURIComponent(this.id)}/exec-stream/${encodeURIComponent(sessionId)}/logs`);
     if (this.client.authToken !== undefined) {
       url.searchParams.set("token", this.client.authToken);
     }

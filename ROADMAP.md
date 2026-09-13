@@ -101,11 +101,8 @@ outbound HTTP both still work.
   and fixed. **Published**:
   [npmjs.com/package/sandkiln](https://www.npmjs.com/package/sandkiln)
   (0.2.0, with signed provenance from the CI build — includes everything
-  in this bullet). Still open: streamed logs, once the daemon can stream
-  them — the shape worth copying when that's built is a replay-then-
-  live-tail model (reconnecting gets everything since the process
-  started, not just what's emitted from that point on), not just a bare
-  live tail.
+  in this bullet, though `execStream`/`listExecStreams`/`attachLogs`
+  below haven't been published under a new version yet).
 - **Done: full filesystem operations** — `chmod`/`chown`/`mkdir`
   (with `-p`-style `parents`)/`rename`/`copy`/`symlink`/`readlink`/
   `truncate`/directory listing with metadata (name, is-dir, is-symlink,
@@ -155,7 +152,9 @@ outbound HTTP both still work.
   live end to end. `cp` (a single unified copy command) was simplified to
   explicit `read`/`write` subcommands instead — less magic than parsing a
   `sandbox:path` prefix syntax for a first version.
-- Still open: `kiln logs -f`, once the daemon can stream output.
+- **Done: `kiln sandbox exec-stream`/`kiln sandbox logs`** — see the
+  "Dev servers and live preview" section's streamed background exec
+  entry.
 - Built for manual testing, agentic workflows, and debugging — mirrors the
   SDK surface, usable standalone without writing code.
 - **Published**: [npmjs.com/package/sandkiln-cli](https://www.npmjs.com/package/sandkiln-cli)
@@ -626,6 +625,48 @@ outbound HTTP both still work.
     need a small control-message side-channel over the same WebSocket
     (e.g. a JSON resize message multiplexed alongside the raw byte
     stream) to change it mid-session.
+- **Done: streamed background exec sessions (`kiln sandbox exec-stream`/
+  `kiln sandbox logs`).** Distinct from both batch `exec` (blocks for one
+  request, returns one stdout/stderr blob) and `pty` (a live interactive
+  shell): this runs a command detached inside the guest and lets any
+  number of callers attach to its output over time, each getting a
+  **replay of everything captured so far, then a live tail** — the exact
+  model this section used to call out as the shape worth copying once
+  built. `POST /sandboxes/:id/exec-stream` starts it and returns a
+  session id immediately; `GET /sandboxes/:id/exec-stream` lists sessions
+  (running or finished); `GET /sandboxes/:id/exec-stream/:id/logs`
+  (WebSocket) attaches. A third, dedicated vsock port
+  (`EXEC_STREAM_PORT`, alongside `AGENT_PORT`/`PTY_PORT`) carries framed
+  `ExecStreamEvent`s (stdout/stderr chunks, then one `Exit`) from a
+  spawned child process with no controlling terminal — the daemon does
+  the actual buffering (a bounded 1MiB ring buffer plus a
+  `tokio::sync::broadcast` fan-out, in `crate::log_session::LogSession`),
+  not the guest, since a session has to keep capturing output whether or
+  not anyone is currently watching. `Sandbox.execStream()`/
+  `.listExecStreams()`/`.attachLogs()` in the JS/TS SDK, `kiln sandbox
+  exec-stream <id> -- <command> [args...]` (start + follow in one) and
+  `kiln sandbox logs <id> [session-id]` (list, or attach/follow an
+  existing one — including one already finished) in the CLI, both
+  resolving to the remote command's own exit code.
+  Live-verified end to end (start a multi-line, multi-second command;
+  attach mid-stream and see replay-then-live-tail; reattach after it
+  finishes and see a full instant replay; two concurrent attaches to the
+  same session, one joining late, both get the complete ordered log) plus
+  a new `scripts/integration-tests/23-exec-stream-logs.sh` (a small Node
+  WebSocket helper, same pattern as `17-pty.sh`'s).
+  - Not carried across resume/fork/restore, and doesn't survive a daemon
+    restart — same in-memory-only scope as `Sandbox::pty_session_count`
+    already has, not a new limitation. A session is daemon-process state
+    tied to one specific `Sandbox` value, not the guest's own memory.
+  - No kill/cancel endpoint yet (`DELETE .../exec-stream/:id` isn't
+    implemented) — a deliberate v1 scope cut, not an oversight: the
+    guest agent would need a way to signal a specific spawned child by
+    id, which today's "one connection, one process, no server-side
+    registry" design (see `sandkiln-guest-agent`'s `exec_stream.rs`)
+    doesn't have a hook for yet.
+  - No concurrent-session cap, unlike PTY's `MAX_PTY_SESSIONS_PER_SANDBOX`
+    — each session gets its own independent vsock connection and child
+    process, with no shared resource between sessions to contend over.
 
 ## Tags and sandbox metadata
 

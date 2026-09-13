@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod error;
 mod idle_reaper;
+mod log_session;
 mod metrics;
 mod pool;
 mod pool_claim;
@@ -11,6 +12,7 @@ mod routes_drives;
 mod routes_exec;
 mod routes_fs;
 mod routes_images;
+mod routes_logs;
 mod routes_metrics;
 mod routes_mounts;
 mod routes_pool;
@@ -171,17 +173,20 @@ async fn async_main() {
         .route("/sandboxes/:id/readlink", post(routes_fs::readlink))
         .route("/sandboxes/:id/truncate", post(routes_fs::truncate))
         .route("/sandboxes/:id/list-dir", post(routes_fs::list_dir))
+        .route("/sandboxes/:id/exec-stream", post(routes_logs::start_exec_stream).get(routes_logs::list_exec_streams))
         .merge(routes_mounts::router())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
     // Its own router, guarded by `auth::require_preview_token` rather than
     // `auth::require_bearer_token` — for the same reason `preview_routes`
     // below is: neither a browser's nor Node's native `WebSocket`
-    // constructor can set a custom `Authorization` header, so a PTY
-    // session needs the same `?token=` query-parameter fallback preview
-    // URLs already use.
-    let pty_routes = Router::new()
+    // constructor can set a custom `Authorization` header, so every
+    // WebSocket-upgrading endpoint (PTY, and streamed exec-stream logs)
+    // needs the same `?token=` query-parameter fallback preview URLs
+    // already use.
+    let websocket_routes = Router::new()
         .route("/sandboxes/:id/pty", get(routes_pty::pty_session))
+        .route("/sandboxes/:id/exec-stream/:session_id/logs", get(routes_logs::attach_logs))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_preview_token));
 
     let drive_routes = Router::new()
@@ -228,7 +233,7 @@ async fn async_main() {
         .merge(pool_routes)
         .merge(snapshot_routes)
         .merge(preview_routes)
-        .merge(pty_routes)
+        .merge(websocket_routes)
         .layer(TraceLayer::new_for_http())
         // Outermost: wraps everything above, including `TraceLayer`, so a
         // caller-supplied or freshly generated request id is already

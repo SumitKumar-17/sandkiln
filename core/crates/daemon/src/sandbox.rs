@@ -144,4 +144,11 @@ pub struct Sandbox {
     /// /sandboxes/:id/mounts` has something to list without needing a
     /// live round-trip into the guest to ask.
     pub mounts: Vec<Mount>,
+    /// Streamed background exec sessions currently tracked against this
+    /// sandbox (`kiln logs -f`'s underlying mechanism) — see
+    /// `crate::routes_logs`'s module doc comment. Not carried across
+    /// resume/fork/restore, same convention as `pty_session_count` just
+    /// above: always freshly empty on a new `Sandbox` value, even one
+    /// representing a resumed/forked/restored guest.
+    pub log_sessions: Mutex<HashMap<String, Arc<crate::log_session::LogSession>>>,
 }

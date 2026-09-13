@@ -14,6 +14,23 @@ Changelog](https://keepachangelog.com/).
 ## Unreleased
 
 ### Added
+- Streamed background exec sessions (`kiln sandbox exec-stream`/`kiln
+  sandbox logs`), plus `Sandbox.execStream()`/`.listExecStreams()`/
+  `.attachLogs()` in the JS/TS SDK (not published under a new npm
+  version yet). Runs a command detached inside the guest over a new,
+  dedicated vsock port (`EXEC_STREAM_PORT`) and lets any number of
+  callers attach to its output over time — each attach gets a replay of
+  everything captured so far, then a live tail, whether the process is
+  still running or already finished. See `ROADMAP.md`'s "Dev servers and
+  live preview" section for the full design.
+  - Live-verified end to end: replay-then-live-tail while a multi-second
+    command is still running, instant full replay on reattach after it
+    finishes, and two concurrent attaches (one joining a second late)
+    both getting the complete ordered log. New
+    `scripts/integration-tests/23-exec-stream-logs.sh`.
+  - Deliberately out of scope for this first version: no kill/cancel
+    endpoint, and no concurrent-session cap (unlike PTY's) — see
+    `ROADMAP.md`'s entry for why.
 - Remote storage mounts (daemon only — no SDK/CLI change, nothing to
   publish yet). `POST/GET/DELETE /sandboxes/:id/mounts` mounts an
   S3-compatible bucket into a sandbox via `rclone mount`, running

@@ -14,8 +14,9 @@ straight to the SDK.
 ## Files
 
 - `src/index.ts` — the CLI. `sandbox create|get-or-create|by-name|ls|rm|
-  exec|read|write|preview|pty|snapshot|resume|fork|chmod|chown|mkdir|
-  rename|cp|symlink|readlink|truncate|ls-dir` and `image create|ls|rm`,
+  exec|read|write|preview|pty|exec-stream|logs|snapshot|resume|fork|
+  chmod|chown|mkdir|rename|cp|symlink|readlink|truncate|ls-dir` and
+  `image create|ls|rm`,
   `drive create|ls|rm`, `pool create|ls|rm` subcommands, each a thin call
   into `Sandbox`/`Sandbox.attach()`/`Image`/`Drive`/`Pool`. `pool create
   <id>` has no "claim" counterpart at all — claiming a warm instance is
@@ -35,6 +36,15 @@ straight to the SDK.
   similar hang ever shows up again: check whether the *server* side is
   actually closing the connection before assuming it's a local handle
   leak.
+  `exec-stream <id> <command> [args...]` starts a background command
+  (`Sandbox.execStream`) then immediately attaches and follows it
+  (`followLogs`, shared with `logs`); `logs <id> [session-id]` lists
+  sessions with no id, or attaches/follows an existing one with one —
+  both print a replay-then-live-tail of the command's output and resolve
+  the process's own exit code from the daemon's bracketed
+  `[process exited with code N]` notice (parsed out of the plain-text
+  notices `routes_logs.rs` sends alongside real output, not a separate
+  structured message), which becomes this CLI invocation's own exit code.
   `resume`/`fork`/`get-or-create`/`by-name` call the SDK's static
   `Sandbox.resume`/`Sandbox.fork`/`Sandbox.getOrCreate`/`Sandbox.byName`
   directly (none acts on an already-existing handle — `resume`/`fork`

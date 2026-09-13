@@ -4,6 +4,7 @@ import { InvalidArgumentError } from "commander";
 import {
   formatDirEntryList,
   formatDriveList,
+  formatExecStreamList,
   formatImageList,
   formatPoolList,
   formatSandboxList,
@@ -186,6 +187,21 @@ test("formatPoolList renders id, image, resources, warm/target counts, and claim
   assert.equal(
     formatPoolList(pools),
     "pool-1  -  2vcpu/512MiB  warm 1/2  claimed 0\n" + "pool-2  img-1  4vcpu/1024MiB  warm 0/1  claimed 2/3\n",
+  );
+});
+
+test("formatExecStreamList reports an empty list distinctly", () => {
+  assert.equal(formatExecStreamList([]), "no exec-stream sessions\n");
+});
+
+test("formatExecStreamList renders id, timestamp, status, and the full command per line", () => {
+  const sessions = [
+    { id: "s1", command: "sh", args: ["-c", "sleep 5"], startedAt: new Date("2026-01-01T00:00:00.000Z"), exitCode: null },
+    { id: "s2", command: "echo", args: ["hi"], startedAt: new Date("2026-01-01T00:00:05.000Z"), exitCode: 0 },
+  ];
+  assert.equal(
+    formatExecStreamList(sessions),
+    "s1  2026-01-01T00:00:00.000Z  running  sh -c sleep 5\n" + "s2  2026-01-01T00:00:05.000Z  exited 0  echo hi\n",
   );
 });
 

@@ -13,7 +13,7 @@ sandkiln-protocol = { path = "../protocol" }
 sandkiln-vmm = { path = "../vmm" }
 sandkiln-store = { path = "../store" }
 axum = { version = "0.7", features = ["ws"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 # For splitting/pumping a WebSocket (Stream + Sink) against an async
 # UnixStream in routes_pty.rs -- already compiled in transitively via
 # axum itself, naming it directly costs nothing new.

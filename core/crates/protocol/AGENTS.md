@@ -39,9 +39,11 @@ that code belongs in `sandkiln-vmm` or `sandkiln-guest-agent` instead.
 - `lib.rs` — re-exports, plus `AGENT_PORT` (the fixed vsock port both
   sides agree on for `Request`/`Response` traffic), `PTY_PORT` (a
   *second*, dedicated vsock port for interactive PTY sessions — see
-  `PtyHandshake` below), and the `encode_*`/`decode_*` helper functions
-  that keep `serde_json` an implementation detail callers don't need to
-  depend on directly.
+  `PtyHandshake` below), `EXEC_STREAM_PORT` (a *third* port for streamed
+  background exec sessions — see `ExecStreamHandshake`/`ExecStreamEvent`
+  below), and the `encode_*`/`decode_*` helper functions that keep
+  `serde_json` an implementation detail callers don't need to depend on
+  directly.
 - `messages.rs` also defines `PtyHandshake { cols, rows }` — not a
   `Request`/`Response` variant, since a PTY session isn't
   request/response shaped at all. A `PTY_PORT` connection reads exactly
@@ -49,6 +51,16 @@ that code belongs in `sandkiln-vmm` or `sandkiln-guest-agent` instead.
   life; see `sandkiln-guest-agent`'s `pty.rs` and
   `core/crates/daemon/src/routes_pty.rs` for the two ends of that
   connection.
+- `messages.rs` also defines `ExecStreamHandshake { command, args }` and
+  `ExecStreamEvent` (`Stdout`/`Stderr`/`Exit` — an internally tagged enum,
+  same shape convention as `Response`) for `EXEC_STREAM_PORT`. Unlike
+  `PTY_PORT`, framing never stops here: a connection reads one
+  `ExecStreamHandshake`, then keeps reading framed `ExecStreamEvent`s
+  (never raw bytes) until an `Exit` event, because a caller needs
+  structured output (which stream, and the process's exit code), not an
+  undifferentiated byte stream. See `sandkiln-guest-agent`'s
+  `exec_stream.rs` and `core/crates/daemon/src/routes_logs.rs` for the
+  two ends.
 
 ## Changing the protocol
 
