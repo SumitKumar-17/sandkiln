@@ -45,11 +45,11 @@ curl -s -X POST "$BASE/sandboxes/get-or-create" \
 
 | Route | What it does |
 |---|---|
-| `POST /sandboxes` | Boot a sandbox. Body: `name?`, `tags?`, `vcpu_count?`, `mem_size_mib?`, `image_id?`, `drives?`, `rate_limit?` (`{bandwidth_bytes_per_sec?, ops_per_sec?}`, Firecracker's own token-bucket limiter). A request with no `drives`/`rate_limit` matching a configured pool's image/resources transparently resumes a warm snapshot instead of cold-booting — see [Startup latency & the pre-warmed pool](../../architecture/startup-latency/). |
+| `POST /sandboxes` | Boot a sandbox. Body: `name?`, `tags?`, `vcpu_count?`, `mem_size_mib?`, `image_id?`, `drives?`, `rate_limit?` (`{bandwidth_bytes_per_sec?, ops_per_sec?}`, Firecracker's own token-bucket limiter), `egress?` (`{mode: "allow_all"\|"deny_all", allow_cidrs?, deny_cidrs?}` — see [Networking & isolation](../../concepts/networking/)). A request with no `drives`/`rate_limit` matching a configured pool's image/resources transparently resumes a warm snapshot instead of cold-booting — see [Startup latency & the pre-warmed pool](../../architecture/startup-latency/); `egress` doesn't disqualify a pool match, it's applied fresh after either way. |
 | `GET /sandboxes` | List sandboxes. `?tag.<key>=<value>` filters (repeatable, all must match). |
 | `GET /sandboxes/history` | Durable history of every sandbox that ever existed and how it ended (`sqlite`-backed, survives a daemon restart, unlike this list itself). `?live_only=true`, `?limit=<n>`. |
 | `GET /sandboxes/by-name/:name` | Resolve a name to a *live* sandbox's id. `409` if the name currently belongs to a held snapshot instead. |
-| `POST /sandboxes/get-or-create` | Resolve-or-create by name in one call. Body: `name` (required), `tags?`, `vcpu_count?`, `mem_size_mib?`, `image_id?`, `rate_limit?`, `drives?` (the last four used only if a fresh sandbox is created). |
+| `POST /sandboxes/get-or-create` | Resolve-or-create by name in one call. Body: `name` (required), `tags?`, `vcpu_count?`, `mem_size_mib?`, `image_id?`, `rate_limit?`, `drives?`, `egress?` (the last five used only if a fresh sandbox is created — resuming an existing snapshot always uses what was recorded on it). |
 | `DELETE /sandboxes/:id` | Stop a sandbox. Preserves state as a snapshot by default (`200`, `{"kept": true, "snapshot_id": "..."}`); `?keep=false` fully destroys instead (`204`). See [Sandbox lifecycle](../../concepts/sandbox-lifecycle/). |
 | `POST /sandboxes/:id/exec` | Run a command. Body: `{"command": "...", "args": [...]}`. Returns `stdout`/`stderr`/`exit_code`. |
 | `POST /sandboxes/:id/read-file` | Body: `{"path": "..."}`. Returns `{"content_base64": "..."}`. |
@@ -70,10 +70,18 @@ curl -s -X POST "$BASE/sandboxes/get-or-create" \
 | Route | What it does |
 |---|---|
 | `POST /sandboxes/:id/snapshot` | Pause, snapshot, stop. Returns a snapshot id. |
-| `GET /snapshots` | List snapshots. `?source_sandbox_id=<id>` narrows to the one taken from that sandbox. |
-| `POST /snapshots/:id/resume` | Boot a new sandbox from the snapshot, **consuming** it. |
+| `GET /snapshots` | List snapshots. `?source_sandbox_id=<id>` narrows to the one taken from that sandbox; `?parent_snapshot_id=<id>` narrows to whatever was forked/resumed from that snapshot (can be more than one, over time). Each result includes `parent_snapshot_id` — see [Snapshots, resume, and fork](../../concepts/snapshots/#lineage--what-a-snapshot-came-from-and-what-came-from-it). |
+| `POST /snapshots/:id/resume` | Boot a new sandbox from the snapshot, consuming the record. Retires the underlying checkpoint into `GET /snapshots/history` by default rather than deleting it — see [Time-travel restore](../../concepts/snapshots/#time-travel-restore--going-back-to-an-earlier-checkpoint). `?retain_history=false` opts back into the original, fully-destructive behavior. |
 | `POST /snapshots/:id/fork` | Boot a new sandbox from the snapshot **without** consuming it. `409` while an earlier fork is still live. |
 | `DELETE /snapshots/:id` | Delete a snapshot outright. `409` while a fork of it is still live. |
+
+### Snapshot history (time-travel restore)
+
+| Route | What it does |
+|---|---|
+| `GET /snapshots/history` | List retired checkpoints — anything a resume retained instead of deleting. Same `?source_sandbox_id=`/`?parent_snapshot_id=` filters as `GET /snapshots`. |
+| `POST /snapshots/history/:id/restore` | Boot a new sandbox from a retired checkpoint. Does **not** consume it — restorable again later. `409` (naming the current holder) while anything live or held shares that checkpoint's frozen network identity. |
+| `DELETE /snapshots/history/:id` | Delete a retired checkpoint outright, reclaiming its disk usage (a full guest-memory dump plus a private rootfs copy) — there's no automatic expiry yet. |
 
 ## Drives
 

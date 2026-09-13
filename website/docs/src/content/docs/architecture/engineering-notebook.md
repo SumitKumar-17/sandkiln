@@ -1,9 +1,9 @@
 ---
 title: "Engineering notebook: real bugs found building this"
-description: What broke while building interactive terminals and pre-warmed pools, how each was actually found, and what's still genuinely unresolved.
+description: What broke building interactive terminals, pre-warmed pools, snapshot lineage, and time-travel restore, how each was actually found, and what's still genuinely unresolved.
 ---
 
-`architecture/bug-hunt-vsock-timeout` tells one story in detail — a stop that could hang forever, found by actually running the failure case rather than in review. This page collects the others, from building interactive terminal access and pre-warmed pools. Same rule as everywhere else on this site: nothing here is stated unless it was actually observed running against real Firecracker/KVM hardware.
+`architecture/bug-hunt-vsock-timeout` tells one story in detail — a stop that could hang forever, found by actually running the failure case rather than in review. This page collects the others, from building interactive terminal access, pre-warmed pools, snapshot lineage, and time-travel restore. Same rule as everywhere else on this site: nothing here is stated unless it was actually observed running against real Firecracker/KVM hardware.
 
 ## The PTY session that hung for exactly 10 seconds
 
@@ -41,6 +41,24 @@ Once the health check above existed, its failure path was slow — about 10.3 se
 
 **The fix**: a `force_stop` path that skips the sync call entirely, used specifically when a VM is already known to be dead — there's nothing to flush on a sandbox that never got the chance to do any real work. This alone roughly halved the fallback's cost, from ~10.3 seconds to ~5.4 seconds.
 
+## The lineage field that pointed at the wrong thing
+
+Building snapshot lineage (`parent_snapshot_id` — see [Snapshots, resume, and fork](../../concepts/snapshots/#lineage--what-a-snapshot-came-from-and-what-came-from-it)) needed one thing: when a sandbox is snapshotted, record what snapshot *it* was resumed or forked from. The daemon already had a field that looked like exactly this — `Sandbox::source_snapshot_id` — so the first version of lineage tracking just read that.
+
+It compiled, passed every test written against it, and was wrong for the single most common case. `source_snapshot_id` isn't a lineage pointer at all — it's deliberately `None` on resume (so a resumed sandbox stays eligible to be snapshotted again) and only ever `Some` on a fork, specifically so an existing check could refuse to re-snapshot a fork (it shares a live resource with its source). Reusing it for lineage meant every *resumed* sandbox — the ordinary, common path — silently reported no lineage at all, while the one case where the field *was* set (fork) is exactly the case that can never produce a new snapshot to attach a lineage pointer to in the first place. The bug was invisible on paper: right types, right names, clean compile.
+
+**Caught live**, not by re-reading the code: a resume-then-snapshot-then-query-by-parent-id check against the real running daemon came back empty. **The fix**: a second, dedicated `Sandbox::parent_snapshot_id` field — `Some` on both resume and fork, `None` only for a genuine cold boot — decoupled entirely from `source_snapshot_id`'s unrelated job of guarding re-snapshotting.
+
+## Fork's shared rootfs file
+
+[Persistence model](../persistence-model/) tells this one in full — a fork sharing its source snapshot's rootfs *file* directly (not a private copy) turned out to be a real, sequential corruption bug, not just a theoretical risk: fork, mutate the shared file, stop the fork, resume the original snapshot directly, and the original's memory state disagrees with what's actually on disk. Found live while building time-travel restore, using the exact same rootfs-cloning fix that feature needed anyway.
+
+## The MMDS refresh that sometimes fails right after a resume
+
+Building on the earlier MMDS story above: even with the full re-initialization sequence in place, `Vm::update_metadata`'s first call right after a pool claim's resume can still fail outright with Firecracker's `"operation not supported after starting the microVM"` on `/mmds/config` — not the "not initialized" error from before, a different rejection. Confirmed to be pre-existing and load-related, not caused by any one feature: the identical failure reproduces against a completely unmodified daemon, roughly 1 run in 3 under this dev box's own test-suite load, 0 in 3 when nothing else is competing for CPU/scheduling at the same time.
+
+**The fix so far**: a bounded retry (up to ~3 seconds, roughly matching how long the equivalent guest-visible check already waits) around the `update_metadata` call, rather than treating one failed attempt as final. This closes the practical impact but not the actual question — see "Currently open" below.
+
 ## Injecting into the wrong file
 
 Not a code bug — a tooling gap that caused a real mistake during this project's own development. Getting a guest-agent change into a running sandbox is a two-step process: build the agent binary for the guest's target, then inject it into a rootfs image file. The second step needs an exact path, and there was more than one plausibly-named `.ext4` file on the dev box for unrelated reasons. The wrong one got injected once — the daemon kept silently booting from the old, un-updated image, and the mismatch wasn't obvious until sandboxes didn't behave like the just-built code should have.
@@ -54,4 +72,6 @@ Honest status on what's still unresolved, not swept into a changelog and forgott
 - **The guest-kernel-panic-on-resume root cause is unconfirmed.** TSC/clock-source drift is a hypothesis, not a diagnosis. Whether this is specific to this dev box's kernel/KVM/CPU combination, this project's own guest kernel build, or a broader Firecracker snapshot/restore characteristic is genuinely open, and worth real investigation before assuming it generalizes to other hardware.
 - **Pool configuration is in-memory only** — it doesn't survive a daemon restart the way snapshot records do, and a restart can orphan an already-warm snapshot with no pool configuration left to claim or clean it up.
 - **Jailer hardening is opt-in and still not proven on real hardware.** The first real-hardware attempt failed outright (every sandbox create returned `500`) because the `jailer` binary itself needs a one-time `setuid-root` step that hadn't been applied yet — root-caused via the same console-log capture used above, not guessed at. Not recommended as-is for a genuinely adversarial workload until it's actually verified end to end.
+- **Why `/mmds/config` sometimes rejects a post-resume call is unconfirmed.** The retry above closes the practical failure, not the open question — whether it's a genuine settling-window race in Firecracker's own internal state machine, or something more specific to this dev box's load characteristics, is an informed guess, not a diagnosis.
+- **Retired checkpoints (time-travel restore) have no automatic expiry.** Every resume keeps a full guest-memory dump plus a private rootfs copy by default, with no size or age-based cleanup — `DELETE /snapshots/history/:id` exists for manual reclaim, but nothing manages this automatically yet. See [Persistence model](../persistence-model/) for how much disk this can actually consume if ignored.
 - See the Roadmap page on the main site and the repository's own `ROADMAP.md` for the full, current list of what's shipped, partial, and not started — this page covers what broke and got fixed, not the complete feature status.

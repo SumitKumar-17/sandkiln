@@ -33,6 +33,24 @@ curl -s -H "X-metadata-token: $TOKEN" -H "Accept: application/json" http://169.2
 
 `Accept: application/json` matters — a `GET` with no `Accept` header returns an AWS-IMDS-style newline-separated list of top-level key names instead of the actual value, a real Firecracker behavior worth knowing about, not a sandkiln bug.
 
-## What's not done yet
+## Egress (outbound network) policy
 
-There's no per-sandbox egress policy yet — every sandbox has full outbound access by default. A domain/IP/port allow-deny policy, enforced at the DNS proxy layer before a connection ever opens, is on the project's Roadmap page but not implemented.
+By default every sandbox keeps unrestricted outbound access — the behavior above, unchanged. An optional `egress` field on `POST /sandboxes` (and `POST /sandboxes/get-or-create`) restricts it per sandbox:
+
+```json
+{
+  "egress": {
+    "mode": "deny_all",
+    "allow_cidrs": ["10.0.0.0/8"],
+    "deny_cidrs": []
+  }
+}
+```
+
+`mode` is `allow_all` (today's default-open behavior, minus whatever `deny_cidrs` subtracts from it) or `deny_all` (nothing outbound except what `allow_cidrs` opens back up). Enforced with one dedicated iptables chain per sandbox, named from its tap device, with a single jump rule inserted ahead of the daemon's own bridge-wide rule so only that sandbox's traffic is affected. `deny_cidrs` rules always win over `allow_cidrs` on overlap — iptables evaluates a chain top to bottom, first match wins, and every deny rule is placed before every allow rule, so there's no special-casing needed to make deny authoritative.
+
+Rules match only traffic actually leaving through the daemon's own uplink interface, the same scoping the bridge-wide rule already uses — which has a useful side effect: DNS queries to the bridge's own gateway IP never transit the uplink at all, so they're structurally exempt from any egress policy without needing an explicit allowlist entry. Even a `deny_all` sandbox with nothing allowed can still resolve names; it just can't reach anything past the gateway that isn't explicitly permitted.
+
+A policy is tied to the sandbox's network lease, not its VM: applied once the lease goes live (fresh boot, pool claim, resume, fork, or a [time-travel restore](../snapshots/)) and removed only when the lease is finally released (a full destroy, or deleting a held snapshot or retired checkpoint) — a plain stop-and-preserve leaves the chain dormant but intact, exactly like the tap device it's attached to.
+
+**Not yet built**: domain-level rules (would need the shared DNS proxy, currently one instance with no per-source differentiation, to become source-IP-aware — a substantially bigger change) and port-level matching (`-p tcp --dport`, a straightforward extension of the same rule shape, just not built yet). IPv4 only, matching every other networking type in this project. No SDK/CLI surface yet — daemon HTTP API only, for now.

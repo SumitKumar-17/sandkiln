@@ -106,7 +106,6 @@ import Footer from "../components/Footer.astro";
         <span class="tag">Ideas — not shipped, not verified</span>
         <h3>A few more directions worth a real look</h3>
         <p>Flagged explicitly as brainstorming, not results, per this project's own standard of never stating an unverified claim as fact:</p>
-        <p><b>A pool <code>max_count</code> ceiling with queueing.</b> Today a pool's warm buffer has a target size but no cap on total concurrent instances — bounding that (and queuing a claim that arrives at the ceiling instead of either rejecting it or growing unbounded) is a natural extension of the same mechanism, not a new one.</p>
         <p><b>Whether jailer's chroot hard-linking adds measurable overhead.</b> Jailer boots via a chroot with hard-linked kernel/rootfs/drive copies rather than the direct paths a non-jailed boot uses — nobody has benchmarked whether that link step itself is visible next to the ~32ms boot number, since jailer hasn't been proven on real hardware yet at all (see the Roadmap page).</p>
         <p><b>Whether the network lease step has room to shrink.</b> The lease already runs concurrently with the rootfs copy rather than after it, so it's not on the critical path today unless the copy itself gets fast enough (via the CoW work above) that the lease becomes the new tail — worth re-measuring once that happens, not before.</p>
       </div>
