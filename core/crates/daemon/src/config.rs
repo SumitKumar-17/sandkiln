@@ -129,22 +129,15 @@ pub struct Config {
     /// and `crate::snapshot`'s module doc comment.
     ///
     /// **Only `state.snap`/`mem.bin` move — the rootfs backing file never
-    /// does, found the hard way** (see
-    /// `crate::snapshot::move_snapshot_files`'s own doc comment for the
-    /// real resume failure that proved it): Firecracker bakes the rootfs
-    /// file's absolute host path into `state.snap` at snapshot time, with
-    /// no override at `/snapshot/load` time, so moving it would silently
-    /// break every future resume/fork. This is a genuine, if partial, win
-    /// rather than the complete one originally hoped for — `mem.bin`
-    /// alone is exactly the guest's configured RAM size, often comparable
-    /// to or larger than the rootfs copy, so archiving still meaningfully
-    /// reduces what an idle snapshot leaves sitting on hot storage
-    /// (`snapshots_root()`'s default location under `$TMPDIR`, often
-    /// tmpfs) — just not all of it. This is also deliberately **not** the
-    /// "remote storage" archive tier `ROADMAP.md` originally sketched
-    /// (moving to an S3-compatible store, which needs the not-yet-built
-    /// remote-storage-mounts feature first) — `archive_dir` is still a
-    /// local filesystem path, just a separately configured one.
+    /// does** (see `crate::snapshot::move_snapshot_files`'s own doc
+    /// comment for why). A genuine, if partial, win rather than the
+    /// complete one originally hoped for — `mem.bin` alone is often
+    /// comparable to or larger than the rootfs copy, so archiving still
+    /// meaningfully reduces hot-storage usage, just not all of it. Also
+    /// deliberately **not** the "remote storage" archive tier
+    /// `ROADMAP.md` originally sketched (an S3-compatible store, needing
+    /// the not-yet-built remote-storage-mounts feature) — `archive_dir`
+    /// is still a local filesystem path, just a separately configured one.
     pub archive_timeout: Option<Duration>,
     /// Where archived snapshots live — see `archive_timeout`. Only
     /// meaningful when `archive_timeout` is set, but always has a value

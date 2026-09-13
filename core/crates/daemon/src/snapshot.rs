@@ -236,24 +236,16 @@ pub fn archive_snapshot_dir(archive_root: &Path, snapshot_id: &str) -> PathBuf {
 /// currently live into `dest_dir` (created if needed), renaming each to
 /// this module's own fixed filenames.
 ///
-/// **Deliberately does not touch `snapshot.rootfs_path` at all — found
-/// live, the hard way.** An earlier version of this function also moved
-/// the rootfs file, on the assumption that `Vm::resume`'s `/snapshot/load`
-/// call would happily use `Snapshot::rootfs_path`'s current value the way
-/// `snapshot_path`/`mem_file_path` are passed fresh at load time. It
-/// doesn't: Firecracker bakes the rootfs backing file's *absolute host
-/// path* into `state.snap` itself at snapshot time, and `/snapshot/load`
-/// has no override for it (unlike `mem_backend.backend_path`, which is a
-/// real load-time parameter, or `vsock_override`) — confirmed by an
-/// actual resume failure after moving it: `"Error manipulating the
-/// backing file: No such file or directory ... /tmp/sandkiln-rootfs-
-/// <id>.ext4"`, Firecracker still looking for the file at its original
-/// path regardless of where the daemon's own `Snapshot` struct says it
-/// is now. The rootfs file has to stay exactly where it was created for
-/// as long as the snapshot might ever be resumed or forked — archiving
-/// only relocates the two files that genuinely can move, `state.snap`
-/// and `mem.bin` (often comparable to or larger than the rootfs copy
-/// anyway, since `mem.bin` is exactly the guest's configured RAM size).
+/// **Deliberately does not touch `snapshot.rootfs_path` at all.**
+/// Firecracker bakes the rootfs backing file's absolute host path into
+/// `state.snap` itself with no override at resume time, so moving it
+/// breaks every future resume/fork — confirmed by a real resume failure
+/// when an earlier version of this function moved it too. See the
+/// website's Persistence model architecture page (or `ROADMAP.md`'s
+/// "Persistence and snapshotting" section, tiered idle lifecycle entry)
+/// for the full incident and the general rootfs-is-a-path-not-a-value
+/// invariant it follows from. Archiving only relocates the two files
+/// that genuinely can move, `state.snap` and `mem.bin`.
 ///
 /// `snapshot`'s own path fields are updated **immediately after each
 /// individual file's move succeeds**, not all at once at the end — so if
