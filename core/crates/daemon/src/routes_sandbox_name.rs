@@ -96,6 +96,8 @@ pub struct GetOrCreateSandboxRequest {
     mem_size_mib: Option<u32>,
     #[serde(default)]
     rate_limit: Option<crate::routes_sandbox::RateLimitRequest>,
+    #[serde(default)]
+    egress: Option<crate::routes_sandbox::EgressPolicyRequest>,
 }
 
 #[derive(Serialize)]
@@ -135,7 +137,12 @@ pub async fn get_or_create_sandbox(
     match state.resolve_name(&request.name) {
         Some(NameResolution::Live(id)) => Ok(Json(GetOrCreateSandboxResponse { id, created: false })),
         Some(NameResolution::Snapshot(snapshot_id)) => {
-            let id = resume_snapshot_by_id(state, snapshot_id).await?;
+            // Always retains history -- resuming by name accepts no
+            // per-call overrides today, same as every other
+            // resume-by-name behavior (see this endpoint's own doc
+            // comment: "resuming an existing snapshot always uses what
+            // was recorded on it").
+            let id = resume_snapshot_by_id(state, snapshot_id, true).await?;
             Ok(Json(GetOrCreateSandboxResponse { id, created: false }))
         }
         None => {
@@ -147,6 +154,7 @@ pub async fn get_or_create_sandbox(
                 mem_size_mib: request.mem_size_mib,
                 image_id: None,
                 rate_limit: request.rate_limit,
+                egress: request.egress,
             };
             let id = create_sandbox_core(&state, create_request).await?;
             Ok(Json(GetOrCreateSandboxResponse { id, created: true }))

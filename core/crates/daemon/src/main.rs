@@ -4,6 +4,7 @@ mod error;
 mod idle_reaper;
 mod metrics;
 mod pool;
+mod pool_claim;
 mod pool_replenisher;
 mod request_id;
 mod routes_drives;
@@ -11,14 +12,17 @@ mod routes_exec;
 mod routes_fs;
 mod routes_images;
 mod routes_metrics;
+mod routes_mounts;
 mod routes_pool;
 mod routes_preview;
 mod routes_pty;
 mod routes_sandbox;
 mod routes_sandbox_name;
 mod routes_snapshot;
+mod routes_snapshot_history;
 mod sandbox;
 mod snapshot;
+mod snapshot_history;
 mod state;
 mod tracing_util;
 
@@ -78,8 +82,15 @@ async fn async_main() {
     // `net_manager`'s free pool (via `NetworkManager::reserve`, called
     // from `reconcile`) before any live `POST /sandboxes` request can
     // race it for the same tap.
-    let reconciled_snapshots = snapshot::reconcile(&net_manager);
+    let reconciled_snapshots = snapshot::reconcile(&net_manager, &config.archive_dir);
     tracing::info!(count = reconciled_snapshots.len(), "reconciled snapshots from disk");
+
+    // Order relative to `reconciled_snapshots` above doesn't matter --
+    // unlike that call, this never touches `net_manager` at all (a
+    // retired checkpoint holds no live lease to reclaim, see
+    // `snapshot_history`'s module doc comment).
+    let reconciled_retired = snapshot_history::reconcile();
+    tracing::info!(count = reconciled_retired.len(), "reconciled retired snapshot checkpoints from disk");
 
     let history = HistoryStore::open(&config.history_db_path)
         .expect("open/create the sandbox history database (SANDKILN_HISTORY_DB_PATH)");
@@ -122,20 +133,24 @@ async fn async_main() {
     let auth_enabled = config.auth_token.is_some();
     let idle_timeout = config.idle_timeout;
     let auto_suspend_timeout = config.auto_suspend_timeout;
-    let state = Arc::new(AppState::new(config, net_manager, drives, images, reconciled_snapshots, history));
+    let archive_timeout = config.archive_timeout;
+    let archive_dir = config.archive_dir.clone();
+    let state = Arc::new(AppState::new(config, net_manager, drives, images, reconciled_snapshots, reconciled_retired, history));
 
-    if idle_timeout.is_some() || auto_suspend_timeout.is_some() {
-        if let Some(auto_suspend_timeout) = auto_suspend_timeout {
-            tracing::info!(auto_suspend_timeout_secs = auto_suspend_timeout.as_secs(), "idle sandbox auto-suspend enabled");
-        }
-        if let Some(idle_timeout) = idle_timeout {
-            tracing::info!(idle_timeout_secs = idle_timeout.as_secs(), "idle sandbox destroy reaper enabled");
-        }
-        tokio::spawn(idle_reaper::run(state.clone(), idle_timeout, auto_suspend_timeout));
+    if let Some(auto_suspend_timeout) = auto_suspend_timeout {
+        tracing::info!(auto_suspend_timeout_secs = auto_suspend_timeout.as_secs(), "idle sandbox auto-suspend enabled");
     }
-    // Unconditional, unlike the reaper above -- see `pool_replenisher`'s
-    // own doc comment for why an idle tick with no pools configured is
-    // cheap enough not to bother gating behind whether any exist yet.
+    if let Some(idle_timeout) = idle_timeout {
+        tracing::info!(idle_timeout_secs = idle_timeout.as_secs(), "idle sandbox destroy reaper enabled");
+    }
+    if let Some(archive_timeout) = archive_timeout {
+        tracing::info!(archive_timeout_secs = archive_timeout.as_secs(), archive_dir = %archive_dir.display(), "idle snapshot archiving enabled");
+    }
+    // Unconditional -- see `idle_reaper`'s own module doc comment (and
+    // `pool_replenisher`'s identical reasoning below) for why a tick with
+    // nothing configured at all is a cheap no-op scan, not worth gating
+    // behind whether any of the three timeouts are actually set.
+    tokio::spawn(idle_reaper::run(state.clone(), idle_timeout, auto_suspend_timeout, archive_timeout, archive_dir));
     tokio::spawn(pool_replenisher::run(state.clone()));
 
     let sandbox_routes = Router::new()
@@ -156,6 +171,7 @@ async fn async_main() {
         .route("/sandboxes/:id/readlink", post(routes_fs::readlink))
         .route("/sandboxes/:id/truncate", post(routes_fs::truncate))
         .route("/sandboxes/:id/list-dir", post(routes_fs::list_dir))
+        .merge(routes_mounts::router())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
     // Its own router, guarded by `auth::require_preview_token` rather than
@@ -183,8 +199,9 @@ async fn async_main() {
         .route("/pools/:id", delete(routes_pool::delete_pool))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
-    let snapshot_routes =
-        routes_snapshot::router().route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
+    let snapshot_routes = routes_snapshot::router()
+        .merge(routes_snapshot_history::router())
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
     // Its own router, guarded by `auth::require_preview_token` rather than
     // `auth::require_bearer_token` — see that middleware's doc comment for

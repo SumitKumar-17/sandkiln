@@ -27,7 +27,12 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   (`SANDKILN_JAILER_ENABLED` and friends) is the daemon-operator switch
   for jailer-based sandbox boot — see `sandkiln_vmm::jailer` and
   `SELF_HOSTING.md`'s jailer section. Deliberately not something a
-  `POST /sandboxes` request body can override.
+  `POST /sandboxes` request body can override. `archive_timeout`/
+  `archive_dir` (`SANDKILN_ARCHIVE_TIMEOUT_SECS`/`SANDKILN_ARCHIVE_DIR`)
+  configure `idle_reaper`'s archive pass — see that module's own doc
+  comment and `archive_timeout`'s field doc comment for the real
+  Firecracker constraint (the rootfs backing file can never move) that
+  shapes what archiving actually does.
 - `metrics.rs` — `Metrics`: the `/metrics` endpoint's counters/gauge/
   histograms and a hand-rolled Prometheus text-exposition-format writer.
   Lives on `AppState` (`state.metrics`); route handlers record into it at
@@ -66,7 +71,30 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   Also owns `pools` (`Mutex<HashMap<String, crate::pool::Pool>>`) —
   configured pre-warmed pools, in-memory only (unlike `snapshots`, not
   reconciled from disk at startup — see `crate::pool`'s module doc
-  comment for why).
+  comment for why). Also owns `retired_snapshots` (`crate::snapshot_history`
+  — time-travel restore's checkpoints) and the ownership-tracking helpers
+  extended for it: `drive_holders()`/`image_holder()` now also check
+  `retired_snapshots` (a retired checkpoint references its drives/image
+  as durably as a held `Snapshot` does), and `tap_device_holder()` is the
+  analogous "who currently holds this tap device" check across live
+  sandboxes, held snapshots, *and* an in-flight restore
+  (`pending_tap_restores`/`try_reserve_pending_tap_restore`/
+  `release_pending_tap_restore`) — needed because a retired checkpoint
+  holds no live lease at all (see `snapshot_history`'s own module doc
+  comment), so nothing else already prevents two different retired
+  checkpoints in the same lineage (sharing one frozen tap device) from
+  both being restored at once the way `Snapshot::forked_into` alone
+  prevents two live forks of one snapshot. `image_holder()`/
+  `tap_device_holder()` both share the same "first match, labeled" walk
+  across sandboxes/snapshots/retired checkpoints via the private
+  `first_match()` helper — pulled out once `tap_device_holder` made it a
+  third near-identical copy of `image_holder`'s own shape, so a fourth
+  resource type never has to re-derive it by hand. `drive_holders()`
+  stays its own hand-written three-collection walk rather than reusing
+  `first_match`: it returns *every* matching holder (`Vec<DriveHold>`,
+  since multiple simultaneous read-only holders are legitimate), not the
+  first one, a genuinely different shape from the single-holder
+  "who owns this" question `first_match` answers.
 - `sandbox.rs` — the `Sandbox` struct the daemon tracks per running VM
   (id, `Vm` handle, network `Lease`, rootfs path, tags, created-at,
   `last_activity`, `image_id` — the registered image this sandbox's
@@ -77,7 +105,18 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   boundary — and `pty_session_count`, an `Arc<AtomicU32>` so a
   `PtySessionGuard` (see `routes_pty.rs`) can outlive the `state.sandboxes`
   lock it was incremented under and still decrement the right counter on
-  drop).
+  drop, and `egress`, `None` for a forked sandbox — mirroring `network`'s
+  own `None`-for-fork convention, since the underlying iptables chain is
+  tied to the *lease*, which the snapshot, not the forked `Sandbox`
+  record, owns, and `parent_snapshot_id` — see its own doc comment for
+  why this is a **separate** field from `source_snapshot_id` just above,
+  not a reuse of it: `source_snapshot_id` being `Some` is what
+  `routes_snapshot::check_snapshottable` reads to *refuse* re-snapshotting
+  a forked sandbox, and stays `None` on resume specifically so a resumed
+  sandbox remains snapshottable — lineage tracking needs the opposite
+  shape (`Some` on both resume and fork), and conflating the two was a
+  real bug caught live, not on paper, while building snapshot lineage —
+  see `ROADMAP.md`'s "Persistence and snapshotting" section).
 - `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop/
   history (`GET /sandboxes/history`, reading `AppState::history` — the
   only read path for it; every write happens as a side effect of
@@ -92,11 +131,17 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   `DELETE` route and `idle_reaper`; it defaults to preserving state
   (snapshot-then-stop, via `routes_snapshot::snapshot_and_stop`) rather
   than destroying it, with `destroy_sandbox_by_id()` — the original
-  teardown (VM stop, network release, rootfs cleanup) — reached via the
-  `?keep=false` opt-out or as the correct silent fallback for a forked
-  sandbox (nothing new to preserve) or a jailed one (can't be
+  teardown (VM stop, network release, rootfs cleanup — unconditional now
+  for every sandbox including a fork, see `Sandbox::rootfs_path`'s own
+  doc comment for why that wasn't always safe to assume) — reached via
+  the `?keep=false` opt-out or as the correct silent fallback for a
+  forked sandbox (nothing new to preserve) or a jailed one (can't be
   snapshotted, surfaces as an error instead of silently discarding
-  state). `create_sandbox_core()` is the actual boot logic, shared with
+  state). Both `destroy_sandbox_by_id` and `routes_snapshot::snapshot_and_stop`
+  also release a stopped sandbox's `source_pool_id` slot back to its pool
+  (`Pool::record_release`) right after removing it from `state.sandboxes`
+  — whichever way it stops, warm or claimed slots are the same
+  `max_count` currency (see `crate::pool`). `create_sandbox_core()` is the actual boot logic, shared with
   `routes_sandbox_name::get_or_create_sandbox`'s create-fresh path — the
   `create_sandbox` handler itself adds the name-uniqueness check under
   `AppState::lock_name` and resolves which rootfs to clone from
@@ -107,14 +152,29 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   can't race an in-flight clone) before calling it.
   `create_sandbox_core` also tries a pre-warmed pool claim first (see
   `crate::pool`) whenever the request has no `drives`/`rate_limit` and a
-  configured pool's key matches — `claim_from_pool` resumes the warm
-  snapshot, runs a real post-resume health check (`exec true`) before
-  trusting it, and falls back to the normal cold-create path below on
-  either an outright resume failure or a failed health check (via
-  `destroy_unhealthy_claim`), rather than ever handing back a sandbox id
-  that's secretly a corpse — see `crate::pool`'s own module doc comment
-  for the real Firecracker/KVM finding that made this check load-bearing,
-  not defensive theater.
+  configured pool's key matches, via `crate::pool_claim` — see that
+  file's own AGENTS.md entry for the claim/retry/health-check mechanics
+  living there now. `ColdSlot` threads its reserved `pool_id` through
+  `create_sandbox_cold` (the factored-out boot mechanics, shared by both
+  the `ColdSlot` and unattributed paths) into `Sandbox::source_pool_id`,
+  committing the `PoolClaimGuard` (from `pool_claim`) on success.
+  `resolve_egress_policy` validates every CIDR in a request's optional
+  `egress` field up front (one clear `400` naming the exact bad entry,
+  via `sandkiln_vmm::egress::validate_cidr`) and converts it to a
+  `sandkiln_vmm::egress::EgressPolicy`. Unlike `drives`/`rate_limit`, an
+  egress policy does NOT disqualify a request from a pool claim — it's
+  enforced entirely via host-side iptables applied after boot/resume, not
+  baked into Firecracker's own snapshotted state, so `claim_from_pool`
+  applies it fresh after a successful claim rather than treating it as
+  pool-incompatible. Failure to apply is fatal (tear down) in both
+  `create_sandbox_cold` and `claim_from_pool` — safe to be strict since
+  both have a fallback or just fail the one request — but only a loud
+  warning in `routes_snapshot::resume_snapshot_by_id`/`fork_snapshot`,
+  since both are one-way operations where destroying a freshly
+  resumed/forked sandbox over a rare iptables hiccup would be worse than
+  the (best-effort, not a hard guarantee) security regression of leaving
+  it unenforced. See `sandkiln_vmm::egress`'s own module doc comment for
+  the actual chain/rule design.
 - `routes_sandbox_name.rs` — name-based lookup and get-or-create:
   `GET /sandboxes/by-name/:name` (live sandboxes only — a name currently
   held by a snapshot is a `409` pointing at get-or-create, not a silent
@@ -145,13 +205,36 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   `routes_exec::read_file`/`write_file` already have none — see this
   file's own module doc comment for why that's a deliberate consistency
   choice, not an oversight.
+- `routes_mounts.rs` — `POST/GET /sandboxes/:id/mounts`,
+  `DELETE /sandboxes/:id/mounts/:mount_id`: mounts an S3-compatible
+  bucket into a sandbox via `rclone mount`, built entirely on top of
+  `call_agent`/`Mkdir`/`WriteFile`/`Chmod`/`Exec` — no new wire protocol.
+  Credentials go in as a `0600` rclone config file, never a command-line
+  argument (see this file's module doc comment). No holder-tracking like
+  `AppState::drive_holders` (concurrent mounts of the same bucket aren't
+  a corruption risk the way a shared drive is) and no re-application on
+  resume/fork/restore (`Sandbox::mounts` exists purely for listing — a
+  mount is a live guest-side FUSE process, captured by Firecracker's own
+  snapshot mechanism along with the rest of guest memory). Needs a guest
+  kernel built with `CONFIG_FUSE_FS` (`images/build-guest-kernel.sh`) and
+  `rclone`/`fusermount3` baked into the rootfs (`images/inject-rclone.sh`)
+  — see `SELF_HOSTING.md`'s "Remote storage mounts (optional)" section.
 - `pool.rs` — `Pool`/`PoolConfig`/`PoolKey`: the pure state a configured
-  pre-warmed pool tracks (its resolved image/resource key and a FIFO
-  queue of warm snapshot ids) and the pure matching logic
-  (`PoolConfig::key`) a `POST /sandboxes` request is checked against. No
-  networking, no `AppState` — see this file's own module doc comment for
-  the feature's full shape and what's deliberately not built yet (a
-  `max_count` ceiling with queueing).
+  pre-warmed pool tracks (its resolved image/resource key, a FIFO queue
+  of warm snapshot ids, and `claimed` — how many live instances of this
+  pool's profile currently exist) and the pure matching logic
+  (`PoolConfig::key`) a `POST /sandboxes` request is checked against.
+  `PoolConfig.max_count` bounds `claimed` (plus what's warm);
+  `has_room_for_new_claim`/`record_claim`/`record_release` are the
+  three operations that keep it honest, and `effective_warm_target`
+  makes replenishment itself respect the same ceiling (never over-warms
+  past the remaining headroom). `Pool::notify` (a `tokio::sync::Notify`,
+  woken by `push_warm` and `record_release`) is what
+  `pool_claim::resolve_pool_claim` waits on when a `max_count`-bounded
+  pool is at capacity — condvar-style: every waiter re-checks the real
+  condition on wake rather than trusting the wakeup itself. No
+  networking, no `AppState` beyond that `Notify` — see this file's own
+  module doc comment for the feature's full shape.
 - `pool_replenisher.rs` — the background task (spawned unconditionally
   from `main.rs`, unlike `idle_reaper` below, since an idle tick with no
   pools configured is cheap) that keeps every pool topped up: boots a
@@ -161,16 +244,36 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   pool's warm queue. One slot per pool per 2-second tick, not all at
   once, so a large `warm_count` fills in gradually rather than spiking
   boot load.
+- `pool_claim.rs` — resolving and executing a `POST /sandboxes` request
+  against a configured pool: `resolve_pool_claim`/`PoolClaim`
+  (`Warm`/`ColdSlot`/`NoPool`, queueing up to `POOL_QUEUE_TIMEOUT` on a
+  `max_count`-bounded pool at capacity), `PoolClaimGuard` (RAII
+  commit-or-release for a reserved slot, used by both this file's own
+  `claim_from_pool` and `routes_sandbox::create_sandbox_cold`'s
+  `ColdSlot`/unattributed paths), and `claim_from_pool` itself (resume the
+  warm snapshot, a real post-resume health check before trusting it, a
+  bounded retry around `Vm::update_metadata`'s MMDS refresh — see that
+  call site's own doc comment for the settling-window race it covers).
+  Split out of `routes_sandbox.rs` once claiming pushed that file well
+  past a defensible size for what's nominally "sandbox lifecycle
+  handlers" — no HTTP route of its own, same as `pool_replenisher.rs`;
+  `routes_sandbox::create_sandbox_core` is still the only caller.
 - `routes_pool.rs` — `POST/GET /pools`, `DELETE /pools/:id`: pool
   *configuration* only — replenishment lives in `pool_replenisher`,
-  claiming lives in `routes_sandbox::create_sandbox_core`. `DELETE`
-  destroys whatever the pool still has warm (via
-  `routes_snapshot::delete_snapshot_by_id`) rather than leaking it as an
-  orphaned, untracked snapshot.
-- `idle_reaper.rs` — background task (spawned from `main.rs` whenever
-  `SANDKILN_IDLE_TIMEOUT_SECS` and/or `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`
-  is set) that reclaims idle sandboxes two ways: auto-suspend (pause +
-  snapshot, via `routes_snapshot::snapshot_and_stop`) past
+  claiming lives in `pool_claim` (invoked from
+  `routes_sandbox::create_sandbox_core`). `POST /pools`
+  accepts `max_count` (rejects an explicit `0` — omit it for unbounded
+  instead); `GET /pools` reports it alongside the live `claimed` count.
+  `DELETE` destroys whatever the pool still has warm (via
+  `routes_snapshot::delete_snapshot_by_id`) and calls
+  `pool.notify.notify_waiters()` first, so anything queued on a
+  `max_count`-bounded pool that just got deleted fails clearly instead of
+  waiting out its own timeout for a pool that no longer exists.
+- `idle_reaper.rs` — background task, spawned unconditionally from
+  `main.rs` (a tick with nothing configured is a cheap no-op scan, same
+  reasoning `pool_replenisher` already uses). Reclaims idle sandboxes two
+  ways: auto-suspend (pause + snapshot, via
+  `routes_snapshot::snapshot_and_stop`) past
   `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`, and destroy (via
   `routes_sandbox::stop_sandbox_by_id`, same preserve-by-default behavior
   as an explicit stop — see above — with a fallback to a real destroy only
@@ -180,42 +283,130 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   running — see `config::Config::auto_suspend_timeout`'s doc comment for
   why `auto_suspend_timeout` is required to be strictly shorter than
   `idle_timeout` when both are set (destroy is a backstop for a
-  persistently-failing auto-suspend, not a competing timer).
+  persistently-failing auto-suspend, not a competing timer). Also runs a
+  third, independent pass — `archive_idle_snapshots`, past
+  `SANDKILN_ARCHIVE_TIMEOUT_SECS` — that moves a *held snapshot's* (any
+  origin, not just auto-suspended ones) `state.snap`/`mem.bin` onto
+  `Config::archive_dir` via `routes_snapshot::archive_snapshot_by_id`;
+  see that function's own doc comment for why `rootfs_path` is
+  deliberately never touched.
 - `snapshot.rs` — the `Snapshot` type (`state.snapshots`'s value type)
   plus everything that makes it durable across a daemon restart: on-disk
   metadata (`meta.json`, alongside `state.snap`/`mem.bin` under
   `snapshot_dir(id)`) written atomically via write-then-rename, and
-  `reconcile()`, which scans `snapshots_root()` at startup and rebuilds
-  `AppState::snapshots` from what's actually on disk — the same
-  "filesystem is the source of truth" pattern `sandkiln_vmm::drive`'s
+  `reconcile()`, which scans both `snapshots_root()` (hot) and
+  `Config::archive_dir` (archived — always scanned, regardless of whether
+  `SANDKILN_ARCHIVE_TIMEOUT_SECS` is currently set, so turning archiving
+  off doesn't orphan snapshots already archived under it) and rebuilds
+  `AppState::snapshots` from what's actually on disk across both — the
+  same "filesystem is the source of truth" pattern `sandkiln_vmm::drive`'s
   `DriveStore::list()` uses for drives. A snapshot directory missing any
-  of its three files is treated as a crash-mid-write and skipped with a
-  warning rather than guessed at. `reconcile()` also calls
-  `NetworkManager::reserve()` for each reconciled snapshot's held tap
-  device/host octet so a live `lease()` call afterward can't hand the
-  same tap to a second sandbox — see `main.rs`, which runs this before
-  the HTTP listener starts accepting connections.
+  of its three files is treated as a crash-mid-write (or crash mid-
+  archive) and skipped with a warning rather than guessed at.
+  `Snapshot.egress`/`SnapshotMeta.egress` (`#[serde(default)]`, so
+  metadata written before this field existed still loads) is the actual
+  source of truth `routes_snapshot::resume_snapshot_by_id`/`fork_snapshot`
+  read to decide what egress policy (if any) to re-apply — carried
+  through persistence deliberately, unlike some other purely-convenience
+  fields, since silently losing a security policy across a snapshot cycle
+  would be a real regression, not just a lost convenience.
+  `Snapshot.parent_snapshot_id`/`SnapshotMeta.parent_snapshot_id` (also
+  `#[serde(default)]`) is the snapshot lineage parent pointer — set at
+  snapshot-creation time in `routes_snapshot::snapshot_and_stop` from the
+  source sandbox's own `Sandbox::parent_snapshot_id` (**not**
+  `source_snapshot_id` — see that field's doc comment in `sandbox.rs` for
+  why conflating them was a real live-caught bug). `None` marks a
+  lineage root.
+  `reconcile()` also calls `NetworkManager::reserve()` for each
+  reconciled snapshot's held tap device/host octet so a live `lease()`
+  call afterward can't hand the same tap to a second sandbox — see
+  `main.rs`, which runs this before the HTTP listener starts accepting
+  connections. `move_snapshot_files`/`move_file` are the archiving
+  primitives (rename, falling back to copy-then-remove-original across
+  filesystems) — **`move_snapshot_files` never touches `rootfs_path`**,
+  see its own doc comment for the real Firecracker resume failure that
+  proved moving it breaks every future resume/fork (the backing file's
+  absolute host path is baked into `state.snap` itself, with no override
+  at `/snapshot/load` time). `meta_path`/`state_path`/`mem_path`/
+  `move_file`/`write_atomically` are `pub(crate)` specifically so
+  `snapshot_history.rs` can reuse them — same directory-layout convention,
+  same file-safety primitives, no reason to duplicate either.
+- `snapshot_history.rs` — `RetiredSnapshot`: "time-travel restore"'s
+  checkpoint type, `state.retired_snapshots`'s value. See its own module
+  doc comment for the full design; the one-line version: resuming a
+  snapshot retires it here instead of deleting it, so it stays
+  restorable (`routes_snapshot_history::restore_snapshot_history_by_id`)
+  as many times as wanted rather than being a one-shot. Deliberately
+  holds a bare `NetworkConfig`/`host_octet`, **not** a live
+  `sandkiln_vmm::network::Lease` — nothing is reserved out of
+  `NetworkManager`'s free pool just because a checkpoint sits in history;
+  a lease is only ever reserved at actual restore time, gated by
+  `AppState::tap_device_holder`. `reconcile()` mirrors `snapshot::reconcile`'s
+  shape closely but **never touches `NetworkManager`** — no lease to
+  reclaim — called from `main.rs` alongside (order-independent from)
+  `snapshot::reconcile`.
+- `routes_snapshot_history.rs` — `GET /snapshots/history` (same
+  `?source_sandbox_id=`/`?parent_snapshot_id=` filter shape as
+  `routes_snapshot::list_snapshots`), `POST /snapshots/history/:id/restore`,
+  and `DELETE /snapshots/history/:id`. `restore_snapshot_history_by_id`
+  is the real mechanics: refuses (409) if `AppState::tap_device_holder`
+  finds this checkpoint's frozen network identity already live/held/
+  mid-restore, otherwise clones its rootfs fresh, resumes the VM from
+  its retained `state.snap`/`mem.bin`, and reserves a fresh `Lease` for
+  the new sandbox (`NetworkManager::reserve`, same call
+  `snapshot::reconcile` uses at startup — safe here specifically because
+  of the guard above, which that startup call doesn't need since nothing
+  else can be live yet at that point). The resulting sandbox has
+  `source_snapshot_id: None` (owns its lease/rootfs outright, unlike a
+  fork) and `parent_snapshot_id: Some(checkpoint id)` — restoring doesn't
+  consume the checkpoint, so a caller can restore the same one again
+  later. `DELETE /snapshots/history/:id` was added specifically because
+  retention has a real, unbounded disk cost with no cleanup otherwise —
+  see `ROADMAP.md`'s "Persistence and snapshotting" section for the live
+  finding that made this non-optional.
 - `routes_drives.rs` / `routes_snapshot.rs` — drives and snapshot/resume
   handlers, each in their own file for the same reason as above. The
   actual pause/snapshot/stop mechanics live in `snapshot_and_stop()`, the
-  actual resume mechanics in `resume_snapshot_by_id()`, and the actual
-  delete mechanics in `delete_snapshot_by_id()` — all three `pub(crate)`,
-  all reused elsewhere in this crate (`snapshot_and_stop`/
-  `resume_snapshot_by_id` by `routes_sandbox`'s persistent-by-default
+  actual resume mechanics in `resume_snapshot_by_id()`, the actual delete
+  mechanics in `delete_snapshot_by_id()`, and the actual archive mechanics
+  in `archive_snapshot_by_id()` — all four `pub(crate)`, all reused
+  elsewhere in this crate (`snapshot_and_stop`/`resume_snapshot_by_id` by
+  `routes_sandbox`'s persistent-by-default
   stop, `routes_sandbox_name`'s get-or-create, `idle_reaper`'s
   auto-suspend, and now `pool`/`pool_replenisher`/`routes_sandbox`'s
   claim path; `delete_snapshot_by_id` by `routes_pool::delete_pool`'s
   warm-snapshot cleanup) so there's exactly one place that knows what
   "snapshot this sandbox" / "resume this snapshot" / "delete this
-  snapshot" means. `check_snapshottable`/
+  snapshot" / "archive this snapshot" means. `archive_snapshot_by_id` is
+  only ever called by `idle_reaper` today — no `POST /snapshots/:id/archive`
+  route exists yet to trigger it on demand, a deliberately deferred
+  follow-up. `check_snapshottable`/
   `SnapshotBlocked` refuses to snapshot a jailed sandbox (`Vm::is_jailed`)
   — `Vm::resume` only ever spawns directly, so a jailed sandbox's snapshot
   could never be resumed correctly; see `sandkiln_vmm::jailer`'s module doc
-  comment before changing this — or a sandbox forked from another snapshot
-  (shares its rootfs file, would corrupt on resume). `list_snapshots` takes
-  an optional `?source_sandbox_id=` filter — how a caller looks up whether
-  a sandbox id it had turned into a snapshot (via auto-suspend or a manual
-  snapshot).
+  comment before changing this — or a sandbox that doesn't own its network
+  lease outright (`source_snapshot_id.is_some()` — a fork; see
+  `Sandbox::source_snapshot_id`'s doc comment for why sharing the *lease*,
+  not the rootfs, is what actually makes this unsafe now). `list_snapshots`
+  takes an optional `?source_sandbox_id=` filter (a sandbox id that became
+  a snapshot) and `?parent_snapshot_id=` (see `crate::snapshot::Snapshot::
+  parent_snapshot_id` — snapshot lineage).
+  `resume_snapshot_by_id()` takes a `retain_history: bool` — see
+  `crate::snapshot_history`'s module doc comment for "time-travel
+  restore," the feature that made this parameter necessary: by default
+  (`true`) it retires the checkpoint it consumes instead of deleting it
+  (`retire_snapshot_files`, run on a blocking thread since it shells out
+  to `cp` for the new sandbox's private rootfs clone), falling back to
+  the original delete-and-reuse-directly behavior as a loud warning, not
+  a fatal error, if retiring fails partway (the VM has already resumed
+  successfully by that point — a history-retention hiccup must never
+  turn a real resume success into a failure response).
+  `fork_snapshot()` gives every fork its own private rootfs clone now
+  too (`routes_sandbox::clone_rootfs`), fatal on failure unlike resume's
+  retention — see that function's own doc comment for the real,
+  pre-existing sequential-corruption bug this fixes (found live while
+  building time-travel restore, not part of that feature's original
+  scope).
 - `routes_metrics.rs` — the `/metrics` handler. Unauthenticated like
   `/healthz` (wired directly on `app` in `main.rs`, not through either
   auth-gated router) since it's operational data about the daemon, not

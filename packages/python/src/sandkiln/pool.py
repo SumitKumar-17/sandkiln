@@ -19,11 +19,18 @@ class PoolInfo:
     vcpu_count: int
     mem_size_mib: int
     warm_count: int
+    max_count: int | None
+    """Maximum live instances (warm + claimed, combined) this pool's
+    profile may ever have at once - `None` means unbounded."""
     warm_ready: int
     """How many resumable snapshots are actually sitting warm right now -
     can be less than `warm_count` right after the pool is created or a
     claim just drained it; replenishment happens in the background, not
     instantly."""
+    claimed: int
+    """How many live instances of this pool's profile exist right now
+    (warm or cold-created, either way) - only meaningful relative to
+    `max_count`."""
 
 
 class Pool:
@@ -51,6 +58,7 @@ class Pool:
         vcpu_count: int | None = None,
         mem_size_mib: int | None = None,
         warm_count: int = 0,
+        max_count: int | None = None,
         base_url: str | None = None,
         auth_token: str | None = None,
     ) -> PoolInfo:
@@ -60,7 +68,10 @@ class Pool:
         409 if `id` is already taken; delete it first to reconfigure.
         `warm_count` is how many resumable snapshots to keep ready at
         once - replenishment happens in the background and isn't
-        instant, see `PoolInfo.warm_ready`."""
+        instant, see `PoolInfo.warm_ready`. `max_count` caps total live
+        instances (warm + claimed) at once - omit for no ceiling; a
+        claim arriving at the ceiling with nothing warm queues
+        daemon-side (up to 30s) before raising a 503."""
         resolved_base_url = resolve_base_url(base_url)
         resolved_token = resolve_auth_token(auth_token)
         body: dict[str, object] = {"id": id, "warm_count": warm_count}
@@ -70,6 +81,8 @@ class Pool:
             body["vcpu_count"] = vcpu_count
         if mem_size_mib is not None:
             body["mem_size_mib"] = mem_size_mib
+        if max_count is not None:
+            body["max_count"] = max_count
         response = request(resolved_base_url, "POST", "/pools", resolved_token, body)
         return _to_pool_info(response)
 
@@ -98,5 +111,7 @@ def _to_pool_info(summary: dict) -> PoolInfo:
         vcpu_count=summary["vcpu_count"],
         mem_size_mib=summary["mem_size_mib"],
         warm_count=summary["warm_count"],
+        max_count=summary["max_count"],
         warm_ready=summary["warm_ready"],
+        claimed=summary["claimed"],
     )

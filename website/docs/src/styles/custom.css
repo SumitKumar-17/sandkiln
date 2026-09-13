@@ -75,3 +75,13 @@ h1, h2, h3, h4 {
   font-family: "Big Shoulders Display", "Arial Narrow", sans-serif;
   font-weight: 800;
 }
+
+/* Same firebox-glass treatment the marketing site gives its terminal
+   panel (see website/src/styles/global.css) — a hot glow at the edge of
+   every code block, so a reader who arrived here straight from the
+   marketing site's hero recognizes the same material. Kept subtle here
+   (no scanlines/embers) since code blocks are read constantly on this
+   site, not a one-time hero moment. */
+.expressive-code .frame {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sl-color-accent) 20%, transparent), 0 18px 40px -20px color-mix(in srgb, var(--sl-color-accent) 40%, transparent) !important;
+}

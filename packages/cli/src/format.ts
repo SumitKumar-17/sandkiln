@@ -142,7 +142,8 @@ export function formatDriveList(drives: DriveInfo[]): string {
 }
 
 function formatPoolLine(info: PoolInfo): string {
-  return `${info.id}  ${info.imageId ?? "-"}  ${info.vcpuCount}vcpu/${info.memSizeMib}MiB  warm ${info.warmReady}/${info.warmCount}`;
+  const claimedPart = info.maxCount === null ? `claimed ${info.claimed}` : `claimed ${info.claimed}/${info.maxCount}`;
+  return `${info.id}  ${info.imageId ?? "-"}  ${info.vcpuCount}vcpu/${info.memSizeMib}MiB  warm ${info.warmReady}/${info.warmCount}  ${claimedPart}`;
 }
 
 export function formatPoolList(pools: PoolInfo[]): string {

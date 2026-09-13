@@ -75,7 +75,7 @@ else
   # resume, especially under this dev box's own concurrent load from
   # other tests/replenishment running at the same time.
   mmds_ok=""
-  for _ in 1 2 3 4 5; do
+  for _ in $(seq 1 8); do
     status="$(req POST "/sandboxes/$CLAIMED_SBX/exec" "{\"command\":\"sh\",\"args\":[\"-c\",\"TOKEN=\$(curl -s -X PUT http://169.254.169.254/latest/api/token -H \\\"X-metadata-token-ttl-seconds: 21600\\\") && curl -s -H \\\"X-metadata-token: \$TOKEN\\\" -H \\\"Accept: application/json\\\" http://169.254.169.254/\"]}")"
     mmds_body="$(cat "$WORKDIR/resp.json")"
     case "$mmds_body" in
@@ -133,3 +133,95 @@ assert_eq "deleting the pool also cleaned up its warm snapshot" "$((snapshot_cou
 
 status="$(req DELETE "/pools/it-pool-$$")"
 assert_status "deleting an already-deleted pool is a 404" 404 "$status"
+
+section "pre-warmed pools: max_count ceiling and queueing"
+# warm_count: 0 here deliberately -- this section is only about the
+# max_count/claimed-count lifecycle, not replenishment (already covered
+# above), so every claim below cold-creates under capacity rather than
+# resuming anything.
+status="$(req POST /pools "{\"id\":\"it-pool-max-$$\",\"warm_count\":0,\"max_count\":1}")"
+assert_status "create a pool with max_count: 1" 200 "$status"
+CREATED_POOLS+=("it-pool-max-$$")
+
+pool_claimed() {
+  req GET /pools >/dev/null
+  if command -v jq >/dev/null 2>&1; then
+    jq -r ".pools[] | select(.id==\"it-pool-max-$$\") | .claimed" < "$WORKDIR/resp.json"
+  else
+    grep -o "\"id\":\"it-pool-max-$$\"[^}]*\"claimed\":[0-9]*" "$WORKDIR/resp.json" | grep -o '[0-9]*$'
+  fi
+}
+
+status="$(req POST /sandboxes "{\"name\":\"it-pool-max-1-$$\"}")"
+assert_status "first claim succeeds and cold-creates under max_count headroom" 200 "$status"
+SBX_MAX_1="$(extract id < "$WORKDIR/resp.json")"
+if [ -z "$SBX_MAX_1" ]; then
+  fail "first max_count claim returned no id — aborting max_count checks"
+else
+  CREATED_SANDBOXES+=("$SBX_MAX_1")
+  assert_eq "pool reports 1 claimed instance after the first create" "1" "$(pool_claimed)"
+
+  # A second concurrent claim has nothing warm and no room (max_count: 1,
+  # already at capacity) -- it must queue rather than reject outright or
+  # silently exceed the ceiling. Backgrounded so this script can confirm
+  # it's still pending, then free the slot and confirm it completes
+  # promptly afterward (a real, event-driven wakeup, not a fixed poll
+  # interval -- see Pool::notify's doc comment). A raw curl of its own,
+  # not the shared `req` helper -- `req` always writes to the one shared
+  # $WORKDIR/resp.json, which this script's own foreground calls (the
+  # DELETE below, then more `req` calls afterward) would race and
+  # clobber while this is still in flight.
+  curl -s -o "$WORKDIR/pool-max-2-resp.json" -X POST "$BASE_URL/sandboxes" \
+    -H 'Content-Type: application/json' "${AUTH_HEADER[@]}" -d "{\"name\":\"it-pool-max-2-$$\"}" &
+  QUEUED_PID=$!
+  sleep 4
+  if kill -0 "$QUEUED_PID" 2>/dev/null; then
+    pass "a second claim at max_count queues instead of rejecting or exceeding the ceiling"
+  else
+    fail "a second claim at max_count returned immediately -- expected it to queue"
+  fi
+
+  status="$(req DELETE "/sandboxes/$SBX_MAX_1?keep=false")"
+  assert_status "stop the first max_count sandbox, freeing its slot" 204 "$status"
+  CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_MAX_1}")
+
+  # The queued claim should wake up promptly once the slot frees -- not
+  # wait out its own ~30s queue timeout. A generous but bounded wait,
+  # not a magic-number sleep tuned to pass by luck.
+  wait_ok=""
+  for _ in $(seq 1 15); do
+    kill -0 "$QUEUED_PID" 2>/dev/null || { wait_ok="yes"; break; }
+    sleep 1
+  done
+  wait "$QUEUED_PID" 2>/dev/null
+  if [ "$wait_ok" = "yes" ]; then
+    pass "the queued claim woke up and completed promptly once a slot freed, not after the full queue timeout"
+  else
+    fail "the queued claim did not complete within 15s of a slot freeing up"
+  fi
+
+  SBX_MAX_2="$(extract id < "$WORKDIR/pool-max-2-resp.json")"
+  if [ -z "$SBX_MAX_2" ]; then
+    fail "queued claim produced no sandbox id ($(cat "$WORKDIR/pool-max-2-resp.json"))"
+  else
+    CREATED_SANDBOXES+=("$SBX_MAX_2")
+    assert_eq "pool reports 1 claimed instance again after the queued claim completed" "1" "$(pool_claimed)"
+
+    status="$(req DELETE "/sandboxes/$SBX_MAX_2?keep=false")"
+    assert_status "stop the second max_count sandbox" 204 "$status"
+    CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_MAX_2}")
+    assert_eq "pool reports 0 claimed instances once both are stopped" "0" "$(pool_claimed)"
+  fi
+fi
+
+# The full ~30s queue-timeout-then-503 path is deliberately not exercised
+# here -- it would add a mandatory ~30s to every run of this suite for a
+# path already verified manually against a live daemon (a held sandbox
+# with nothing freeing its pool's only slot; the second claim returned a
+# real 503 with a clear message after exactly 30.0s). Same tradeoff this
+# suite already makes for the sqlite-history restart case (see
+# 16-sandbox-history.sh) -- not everything worth verifying once needs to
+# cost every future run.
+status="$(req DELETE "/pools/it-pool-max-$$")"
+assert_status "delete the max_count pool" 204 "$status"
+CREATED_POOLS=("${CREATED_POOLS[@]/it-pool-max-$$}")

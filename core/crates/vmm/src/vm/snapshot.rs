@@ -62,29 +62,21 @@ impl Vm {
     /// part of the same call, so there's no separate `InstanceStart`
     /// action the way `boot()` needs.
     ///
-    /// Two things the snapshot references by host path rather than by
-    /// value, which the caller is responsible for getting right:
-    /// - The rootfs drive's backing file (see `snapshot()`'s doc comment)
-    ///   must still be at the path it had when snapshotted.
-    /// - The network tap device: the guest's IP/MAC were finalized via
-    ///   kernel boot args at the *original* boot and are frozen in the
-    ///   snapshotted memory image, so whatever host tap device is
-    ///   attached under the same name the VM had at snapshot time is what
-    ///   the resumed guest will keep using — there's no way to hand it a
-    ///   fresh lease here (Firecracker's `network_overrides` can rename
-    ///   the *host* side of an interface on load, but the guest-visible
-    ///   IP/MAC are already-booted guest OS state we can't reach, so a
-    ///   caller reusing a fresh lease's tap device would just leave the
-    ///   guest talking to a device nothing is listening on). This module
-    ///   deliberately doesn't take a `network` field on `ResumeConfig` —
-    ///   the daemon holds the original `Lease` on the sandbox's behalf
-    ///   across a snapshot instead of releasing it, and simply hands the
-    ///   same one to the resumed sandbox.
+    /// The rootfs backing file and the network tap device are both
+    /// referenced by host path/name rather than by value inside the
+    /// snapshot, and the caller is responsible for getting both right
+    /// (still at the same path; still the same tap device) — see the
+    /// website's Persistence model architecture page for why moving
+    /// either one silently breaks a resume rather than erroring cleanly.
+    /// This module deliberately takes no `network` field on
+    /// `ResumeConfig` as a result — the daemon holds the original `Lease`
+    /// across a snapshot instead of releasing it, and hands that exact
+    /// one back.
     ///
-    /// The vsock socket path is the one exception: it's a host-side
-    /// listening path the guest agent never sees, so it's safe to
-    /// reassign fresh via Firecracker's `vsock_override` — which is what
-    /// this does, generating a new path the same way `boot()` does.
+    /// The vsock socket path is the one exception: it's host-side
+    /// plumbing the guest never sees, so it's safe to reassign fresh via
+    /// Firecracker's `vsock_override`, generating a new path the same way
+    /// `boot()` does.
     pub fn resume(config: &ResumeConfig) -> io::Result<Self> {
         let started = Instant::now();
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);

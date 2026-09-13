@@ -7,8 +7,9 @@
 //! ~300-line-ish shape for no structural reason.
 
 use crate::error::AppError;
+use crate::pool_claim::{claim_from_pool, resolve_pool_claim, MAX_POOL_CLAIM_ATTEMPTS, PoolClaim, PoolClaimGuard};
 use crate::routes_drives::DriveAttachment;
-use crate::routes_snapshot::{resume_snapshot_by_id, snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
+use crate::routes_snapshot::{snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
 use crate::sandbox::Sandbox;
 use crate::state::{can_attach_read_only, describe_drive_holders, AppState, AttachedDrive};
 use crate::tracing_util::spawn_blocking_in_current_span;
@@ -68,6 +69,18 @@ pub struct CreateSandboxRequest {
     /// silently no-op" convention as `vcpu_count`/`mem_size_mib`.
     #[serde(default)]
     pub(crate) rate_limit: Option<RateLimitRequest>,
+    /// Outbound network policy for this sandbox — see
+    /// `sandkiln_vmm::egress`'s module doc comment for the full design.
+    /// Omitted means today's behavior, unchanged: unrestricted outbound
+    /// through the shared bridge's existing catch-all rule. Unlike
+    /// `drives`/`rate_limit`, this can still match a pre-warmed pool (see
+    /// `crate::pool`) — egress is enforced via host-side iptables rules
+    /// applied *after* boot/resume, never baked into Firecracker's own
+    /// VM/snapshot state, so it's compatible with any warm snapshot
+    /// regardless of what policy (if any) the pool's own replenishment
+    /// boot used.
+    #[serde(default)]
+    pub(crate) egress: Option<EgressPolicyRequest>,
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -76,6 +89,26 @@ pub struct RateLimitRequest {
     pub(crate) bandwidth_bytes_per_sec: Option<u64>,
     #[serde(default)]
     pub(crate) ops_per_sec: Option<u64>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct EgressPolicyRequest {
+    pub(crate) mode: EgressModeRequest,
+    /// IPv4 CIDRs (`"10.0.0.0/8"`) — validated in `resolve_egress_policy`,
+    /// not here, so a malformed one gets one clear `400` covering every
+    /// entry in both lists rather than whichever `serde` error format a
+    /// custom `Deserialize` impl would produce.
+    #[serde(default)]
+    pub(crate) allow_cidrs: Vec<String>,
+    #[serde(default)]
+    pub(crate) deny_cidrs: Vec<String>,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum EgressModeRequest {
+    AllowAll,
+    DenyAll,
 }
 
 #[derive(Serialize)]
@@ -171,6 +204,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
         resolve_resource_override(request.mem_size_mib, state.config.mem_size_mib, state.config.max_mem_size_mib, "mem_size_mib")
             .map_err(AppError::BadRequest)?;
     let rate_limit = resolve_rate_limit(&request.rate_limit).map_err(AppError::BadRequest)?;
+    let egress = resolve_egress_policy(&request.egress).map_err(AppError::BadRequest)?;
 
     // A matching, ready pre-warmed pool (see `crate::pool`) lets this
     // resume a warm snapshot instead of paying full cold-create cost —
@@ -179,27 +213,76 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
     // a VM's state at boot time and a warm snapshot was booted with
     // neither, so either one present here means this request can never
     // match a pool, regardless of image/resources — falls through to the
-    // normal cold-create path below instead of silently ignoring them.
+    // normal cold-create path below instead of silently ignoring them (and
+    // never queues on a `max_count`-bounded pool either, for the same
+    // reason: it was never going to match that pool anyway).
     if request.drives.is_empty() && request.rate_limit.is_none() {
         let key = crate::pool::PoolKey { image_id: request.image_id.clone(), vcpu_count, mem_size_mib };
-        let claimed_snapshot = {
-            let mut pools = state.pools.lock().unwrap();
-            pools.values_mut().find(|p| p.config.key() == key).and_then(|p| p.take_warm())
-        };
-        if let Some(snapshot_id) = claimed_snapshot {
-            match claim_from_pool(state, snapshot_id, &request).await {
-                Ok(id) => return Ok(id),
-                Err(e) => {
-                    // A claim can fail for reasons a caller's own request
-                    // had nothing to do with (see `claim_from_pool`'s doc
-                    // comment) — degrading to a normal cold create rather
-                    // than failing the whole request is the entire point
-                    // of a pool being an optimization, not a guarantee.
-                    tracing::warn!(error = %e, "pool claim failed — falling back to a normal cold create");
+        // Bounded retry, not a single attempt: a warm claim failing its
+        // post-resume health check (see `claim_from_pool`'s doc comment —
+        // measured at up to ~2-in-3 resumes, not a rare corner case)
+        // releases its reserved slot right back to the pool via
+        // `PoolClaimGuard`'s drop — re-resolving immediately afterward is
+        // what lets the resulting fallback cold-create still count
+        // against `max_count` instead of silently bypassing it. Without
+        // this loop, a `max_count`-bounded pool with a high resume
+        // failure rate could end up running noticeably more live
+        // instances than its own configured ceiling. Bounded (not
+        // unbounded) purely as a safety margin against a pathological
+        // run of consecutive bad warm snapshots — see
+        // `MAX_POOL_CLAIM_ATTEMPTS`.
+        for _ in 0..MAX_POOL_CLAIM_ATTEMPTS {
+            match resolve_pool_claim(state, &key).await? {
+                PoolClaim::Warm { pool_id, snapshot_id } => {
+                    let guard = PoolClaimGuard::new(state.clone(), Some(pool_id.clone()));
+                    match claim_from_pool(state, snapshot_id, pool_id, &request, egress.clone()).await {
+                        Ok(id) => {
+                            guard.commit();
+                            return Ok(id);
+                        }
+                        Err(e) => {
+                            // `guard` drops at the end of this arm (not
+                            // committed), releasing the slot this claim
+                            // reserved back to the pool — the next loop
+                            // iteration's `resolve_pool_claim` sees that
+                            // freed room immediately.
+                            tracing::warn!(error = %e, "pool claim failed — retrying against the pool once more before falling back unattributed");
+                        }
+                    }
                 }
+                PoolClaim::ColdSlot { pool_id } => {
+                    // Room under `max_count`, nothing warm ready right
+                    // now — proceed into the cold-create path below,
+                    // attributed to this pool so the reserved slot is
+                    // either committed to the resulting live `Sandbox` or
+                    // released on any failure (`PoolClaimGuard`,
+                    // constructed inside).
+                    return create_sandbox_cold(state, request, Some(pool_id), vcpu_count, mem_size_mib, rate_limit, egress).await;
+                }
+                PoolClaim::NoPool => break, // no pool configured for this profile at all — today's original, totally unattributed behavior.
             }
         }
     }
+
+    create_sandbox_cold(state, request, None, vcpu_count, mem_size_mib, rate_limit, egress).await
+}
+
+/// The actual cold-boot mechanics — unchanged from before pools existed,
+/// except for `pool_id`: `Some` when `create_sandbox_core` reserved a
+/// slot for this create against a `max_count`-bounded pool (see
+/// `PoolClaim::ColdSlot`), threaded through to `PoolClaimGuard` (released
+/// on any failure below) and `Sandbox::source_pool_id` (committed,
+/// permanently owning the slot, on success).
+async fn create_sandbox_cold(
+    state: &Arc<AppState>,
+    request: CreateSandboxRequest,
+    pool_id: Option<String>,
+    vcpu_count: u8,
+    mem_size_mib: u32,
+    rate_limit: Option<RateLimiter>,
+    egress: Option<sandkiln_vmm::egress::EgressPolicy>,
+) -> Result<String, AppError> {
+    let pool_guard = PoolClaimGuard::new(state.clone(), pool_id.clone());
 
     // Checked and reserved before the (slow) boot starts, not just relied
     // on implicitly once the sandbox is inserted into `state.sandboxes` at
@@ -249,6 +332,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
         let state = state.clone();
         let rootfs_path = rootfs_path.clone();
         let base_rootfs_source = base_rootfs_source.clone();
+        let egress = egress.clone();
         move || -> std::io::Result<(Vm, Lease, Option<u32>)> {
             let span = tracing::Span::current();
             // Copying the rootfs and leasing a network are independent —
@@ -305,6 +389,23 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
             match vm {
                 Ok(vm) => {
                     state.metrics.record_boot_duration_ms(boot_started.elapsed().as_secs_f64() * 1000.0);
+                    // Applied after boot succeeds, before this sandbox is
+                    // ever visible to a caller -- a requested policy that
+                    // fails to apply must not silently leave the sandbox
+                    // unrestricted, so this is treated exactly like a
+                    // failed `Vm::boot`: tear everything down and return
+                    // the error rather than let a broken-but-unenforced
+                    // policy through.
+                    if let Some(policy) = &egress {
+                        if let Err(e) = sandkiln_vmm::egress::apply(lease.config.guest_ip, &lease.config.tap_device, state.network.uplink(), policy) {
+                            let _ = vm.stop();
+                            let _ = state.network.release(lease);
+                            if let (Some(id), Some(pool)) = (jail_id, &state.jailer_ids) {
+                                pool.release(id);
+                            }
+                            return Err(e);
+                        }
+                    }
                     Ok((vm, lease, jail_id))
                 }
                 Err(e) => {
@@ -341,118 +442,24 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
         source_snapshot_id: None,
         name: request.name,
         pty_session_count: Default::default(),
+        source_pool_id: pool_id,
+        egress,
+        // A cold create -- fresh boot or a pool's own warm-replenishment
+        // boot -- is always a root of its own lineage.
+        parent_snapshot_id: None,
+        // A fresh boot never has any remote storage mounted yet -- see
+        // `crate::routes_mounts`.
+        mounts: Vec::new(),
     };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
     state.metrics.record_sandbox_created();
+    // The slot `resolve_pool_claim` reserved (if any) is now durably
+    // owned by the live `Sandbox` above via `source_pool_id` — released
+    // later by `destroy_sandbox_by_id`/`snapshot_and_stop`, not this
+    // guard, which would otherwise release it right back on drop here.
+    pool_guard.commit();
 
     Ok(id)
-}
-
-/// Finishes a pre-warmed pool claim (see `crate::pool`): resumes the warm
-/// snapshot `create_sandbox_core` already popped off a matching pool,
-/// verifies the result is actually alive, then overwrites its identity
-/// with what the *caller* actually asked for.
-///
-/// **The health check is load-bearing, not defensive theater — and not
-/// a rare edge case either.** Found live while building this feature:
-/// Firecracker's snapshot/restore has a real failure mode where the
-/// restored guest kernel panics early in boot (confirmed via its
-/// captured console log — an early-boot divide-by-zero trap in the
-/// console driver, restored CPU/timer state interacting badly with
-/// timing-sensitive init code) and the whole Firecracker process exits
-/// shortly after. Measured directly at roughly **1-in-3 to 2-in-3**
-/// resumes across repeated clean, isolated test runs on this dev box —
-/// this project's own `08-snapshots.sh` integration check still passes
-/// every run because one resume isn't enough attempts to reliably hit
-/// it, but a pool's whole reason to exist is resuming far more often
-/// than a manual test ever would, which is exactly what surfaced a
-/// failure rate this significant. Handing a caller a sandbox id that's
-/// actually a corpse would be worse than never having a pool at all, so
-/// this treats a failed health check as "the warm snapshot was bad" and
-/// cleans up + falls back to a normal cold create (see this function's
-/// caller) rather than either failing the request outright or returning
-/// a broken id — see `destroy_unhealthy_claim`'s use of `Vm::force_stop`
-/// for why the fallback itself doesn't pay a second unnecessary timeout.
-///
-/// The warm snapshot's own tags/name/MMDS content reflect
-/// `pool_replenisher`'s placeholder request, not this one, and would
-/// otherwise leak through as a confusing stale identity once a sandbox
-/// does pass its health check — the guest-visible half of that (MMDS)
-/// needs an explicit live Firecracker API call to fix, not just editing
-/// the daemon's own `Sandbox` record; see
-/// `sandkiln_vmm::vm::Vm::update_metadata`'s doc comment.
-async fn claim_from_pool(state: &Arc<AppState>, snapshot_id: String, request: &CreateSandboxRequest) -> Result<String, AppError> {
-    let id = resume_snapshot_by_id(state.clone(), snapshot_id).await?;
-
-    let health_check = spawn_blocking_in_current_span("pool claim health check task panicked", {
-        let state = state.clone();
-        let id = id.clone();
-        move || {
-            let sandboxes = state.sandboxes.lock().unwrap();
-            let sandbox = sandboxes.get(&id).expect("resume_snapshot_by_id above just inserted this id");
-            sandbox.vm.call(&sandkiln_protocol::Request::Exec { command: "true".to_string(), args: vec![] })
-        }
-    })
-    .await;
-
-    if let Err(e) = health_check {
-        tracing::warn!(sandbox_id = %id, error = %e, "pool-claimed sandbox failed its post-resume health check — tearing it down");
-        destroy_unhealthy_claim(state, id).await;
-        return Err(AppError::from(std::io::Error::other("pool-claimed sandbox failed its post-resume health check")));
-    }
-
-    let created_at = SystemTime::now();
-    let metadata = serde_json::json!({ "id": id, "name": &request.name, "tags": &request.tags });
-    {
-        let mut sandboxes = state.sandboxes.lock().unwrap();
-        let sandbox = sandboxes.get_mut(&id).expect("resume_snapshot_by_id above just inserted this id");
-        // Non-fatal if this fails: the sandbox already passed its health
-        // check above and is genuinely usable either way, just with
-        // stale MMDS content until something else resumes or re-patches
-        // it (nothing does today) — worth a loud warning, not a failed
-        // create over a metadata-only mismatch.
-        if let Err(e) = sandbox.vm.update_metadata(&metadata) {
-            tracing::warn!(sandbox_id = %id, error = %e, "failed to refresh MMDS metadata after resuming a pool-claimed sandbox");
-        }
-        sandbox.tags = request.tags.clone();
-        sandbox.name = request.name.clone();
-        sandbox.created_at = created_at;
-    }
-
-    if let Err(e) = state.history.record_created(&id, request.name.as_deref(), &request.tags, request.image_id.as_deref(), created_at) {
-        tracing::warn!(error = %e, sandbox_id = %id, "failed to record sandbox creation in history store");
-    }
-    state.metrics.record_sandbox_created();
-    tracing::info!(sandbox_id = %id, "claimed a pre-warmed pool instance instead of cold-booting");
-    Ok(id)
-}
-
-/// Tears down a pool-claimed sandbox that failed its post-resume health
-/// check — same resource cleanup `stop_sandbox_by_id`'s destroy path
-/// does (release the network lease, remove the rootfs copy, stop the
-/// `Vm`), just entered from a different failure mode: this sandbox never
-/// got the chance to be a real, usable create in the first place.
-async fn destroy_unhealthy_claim(state: &Arc<AppState>, id: String) {
-    let sandbox = state.sandboxes.lock().unwrap().remove(&id);
-    let Some(sandbox) = sandbox else { return };
-    spawn_blocking_in_current_span("unhealthy claim teardown task panicked", {
-        let state = state.clone();
-        move || {
-            if let Some(lease) = sandbox.network {
-                let _ = state.network.release(lease);
-            }
-            let _ = std::fs::remove_file(&sandbox.rootfs_path);
-            // `force_stop`, not `stop` -- the health check that got us
-            // here already proved this VM isn't listening, so the
-            // optimistic "sync before kill" `stop()` would otherwise try
-            // has nothing to protect and would just burn its own
-            // separate ~5-second retry budget for no reason.
-            if let Err(e) = sandbox.vm.force_stop() {
-                tracing::warn!(sandbox_id = %id, error = %e, "failed to fully stop an unhealthy pool-claimed sandbox's VM");
-            }
-        }
-    })
-    .await;
 }
 
 #[derive(Serialize)]
@@ -720,18 +727,36 @@ pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String, keep: b
 async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopOutcome, StopError> {
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or(StopError::NotFound)?;
     let source_snapshot_id = sandbox.source_snapshot_id.clone();
-    let owns_rootfs = source_snapshot_id.is_none();
+
+    // This live instance's pool membership (if any) ends here — see the
+    // identical release in `routes_snapshot::snapshot_and_stop` for why
+    // this doesn't carry forward onto anything resumed/forked later.
+    if let Some(pool_id) = &sandbox.source_pool_id {
+        if let Some(pool) = state.pools.lock().unwrap().get_mut(pool_id) {
+            pool.record_release();
+        }
+    }
 
     spawn_blocking_in_current_span("stop task panicked", {
         let state = state.clone();
         move || {
             let _ = sandbox.vm.stop();
             if let Some(network) = sandbox.network {
+                // Lease is about to be released back to the free pool --
+                // this sandbox's dedicated chain (if any) has to go first,
+                // matching the "removed only when the lease is finally
+                // released" lifecycle. Safe to call even if no policy was
+                // ever applied -- see `egress::remove`'s own doc comment.
+                sandkiln_vmm::egress::remove(network.config.guest_ip, &network.config.tap_device, state.network.uplink());
                 let _ = state.network.release(network);
             }
-            if owns_rootfs {
-                let _ = std::fs::remove_file(&sandbox.rootfs_path);
-            }
+            // Every `Sandbox`, forked or not, owns a private rootfs file
+            // outright — a fork gets its own clone at fork time (see
+            // `routes_snapshot::fork_snapshot`'s own doc comment on the
+            // sequential-corruption bug that fixed), so there's no case
+            // left where this file is actually shared with anything else
+            // still alive and left dangling by removing it here.
+            let _ = std::fs::remove_file(&sandbox.rootfs_path);
             // `Vm::stop` already removed this sandbox's chroot directory if
             // it was jailed — this releases the daemon-level uid/gid
             // allocation, a separate resource `Vm` has no visibility into.
@@ -807,6 +832,21 @@ fn resolve_rate_limit(requested: &Option<RateLimitRequest>) -> Result<Option<Rat
     }))
 }
 
+/// Validates every CIDR in a requested egress policy up front — one clear
+/// `400` naming the exact bad entry, rather than a cryptic iptables
+/// failure surfacing later from deep inside a boot task.
+fn resolve_egress_policy(requested: &Option<EgressPolicyRequest>) -> Result<Option<sandkiln_vmm::egress::EgressPolicy>, String> {
+    let Some(req) = requested else { return Ok(None) };
+    for cidr in req.allow_cidrs.iter().chain(&req.deny_cidrs) {
+        sandkiln_vmm::egress::validate_cidr(cidr)?;
+    }
+    let mode = match req.mode {
+        EgressModeRequest::AllowAll => sandkiln_vmm::egress::EgressMode::AllowAll,
+        EgressModeRequest::DenyAll => sandkiln_vmm::egress::EgressMode::DenyAll,
+    };
+    Ok(Some(sandkiln_vmm::egress::EgressPolicy { mode, allow_cidrs: req.allow_cidrs.clone(), deny_cidrs: req.deny_cidrs.clone() }))
+}
+
 /// Returns the first item that's already been seen, if any.
 fn first_duplicate<'a>(mut items: impl Iterator<Item = &'a str>) -> Option<&'a str> {
     let mut seen = HashSet::new();
@@ -818,7 +858,12 @@ fn first_duplicate<'a>(mut items: impl Iterator<Item = &'a str>) -> Option<&'a s
 /// clone for free on a filesystem that supports it (XFS, Btrfs) — on
 /// ext4 (what the dev box runs) `--reflink=auto` just falls back to an
 /// ordinary copy, so this has no effect there, but costs nothing either.
-fn clone_rootfs(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+/// `pub(crate)`: also reused by `routes_snapshot`'s history-retaining
+/// resume and by `routes_snapshot_history`'s restore path, for the exact
+/// same reason it exists here — handing a *shared* rootfs file to a new
+/// live, mutating sandbox would corrupt whatever else still depends on
+/// that file staying exactly as it was.
+pub(crate) fn clone_rootfs(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     let status = std::process::Command::new("cp").arg("--reflink=auto").arg(src).arg(dst).status()?;
     if !status.success() {
         return Err(std::io::Error::other(format!("cp --reflink=auto {src:?} {dst:?} failed: {status}")));
@@ -902,6 +947,46 @@ mod tests {
     fn first_duplicate_none_when_all_unique() {
         assert_eq!(first_duplicate(["a", "b", "c"].into_iter()), None);
         assert_eq!(first_duplicate(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn resolve_egress_policy_returns_none_when_omitted() {
+        assert_eq!(resolve_egress_policy(&None), Ok(None));
+    }
+
+    #[test]
+    fn resolve_egress_policy_accepts_well_formed_cidrs_in_both_lists() {
+        let requested = Some(EgressPolicyRequest {
+            mode: EgressModeRequest::DenyAll,
+            allow_cidrs: vec!["10.0.0.0/8".to_string()],
+            deny_cidrs: vec!["192.168.1.1/32".to_string()],
+        });
+        let policy = resolve_egress_policy(&requested).unwrap().unwrap();
+        assert_eq!(policy.mode, sandkiln_vmm::egress::EgressMode::DenyAll);
+        assert_eq!(policy.allow_cidrs, vec!["10.0.0.0/8".to_string()]);
+        assert_eq!(policy.deny_cidrs, vec!["192.168.1.1/32".to_string()]);
+    }
+
+    #[test]
+    fn resolve_egress_policy_rejects_a_malformed_allow_cidr() {
+        let requested = Some(EgressPolicyRequest {
+            mode: EgressModeRequest::AllowAll,
+            allow_cidrs: vec!["not-a-cidr".to_string()],
+            deny_cidrs: vec![],
+        });
+        let err = resolve_egress_policy(&requested).unwrap_err();
+        assert!(err.contains("not-a-cidr"), "message was: {err}");
+    }
+
+    #[test]
+    fn resolve_egress_policy_rejects_a_malformed_deny_cidr() {
+        let requested = Some(EgressPolicyRequest {
+            mode: EgressModeRequest::AllowAll,
+            allow_cidrs: vec![],
+            deny_cidrs: vec!["10.0.0.0/33".to_string()],
+        });
+        let err = resolve_egress_policy(&requested).unwrap_err();
+        assert!(err.contains("10.0.0.0/33"), "message was: {err}");
     }
 
     #[test]

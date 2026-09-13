@@ -185,6 +185,45 @@ if `SANDKILN_BASE_ROOTFS` looks like the small test image, and
 `--root-checks` verifies the agent is actually baked into whatever image
 is configured — run it before starting the daemon for real.
 
+## 4b. Remote storage mounts (optional)
+
+Skip this section unless you want sandboxes to be able to mount an
+S3-compatible bucket into their own filesystem (`POST
+/sandboxes/:id/mounts`). It needs two things neither the quick test path
+nor the production path above gives you by default:
+
+**A guest kernel built with `CONFIG_FUSE_FS`.** Firecracker's own
+default/CI kernel builds — including the one `images/fetch-test-image.sh`
+downloads in section 3 — don't enable FUSE, and guest kernels can't load
+modules at runtime, so this has to be compiled in:
+
+```
+images/build-guest-kernel.sh 5.10.223 ~/sandkiln-tools/images/vmlinux-5.10.223-fuse
+```
+
+Needs a kernel build toolchain (`sudo apt-get install -y build-essential
+flex bison libelf-dev bc`) and a few minutes. Point the daemon at the
+result with `SANDKILN_KERNEL_PATH=~/sandkiln-tools/images/vmlinux-5.10.223-fuse`
+(section 7) — this fully replaces the default kernel for every sandbox,
+not just ones that use mounts, so there's no reason not to just always
+use the FUSE-enabled one once you've built it.
+
+**`rclone` and `fusermount3` baked into the rootfs**, the same way the
+guest agent is (section 4) — a static binary injection rather than an
+apt package, since `rclone mount` is what actually talks to the bucket
+from inside the guest:
+
+```
+scripts/dev.sh inject-rclone <path-to-a-static-rclone-binary> [rootfs-path]
+```
+
+Download a static `rclone` build for your architecture, then run the
+above (`rootfs-path` defaults the same way `inject-agent` does).
+`fusermount3` comes along for free from this host's own `/bin/fusermount3`
+(install the `fuse3` package here if it's missing) — see
+`images/inject-rclone.sh`'s own header comment for why rclone needs it
+even though the guest agent runs as root.
+
 ### Custom and managed images
 
 `SANDKILN_BASE_ROOTFS` is the daemon-wide default every sandbox boots
@@ -407,6 +446,8 @@ source):
 | `SANDKILN_HISTORY_DB_PATH` | `~/sandkiln-tools/history.db` | sqlite database of durable sandbox lifecycle history (`GET /sandboxes/history`) — survives a daemon restart, unlike `GET /sandboxes`; a still-live record found at startup is marked orphaned, since a restart unconditionally orphans whatever Firecracker process it referred to (this database records *that a sandbox existed and how it ended*, it cannot bring one back — see `core/crates/store`'s module doc comment) |
 | `SANDKILN_IDLE_TIMEOUT_SECS` | unset (disabled) | auto-**destroy** a sandbox after this many idle seconds (no exec/read/write activity) — VM killed, network released, rootfs deleted, state gone for good; `0` also disables it |
 | `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS` | unset (disabled) | auto-**suspend** an idle sandbox instead: pause + snapshot it (same as `POST /sandboxes/:id/snapshot`) and free its VM/vcpu/memory, keeping it resumable; `0` also disables it. If both this and `SANDKILN_IDLE_TIMEOUT_SECS` are set, this must be strictly smaller — auto-suspend always gets first crack at an idle sandbox, and the destroy timeout becomes a backstop for a sandbox whose auto-suspend keeps failing (see `core/crates/daemon/src/config.rs`'s `auto_suspend_timeout` doc comment) |
+| `SANDKILN_ARCHIVE_TIMEOUT_SECS` | unset (disabled) | auto-**archive** a held snapshot (any origin — auto-suspend or a manual `POST /sandboxes/:id/snapshot`) after it's sat unresumed this many seconds: moves its `state.snap`/`mem.bin` onto `SANDKILN_ARCHIVE_DIR`, off `snapshots_root()`'s default location under `$TMPDIR` (often tmpfs); `0` also disables it. Independent of the two settings above — no ordering requirement, applies regardless of whether either is even set. **The rootfs backing file never moves**, archived or not — Firecracker bakes its absolute host path into `state.snap` itself with no override at resume time, confirmed by a real resume failure when an earlier version of this feature tried moving it too (see `core/crates/daemon/src/snapshot.rs`'s `move_snapshot_files` doc comment) — so this is a real, but partial, win: `mem.bin` alone is exactly the guest's configured RAM size, often comparable to or larger than the rootfs copy |
+| `SANDKILN_ARCHIVE_DIR` | `~/sandkiln-tools/archive` | where `SANDKILN_ARCHIVE_TIMEOUT_SECS` moves an idle snapshot's files — point this at a real disk (not another tmpfs path) to actually get the durability/RAM-pressure benefit; only matters if that timeout is set, but always has a default like `SANDKILN_DRIVES_DIR`/`SANDKILN_IMAGES_DIR` |
 | `SANDKILN_LOG_FORMAT` | `pretty` | set to `json` for one JSON object per log line, for log pipelines that parse fields |
 | `SANDKILN_PREVIEW_TIMEOUT_SECS` | `30` | how long a dev-server preview proxy request waits for the guest to respond before a `504` |
 | `SANDKILN_JAILER_ENABLED` | unset (disabled) | boot sandboxes via Firecracker's jailer instead of a direct spawn — see "Optional: jailer-based sandbox boot" above |
@@ -713,6 +754,24 @@ trusting the result — that's exactly what it exists for.
   bookkeeping of *running* sandboxes is in-memory only regardless — a
   restart never preserves live sandboxes (their VM processes exit with
   the daemon), only drives and snapshots on disk.
+- **Time-travel restore and its disk cost**: `POST /snapshots/:id/resume`
+  retains the snapshot it consumes by default now, instead of deleting
+  it — it becomes a restorable checkpoint under `GET /snapshots/history`
+  (`POST /snapshots/history/:id/restore` to go back to it later, `DELETE
+  /snapshots/history/:id` to reclaim its disk). These live under
+  `$TMPDIR/sandkiln-snapshot-history`, same reboot-survival caveat as
+  `sandkiln-snapshots` above. **This has a real, unbounded disk cost if
+  left unmanaged**: every resume now keeps a full guest-memory dump
+  (comparable to the sandbox's configured RAM) plus a private rootfs
+  copy, forever, until explicitly deleted — found live while building
+  this, where routine testing alone filled a 468GB disk. There is no
+  automatic expiry yet (a deliberately deferred follow-up — see
+  `ROADMAP.md`'s "Persistence and snapshotting" section); if your
+  workload resumes frequently and you don't need to travel back further
+  than the latest state, either delete old checkpoints yourself via `GET
+  /snapshots/history` + `DELETE /snapshots/history/:id`, or pass
+  `?retain_history=false` on `POST /snapshots/:id/resume` to opt back
+  into the original, zero-retention behavior for that call.
 - **Cleanup on crash**: if `sandkilnd` is killed ungracefully, any
   Firecracker child processes it had spawned are orphaned (not part of
   a process group the daemon tears down on its own exit) — check

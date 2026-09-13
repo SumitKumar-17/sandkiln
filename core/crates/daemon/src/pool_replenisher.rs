@@ -64,6 +64,10 @@ async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) {
         mem_size_mib: Some(config.mem_size_mib),
         image_id: config.image_id.clone(),
         rate_limit: None,
+        // A warm-boot instance never has an egress policy baked in ahead
+        // of time -- the actual claimer's own policy (if any) is applied
+        // fresh at claim time instead, see `routes_sandbox::claim_from_pool`.
+        egress: None,
     };
     let sandbox_id = match create_sandbox_core(state, request).await {
         Ok(id) => id,

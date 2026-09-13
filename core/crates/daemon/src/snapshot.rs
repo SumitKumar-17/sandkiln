@@ -1,4 +1,5 @@
-use crate::state::AttachedDrive;
+use crate::state::{AttachedDrive, Mount};
+use sandkiln_vmm::egress::EgressPolicy;
 use sandkiln_vmm::network::{Lease, NetworkManager};
 use sandkiln_vmm::vm::NetworkConfig;
 use serde::{Deserialize, Serialize};
@@ -76,6 +77,43 @@ pub struct Snapshot {
     /// and `snapshot_sandbox` alike before any of them touch this
     /// snapshot's shared resources.
     pub forked_into: Option<String>,
+    /// When this snapshot's files were moved from `snapshots_root()` to
+    /// the daemon's configured `archive_dir` — `None` means it's still
+    /// "hot" (the original, only location before archiving existed).
+    /// Set once, by `archive_snapshot_by_id`, and never cleared — there's
+    /// no "un-archive" operation; resuming/forking reads straight from
+    /// wherever `snapshot_path`/`mem_file_path`/`rootfs_path` currently
+    /// point, hot or archived, with no code-path difference either way.
+    /// See `crate::idle_reaper`'s archive pass and `Config::archive_timeout`.
+    pub archived_at: Option<SystemTime>,
+    /// The egress policy the sandbox this came from had, if any — carried
+    /// through so `routes_snapshot::resume_snapshot_by_id`/`fork_snapshot`
+    /// can (re-)apply it via `sandkiln_vmm::egress::apply`. Without this,
+    /// a protected sandbox's firewall would silently disappear the moment
+    /// it's ever snapshotted and resumed — a real security regression,
+    /// not just a lost convenience.
+    pub egress: Option<EgressPolicy>,
+    /// The snapshot the sandbox that produced this one was itself
+    /// resumed or forked from, if any — carried straight over from
+    /// `Sandbox::source_snapshot_id` at the moment this snapshot was
+    /// taken. `None` means this snapshot's source sandbox was cold-booted
+    /// (from the base rootfs or a registered image), making this snapshot
+    /// a root of its own lineage rather than a link in a longer chain.
+    /// This is a *parent* pointer, not a live reference — the parent
+    /// snapshot named here may since have been deleted, in which case the
+    /// chain simply ends at this snapshot as far as `GET /snapshots`
+    /// (`?parent_snapshot_id=`) can still see. See `ROADMAP.md`'s
+    /// "Snapshot lineage" entry for why a pointer (walkable in both
+    /// directions via that filter) rather than a fuller durable ancestry
+    /// tree is the deliberately narrow first slice here.
+    pub parent_snapshot_id: Option<String>,
+    /// Carried over from the source sandbox's `Sandbox::mounts` — see
+    /// `crate::routes_mounts`'s module doc comment. No credentials here
+    /// (never were, on the `Sandbox` side either), and nothing to
+    /// re-apply on resume/fork: the mount is a live guest-side FUSE
+    /// process, already captured in the snapshotted memory image along
+    /// with everything else.
+    pub mounts: Vec<Mount>,
 }
 
 /// On-disk mirror of everything about a `Snapshot` that isn't already
@@ -110,15 +148,40 @@ struct SnapshotMeta {
     /// `None`, not fail `reconcile()` outright.
     #[serde(default)]
     name: Option<String>,
+    /// Same "defaults cleanly on upgrade" reasoning as `name` — absent in
+    /// metadata written before archiving existed, or for anything that
+    /// was never archived.
+    #[serde(default)]
+    archived_at_unix: Option<u64>,
+    /// Same "defaults cleanly on upgrade" reasoning as `name` — absent in
+    /// metadata written before egress policies existed, or for a
+    /// snapshot whose sandbox never had one.
+    #[serde(default)]
+    egress: Option<EgressPolicy>,
+    /// Same "defaults cleanly on upgrade" reasoning as `name` — absent in
+    /// metadata written before lineage tracking existed, or for a root
+    /// snapshot with no parent.
+    #[serde(default)]
+    parent_snapshot_id: Option<String>,
+    /// Same "defaults cleanly on upgrade" reasoning as `name` — absent in
+    /// metadata written before remote storage mounts existed, or for a
+    /// snapshot whose sandbox never had any.
+    #[serde(default)]
+    mounts: Vec<Mount>,
 }
 
 impl Snapshot {
-    /// Writes this snapshot's metadata to `snapshot_dir(&self.id)`,
-    /// atomically (write-then-rename, see `write_atomically`) so a crash
-    /// mid-write can never leave a torn, half-written metadata file
-    /// behind for `reconcile` to trip over. Assumes the directory already
-    /// exists — `snapshot_sandbox` creates it before this is ever called.
-    pub fn persist(&self) -> io::Result<()> {
+    /// Writes this snapshot's metadata into `dir`, atomically
+    /// (write-then-rename, see `write_atomically`) so a crash mid-write
+    /// can never leave a torn, half-written metadata file behind for
+    /// `reconcile` to trip over. Assumes `dir` already exists.
+    ///
+    /// Takes the target directory explicitly rather than always deriving
+    /// it from `snapshot_dir(&self.id)` (the hot root) specifically so
+    /// `archive_snapshot_by_id` can reuse this to write metadata into the
+    /// *archive* directory instead — the two are the only call sites, and
+    /// each already knows which root it's writing into.
+    pub fn persist(&self, dir: &Path) -> io::Result<()> {
         let meta = SnapshotMeta {
             id: self.id.clone(),
             source_sandbox_id: self.source_sandbox_id.clone(),
@@ -133,9 +196,13 @@ impl Snapshot {
             tags: self.tags.clone(),
             created_at_unix: self.created_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
             name: self.name.clone(),
+            archived_at_unix: self.archived_at.map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()),
+            egress: self.egress.clone(),
+            parent_snapshot_id: self.parent_snapshot_id.clone(),
+            mounts: self.mounts.clone(),
         };
         let json = serde_json::to_vec_pretty(&meta).map_err(|e| io::Error::other(format!("serializing snapshot metadata: {e}")))?;
-        write_atomically(&meta_path(&snapshot_dir(&self.id)), &json)
+        write_atomically(&meta_path(dir), &json)
     }
 }
 
@@ -153,16 +220,88 @@ pub fn snapshot_dir(snapshot_id: &str) -> PathBuf {
     snapshots_root().join(snapshot_id)
 }
 
-fn meta_path(dir: &Path) -> PathBuf {
+// Shared with `snapshot_history.rs` (`pub(crate)`) -- a retired checkpoint
+// lives in its own per-id directory with these exact same three filenames,
+// same reasoning as sharing `move_file`/`write_atomically` below: the
+// naming scheme itself isn't snapshot-specific, just a directory-layout
+// convention both modules use identically.
+pub(crate) fn meta_path(dir: &Path) -> PathBuf {
     dir.join("meta.json")
 }
 
-fn state_path(dir: &Path) -> PathBuf {
+pub(crate) fn state_path(dir: &Path) -> PathBuf {
     dir.join("state.snap")
 }
 
-fn mem_path(dir: &Path) -> PathBuf {
+pub(crate) fn mem_path(dir: &Path) -> PathBuf {
     dir.join("mem.bin")
+}
+
+/// Where one archived snapshot's files live, under the daemon's
+/// configured `Config::archive_dir` — same per-snapshot-directory shape
+/// as `snapshot_dir`, just under a separately configured root. See
+/// `archive_snapshot_by_id`.
+pub fn archive_snapshot_dir(archive_root: &Path, snapshot_id: &str) -> PathBuf {
+    archive_root.join(snapshot_id)
+}
+
+/// Moves a snapshot's state and memory files from wherever they
+/// currently live into `dest_dir` (created if needed), renaming each to
+/// this module's own fixed filenames.
+///
+/// **Deliberately does not touch `snapshot.rootfs_path` at all.**
+/// Firecracker bakes the rootfs backing file's absolute host path into
+/// `state.snap` itself with no override at resume time, so moving it
+/// breaks every future resume/fork — confirmed by a real resume failure
+/// when an earlier version of this function moved it too. See the
+/// website's Persistence model architecture page (or `ROADMAP.md`'s
+/// "Persistence and snapshotting" section, tiered idle lifecycle entry)
+/// for the full incident and the general rootfs-is-a-path-not-a-value
+/// invariant it follows from. Archiving only relocates the two files
+/// that genuinely can move, `state.snap` and `mem.bin`.
+///
+/// `snapshot`'s own path fields are updated **immediately after each
+/// individual file's move succeeds**, not all at once at the end — so if
+/// this returns `Err` partway through (the mem file's move failing after
+/// the state file's already moved), `snapshot` always accurately reflects
+/// where each file *actually* is on disk right now, even though that's
+/// now a mix of the old and new directories. This can't be made fully
+/// atomic (a cross-filesystem move is never atomic at the OS level), so a
+/// caller that hits this needs to treat it like `reconcile()`'s own
+/// "incomplete snapshot directory" case: real, needs attention, not
+/// something to silently paper over or guess at.
+///
+/// Prefers a `rename` (instant, same-filesystem) and falls back to
+/// copy-then-remove-original only if that fails — the common case is
+/// `dest_dir` on a different filesystem than the hot path entirely (the
+/// whole point of archiving), so this fallback is the expected path in
+/// practice, not a rare corner case.
+pub(crate) fn move_snapshot_files(snapshot: &mut Snapshot, dest_dir: &Path) -> io::Result<()> {
+    fs::create_dir_all(dest_dir)?;
+
+    let new_state = state_path(dest_dir);
+    move_file(&snapshot.snapshot_path, &new_state)?;
+    snapshot.snapshot_path = new_state;
+
+    let new_mem = mem_path(dest_dir);
+    move_file(&snapshot.mem_file_path, &new_mem)?;
+    snapshot.mem_file_path = new_mem;
+
+    Ok(())
+}
+
+// `pub(crate)`: `snapshot_history.rs`'s own retire/restore file movement
+// reuses this rather than re-implementing the same rename-with-cross-
+// filesystem-fallback dance a second time.
+pub(crate) fn move_file(src: &Path, dst: &Path) -> io::Result<()> {
+    if fs::rename(src, dst).is_ok() {
+        return Ok(());
+    }
+    // Cross-filesystem rename fails (EXDEV) -- fall back to a real copy
+    // followed by removing the source, rather than treating the initial
+    // `rename` failure as final.
+    fs::copy(src, dst)?;
+    fs::remove_file(src)
 }
 
 /// Writes `contents` to `path` without ever leaving a torn (partially
@@ -174,7 +313,7 @@ fn mem_path(dir: &Path) -> PathBuf {
 /// never a mix. The temp file lives next to `path` (not in a shared temp
 /// dir) specifically so the rename is guaranteed to stay on one
 /// filesystem — a cross-filesystem rename is not atomic.
-fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
     let mut tmp_name = path.as_os_str().to_owned();
     tmp_name.push(".tmp");
     let tmp_path = PathBuf::from(tmp_name);
@@ -204,35 +343,50 @@ fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-/// Scans `snapshots_root()` and reconstructs every valid `Snapshot`
-/// found on disk — the reconciliation step that makes snapshots durable
-/// across a daemon restart, mirroring `DriveStore::list()`'s "the
+/// Scans `snapshots_root()` (hot) and `archive_root` (see
+/// `Config::archive_dir`) and reconstructs every valid `Snapshot` found
+/// on disk across both — the reconciliation step that makes snapshots
+/// durable across a daemon restart, mirroring `DriveStore::list()`'s "the
 /// filesystem is the source of truth" pattern. Call once at startup,
 /// before the HTTP listener starts accepting connections and before any
 /// live `NetworkManager::lease()` call can race a reconciled snapshot's
-/// held tap device (see `NetworkManager::reserve`).
+/// held tap device (see `NetworkManager::reserve`). `archive_root` is
+/// always scanned, regardless of whether `Config::archive_timeout` is
+/// currently set — that only controls whether *new* snapshots get
+/// archived going forward, and turning it off must not silently orphan
+/// snapshots already archived under it (harmless if the directory has
+/// never existed at all: `scan_root` treats "not found" as "nothing
+/// here", same as it already does for a hot root that's never been used).
 ///
 /// A snapshot directory missing any of its three files (`meta.json`,
 /// `state.snap`, `mem.bin`) — the signature of a crash mid-snapshot-
 /// creation, since all three are only ever produced together by
-/// `snapshot_sandbox` — is treated as invalid and skipped with a warning
-/// log rather than reconciled or silently deleted; the files are left in
+/// `snapshot_sandbox`, or mid-archive (see `move_snapshot_files`'s own
+/// doc comment) — is treated as invalid and skipped with a warning log
+/// rather than reconciled or silently deleted; the files are left in
 /// place for manual inspection rather than the daemon guessing at
 /// recovery. Likewise a `meta.json` that fails to parse.
-pub fn reconcile(network: &NetworkManager) -> HashMap<String, Snapshot> {
+pub fn reconcile(network: &NetworkManager, archive_root: &Path) -> HashMap<String, Snapshot> {
     let mut snapshots = HashMap::new();
-    let root = snapshots_root();
+    scan_root(&snapshots_root(), network, &mut snapshots);
+    scan_root(archive_root, network, &mut snapshots);
+    snapshots
+}
 
-    let entries = match fs::read_dir(&root) {
+/// One root's worth of `reconcile`'s work — pulled out so `reconcile`
+/// can call it once per root (hot, then archive) without duplicating the
+/// scan-and-validate loop.
+fn scan_root(root: &Path, network: &NetworkManager, snapshots: &mut HashMap<String, Snapshot>) {
+    let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return snapshots,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return,
         Err(e) => {
             tracing::warn!(
                 error = %e,
                 dir = %root.display(),
-                "failed to scan snapshots directory on startup — starting with no reconciled snapshots"
+                "failed to scan a snapshots directory on startup — treating it as having nothing to reconcile"
             );
-            return snapshots;
+            return;
         }
     };
 
@@ -254,14 +408,12 @@ pub fn reconcile(network: &NetworkManager) -> HashMap<String, Snapshot> {
 
         match load_one(&dir, id, network) {
             Some(snapshot) => {
-                tracing::info!(snapshot_id = %id, "reconciled snapshot from disk");
+                tracing::info!(snapshot_id = %id, archived = snapshot.archived_at.is_some(), "reconciled snapshot from disk");
                 snapshots.insert(id.to_string(), snapshot);
             }
             None => continue,
         }
     }
-
-    snapshots
 }
 
 /// Loads and validates one snapshot directory. Returns `None` (having
@@ -344,6 +496,10 @@ fn load_one(dir: &Path, id: &str, network: &NetworkManager) -> Option<Snapshot> 
         // comment: only the original snapshot's files persist), so a
         // reconciled snapshot always starts with no live fork.
         forked_into: None,
+        archived_at: meta.archived_at_unix.map(|secs| UNIX_EPOCH + Duration::from_secs(secs)),
+        egress: meta.egress,
+        parent_snapshot_id: meta.parent_snapshot_id,
+        mounts: meta.mounts,
     })
 }
 
@@ -397,6 +553,10 @@ mod tests {
             tags: HashMap::from([("env".to_string(), "test".to_string())]),
             created_at_unix: 1_700_000_000,
             name: Some("sample-snapshot".to_string()),
+            archived_at_unix: None,
+            egress: None,
+            parent_snapshot_id: None,
+            mounts: vec![],
         }
     }
 
@@ -487,9 +647,19 @@ mod tests {
             created_at: UNIX_EPOCH + Duration::from_secs(1_700_000_123),
             name: Some("round-trip-name".to_string()),
             forked_into: None,
+            archived_at: None,
+            egress: None,
+            parent_snapshot_id: Some("snap-parent-1".to_string()),
+            mounts: vec![Mount {
+                id: "mount-1".to_string(),
+                bucket: "my-bucket".to_string(),
+                endpoint: "https://s3.example.com".to_string(),
+                mount_path: "/mnt/data".to_string(),
+                read_only: true,
+            }],
         };
 
-        snapshot.persist().unwrap();
+        snapshot.persist(&real.dir).unwrap();
 
         let fresh_network = test_network(["tapA".to_string(), "tapB".to_string()]);
         let loaded = load_one(&real.dir, real.id, &fresh_network).expect("a fully-written snapshot must reconcile");
@@ -510,6 +680,18 @@ mod tests {
         assert_eq!(loaded.tags.get("owner"), Some(&"sumit".to_string()));
         assert_eq!(loaded.created_at.duration_since(UNIX_EPOCH).unwrap().as_secs(), 1_700_000_123);
         assert_eq!(loaded.name.as_deref(), Some("round-trip-name"));
+        assert_eq!(loaded.archived_at, None);
+        assert_eq!(loaded.parent_snapshot_id.as_deref(), Some("snap-parent-1"));
+        assert_eq!(
+            loaded.mounts,
+            vec![Mount {
+                id: "mount-1".to_string(),
+                bucket: "my-bucket".to_string(),
+                endpoint: "https://s3.example.com".to_string(),
+                mount_path: "/mnt/data".to_string(),
+                read_only: true,
+            }]
+        );
 
         // The reconciled snapshot's tap must be pulled out of the fresh
         // manager's free pool — the actual double-lease-prevention
@@ -546,6 +728,60 @@ mod tests {
         let network = test_network(["tapA".to_string()]);
         let loaded = load_one(&dir, "snap-no-name", &network).expect("must reconcile despite the missing name key");
         assert_eq!(loaded.name, None);
+    }
+
+    #[test]
+    fn load_one_defaults_parent_snapshot_id_to_none_for_metadata_written_before_lineage_existed() {
+        let t = TempDir::new("no-parent-snapshot-id-key");
+        let dir = t.path.join("snap-no-parent");
+        fs::create_dir_all(&dir).unwrap();
+        let meta_without_parent = serde_json::json!({
+            "id": "snap-no-parent",
+            "source_sandbox_id": "sandbox-1",
+            "rootfs_path": "/tmp/sandkiln-rootfs-1.ext4",
+            "tap_device": "tapA",
+            "guest_ip": "172.16.0.5",
+            "gateway_ip": "172.16.0.1",
+            "guest_mac": "AA:FC:00:00:05:05",
+            "host_octet": 5,
+            "attached_drives": [{"drive_id": "d1", "read_only": false}],
+            "tags": {},
+            "created_at_unix": 1_700_000_000u64,
+        });
+        fs::write(meta_path(&dir), serde_json::to_vec(&meta_without_parent).unwrap()).unwrap();
+        fs::write(state_path(&dir), b"state").unwrap();
+        fs::write(mem_path(&dir), b"mem").unwrap();
+
+        let network = test_network(["tapA".to_string()]);
+        let loaded = load_one(&dir, "snap-no-parent", &network).expect("must reconcile despite the missing parent_snapshot_id key");
+        assert_eq!(loaded.parent_snapshot_id, None);
+    }
+
+    #[test]
+    fn load_one_defaults_mounts_to_empty_for_metadata_written_before_remote_mounts_existed() {
+        let t = TempDir::new("no-mounts-key");
+        let dir = t.path.join("snap-no-mounts");
+        fs::create_dir_all(&dir).unwrap();
+        let meta_without_mounts = serde_json::json!({
+            "id": "snap-no-mounts",
+            "source_sandbox_id": "sandbox-1",
+            "rootfs_path": "/tmp/sandkiln-rootfs-1.ext4",
+            "tap_device": "tapA",
+            "guest_ip": "172.16.0.5",
+            "gateway_ip": "172.16.0.1",
+            "guest_mac": "AA:FC:00:00:05:05",
+            "host_octet": 5,
+            "attached_drives": [{"drive_id": "d1", "read_only": false}],
+            "tags": {},
+            "created_at_unix": 1_700_000_000u64,
+        });
+        fs::write(meta_path(&dir), serde_json::to_vec(&meta_without_mounts).unwrap()).unwrap();
+        fs::write(state_path(&dir), b"state").unwrap();
+        fs::write(mem_path(&dir), b"mem").unwrap();
+
+        let network = test_network(["tapA".to_string()]);
+        let loaded = load_one(&dir, "snap-no-mounts", &network).expect("must reconcile despite the missing mounts key");
+        assert_eq!(loaded.mounts, Vec::new());
     }
 
     #[test]
@@ -655,5 +891,87 @@ mod tests {
              live lease() cannot double-hand it to a different sandbox"
         );
         assert!(network.free_tap_devices().contains(&"tapB".to_string()));
+    }
+
+    #[test]
+    fn move_file_relocates_real_content_within_one_filesystem() {
+        let t = TempDir::new("move-file-same-fs");
+        let src = t.path.join("src.bin");
+        let dst = t.path.join("nested").join("dst.bin");
+        fs::create_dir_all(dst.parent().unwrap()).unwrap();
+        fs::write(&src, b"snapshot bytes").unwrap();
+
+        move_file(&src, &dst).unwrap();
+
+        assert_eq!(fs::read(&dst).unwrap(), b"snapshot bytes");
+        assert!(!src.exists(), "the source must be gone after a move, not just copied");
+    }
+
+    #[test]
+    fn move_file_fails_cleanly_for_a_missing_source() {
+        let t = TempDir::new("move-file-missing");
+        let result = move_file(&t.path.join("does-not-exist.bin"), &t.path.join("dst.bin"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn move_snapshot_files_relocates_state_and_mem_but_leaves_rootfs_exactly_where_it_was() {
+        let t = TempDir::new("move-snapshot-files");
+        let hot = t.path.join("hot");
+        let archive = t.path.join("archive");
+        fs::create_dir_all(&hot).unwrap();
+        let state_file = hot.join("state.snap");
+        let mem_file = hot.join("mem.bin");
+        let rootfs_file = t.path.join("sandkiln-rootfs-loose.ext4");
+        fs::write(&state_file, b"state").unwrap();
+        fs::write(&mem_file, b"mem").unwrap();
+        fs::write(&rootfs_file, b"rootfs").unwrap();
+
+        let network = test_network(["tapA".to_string()]);
+        let mut snapshot = Snapshot {
+            id: "snap-move".to_string(),
+            source_sandbox_id: "sandbox-1".to_string(),
+            snapshot_path: state_file.clone(),
+            mem_file_path: mem_file.clone(),
+            rootfs_path: rootfs_file.clone(),
+            network: network.reserve(
+                NetworkConfig {
+                    tap_device: "tapA".to_string(),
+                    guest_ip: "172.16.0.9".parse().unwrap(),
+                    gateway_ip: "172.16.0.1".parse().unwrap(),
+                    guest_mac: "AA:FC:00:00:09:09".to_string(),
+                },
+                9,
+            ),
+            attached_drives: vec![],
+            image_id: None,
+            tags: HashMap::new(),
+            created_at: SystemTime::now(),
+            name: None,
+            forked_into: None,
+            archived_at: None,
+            egress: None,
+            parent_snapshot_id: None,
+            mounts: vec![],
+        };
+
+        move_snapshot_files(&mut snapshot, &archive).unwrap();
+
+        assert_eq!(snapshot.snapshot_path, state_path(&archive));
+        assert_eq!(snapshot.mem_file_path, mem_path(&archive));
+        assert_eq!(fs::read(&snapshot.snapshot_path).unwrap(), b"state");
+        assert_eq!(fs::read(&snapshot.mem_file_path).unwrap(), b"mem");
+        assert!(!state_file.exists());
+        assert!(!mem_file.exists());
+
+        // The one thing this whole test exists to pin down: Firecracker
+        // bakes the rootfs backing file's absolute host path into
+        // state.snap itself, with no override at resume time -- moving
+        // it would silently break every future resume/fork of this
+        // snapshot. `rootfs_path` must be untouched, and the file itself
+        // must still be exactly where it started.
+        assert_eq!(snapshot.rootfs_path, rootfs_file);
+        assert_eq!(fs::read(&snapshot.rootfs_path).unwrap(), b"rootfs");
+        assert!(rootfs_file.exists());
     }
 }

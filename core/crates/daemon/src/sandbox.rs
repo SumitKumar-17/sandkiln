@@ -1,4 +1,5 @@
-use crate::state::AttachedDrive;
+use crate::state::{AttachedDrive, Mount};
+use sandkiln_vmm::egress::EgressPolicy;
 use sandkiln_vmm::network::Lease;
 use sandkiln_vmm::vm::Vm;
 use std::collections::HashMap;
@@ -18,10 +19,18 @@ pub struct Sandbox {
     /// consuming-resumed via `/snapshots/:id/resume`) owns its lease
     /// outright.
     pub network: Option<Lease>,
-    /// This sandbox's own copy of the base rootfs image. Removed on stop
-    /// — unless `source_snapshot_id` is set, in which case this path is
-    /// the snapshot's shared rootfs file, not this sandbox's own, and
-    /// must survive so the snapshot can be forked/resumed again.
+    /// This sandbox's own private copy of the base rootfs image — always
+    /// its own, including a forked or restored sandbox (each gets a
+    /// fresh clone at fork/restore time via `routes_sandbox::clone_rootfs`,
+    /// never the source snapshot's/checkpoint's own file directly), so
+    /// `destroy_sandbox_by_id` removes it unconditionally on full
+    /// teardown. **Not always true before this was fixed**: forking used
+    /// to hand out the source snapshot's rootfs file directly, a real
+    /// bug found live while building time-travel restore — fork, mutate
+    /// the shared file, stop the fork, then resume the *original*
+    /// snapshot directly, and its memory state (describing the rootfs as
+    /// of the original snapshot) disagreed with what was actually on
+    /// disk. See `routes_snapshot::fork_snapshot`'s own doc comment.
     pub rootfs_path: PathBuf,
     /// Persistent drives attached at creation (see
     /// `sandkiln_vmm::drive::DriveStore`), each with whether it was
@@ -59,8 +68,12 @@ pub struct Sandbox {
     /// `/resume` — see `Snapshot::forked_into`, which this is the other
     /// half of: `routes_sandbox::stop_sandbox_by_id` clears that lock on
     /// the referenced snapshot once this sandbox's `Vm` is fully stopped,
-    /// and skips deleting `rootfs_path` / releasing `network` here since
-    /// neither is owned by this sandbox.
+    /// and skips releasing `network` here since the lease isn't owned by
+    /// this sandbox (still borrowed from the live snapshot the whole
+    /// time — see `network`'s own doc comment above). `rootfs_path`
+    /// *is* still this sandbox's own to delete regardless, though — a
+    /// fork owns a private clone of it (see that field's doc comment),
+    /// not the source snapshot's file.
     pub source_snapshot_id: Option<String>,
     /// Caller-given identity, unique among live sandboxes and held
     /// snapshots at the moment it was claimed (see
@@ -83,4 +96,52 @@ pub struct Sandbox {
     /// needs to reach it long after `Sandbox` itself may no longer be
     /// reachable through the map at all.
     pub pty_session_count: Arc<AtomicU32>,
+    /// Set when this sandbox counts against a configured pool's
+    /// `max_count` (see `crate::pool`'s module doc comment for exactly
+    /// when) — a resumed warm claim or a cold-created instance made
+    /// under that pool's remaining headroom, never anything else. Read
+    /// by `destroy_sandbox_by_id`/`routes_snapshot::snapshot_and_stop` to
+    /// release the slot back when this sandbox stops being live, however
+    /// it stops. Deliberately **not** carried onto the `Snapshot` record
+    /// a stop might produce — a later resume/fork is a fresh creation
+    /// event, matched against whatever pool applies at that time, not
+    /// tied back to this one forever.
+    pub source_pool_id: Option<String>,
+    /// This sandbox's egress (outbound network) policy, if it was given
+    /// one at create time — see `sandkiln_vmm::egress`'s module doc
+    /// comment for the full design. `None` for a forked sandbox
+    /// (`source_snapshot_id.is_some()`), same ownership convention as
+    /// `network`: the underlying iptables chain is tied to the lease,
+    /// which the *snapshot* owns for a fork, not this `Sandbox` record —
+    /// see `Snapshot::egress` for the copy that actually gets
+    /// (re-)applied on resume/fork.
+    pub egress: Option<EgressPolicy>,
+    /// The snapshot this sandbox was resumed or forked from, if any —
+    /// purely informational, carried onto `Snapshot::parent_snapshot_id`
+    /// if/when this sandbox is itself snapshotted (see
+    /// `routes_snapshot::snapshot_and_stop`). **Deliberately a separate
+    /// field from `source_snapshot_id` above, not a reuse of it**:
+    /// `source_snapshot_id` being `Some` is specifically what
+    /// `check_snapshottable` reads to *refuse* snapshotting a forked
+    /// sandbox (it shares its snapshot's live rootfs file), and stays
+    /// `None` on resume specifically so a resumed sandbox — which owns
+    /// its rootfs outright — remains snapshottable. Lineage needs the
+    /// opposite shape: `Some` on **both** resume and fork (both really do
+    /// descend from that snapshot), `None` only for a genuinely
+    /// cold-booted sandbox. Reusing `source_snapshot_id` for this would
+    /// have silently made every resumed sandbox's lineage a dead end,
+    /// since a resumed sandbox is exactly the common case that *can* be
+    /// snapshotted again — this was caught live, not on paper (see
+    /// `ROADMAP.md`'s "Snapshot lineage" entry).
+    pub parent_snapshot_id: Option<String>,
+    /// Remote object-store mounts currently active inside this sandbox —
+    /// see `crate::routes_mounts`'s module doc comment. Unlike
+    /// `attached_drives`/`network`/`egress`, nothing here needs
+    /// re-applying on resume/fork/restore: a mount is a live guest-side
+    /// FUSE process, and Firecracker's snapshot mechanism already
+    /// captures a running process's full state along with everything
+    /// else in guest memory. This field exists purely so `GET
+    /// /sandboxes/:id/mounts` has something to list without needing a
+    /// live round-trip into the guest to ask.
+    pub mounts: Vec<Mount>,
 }

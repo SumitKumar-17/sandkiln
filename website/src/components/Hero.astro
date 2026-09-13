@@ -6,7 +6,17 @@
       <p class="lede">Built from the metal up: a Rust VMM, a static guest agent talking over vsock, an HTTP daemon that drives it all — no shell scripts in the hot path, no container escape surface.</p>
 
       <div class="stat-row">
-        <div class="stat"><b>32.7ms</b><span>Cold boot</span></div>
+        <div class="pyro">
+          <svg width="64" height="64" viewBox="0 0 64 64" aria-hidden="true">
+            <circle class="dial-track" cx="32" cy="32" r="26" pathLength="75" stroke-dasharray="75" stroke-dashoffset="18.75" />
+            <circle class="dial-value" cx="32" cy="32" r="26" pathLength="75" stroke-dasharray="75" stroke-dashoffset="67.5" />
+            <g class="needle">
+              <line x1="32" y1="32" x2="32" y2="12" stroke="var(--accent-glow)" stroke-width="2" stroke-linecap="round" />
+              <circle cx="32" cy="32" r="3" fill="var(--accent-glow)" />
+            </g>
+          </svg>
+          <div class="pyro-read"><b>32.7ms</b><span>Cold boot</span></div>
+        </div>
         <div class="stat"><b>250µs</b><span>Exec round-trip</span></div>
         <div class="stat"><b>MIT</b><span>License</span></div>
         <div class="stat"><b>Rust</b><span>Core engine</span></div>
@@ -19,11 +29,79 @@
     </div>
 
     <div class="term" id="term">
+      <canvas id="embers" aria-hidden="true"></canvas>
       <div class="term-bar"><span></span><span></span><span></span><b>sandkiln boot — real console output</b></div>
       <pre id="term-out"></pre>
     </div>
   </div>
 </section>
+
+<style>
+  #embers { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+</style>
+
+<script>
+  (function () {
+    var canvas = document.getElementById("embers");
+    if (!(canvas instanceof HTMLCanvasElement)) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    var ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    function resize() {
+      var rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    var accent = ["#ff8a4c", "#ff5a24", "#ffb28e"];
+    function makeEmber() {
+      var w = canvas.width, h = canvas.height;
+      return {
+        x: w * (0.15 + Math.random() * 0.7),
+        y: h + 10,
+        r: (1 + Math.random() * 2) * dpr,
+        vy: (0.25 + Math.random() * 0.5) * dpr,
+        vx: (Math.random() - 0.5) * 0.35 * dpr,
+        life: 0,
+        maxLife: 140 + Math.random() * 120,
+        color: accent[Math.floor(Math.random() * accent.length)],
+      };
+    }
+    var embers = [];
+    for (var i = 0; i < 22; i++) {
+      var e = makeEmber();
+      e.y = Math.random() * canvas.height;
+      embers.push(e);
+    }
+
+    function tick() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (var j = 0; j < embers.length; j++) {
+        var em = embers[j];
+        em.life++;
+        em.x += em.vx;
+        em.y -= em.vy;
+        var fade = 1 - em.life / em.maxLife;
+        if (fade <= 0 || em.y < -10) {
+          embers[j] = makeEmber();
+          continue;
+        }
+        ctx.globalAlpha = Math.max(0, fade) * 0.85;
+        ctx.fillStyle = em.color;
+        ctx.beginPath();
+        ctx.arc(em.x, em.y, em.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  })();
+</script>
 
 <script>
   (function () {

@@ -25,6 +25,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tower-http = { version = "0.5", features = ["trace"] }
 uuid = { version = "1", features = ["v4"] }
 caps = "0.5"
+# For encoding the credentials file `routes_mounts.rs` writes into the
+# guest via `Request::WriteFile` -- every other caller of that request
+# base64-encodes real *file* content on their own side and passes it
+# through untouched; this is the first daemon-originated content that
+# needs the same encoding done here instead. Same crate/API
+# `sandkiln-guest-agent` already uses for the decode side.
+base64 = "0.22"
 # Already implicit in the dependency tree via axum 0.7 (which is built on
 # hyper 1.x); these just turn on the client side of what's already there
 # for the /preview reverse proxy, rather than pulling in a whole separate

@@ -14,6 +14,151 @@ Changelog](https://keepachangelog.com/).
 ## Unreleased
 
 ### Added
+- Remote storage mounts (daemon only — no SDK/CLI change, nothing to
+  publish yet). `POST/GET/DELETE /sandboxes/:id/mounts` mounts an
+  S3-compatible bucket into a sandbox via `rclone mount`, running
+  entirely inside the guest through the existing
+  `Mkdir`/`WriteFile`/`Chmod`/`Exec` guest requests — no new wire
+  protocol. Credentials go in as a `0600` rclone config file, never a
+  command-line argument. See `ROADMAP.md`'s "Drives and remote storage"
+  section and `routes_mounts.rs`'s module doc comment for the full
+  design.
+  - Found live, the hard way: Firecracker's own default/CI guest kernels
+    don't enable `CONFIG_FUSE_FS`, and guest kernels can't load modules at
+    runtime, so `/dev/fuse` doesn't exist at all in a stock setup —
+    required building a custom kernel (`images/build-guest-kernel.sh`)
+    against Firecracker's own recommended config as the base. Also found
+    that rclone's Linux FUSE backend always execs `fusermount3` to do the
+    actual mount, even running as root — `images/inject-rclone.sh` bakes
+    both in as static/near-static binaries, the same way the guest agent
+    itself is injected, since apt can't be relied on inside the rootfs.
+  - Verified end-to-end against a real `rclone serve s3` test fixture:
+    mount, read an existing object, write a new one and confirm it lands
+    on the backing store, list, and unmount — not just kernel-level FUSE
+    availability.
+- Time-travel restore (daemon only — no SDK/CLI change, nothing to
+  publish yet). `POST /snapshots/:id/resume` no longer deletes the
+  checkpoint it consumes by default — it retires into `GET
+  /snapshots/history`, restorable again later via `POST
+  /snapshots/history/:id/restore` (as many times as wanted — restoring
+  doesn't consume it either), and reclaimable outright via `DELETE
+  /snapshots/history/:id`. `?retain_history=false` opts back into the
+  original, zero-retention behavior. Sequential ("go back to any earlier
+  point"), not branching: restoring refuses (`409`, naming the current
+  holder) while anything else sharing that checkpoint's frozen network
+  identity is live or held, generalizing the same one-live-descendant
+  rule `Snapshot::forked_into` already enforces for fork across a whole
+  lineage's history instead of just its latest snapshot. A restored
+  sandbox owns its network lease and rootfs outright (unlike a fork), so
+  it stays snapshottable afterward. See `ROADMAP.md`'s "Persistence and
+  snapshotting" section for the full design.
+  - Found and fixed a real, pre-existing corruption bug while building
+    this: `POST /snapshots/:id/fork` shared its source snapshot's rootfs
+    file directly rather than a private copy — safe for two simultaneous
+    forks (blocked by `forked_into` already) but not two sequential ones
+    (fork, mutate, stop the fork, then resume the original directly —
+    the resumed memory state and the now-mutated shared file disagree).
+    Reproduced live, fixed by giving every fork its own private rootfs
+    clone, same as retirement's own checkpoints get.
+  - Found live, the operational way: retaining every resume's checkpoint
+    by default has a real, unbounded disk cost (a full guest-memory dump
+    plus a private rootfs copy, forever, until deleted) — routine manual
+    verification alone filled a 468GB dev-box disk during development.
+    `DELETE /snapshots/history/:id` was added specifically in response,
+    not part of the original design; automatic expiry is a deliberately
+    deferred follow-up (see `SELF_HOSTING.md`'s new "Time-travel restore
+    and its disk cost" guidance).
+  - Deliberately out of scope: true parallel branching (two checkpoints
+    from one lineage live at once) — blocked by the same
+    frozen-guest-network-identity constraint that already rules out true
+    concurrent forking, not a scope choice.
+  - 20 new `scripts/integration-test.sh` checks; also hardened
+    `claim_from_pool`'s post-resume MMDS metadata refresh with a bounded
+    retry (an existing, already-intermittent Firecracker-level race under
+    load, confirmed independent of this change by reproducing it against
+    an unmodified daemon) and fixed `integration-test.sh`'s own cleanup to
+    sweep `GET /snapshots/history` for anything retired during a run,
+    rather than trying to track every resume by hand across every topic
+    file — 294/294 passing overall.
+- Snapshot lineage (daemon only — no SDK/CLI change, nothing to publish
+  yet). `Snapshot.parent_snapshot_id` records the snapshot a new
+  snapshot's source sandbox was itself resumed/forked from, `None` for a
+  lineage root (a cold-booted source sandbox). Exposed on every `GET
+  /snapshots` result and queryable in the other direction too, via a new
+  `?parent_snapshot_id=<id>` filter (can genuinely match more than one
+  snapshot over time, unlike the existing `?source_sandbox_id=` filter) —
+  together enough to walk a full lineage tree in either direction without
+  a dedicated tree-shaped endpoint. Found and fixed a real bug live while
+  building this: the first version sourced the new pointer from the
+  already-existing `Sandbox::source_snapshot_id`, which is deliberately
+  `None` on resume (so a resumed sandbox stays eligible to be snapshotted
+  again) and only ever `Some` on a fork (which, by existing design, can
+  *never* be snapshotted again) — reusing it would have silently
+  dead-ended lineage for the common resume case while compiling and
+  passing every test written against it. Fixed with a second, dedicated
+  `Sandbox::parent_snapshot_id` field. See `ROADMAP.md`'s "Persistence
+  and snapshotting" section for the full story. 10 new
+  `scripts/integration-test.sh` checks, 267/267 passing overall.
+- Per-sandbox egress (outbound network) policy (daemon only — no SDK/CLI
+  change, nothing to publish yet). A new `egress: { mode, allow_cidrs,
+  deny_cidrs }` field on `POST /sandboxes`/`POST /sandboxes/get-or-create`
+  — `mode` is `allow_all` or `deny_all`, enforced via one dedicated
+  iptables chain per sandbox (`sandkiln_vmm::egress`) with deny always
+  beating allow on overlap via rule ordering, not special-casing. Applied
+  once a lease goes live (boot, pool claim, resume, fork) and removed
+  only when the lease is finally released, so it survives a plain
+  snapshot-and-stop the same way the underlying tap device does, and
+  persists correctly across snapshot/resume/fork (re-applied fresh each
+  time, with a re-apply failure on resume/fork treated as a loud warning
+  rather than fatal, since both are one-way operations). See
+  `ROADMAP.md`'s "Firewall and egress policy" section for the full design
+  and what's still deferred (domain/port-level rules, SDK/CLI exposure).
+  Live-verified against the real dev box: `deny_all`/`allow_cidrs`/
+  `deny_cidrs`/deny-wins-on-overlap all behave correctly, gateway-bound
+  (DNS) traffic stays reachable regardless of policy, and a policy
+  survives snapshot/resume/fork and is fully torn down on destroy. 12 new
+  `scripts/integration-test.sh` checks (the actual allow/deny behavior
+  needs a second real LAN address to test against, not guaranteed on
+  every machine this suite runs on, so that part is verified manually
+  instead — same tradeoff already made for the daemon-restart case
+  below), 257/257 passing overall.
+- Tiered idle lifecycle, archive tier (daemon only — no SDK/CLI change,
+  nothing to publish): `SANDKILN_ARCHIVE_TIMEOUT_SECS` moves a held
+  snapshot's `state.snap`/`mem.bin` onto a separately configured
+  `SANDKILN_ARCHIVE_DIR` once it's sat unresumed that long, applying to
+  any held snapshot regardless of how it arose. `GET /snapshots` reports
+  `archived_at_unix`. Live-verified end to end, including a real
+  Firecracker constraint found mid-build (the rootfs backing file's path
+  is baked into `state.snap` with no override at resume time — confirmed
+  by an actual resume failure after moving it — so only `state.snap`/
+  `mem.bin` move, `rootfs_path` never does) and a real latent bug it
+  surfaced (two existing snapshot-cleanup code paths derived the
+  directory to remove from a hardcoded hot-root path instead of the
+  snapshot's own current location, which would have silently leaked an
+  archived snapshot's files forever). See `ROADMAP.md`'s "Persistence and
+  snapshotting" section for the full story. 1 new
+  `scripts/integration-test.sh` check (the archive-after-timeout
+  behavior itself needs a differently-configured daemon, verified
+  manually instead — same tradeoff already made for the sqlite-history
+  restart case), 245/245 passing overall.
+- Pre-warmed pools: `max_count` ceiling with queueing (daemon only — no
+  SDK/CLI change, nothing to publish). `PoolConfig.max_count` caps the
+  total live instances (warm + claimed) a pool's profile may have at
+  once; a `POST /sandboxes` claim arriving at the ceiling with nothing
+  warm queues (a `tokio::sync::Notify` per pool) for up to 30s before a
+  real `503`, instead of rejecting outright or silently exceeding the
+  ceiling. `GET /pools` now also reports `max_count`/`claimed`.
+  Live-verified: blocks a second claim at capacity, wakes it the instant
+  a slot frees (not on a poll interval), and 503s cleanly after the full
+  30s when nothing frees up. Also fixed a real bug found by live-testing
+  this exact feature: a failed warm claim's cold-create fallback wasn't
+  being attributed back to the pool, letting `max_count` be silently
+  exceeded under this project's own already-documented high resume
+  failure rate — fixed with a bounded 3-attempt retry so the fallback
+  re-resolves pool capacity instead of falling through unattributed. See
+  `ROADMAP.md`'s "Persistence and snapshotting" section for the full
+  story. 8 new `scripts/integration-test.sh` checks, 244/244 passing
+  overall.
 - Pre-warmed pools (0.7.0, above) added to the Python SDK too
   (`Pool.create/list/delete`, `packages/python/src/sandkiln/pool.py`) —
   not published to PyPI yet, so nothing to version here, but live-verified

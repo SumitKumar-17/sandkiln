@@ -405,6 +405,7 @@ export interface CreatePoolRequestBody {
   vcpu_count?: number;
   mem_size_mib?: number;
   warm_count: number;
+  max_count?: number;
 }
 
 export interface PoolSummaryBody {
@@ -413,7 +414,9 @@ export interface PoolSummaryBody {
   vcpu_count: number;
   mem_size_mib: number;
   warm_count: number;
+  max_count: number | null;
   warm_ready: number;
+  claimed: number;
 }
 
 export interface ListPoolsResponseBody {
@@ -430,9 +433,16 @@ export interface PoolInfo {
   vcpuCount: number;
   memSizeMib: number;
   warmCount: number;
+  /** Maximum live instances (warm + claimed, combined) this pool's
+   * profile may ever have at once — `null` means unbounded. */
+  maxCount: number | null;
   /** How many resumable snapshots are actually sitting warm right now —
    * can be less than `warmCount` right after the pool is created or a
    * claim just drained it; replenishment happens in the background, not
    * instantly. */
   warmReady: number;
+  /** How many live instances of this pool's profile exist right now
+   * (warm or cold-created, either way) — only meaningful relative to
+   * `maxCount`. */
+  claimed: number;
 }

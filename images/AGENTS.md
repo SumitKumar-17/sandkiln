@@ -18,6 +18,19 @@ that mount/chroot).
   (mount, copy to `/usr/local/bin/`, install + enable a systemd service).
   Works against any rootfs with systemd, including whatever
   `build-universal-image.sh` produces (if that exists yet — check).
+- `build-guest-kernel.sh` — rebuilds `vmlinux` from vanilla kernel source
+  with `CONFIG_FUSE_FS` enabled (Firecracker's own default/CI kernel
+  configs don't set it, and guest kernels can't load modules at
+  runtime), starting from Firecracker's own published recommended config
+  and reconciling with `make olddefconfig`. Only needed for remote
+  storage mounts (`routes_mounts.rs`) — most sandboxes never need this.
+- `inject-rclone.sh` — bakes `rclone` plus `fusermount3` into a rootfs
+  image, same mount/copy shape as `inject-agent.sh`. `fusermount3` is
+  needed even though the guest agent (and everything it execs) runs as
+  root: rclone's Linux FUSE backend always execs `fusermount3` to do the
+  actual mount, with no direct-`mount(2)` fallback for root. It only
+  depends on libc, not `libfuse3` — copy it straight from any Debian/
+  Ubuntu build host's `/bin/fusermount3` (`fuse3` package).
 - Whatever image-build and multi-agent-user-setup scripts exist beyond
   this — check `ls` and each script's own header comment, this file
   isn't guaranteed to enumerate every script that's been added since it

@@ -48,10 +48,11 @@ report = sandbox.read_file("/tmp/report.json")
 sandbox.stop(keep=False)
 ```
 
-- **`Sandbox.create(name=None, tags=None, base_url=None, auth_token=None, vcpu_count=None, mem_size_mib=None, image_id=None)`** — boots a sandbox. `name` is a caller-given identity, unique among live sandboxes and held snapshots (`409` if already taken) — see `by_name`/`get_or_create` below. `vcpu_count`/`mem_size_mib` override the daemon's configured defaults, subject to its ceiling. `image_id` boots from a registered image instead of the default rootfs.
+- **`Sandbox.create(name=None, tags=None, base_url=None, auth_token=None, vcpu_count=None, mem_size_mib=None, image_id=None, rate_limit=None, drives=None)`** — boots a sandbox. `name` is a caller-given identity, unique among live sandboxes and held snapshots (`409` if already taken) — see `by_name`/`get_or_create` below. `vcpu_count`/`mem_size_mib` override the daemon's configured defaults, subject to its ceiling. `image_id` boots from a registered image instead of the default rootfs. `rate_limit` caps host I/O via Firecracker's own token-bucket limiter (unlimited if omitted). `drives` is a list of `DriveAttachment` to attach existing persistent drives (see `Drive` below). A call with no `drives`/`rate_limit` matching a configured pool's image/resources transparently resumes a warm snapshot instead of cold-booting — see `Pool` below.
 - **`sandbox.run_command(command, args=None)`** — returns an `ExecResult` (`stdout`, `stderr`, `exit_code`).
 - **`sandbox.read_file(path)`** — returns file contents as `bytes`.
 - **`sandbox.write_file(path, content)`** — `content` is `str` or `bytes`.
+- **`sandbox.chmod(path, mode)`**, **`sandbox.chown(path, uid, gid)`**, **`sandbox.mkdir(path, parents=False)`**, **`sandbox.rename(from_path, to_path)`**, **`sandbox.copy(from_path, to_path)`**, **`sandbox.symlink(target, link_path)`**, **`sandbox.readlink(path)`**, **`sandbox.truncate(path, size)`**, **`sandbox.list_dir(path)`** (returns `list[DirEntry]` with real `is_dir`/`is_symlink`/`size`/`mode`/`mtime` metadata) — the full filesystem operation set.
 - **`sandbox.stop(keep=None)`** — stops the sandbox. Default (`keep` omitted or `True`) preserves state as a resumable snapshot, returns a `StopResult(kept, snapshot_id)`. `keep=False` fully destroys instead.
 
 ### Attaching to an id you already have
@@ -149,6 +150,38 @@ Image.delete("node-lts-custom")  # 409 while any sandbox/snapshot still referenc
 - **`Image.register(id, path, base_url=None, auth_token=None)`** — registers an already-built ext4 rootfs file at `path` on the daemon's own host filesystem, for `Sandbox.create(image_id=...)` to boot from. Not a file upload.
 - **`Image.list(base_url=None, auth_token=None)`** / **`Image.delete(id, base_url=None, auth_token=None)`** — list registered images, or delete one (`409` while anything references it).
 
-## Not yet in this SDK
+## `Drive`
 
-Attaching drives at create time — the daemon and CLI don't expose it here either. See the project's Roadmap page.
+```python
+from sandkiln import Drive, DriveAttachment, Sandbox
+
+drive = Drive.create(512)  # 512 MiB, empty
+sandbox = Sandbox.create(drives=[DriveAttachment(id=drive.id)])
+# A second sandbox can share it read-only alongside others, but not read-write:
+reader = Sandbox.create(drives=[DriveAttachment(id=drive.id, read_only=True)])
+
+Drive.delete(drive.id)  # 409 while any sandbox or held snapshot still attaches it
+```
+
+- **`Drive.create(size_mib, base_url=None, auth_token=None)`** — creates a new empty persistent drive, returns its id.
+- **`Drive.list(base_url=None, auth_token=None)`** — lists drives, including every current holder and whether each is read-only.
+- **`Drive.delete(id, base_url=None, auth_token=None)`** — permanently removes a drive and its backing file.
+
+## `Pool`
+
+```python
+from sandkiln import Pool, Sandbox
+
+Pool.create("build-workers", vcpu_count=2, mem_size_mib=1024, warm_count=3)
+
+# Some time later, once the background replenisher has warmed instances up:
+# matches the pool's image/resources and no drives/rate_limit -- resumes
+# a warm snapshot automatically instead of cold-booting. No special call.
+sandbox = Sandbox.create(vcpu_count=2, mem_size_mib=1024)
+```
+
+- **`Pool.create(id, image_id=None, vcpu_count=None, mem_size_mib=None, warm_count=0, base_url=None, auth_token=None)`** — configures a pool under a caller-given `id` (`409` if already taken — delete it first to reconfigure). `warm_count` is how many resumable snapshots to keep ready.
+- **`Pool.list(base_url=None, auth_token=None)`** — lists configured pools, including `warm_ready` (how many are actually ready right now — replenishment happens in the background, not instantly).
+- **`Pool.delete(id, base_url=None, auth_token=None)`** — removes a pool's configuration and destroys whatever it currently has warm. A sandbox already claimed from it is unaffected.
+
+There's no `Pool.claim()` — claiming is entirely transparent, done by `Sandbox.create()` itself matching a configured pool. See [Startup latency & the pre-warmed pool](../../architecture/startup-latency/) for real measured numbers, including a genuinely non-rare resume failure mode and how it's handled.

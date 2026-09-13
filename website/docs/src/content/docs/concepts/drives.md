@@ -7,7 +7,7 @@ A drive is persistent block storage that outlives any one sandbox's lifetime —
 
 ## Creating and attaching
 
-`POST /drives` with `{"size_mib": <n>}` creates a new empty drive and returns its id. Attach it to a sandbox at create time via `POST /sandboxes`'s `drives` field: `[{"id": "<drive-id>", "read_only": false}]`. Firecracker exposes it inside the guest as its own `virtio-blk` device — format and mount it like any other block device.
+`POST /drives` with `{"size_mib": <n>}` creates a new empty drive and returns its id — or `Drive.create(sizeMib)`/`Drive.create(size_mib=...)` in the JS/TS and Python SDKs, or `kiln drive create <size-mib>`. Attach it to a sandbox at create time via `POST /sandboxes`'s `drives` field: `[{"id": "<drive-id>", "read_only": false}]` — the SDKs take a `drives`/`drives=` option on `Sandbox.create`/`create()` with the same shape (camelCase/snake_case per language), and `kiln sandbox create --drive <id[:ro]>` (repeatable). Firecracker exposes it inside the guest as its own `virtio-blk` device — format and mount it like any other block device.
 
 ## Conflict detection
 
@@ -23,4 +23,4 @@ A drive attached read-only may be attached to arbitrarily many sandboxes (and he
 
 ## What's not done yet
 
-Neither SDK nor `kiln` exposes drives yet — the only way to create, attach, or delete a drive today is the raw HTTP API described above. See the project's Roadmap page for status.
+Remote storage mounts (a FUSE-mounted, S3-compatible object store read and written like local disk inside a sandbox) don't exist — a drive is local block storage only. See the project's Roadmap page for full status.
