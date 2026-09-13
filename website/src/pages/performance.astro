@@ -24,18 +24,18 @@ import Footer from "../components/Footer.astro";
       <div class="bench-grid">
         <div class="bench-card">
           <div class="label">Cold boot (criterion)</div>
-          <div class="value">32.3–33.1<span style="font-size:16px;">ms</span></div>
-          <div class="ctx">Process spawn to InstanceStart acknowledged</div>
+          <div class="value">10.5–10.9<span style="font-size:16px;">ms</span></div>
+          <div class="ctx">Process spawn to InstanceStart acknowledged — was 32.3–33.1ms before fixing a 20ms fixed-sleep poll, see below</div>
         </div>
         <div class="bench-card">
           <div class="label">Exec round-trip (criterion)</div>
-          <div class="value">225–275<span style="font-size:16px;">µs</span></div>
+          <div class="value">220–250<span style="font-size:16px;">µs</span></div>
           <div class="ctx">Over an already-open vsock connection</div>
         </div>
         <div class="bench-card">
           <div class="label">Resume from snapshot (criterion)</div>
-          <div class="value">~25.8<span style="font-size:16px;">ms</span></div>
-          <div class="ctx">25.5–26.2ms — only ~19% faster than cold boot</div>
+          <div class="value">6.5–7.7<span style="font-size:16px;">ms</span></div>
+          <div class="ctx">Was 25.5–26.2ms — shares the same fixed socket-wait boot fixed below</div>
         </div>
         <div class="bench-card">
           <div class="label">Snapshot take (criterion)</div>
@@ -62,10 +62,12 @@ import Footer from "../components/Footer.astro";
       <p class="table-note">A dash means the run didn't record that figure, not that it was zero. Only the numbers written down at the time appear here.</p>
 
       <div class="callout">
-        <p><b>What we measured:</b> cold boot via <code>criterion</code> at 32.3–33.1ms, an exec round-trip on an already-open vsock connection at 225–275µs, and a load test of 4 concurrent workers running 5 cycles each of create → exec → delete against the live daemon.</p>
+        <p><b>What we measured:</b> cold boot via <code>criterion</code> at 10.5–10.9ms, an exec round-trip on an already-open vsock connection at 220–250µs, and a load test of 4 concurrent workers running 5 cycles each of create → exec → delete against the live daemon.</p>
         <p><b>What we found:</b> the load test's <code>create</code> phase had a mean of 369ms (p95 588ms) — far above the ~33ms cold-boot figure sitting right next to it. The gap traced to the ~300MB rootfs copy, run synchronously right after the network lease, dominating the whole phase even though boot itself was fast.</p>
-        <p><b>What we fixed:</b> the rootfs copy and the network lease are independent work with no reason to serialize — they now run concurrently on separate threads — and the copy itself switched to <code>cp --reflink=auto</code>, an instant copy-on-write clone on a filesystem that supports it. Re-measured: <code>create</code> mean dropped from 369ms to 211ms, a real, repeatable win. Throughput barely moved (5.59 → 5.38 cycles/sec) because <code>create</code> is only one phase of a cycle and both runs are small samples on a variable-load box — the <code>create</code>-specific improvement is the result, not the throughput figure.</p>
-        <p><b>What's still open:</b> this dev box runs ext4, which has no copy-on-write, so <code>--reflink=auto</code> silently falls back to an ordinary copy — the remaining ~180ms is real file-copy time that needs a CoW-capable filesystem (XFS, Btrfs) or a device-mapper layer to close.</p>
+        <p><b>What we fixed:</b> the rootfs copy and the network lease are independent work with no reason to serialize — they now run concurrently on separate threads — and the copy itself switched to <code>cp --reflink=auto</code>, an instant copy-on-write clone on a filesystem that supports it. Re-measured: <code>create</code> mean dropped from 369ms to 211ms, a real, repeatable win.</p>
+        <p><b>What we found next, from a full per-phase profiling pass:</b> 20 isolated cold creates broke <b>167.65ms</b> down completely (0.32ms unaccounted) — the rootfs clone was <b>74.0%</b> of it (124.09ms), boot itself <b>20.3%</b> (34.00ms), and a synchronous history-store write <b>5.5%</b> (9.24ms). The network lease this project had suspected — three <code>ip</code>/<code>bridge</code> subprocess calls — turned out to be <b>~4.36ms</b>, not the bottleneck at all.</p>
+        <p><b>What we fixed from that:</b> 20.11ms of every single boot (min 20.04, max 20.18 — the signature of one quantized sleep, not real waiting) was a fixed <code>sleep(20ms)</code> polling for Firecracker's API socket to exist. Replaced with a real connect-retry on a 200µs→5ms backoff — which also closes a genuine race the file-existence poll had (the socket file appears at <code>bind()</code>, a moment before <code>listen()</code>). Re-measured: boot <b>34.00ms → 11.22/11.44ms</b>, cold create <b>167.65ms → 144.59/143.56ms</b> — a real <b>~14%</b> cut to every cold create, and to snapshot resume too, which shares the same code path.</p>
+        <p><b>A correction, made honestly:</b> this page previously concluded the remaining gap "needs a CoW-capable filesystem or a device-mapper layer" — tested live on a real XFS filesystem, which confirmed a genuine copy-on-write clone but changed <i>nothing</i> about end-to-end create latency. The explanation offered at the time (the copy was already hidden behind the network lease) turns out to be wrong — the lease is only ~4ms. The leading replacement explanation, <b>not yet re-verified</b>: the per-sandbox rootfs clone's destination is always <code>/tmp</code> (ext4), regardless of where the base image lives, so a cross-filesystem <code>--reflink=auto</code> could never have actually reflinked even when the source was on XFS. See <a href="../docs/architecture/engineering-notebook/">the engineering notebook</a> for the full story, including the mistake in our own earlier measurement.</p>
       </div>
     </div>
   </section>
@@ -94,21 +96,36 @@ import Footer from "../components/Footer.astro";
       <div class="section-head" style="margin-top:48px;">
         <div class="eyebrow">What's next</div>
         <h2>The remaining latency gap, and where it actually lives.</h2>
-        <p>Snapshot-take and resume are both already small (~322ms and ~25.8ms) — resume isn't the bottleneck. The ~180ms gap between a ~32ms boot and a full cold create is in the surrounding per-create setup, mainly the rootfs copy.</p>
+        <p>A complete phase breakdown of a 144ms cold create (post-fix), from 20 isolated, controlled measurements:</p>
+      </div>
+
+      <div class="table-scroll" style="margin-bottom: 24px;">
+        <table class="lat-table">
+          <thead><tr><th>Phase</th><th>Share of a cold create</th></tr></thead>
+          <tbody>
+            <tr><td>rootfs clone (<code>cp --reflink=auto</code>)</td><td>74.0%</td></tr>
+            <tr><td>Vm::boot total</td><td>20.3%</td></tr>
+            <tr><td>— wait for the API socket (now fixed, was 12.0%)</td><td>0.5%</td></tr>
+            <tr><td>— InstanceStart</td><td>7.1%</td></tr>
+            <tr><td>— configuration PUTs (all 7 combined)</td><td>1.0%</td></tr>
+            <tr><td>history-store write</td><td>5.5%</td></tr>
+            <tr><td>network lease (fully concurrent with the clone)</td><td>~0.1%</td></tr>
+          </tbody>
+        </table>
       </div>
 
       <div class="note-block">
-        <span class="tag">The concrete next lever</span>
-        <h3>A copy-on-write filesystem or device-mapper layer for rootfs storage</h3>
-        <p>This dev box runs ext4, which has no copy-on-write, so <code>cp --reflink=auto</code> silently falls back to an ordinary copy — the remaining ~180ms is real file-copy time. A CoW-capable filesystem (XFS, Btrfs) would make that same <code>--reflink=auto</code> call an instant clone with no code change at all; a device-mapper/thin-provisioning layer would get there a different way if the host filesystem can't change. Either closes the single largest remaining piece of "how long until I can run code," for every create the pool above doesn't already serve from a warm snapshot.</p>
+        <span class="tag">The concrete next lever, if the reflink hypothesis holds</span>
+        <h3>Give the per-sandbox rootfs clone a configurable destination</h3>
+        <p>The rootfs clone is <b>74% of a cold create</b> — genuinely the dominant cost, confirmed by direct measurement, not assumption. Whether a CoW-capable filesystem actually closes that gap is <b>not yet re-verified</b> (see the correction above) — the clone always lands in <code>std::env::temp_dir()</code> regardless of where the base image lives, so today's config has no way to put both on the same filesystem to test cleanly. That's the next real step: a configurable clone destination, then a clean re-measurement — not another filesystem swap without fixing the destination first.</p>
       </div>
 
       <div class="note-block">
         <span class="tag">Ideas — not shipped, not verified</span>
         <h3>A few more directions worth a real look</h3>
         <p>Flagged explicitly as brainstorming, not results, per this project's own standard of never stating an unverified claim as fact:</p>
-        <p><b>Whether jailer's chroot hard-linking adds measurable overhead.</b> Jailer boots via a chroot with hard-linked kernel/rootfs/drive copies rather than the direct paths a non-jailed boot uses — nobody has benchmarked whether that link step itself is visible next to the ~32ms boot number, since jailer hasn't been proven on real hardware yet at all (see the Roadmap page).</p>
-        <p><b>Whether the network lease step has room to shrink.</b> The lease already runs concurrently with the rootfs copy rather than after it, so it's not on the critical path today unless the copy itself gets fast enough (via the CoW work above) that the lease becomes the new tail — worth re-measuring once that happens, not before.</p>
+        <p><b>Whether jailer's chroot hard-linking adds measurable overhead.</b> Jailer boots via a chroot with hard-linked kernel/rootfs/drive copies rather than the direct paths a non-jailed boot uses — nobody has benchmarked whether that link step itself is visible next to boot time, since jailer hasn't been proven on real hardware yet at all (see the Roadmap page).</p>
+        <p><b>Moving the history-store write off the create critical path.</b> Measured at 9.24ms (5.5% of a create) for a write its own code already treats as best-effort. Looks like an easy, real win — not yet attempted or measured as a change.</p>
       </div>
     </div>
   </section>
