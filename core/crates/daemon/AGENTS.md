@@ -71,7 +71,20 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   Also owns `pools` (`Mutex<HashMap<String, crate::pool::Pool>>`) —
   configured pre-warmed pools, in-memory only (unlike `snapshots`, not
   reconciled from disk at startup — see `crate::pool`'s module doc
-  comment for why).
+  comment for why). Also owns `retired_snapshots` (`crate::snapshot_history`
+  — time-travel restore's checkpoints) and the ownership-tracking helpers
+  extended for it: `drive_holders()`/`image_holder()` now also check
+  `retired_snapshots` (a retired checkpoint references its drives/image
+  as durably as a held `Snapshot` does), and `tap_device_holder()` is the
+  analogous "who currently holds this tap device" check across live
+  sandboxes, held snapshots, *and* an in-flight restore
+  (`pending_tap_restores`/`try_reserve_pending_tap_restore`/
+  `release_pending_tap_restore`) — needed because a retired checkpoint
+  holds no live lease at all (see `snapshot_history`'s own module doc
+  comment), so nothing else already prevents two different retired
+  checkpoints in the same lineage (sharing one frozen tap device) from
+  both being restored at once the way `Snapshot::forked_into` alone
+  prevents two live forks of one snapshot.
 - `sandbox.rs` — the `Sandbox` struct the daemon tracks per running VM
   (id, `Vm` handle, network `Lease`, rootfs path, tags, created-at,
   `last_activity`, `image_id` — the registered image this sandbox's
@@ -108,9 +121,11 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   `DELETE` route and `idle_reaper`; it defaults to preserving state
   (snapshot-then-stop, via `routes_snapshot::snapshot_and_stop`) rather
   than destroying it, with `destroy_sandbox_by_id()` — the original
-  teardown (VM stop, network release, rootfs cleanup) — reached via the
-  `?keep=false` opt-out or as the correct silent fallback for a forked
-  sandbox (nothing new to preserve) or a jailed one (can't be
+  teardown (VM stop, network release, rootfs cleanup — unconditional now
+  for every sandbox including a fork, see `Sandbox::rootfs_path`'s own
+  doc comment for why that wasn't always safe to assume) — reached via
+  the `?keep=false` opt-out or as the correct silent fallback for a
+  forked sandbox (nothing new to preserve) or a jailed one (can't be
   snapshotted, surfaces as an error instead of silently discarding
   state). Both `destroy_sandbox_by_id` and `routes_snapshot::snapshot_and_stop`
   also release a stopped sandbox's `source_pool_id` slot back to its pool
@@ -135,8 +150,14 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   runs a real post-resume health check (`exec true`) before trusting it,
   and on failure releases its reserved slot (`PoolClaimGuard`'s `Drop`)
   and **retries** `resolve_pool_claim` (bounded, `MAX_POOL_CLAIM_ATTEMPTS`)
-  before ever falling through to a plain, unattributed cold create — see
-  `crate::pool`'s own module doc comment for the real Firecracker/KVM
+  before ever falling through to a plain, unattributed cold create.
+  `claim_from_pool`'s later `Vm::update_metadata` call (refreshing MMDS
+  with the caller's real name/tags after resume) is itself retried
+  (`UPDATE_METADATA_MAX_ATTEMPTS`/`UPDATE_METADATA_RETRY_DELAY`, ~3s
+  total) against an existing, already-intermittent Firecracker-level
+  race under load — confirmed independent of any one feature by
+  reproducing it against an unmodified daemon (failed 1 run out of 3).
+  See `crate::pool`'s own module doc comment for the real Firecracker/KVM
   finding that made the health check load-bearing (not defensive
   theater) and the real bug the retry loop itself fixes (a failed
   claim's fallback silently not counting against `max_count`, found by
@@ -285,7 +306,43 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   see its own doc comment for the real Firecracker resume failure that
   proved moving it breaks every future resume/fork (the backing file's
   absolute host path is baked into `state.snap` itself, with no override
-  at `/snapshot/load` time).
+  at `/snapshot/load` time). `meta_path`/`state_path`/`mem_path`/
+  `move_file`/`write_atomically` are `pub(crate)` specifically so
+  `snapshot_history.rs` can reuse them — same directory-layout convention,
+  same file-safety primitives, no reason to duplicate either.
+- `snapshot_history.rs` — `RetiredSnapshot`: "time-travel restore"'s
+  checkpoint type, `state.retired_snapshots`'s value. See its own module
+  doc comment for the full design; the one-line version: resuming a
+  snapshot retires it here instead of deleting it, so it stays
+  restorable (`routes_snapshot_history::restore_snapshot_history_by_id`)
+  as many times as wanted rather than being a one-shot. Deliberately
+  holds a bare `NetworkConfig`/`host_octet`, **not** a live
+  `sandkiln_vmm::network::Lease` — nothing is reserved out of
+  `NetworkManager`'s free pool just because a checkpoint sits in history;
+  a lease is only ever reserved at actual restore time, gated by
+  `AppState::tap_device_holder`. `reconcile()` mirrors `snapshot::reconcile`'s
+  shape closely but **never touches `NetworkManager`** — no lease to
+  reclaim — called from `main.rs` alongside (order-independent from)
+  `snapshot::reconcile`.
+- `routes_snapshot_history.rs` — `GET /snapshots/history` (same
+  `?source_sandbox_id=`/`?parent_snapshot_id=` filter shape as
+  `routes_snapshot::list_snapshots`), `POST /snapshots/history/:id/restore`,
+  and `DELETE /snapshots/history/:id`. `restore_snapshot_history_by_id`
+  is the real mechanics: refuses (409) if `AppState::tap_device_holder`
+  finds this checkpoint's frozen network identity already live/held/
+  mid-restore, otherwise clones its rootfs fresh, resumes the VM from
+  its retained `state.snap`/`mem.bin`, and reserves a fresh `Lease` for
+  the new sandbox (`NetworkManager::reserve`, same call
+  `snapshot::reconcile` uses at startup — safe here specifically because
+  of the guard above, which that startup call doesn't need since nothing
+  else can be live yet at that point). The resulting sandbox has
+  `source_snapshot_id: None` (owns its lease/rootfs outright, unlike a
+  fork) and `parent_snapshot_id: Some(checkpoint id)` — restoring doesn't
+  consume the checkpoint, so a caller can restore the same one again
+  later. `DELETE /snapshots/history/:id` was added specifically because
+  retention has a real, unbounded disk cost with no cleanup otherwise —
+  see `ROADMAP.md`'s "Persistence and snapshotting" section for the live
+  finding that made this non-optional.
 - `routes_drives.rs` / `routes_snapshot.rs` — drives and snapshot/resume
   handlers, each in their own file for the same reason as above. The
   actual pause/snapshot/stop mechanics live in `snapshot_and_stop()`, the
@@ -306,11 +363,29 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   `SnapshotBlocked` refuses to snapshot a jailed sandbox (`Vm::is_jailed`)
   — `Vm::resume` only ever spawns directly, so a jailed sandbox's snapshot
   could never be resumed correctly; see `sandkiln_vmm::jailer`'s module doc
-  comment before changing this — or a sandbox forked from another snapshot
-  (shares its rootfs file, would corrupt on resume). `list_snapshots` takes
-  an optional `?source_sandbox_id=` filter — how a caller looks up whether
-  a sandbox id it had turned into a snapshot (via auto-suspend or a manual
-  snapshot).
+  comment before changing this — or a sandbox that doesn't own its network
+  lease outright (`source_snapshot_id.is_some()` — a fork; see
+  `Sandbox::source_snapshot_id`'s doc comment for why sharing the *lease*,
+  not the rootfs, is what actually makes this unsafe now). `list_snapshots`
+  takes an optional `?source_sandbox_id=` filter (a sandbox id that became
+  a snapshot) and `?parent_snapshot_id=` (see `crate::snapshot::Snapshot::
+  parent_snapshot_id` — snapshot lineage).
+  `resume_snapshot_by_id()` takes a `retain_history: bool` — see
+  `crate::snapshot_history`'s module doc comment for "time-travel
+  restore," the feature that made this parameter necessary: by default
+  (`true`) it retires the checkpoint it consumes instead of deleting it
+  (`retire_snapshot_files`, run on a blocking thread since it shells out
+  to `cp` for the new sandbox's private rootfs clone), falling back to
+  the original delete-and-reuse-directly behavior as a loud warning, not
+  a fatal error, if retiring fails partway (the VM has already resumed
+  successfully by that point — a history-retention hiccup must never
+  turn a real resume success into a failure response).
+  `fork_snapshot()` gives every fork its own private rootfs clone now
+  too (`routes_sandbox::clone_rootfs`), fatal on failure unlike resume's
+  retention — see that function's own doc comment for the real,
+  pre-existing sequential-corruption bug this fixes (found live while
+  building time-travel restore, not part of that feature's original
+  scope).
 - `routes_metrics.rs` — the `/metrics` handler. Unauthenticated like
   `/healthz` (wired directly on `app` in `main.rs`, not through either
   auth-gated router) since it's operational data about the daemon, not

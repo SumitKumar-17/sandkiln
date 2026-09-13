@@ -137,7 +137,12 @@ pub async fn get_or_create_sandbox(
     match state.resolve_name(&request.name) {
         Some(NameResolution::Live(id)) => Ok(Json(GetOrCreateSandboxResponse { id, created: false })),
         Some(NameResolution::Snapshot(snapshot_id)) => {
-            let id = resume_snapshot_by_id(state, snapshot_id).await?;
+            // Always retains history -- resuming by name accepts no
+            // per-call overrides today, same as every other
+            // resume-by-name behavior (see this endpoint's own doc
+            // comment: "resuming an existing snapshot always uses what
+            // was recorded on it").
+            let id = resume_snapshot_by_id(state, snapshot_id, true).await?;
             Ok(Json(GetOrCreateSandboxResponse { id, created: false }))
         }
         None => {

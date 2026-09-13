@@ -207,15 +207,20 @@ pub fn snapshot_dir(snapshot_id: &str) -> PathBuf {
     snapshots_root().join(snapshot_id)
 }
 
-fn meta_path(dir: &Path) -> PathBuf {
+// Shared with `snapshot_history.rs` (`pub(crate)`) -- a retired checkpoint
+// lives in its own per-id directory with these exact same three filenames,
+// same reasoning as sharing `move_file`/`write_atomically` below: the
+// naming scheme itself isn't snapshot-specific, just a directory-layout
+// convention both modules use identically.
+pub(crate) fn meta_path(dir: &Path) -> PathBuf {
     dir.join("meta.json")
 }
 
-fn state_path(dir: &Path) -> PathBuf {
+pub(crate) fn state_path(dir: &Path) -> PathBuf {
     dir.join("state.snap")
 }
 
-fn mem_path(dir: &Path) -> PathBuf {
+pub(crate) fn mem_path(dir: &Path) -> PathBuf {
     dir.join("mem.bin")
 }
 
@@ -280,7 +285,10 @@ pub(crate) fn move_snapshot_files(snapshot: &mut Snapshot, dest_dir: &Path) -> i
     Ok(())
 }
 
-fn move_file(src: &Path, dst: &Path) -> io::Result<()> {
+// `pub(crate)`: `snapshot_history.rs`'s own retire/restore file movement
+// reuses this rather than re-implementing the same rename-with-cross-
+// filesystem-fallback dance a second time.
+pub(crate) fn move_file(src: &Path, dst: &Path) -> io::Result<()> {
     if fs::rename(src, dst).is_ok() {
         return Ok(());
     }
@@ -300,7 +308,7 @@ fn move_file(src: &Path, dst: &Path) -> io::Result<()> {
 /// never a mix. The temp file lives next to `path` (not in a shared temp
 /// dir) specifically so the rename is guaranteed to stay on one
 /// filesystem — a cross-filesystem rename is not atomic.
-fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
     let mut tmp_name = path.as_os_str().to_owned();
     tmp_name.push(".tmp");
     let tmp_path = PathBuf::from(tmp_name);

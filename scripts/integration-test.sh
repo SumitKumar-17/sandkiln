@@ -50,6 +50,19 @@ WORKDIR="$(mktemp -d /tmp/sandkiln-integration-test-XXXXXX)"
 PASS=0
 FAIL=0
 FAILURES=()
+# Every `POST /snapshots/:id/resume` retires a full checkpoint (guest
+# memory dump + rootfs clone) by default now -- see routes_snapshot.rs's
+# module doc comment -- including ones this script never sees an id for
+# at all (a pre-warmed pool's own internal warm-snapshot resume on
+# claim). Tracking every resumed snapshot id by hand across every topic
+# file (some of them several layers removed from this script) isn't
+# reliable, so cleanup instead sweeps `GET /snapshots/history` for
+# anything retired *during this run* (by timestamp) — see `cleanup()`
+# below. **Found live**: two full runs of this suite alone accumulated
+# tens of GB of orphaned checkpoints on the dev box before this existed,
+# entirely from ordinary resumes nothing was ever going to explicitly
+# restore.
+RUN_STARTED_UNIX="$(date +%s)"
 
 CREATED_SANDBOXES=()
 CREATED_DRIVES=()
@@ -77,6 +90,16 @@ cleanup() {
   for id in "${CREATED_POOLS[@]:-}"; do
     [ -n "$id" ] && curl -s -o /dev/null -X DELETE "$BASE_URL/pools/$id" "${AUTH_HEADER[@]}"
   done
+  # Sweep: anything retired at or after this run started, tracked id or
+  # not (see RUN_STARTED_UNIX's own comment above). A few seconds of
+  # slack absorbs clock skew between this shell and the daemon's clock
+  # without risking sweeping up something genuinely pre-existing.
+  if command -v jq >/dev/null 2>&1; then
+    cutoff_unix=$((RUN_STARTED_UNIX - 5))
+    for id in $(curl -s "$BASE_URL/snapshots/history" "${AUTH_HEADER[@]}" | jq -r --argjson cutoff "$cutoff_unix" '.checkpoints[] | select(.retired_at_unix >= $cutoff) | .id' 2>/dev/null); do
+      curl -s -o /dev/null -X DELETE "$BASE_URL/snapshots/history/$id" "${AUTH_HEADER[@]}"
+    done
+  fi
   rm -rf "$WORKDIR"
 }
 trap cleanup EXIT

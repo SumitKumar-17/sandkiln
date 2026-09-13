@@ -4,6 +4,7 @@ use crate::pool::Pool;
 use crate::routes_preview::PreviewClient;
 use crate::sandbox::Sandbox;
 use crate::snapshot::Snapshot;
+use crate::snapshot_history::RetiredSnapshot;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use sandkiln_store::HistoryStore;
@@ -40,6 +41,14 @@ pub struct AppState {
     pub jailer_ids: Option<JailerIdPool>,
     pub sandboxes: Mutex<HashMap<String, Sandbox>>,
     pub snapshots: Mutex<HashMap<String, Snapshot>>,
+    /// Retired checkpoints — see `crate::snapshot_history`'s module doc
+    /// comment for the full "time-travel restore" design. Deliberately a
+    /// separate map from `snapshots` above, not a flag on `Snapshot`
+    /// itself: a retired checkpoint holds no live `Lease` at all (nothing
+    /// reserved out of `NetworkManager`'s free pool), a structurally
+    /// different resource-ownership state from every entry in
+    /// `snapshots`, which always holds one for as long as it exists.
+    pub retired_snapshots: Mutex<HashMap<String, RetiredSnapshot>>,
     /// One `tokio::sync::Mutex` per name currently being claimed, created
     /// lazily. Serializes every code path that can claim or resolve a
     /// name (named `create_sandbox`, `get_or_create_sandbox`) against
@@ -74,6 +83,21 @@ pub struct AppState {
     /// (not durable across a restart, unlike `snapshots` above) — see
     /// that module for why.
     pub pools: Mutex<HashMap<String, Pool>>,
+    /// Tap devices with a `POST /snapshots/history/:id/restore` currently
+    /// in flight against them — closes a race `tap_device_holder` alone
+    /// can't: two *different* retired checkpoints in the same lineage
+    /// share the same frozen tap device/IP/MAC (see
+    /// `crate::snapshot_history`'s module doc comment), so concurrently
+    /// restoring two different retired ids for that one device would both
+    /// pass a plain "is this live or held right now" check (neither is,
+    /// yet) and then race `NetworkManager::reserve`, which does not
+    /// itself detect a double reservation — it exists for the
+    /// startup-reconcile case, where by construction nothing else could
+    /// be live yet. Same shape as `pending_image_boots` above, but a
+    /// plain set rather than a refcount: unlike booting from a shared
+    /// image, only one restore of a given tap device may ever be in
+    /// flight at a time.
+    pending_tap_restores: Mutex<std::collections::HashSet<String>>,
 }
 
 impl AppState {
@@ -88,6 +112,7 @@ impl AppState {
         drives: DriveStore,
         images: ImageStore,
         snapshots: HashMap<String, Snapshot>,
+        retired_snapshots: HashMap<String, RetiredSnapshot>,
         history: HistoryStore,
     ) -> Self {
         let jailer_ids = config.jailer.as_ref().map(|j| JailerIdPool::new(j.uid_gid_range.clone()));
@@ -99,12 +124,14 @@ impl AppState {
             jailer_ids,
             sandboxes: Mutex::new(HashMap::new()),
             snapshots: Mutex::new(snapshots),
+            retired_snapshots: Mutex::new(retired_snapshots),
             name_locks: Mutex::new(HashMap::new()),
             pending_image_boots: Mutex::new(HashMap::new()),
             metrics: Metrics::new(),
             preview_client: build_preview_client(),
             history,
             pools: Mutex::new(HashMap::new()),
+            pending_tap_restores: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -138,6 +165,19 @@ impl AppState {
                 .iter()
                 .find(|d| d.drive_id == drive_id)
                 .map(|d| DriveHold { holder: format!("snapshot {}", s.id), read_only: d.read_only })
+        }));
+        // A retired checkpoint (`crate::snapshot_history`) references its
+        // drives exactly as durably as a held `Snapshot` does — it's just
+        // sitting in history instead of `snapshots` right now, not any
+        // less real a reference. Without this, a drive a retired
+        // checkpoint depends on read-write could be silently re-attached
+        // read-write elsewhere, and restoring that checkpoint later would
+        // hand two live VMs the same mutable backing file.
+        holders.extend(self.retired_snapshots.lock().unwrap().values().filter_map(|s| {
+            s.attached_drives
+                .iter()
+                .find(|d| d.drive_id == drive_id)
+                .map(|d| DriveHold { holder: format!("retired snapshot {}", s.id), read_only: d.read_only })
         }));
         holders
     }
@@ -203,7 +243,74 @@ impl AppState {
         {
             return Some(format!("snapshot {}", snapshot.id));
         }
+        // Same reasoning as `drive_holders`' retired-checkpoint extension
+        // just above: a retired checkpoint's rootfs was cloned from this
+        // image at the sandbox's original boot, same as a held snapshot's
+        // was — deleting the image out from under it would only matter if
+        // that checkpoint is ever restored, but the check has to happen
+        // now, not deferred to restore time.
+        if let Some(retired) =
+            self.retired_snapshots.lock().unwrap().values().find(|s| s.image_id.as_deref() == Some(image_id))
+        {
+            return Some(format!("retired snapshot {}", retired.id));
+        }
         None
+    }
+
+    /// Where the tap device backing `tap_device` is currently held, if
+    /// anywhere — a live sandbox's own lease, a held snapshot's (whether
+    /// or not it's currently lent out to a live fork: the `Lease` stays
+    /// inside the `Snapshot` the whole time either way, see
+    /// `Snapshot::forked_into`'s doc comment), or another retired
+    /// checkpoint that's *itself* mid-restore right now. `None` means
+    /// free to reserve.
+    ///
+    /// This is the check `routes_snapshot_history::restore_snapshot_history`
+    /// needs before it can safely call `NetworkManager::reserve` for a
+    /// retired checkpoint: unlike `snapshot::reconcile`'s call to the same
+    /// method (always at startup, before anything else can possibly be
+    /// live), a restore can race real, already-live users of this exact
+    /// tap device — and `NetworkManager::reserve` itself does not check
+    /// for that; it exists for the startup case, where by construction
+    /// nothing else could be holding it yet, and will silently proceed
+    /// (with only a warning) even if the tap it's given is already
+    /// checked out. This is the guard that makes calling it safe outside
+    /// that one narrow startup circumstance.
+    pub fn tap_device_holder(&self, tap_device: &str) -> Option<String> {
+        if let Some(sandbox) = self
+            .sandboxes
+            .lock()
+            .unwrap()
+            .values()
+            .find(|s| s.network.as_ref().is_some_and(|n| n.config.tap_device == tap_device))
+        {
+            return Some(format!("sandbox {}", sandbox.id));
+        }
+        if let Some(snapshot) =
+            self.snapshots.lock().unwrap().values().find(|s| s.network.config.tap_device == tap_device)
+        {
+            return Some(format!("snapshot {}", snapshot.id));
+        }
+        if self.pending_tap_restores.lock().unwrap().contains(tap_device) {
+            return Some("another restore already in progress for this checkpoint's network identity".to_string());
+        }
+        None
+    }
+
+    /// Attempts to claim `tap_device` for an in-flight restore —
+    /// `true` if this call won the claim (the caller may proceed),
+    /// `false` if another restore already holds it (the caller must
+    /// refuse, not proceed) — see `pending_tap_restores`'s own doc
+    /// comment for the race this closes. Paired with
+    /// `release_pending_tap_restore`, ideally via an RAII guard (see
+    /// `routes_snapshot_history::PendingTapRestoreGuard`) so every exit
+    /// path — success, failure, or a panic unwind — releases it.
+    pub fn try_reserve_pending_tap_restore(&self, tap_device: &str) -> bool {
+        self.pending_tap_restores.lock().unwrap().insert(tap_device.to_string())
+    }
+
+    pub fn release_pending_tap_restore(&self, tap_device: &str) {
+        self.pending_tap_restores.lock().unwrap().remove(tap_device);
     }
 
     /// Serializes every operation that claims or resolves one particular
@@ -446,7 +553,7 @@ mod tests {
         let drives = DriveStore::new(dir.join("drives")).expect("create test drives dir");
         let images = ImageStore::new(dir.join("images")).expect("create test images dir");
         let history = HistoryStore::open_in_memory().expect("create in-memory test history store");
-        Arc::new(AppState::new(config, network, drives, images, HashMap::new(), history))
+        Arc::new(AppState::new(config, network, drives, images, HashMap::new(), HashMap::new(), history))
     }
 
     #[test]
@@ -602,7 +709,7 @@ mod tests {
                 jailer: None,
             };
             let history = HistoryStore::open_in_memory().expect("create in-memory test history store");
-            let state = AppState::new(config, network, drives, images, HashMap::new(), history);
+            let state = AppState::new(config, network, drives, images, HashMap::new(), HashMap::new(), history);
             Self { state, dir }
         }
     }
@@ -664,12 +771,142 @@ mod tests {
         assert_eq!(t.state.image_holder("never-reserved"), None);
     }
 
-    // `image_holder`'s sandbox-map and snapshot-map branches aren't
-    // exercised here: both need a real `sandkiln_vmm::vm::Vm` (a running
-    // Firecracker process/vsock connection) or a real `Lease` to construct
-    // a `Sandbox`/`Snapshot` at all, which needs KVM — the same reason
-    // `drive_holder`, this method's existing sibling, has no unit test of
-    // its own either. The logic both branches share with the
-    // `pending_image_boots` branch tested above (`Option<String>`-typed
-    // `.find` over a map) is otherwise identical and already covered.
+    // `image_holder`'s sandbox-map branch isn't exercised here: a real
+    // `Sandbox` needs a real `sandkiln_vmm::vm::Vm` (a running Firecracker
+    // process/vsock connection), which needs KVM. Its snapshot-map branch
+    // -- and `tap_device_holder`'s below -- *are* covered further down:
+    // unlike `Sandbox`, `Snapshot` needs only a `Lease`, and
+    // `NetworkManager::reserve()` builds one without any real netlink
+    // call at all (see `test_network`/`test_lease` below) -- the same
+    // reason `snapshot.rs`'s own tests can construct a real `Snapshot`
+    // without KVM either.
+
+    fn test_network() -> NetworkManager {
+        NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", ["tapA".to_string()])
+    }
+
+    fn test_lease(network: &NetworkManager, tap_device: &str, host_octet: u8) -> sandkiln_vmm::network::Lease {
+        network.reserve(
+            sandkiln_vmm::vm::NetworkConfig {
+                tap_device: tap_device.to_string(),
+                guest_ip: "10.0.0.5".parse().unwrap(),
+                gateway_ip: "10.0.0.1".parse().unwrap(),
+                guest_mac: "AA:FC:00:00:05:05".to_string(),
+            },
+            host_octet,
+        )
+    }
+
+    fn test_snapshot(id: &str, network: &NetworkManager, tap_device: &str) -> Snapshot {
+        Snapshot {
+            id: id.to_string(),
+            source_sandbox_id: "sandbox-x".to_string(),
+            snapshot_path: PathBuf::from("/tmp/does-not-need-to-exist/state.snap"),
+            mem_file_path: PathBuf::from("/tmp/does-not-need-to-exist/mem.bin"),
+            rootfs_path: PathBuf::from("/tmp/does-not-need-to-exist/rootfs.ext4"),
+            network: test_lease(network, tap_device, 5),
+            attached_drives: vec![],
+            image_id: None,
+            tags: HashMap::new(),
+            created_at: std::time::SystemTime::now(),
+            name: None,
+            forked_into: None,
+            archived_at: None,
+            egress: None,
+            parent_snapshot_id: None,
+        }
+    }
+
+    fn test_retired_snapshot(id: &str, tap_device: &str) -> RetiredSnapshot {
+        RetiredSnapshot {
+            id: id.to_string(),
+            source_sandbox_id: "sandbox-y".to_string(),
+            snapshot_path: PathBuf::from("/tmp/does-not-need-to-exist/state.snap"),
+            mem_file_path: PathBuf::from("/tmp/does-not-need-to-exist/mem.bin"),
+            rootfs_path: PathBuf::from("/tmp/does-not-need-to-exist/rootfs.ext4"),
+            network: sandkiln_vmm::vm::NetworkConfig {
+                tap_device: tap_device.to_string(),
+                guest_ip: "10.0.0.6".parse().unwrap(),
+                gateway_ip: "10.0.0.1".parse().unwrap(),
+                guest_mac: "AA:FC:00:00:06:06".to_string(),
+            },
+            host_octet: 6,
+            attached_drives: vec![],
+            image_id: None,
+            tags: HashMap::new(),
+            created_at: std::time::SystemTime::now(),
+            retired_at: std::time::SystemTime::now(),
+            name: None,
+            parent_snapshot_id: None,
+            egress: None,
+        }
+    }
+
+    #[test]
+    fn tap_device_holder_is_none_when_nothing_holds_it() {
+        let t = TestState::new("tap-holder-none");
+        assert_eq!(t.state.tap_device_holder("tapA"), None);
+    }
+
+    #[test]
+    fn tap_device_holder_finds_a_held_snapshot() {
+        let t = TestState::new("tap-holder-snapshot");
+        let network = test_network();
+        t.state.snapshots.lock().unwrap().insert("snap-1".to_string(), test_snapshot("snap-1", &network, "tapA"));
+        assert_eq!(t.state.tap_device_holder("tapA"), Some("snapshot snap-1".to_string()));
+        assert_eq!(t.state.tap_device_holder("tapB"), None, "an unrelated tap must not be reported as held");
+    }
+
+    #[test]
+    fn tap_device_holder_reports_a_pending_restore() {
+        let t = TestState::new("tap-holder-pending-restore");
+        assert!(t.state.try_reserve_pending_tap_restore("tapA"));
+        assert!(t.state.tap_device_holder("tapA").is_some());
+    }
+
+    #[test]
+    fn try_reserve_pending_tap_restore_claims_then_blocks_a_second_caller() {
+        let t = TestState::new("pending-restore-claim");
+        assert!(t.state.try_reserve_pending_tap_restore("tapA"), "the first claim must win");
+        assert!(!t.state.try_reserve_pending_tap_restore("tapA"), "a second concurrent claim of the same tap must lose");
+    }
+
+    #[test]
+    fn release_pending_tap_restore_frees_it_for_a_new_claim() {
+        let t = TestState::new("pending-restore-release");
+        assert!(t.state.try_reserve_pending_tap_restore("tapA"));
+        t.state.release_pending_tap_restore("tapA");
+        assert_eq!(t.state.tap_device_holder("tapA"), None);
+        assert!(t.state.try_reserve_pending_tap_restore("tapA"), "releasing must actually free the claim for reuse");
+    }
+
+    #[test]
+    fn release_pending_tap_restore_without_a_matching_reservation_does_not_panic() {
+        let t = TestState::new("pending-restore-release-unclaimed");
+        t.state.release_pending_tap_restore("never-claimed");
+        assert_eq!(t.state.tap_device_holder("never-claimed"), None);
+    }
+
+    #[test]
+    fn drive_holders_includes_a_retired_snapshot_that_references_the_drive() {
+        let t = TestState::new("drive-holders-retired");
+        let mut retired = test_retired_snapshot("retired-1", "tapA");
+        retired.attached_drives = vec![AttachedDrive { drive_id: "d1".to_string(), read_only: false }];
+        t.state.retired_snapshots.lock().unwrap().insert("retired-1".to_string(), retired);
+
+        let holders = t.state.drive_holders("d1");
+        assert_eq!(holders.len(), 1);
+        assert_eq!(holders[0].holder, "retired snapshot retired-1");
+        assert!(!holders[0].read_only);
+    }
+
+    #[test]
+    fn image_holder_finds_a_retired_snapshot() {
+        let t = TestState::new("image-holder-retired");
+        let mut retired = test_retired_snapshot("retired-2", "tapA");
+        retired.image_id = Some("img1".to_string());
+        t.state.retired_snapshots.lock().unwrap().insert("retired-2".to_string(), retired);
+
+        assert_eq!(t.state.image_holder("img1"), Some("retired snapshot retired-2".to_string()));
+    }
 }

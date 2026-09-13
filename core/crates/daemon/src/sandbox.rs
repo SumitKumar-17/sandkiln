@@ -19,10 +19,18 @@ pub struct Sandbox {
     /// consuming-resumed via `/snapshots/:id/resume`) owns its lease
     /// outright.
     pub network: Option<Lease>,
-    /// This sandbox's own copy of the base rootfs image. Removed on stop
-    /// — unless `source_snapshot_id` is set, in which case this path is
-    /// the snapshot's shared rootfs file, not this sandbox's own, and
-    /// must survive so the snapshot can be forked/resumed again.
+    /// This sandbox's own private copy of the base rootfs image — always
+    /// its own, including a forked or restored sandbox (each gets a
+    /// fresh clone at fork/restore time via `routes_sandbox::clone_rootfs`,
+    /// never the source snapshot's/checkpoint's own file directly), so
+    /// `destroy_sandbox_by_id` removes it unconditionally on full
+    /// teardown. **Not always true before this was fixed**: forking used
+    /// to hand out the source snapshot's rootfs file directly, a real
+    /// bug found live while building time-travel restore — fork, mutate
+    /// the shared file, stop the fork, then resume the *original*
+    /// snapshot directly, and its memory state (describing the rootfs as
+    /// of the original snapshot) disagreed with what was actually on
+    /// disk. See `routes_snapshot::fork_snapshot`'s own doc comment.
     pub rootfs_path: PathBuf,
     /// Persistent drives attached at creation (see
     /// `sandkiln_vmm::drive::DriveStore`), each with whether it was
@@ -60,8 +68,12 @@ pub struct Sandbox {
     /// `/resume` — see `Snapshot::forked_into`, which this is the other
     /// half of: `routes_sandbox::stop_sandbox_by_id` clears that lock on
     /// the referenced snapshot once this sandbox's `Vm` is fully stopped,
-    /// and skips deleting `rootfs_path` / releasing `network` here since
-    /// neither is owned by this sandbox.
+    /// and skips releasing `network` here since the lease isn't owned by
+    /// this sandbox (still borrowed from the live snapshot the whole
+    /// time — see `network`'s own doc comment above). `rootfs_path`
+    /// *is* still this sandbox's own to delete regardless, though — a
+    /// fork owns a private clone of it (see that field's doc comment),
+    /// not the source snapshot's file.
     pub source_snapshot_id: Option<String>,
     /// Caller-given identity, unique among live sandboxes and held
     /// snapshots at the moment it was claimed (see

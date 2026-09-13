@@ -17,8 +17,10 @@ mod routes_pty;
 mod routes_sandbox;
 mod routes_sandbox_name;
 mod routes_snapshot;
+mod routes_snapshot_history;
 mod sandbox;
 mod snapshot;
+mod snapshot_history;
 mod state;
 mod tracing_util;
 
@@ -81,6 +83,13 @@ async fn async_main() {
     let reconciled_snapshots = snapshot::reconcile(&net_manager, &config.archive_dir);
     tracing::info!(count = reconciled_snapshots.len(), "reconciled snapshots from disk");
 
+    // Order relative to `reconciled_snapshots` above doesn't matter --
+    // unlike that call, this never touches `net_manager` at all (a
+    // retired checkpoint holds no live lease to reclaim, see
+    // `snapshot_history`'s module doc comment).
+    let reconciled_retired = snapshot_history::reconcile();
+    tracing::info!(count = reconciled_retired.len(), "reconciled retired snapshot checkpoints from disk");
+
     let history = HistoryStore::open(&config.history_db_path)
         .expect("open/create the sandbox history database (SANDKILN_HISTORY_DB_PATH)");
     // Same reasoning as reconciling snapshots above, before the listener
@@ -124,7 +133,7 @@ async fn async_main() {
     let auto_suspend_timeout = config.auto_suspend_timeout;
     let archive_timeout = config.archive_timeout;
     let archive_dir = config.archive_dir.clone();
-    let state = Arc::new(AppState::new(config, net_manager, drives, images, reconciled_snapshots, history));
+    let state = Arc::new(AppState::new(config, net_manager, drives, images, reconciled_snapshots, reconciled_retired, history));
 
     if let Some(auto_suspend_timeout) = auto_suspend_timeout {
         tracing::info!(auto_suspend_timeout_secs = auto_suspend_timeout.as_secs(), "idle sandbox auto-suspend enabled");
@@ -187,8 +196,9 @@ async fn async_main() {
         .route("/pools/:id", delete(routes_pool::delete_pool))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
-    let snapshot_routes =
-        routes_snapshot::router().route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
+    let snapshot_routes = routes_snapshot::router()
+        .merge(routes_snapshot_history::router())
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
     // Its own router, guarded by `auth::require_preview_token` rather than
     // `auth::require_bearer_token` — see that middleware's doc comment for

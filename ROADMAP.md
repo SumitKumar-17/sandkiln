@@ -43,12 +43,14 @@ hardware, not just code that compiles.
   persistent drives with read-only sharing; a guest-accessible metadata
   service; durable sandbox history; per-sandbox egress (outbound network)
   policy enforced via dedicated iptables chains; snapshot lineage
-  (parent-pointer ancestry, queryable in both directions). All exposed
-  through both SDKs and the CLI (interactive PTY: JS/TS SDK and CLI only;
-  idle-lifecycle archiving: daemon-operator config only, no client
-  surface; egress policy and snapshot lineage: daemon HTTP API only so
-  far, no SDK/CLI surface yet — see their respective sections),
-  live-verified via `scripts/integration-test.sh` (267 checks, 0 failing,
+  (parent-pointer ancestry, queryable in both directions); time-travel
+  restore (retired, non-consumed checkpoints, restorable repeatedly).
+  All exposed through both SDKs and the CLI (interactive PTY: JS/TS SDK
+  and CLI only; idle-lifecycle archiving: daemon-operator config only, no
+  client surface; egress policy, snapshot lineage, and time-travel
+  restore: daemon HTTP API only so far, no SDK/CLI surface yet — see
+  their respective sections),
+  live-verified via `scripts/integration-test.sh` (294 checks, 0 failing,
   with `SANDKILN_AUTH_TOKEN` set — see that script's own usage
   comment for what's skipped without one).
 
@@ -269,9 +271,55 @@ outbound HTTP both still work.
   either a verified per-fork drive-path override or a from-scratch
   live-memory-clone approach — genuinely open, see
   `core/crates/daemon/src/routes_snapshot.rs`'s module doc comment.
-- **Time-travel restore**: keep more than just the latest snapshot per
-  sandbox, so a caller can restore to an earlier point, not only the most
-  recent stop.
+- **Done: time-travel restore.** `POST /snapshots/:id/resume` no longer
+  deletes the checkpoint it consumes by default — it *retires* into
+  `GET /snapshots/history`, restorable again later via `POST
+  /snapshots/history/:id/restore`, as many times as wanted (`DELETE
+  /snapshots/history/:id` to reclaim it outright). `?retain_history=false`
+  opts back into the original, zero-retention behavior. Sequential, not
+  branching: restoring an old checkpoint doesn't destroy or invalidate
+  whatever came after it in that lineage (they stay in history too, like
+  an old git commit's descendants surviving a checkout of an ancestor),
+  but restoring refuses (`409`, naming the holder) while anything else
+  sharing that checkpoint's frozen network identity is currently live or
+  held — the same one-live-descendant-at-a-time rule `Snapshot::forked_into`
+  already enforces for fork, generalized across a lineage's full history
+  instead of just its single most recent snapshot. A restored sandbox
+  owns everything outright (a fresh network lease, a private rootfs
+  clone) and so, unlike a fork, stays snapshottable afterward, starting a
+  new branch of history from that point.
+  - **A real, pre-existing corruption bug found and fixed while building
+    this**: `POST /snapshots/:id/fork` shared its source snapshot's
+    rootfs *file* directly, not a private copy. Fine for two
+    *simultaneous* forks (already ruled out by `forked_into`), not for
+    two *sequential* ones: fork, mutate the shared file, stop the fork,
+    then resume (not fork) the original snapshot directly — `Vm::resume`
+    loads memory state describing the rootfs as it was *before* the fork
+    ever ran, against a file that now has the fork's mutations layered on
+    top. Reproduced live (write a marker, fork, overwrite the marker in
+    the fork, stop the fork, resume the original directly — the marker
+    came back mutated) and fixed the same way retirement's own safety
+    property works: `routes_sandbox::clone_rootfs` gives every fork its
+    own private copy now, closing the exact class of bug this whole
+    feature exists to prevent.
+  - **A second issue found live, this one operational rather than a
+    correctness bug**: retaining every resume's checkpoint by default has
+    a real, unbounded disk cost — a full guest-memory dump plus a private
+    rootfs copy, forever, until deleted. Routine manual verification
+    while building this alone filled a 468GB dev-box disk. `DELETE
+    /snapshots/history/:id` (added specifically in response to this, not
+    part of the original design) is the mitigation shipped so far;
+    automatic expiry/retention policy is a deliberately deferred
+    follow-up — see `SELF_HOSTING.md`'s "Time-travel restore and its disk
+    cost" for operator-facing guidance in the meantime.
+  - **Deliberately out of scope**: true parallel branching (two
+    checkpoints from one lineage live at once) — blocked by the same
+    frozen-network-identity constraint that already rules out true
+    concurrent forking (see `routes_snapshot.rs`'s own module doc
+    comment: the guest's IP/MAC can't be changed post-hoc without
+    in-guest cooperation this project's guest agent doesn't have), not a
+    scope choice. No SDK/CLI surface yet — daemon HTTP API only, same
+    precedent as egress policy and snapshot lineage.
 - **Done: tiered idle lifecycle, the archive tier — a first honestly-scoped
   slice.** Extends today's binary auto-suspend (running → snapshot) with
   a second, independent tier: `SANDKILN_ARCHIVE_TIMEOUT_SECS` moves a

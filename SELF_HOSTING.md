@@ -715,6 +715,24 @@ trusting the result — that's exactly what it exists for.
   bookkeeping of *running* sandboxes is in-memory only regardless — a
   restart never preserves live sandboxes (their VM processes exit with
   the daemon), only drives and snapshots on disk.
+- **Time-travel restore and its disk cost**: `POST /snapshots/:id/resume`
+  retains the snapshot it consumes by default now, instead of deleting
+  it — it becomes a restorable checkpoint under `GET /snapshots/history`
+  (`POST /snapshots/history/:id/restore` to go back to it later, `DELETE
+  /snapshots/history/:id` to reclaim its disk). These live under
+  `$TMPDIR/sandkiln-snapshot-history`, same reboot-survival caveat as
+  `sandkiln-snapshots` above. **This has a real, unbounded disk cost if
+  left unmanaged**: every resume now keeps a full guest-memory dump
+  (comparable to the sandbox's configured RAM) plus a private rootfs
+  copy, forever, until explicitly deleted — found live while building
+  this, where routine testing alone filled a 468GB disk. There is no
+  automatic expiry yet (a deliberately deferred follow-up — see
+  `ROADMAP.md`'s "Persistence and snapshotting" section); if your
+  workload resumes frequently and you don't need to travel back further
+  than the latest state, either delete old checkpoints yourself via `GET
+  /snapshots/history` + `DELETE /snapshots/history/:id`, or pass
+  `?retain_history=false` on `POST /snapshots/:id/resume` to opt back
+  into the original, zero-retention behavior for that call.
 - **Cleanup on crash**: if `sandkilnd` is killed ungracefully, any
   Firecracker child processes it had spawned are orphaned (not part of
   a process group the daemon tears down on its own exit) — check

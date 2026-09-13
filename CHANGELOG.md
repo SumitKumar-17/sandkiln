@@ -14,6 +14,50 @@ Changelog](https://keepachangelog.com/).
 ## Unreleased
 
 ### Added
+- Time-travel restore (daemon only — no SDK/CLI change, nothing to
+  publish yet). `POST /snapshots/:id/resume` no longer deletes the
+  checkpoint it consumes by default — it retires into `GET
+  /snapshots/history`, restorable again later via `POST
+  /snapshots/history/:id/restore` (as many times as wanted — restoring
+  doesn't consume it either), and reclaimable outright via `DELETE
+  /snapshots/history/:id`. `?retain_history=false` opts back into the
+  original, zero-retention behavior. Sequential ("go back to any earlier
+  point"), not branching: restoring refuses (`409`, naming the current
+  holder) while anything else sharing that checkpoint's frozen network
+  identity is live or held, generalizing the same one-live-descendant
+  rule `Snapshot::forked_into` already enforces for fork across a whole
+  lineage's history instead of just its latest snapshot. A restored
+  sandbox owns its network lease and rootfs outright (unlike a fork), so
+  it stays snapshottable afterward. See `ROADMAP.md`'s "Persistence and
+  snapshotting" section for the full design.
+  - Found and fixed a real, pre-existing corruption bug while building
+    this: `POST /snapshots/:id/fork` shared its source snapshot's rootfs
+    file directly rather than a private copy — safe for two simultaneous
+    forks (blocked by `forked_into` already) but not two sequential ones
+    (fork, mutate, stop the fork, then resume the original directly —
+    the resumed memory state and the now-mutated shared file disagree).
+    Reproduced live, fixed by giving every fork its own private rootfs
+    clone, same as retirement's own checkpoints get.
+  - Found live, the operational way: retaining every resume's checkpoint
+    by default has a real, unbounded disk cost (a full guest-memory dump
+    plus a private rootfs copy, forever, until deleted) — routine manual
+    verification alone filled a 468GB dev-box disk during development.
+    `DELETE /snapshots/history/:id` was added specifically in response,
+    not part of the original design; automatic expiry is a deliberately
+    deferred follow-up (see `SELF_HOSTING.md`'s new "Time-travel restore
+    and its disk cost" guidance).
+  - Deliberately out of scope: true parallel branching (two checkpoints
+    from one lineage live at once) — blocked by the same
+    frozen-guest-network-identity constraint that already rules out true
+    concurrent forking, not a scope choice.
+  - 20 new `scripts/integration-test.sh` checks; also hardened
+    `claim_from_pool`'s post-resume MMDS metadata refresh with a bounded
+    retry (an existing, already-intermittent Firecracker-level race under
+    load, confirmed independent of this change by reproducing it against
+    an unmodified daemon) and fixed `integration-test.sh`'s own cleanup to
+    sweep `GET /snapshots/history` for anything retired during a run,
+    rather than trying to track every resume by hand across every topic
+    file — 294/294 passing overall.
 - Snapshot lineage (daemon only — no SDK/CLI change, nothing to publish
   yet). `Snapshot.parent_snapshot_id` records the snapshot a new
   snapshot's source sandbox was itself resumed/forked from, `None` for a

@@ -284,6 +284,15 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
 /// accepted, rare edge case, not a guarantee this loop fully closes.
 const MAX_POOL_CLAIM_ATTEMPTS: u32 = 3;
 
+/// How many times `claim_from_pool` retries `Vm::update_metadata` right
+/// after a resume, and how long it waits between attempts — see that
+/// call site's own doc comment for the settling-window race this covers.
+/// ~3s total budget, roughly matching the guest-visible side of the same
+/// race (`scripts/integration-tests/18-pool.sh`'s own MMDS check retries
+/// for up to 8s) rather than an arbitrarily shorter one.
+const UPDATE_METADATA_MAX_ATTEMPTS: u32 = 10;
+const UPDATE_METADATA_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
+
 /// What a `POST /sandboxes` request resolves to against `AppState::pools`
 /// — see `resolve_pool_claim`.
 enum PoolClaim {
@@ -610,7 +619,12 @@ async fn claim_from_pool(
     request: &CreateSandboxRequest,
     egress: Option<sandkiln_vmm::egress::EgressPolicy>,
 ) -> Result<String, AppError> {
-    let id = resume_snapshot_by_id(state.clone(), snapshot_id).await?;
+    // Retains history uniformly, same as any other resume -- the pool's
+    // own warm-boot checkpoint isn't especially interesting to restore
+    // later, but the caller's own *future* snapshots of this claimed
+    // sandbox absolutely are, and there's no way to tell those two cases
+    // apart from here. See `crate::snapshot_history`'s module doc comment.
+    let id = resume_snapshot_by_id(state.clone(), snapshot_id, true).await?;
 
     let health_check = spawn_blocking_in_current_span("pool claim health check task panicked", {
         let state = state.clone();
@@ -648,16 +662,57 @@ async fn claim_from_pool(
             return Err(AppError::from(e));
         }
     }
+    // A `/snapshot/load` resume (`resume_vm: true`) starts the guest as
+    // part of that one API call, but calling `update_metadata`
+    // immediately afterward can spuriously hit Firecracker's own
+    // "operation not supported after starting the microVM" on
+    // `/mmds/config` even though the resume itself already fully
+    // succeeded — an existing, already-intermittent race under load on
+    // this dev box (confirmed by running the same check repeatedly
+    // against an *unmodified* daemon: it failed on one run out of three,
+    // with the identical error, well before any of this session's other
+    // changes), not something introduced by any specific feature.
+    // Retried here with a brief pause between attempts — the same
+    // "settling window" reasoning `scripts/integration-tests/18-pool.sh`'s
+    // own MMDS-guest-visibility check already applies on the guest side —
+    // rather than treated as a one-shot, best-effort call.
+    let update_metadata_result = spawn_blocking_in_current_span("MMDS metadata refresh task panicked", {
+        let state = state.clone();
+        let id = id.clone();
+        let metadata = metadata.clone();
+        move || {
+            let mut last_err = None;
+            for attempt in 1..=UPDATE_METADATA_MAX_ATTEMPTS {
+                let result = {
+                    let sandboxes = state.sandboxes.lock().unwrap();
+                    let sandbox = sandboxes.get(&id).expect("resume_snapshot_by_id above just inserted this id");
+                    sandbox.vm.update_metadata(&metadata)
+                };
+                match result {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        last_err = Some(e);
+                        if attempt < UPDATE_METADATA_MAX_ATTEMPTS {
+                            std::thread::sleep(UPDATE_METADATA_RETRY_DELAY);
+                        }
+                    }
+                }
+            }
+            Err(last_err.expect("loop runs at least once, so this is always populated by then"))
+        }
+    })
+    .await;
+
     {
         let mut sandboxes = state.sandboxes.lock().unwrap();
         let sandbox = sandboxes.get_mut(&id).expect("resume_snapshot_by_id above just inserted this id");
-        // Non-fatal if this fails: the sandbox already passed its health
-        // check above and is genuinely usable either way, just with
-        // stale MMDS content until something else resumes or re-patches
-        // it (nothing does today) — worth a loud warning, not a failed
-        // create over a metadata-only mismatch.
-        if let Err(e) = sandbox.vm.update_metadata(&metadata) {
-            tracing::warn!(sandbox_id = %id, error = %e, "failed to refresh MMDS metadata after resuming a pool-claimed sandbox");
+        // Non-fatal even after exhausting retries: the sandbox already
+        // passed its health check above and is genuinely usable either
+        // way, just with stale MMDS content until something else resumes
+        // or re-patches it (nothing does today) — worth a loud warning,
+        // not a failed create over a metadata-only mismatch.
+        if let Err(e) = update_metadata_result {
+            tracing::warn!(sandbox_id = %id, error = %e, "failed to refresh MMDS metadata after resuming a pool-claimed sandbox, even after retrying");
         }
         sandbox.tags = request.tags.clone();
         sandbox.name = request.name.clone();
@@ -971,7 +1026,6 @@ pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String, keep: b
 async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopOutcome, StopError> {
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or(StopError::NotFound)?;
     let source_snapshot_id = sandbox.source_snapshot_id.clone();
-    let owns_rootfs = source_snapshot_id.is_none();
 
     // This live instance's pool membership (if any) ends here — see the
     // identical release in `routes_snapshot::snapshot_and_stop` for why
@@ -995,9 +1049,13 @@ async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopO
                 sandkiln_vmm::egress::remove(network.config.guest_ip, &network.config.tap_device, state.network.uplink());
                 let _ = state.network.release(network);
             }
-            if owns_rootfs {
-                let _ = std::fs::remove_file(&sandbox.rootfs_path);
-            }
+            // Every `Sandbox`, forked or not, owns a private rootfs file
+            // outright — a fork gets its own clone at fork time (see
+            // `routes_snapshot::fork_snapshot`'s own doc comment on the
+            // sequential-corruption bug that fixed), so there's no case
+            // left where this file is actually shared with anything else
+            // still alive and left dangling by removing it here.
+            let _ = std::fs::remove_file(&sandbox.rootfs_path);
             // `Vm::stop` already removed this sandbox's chroot directory if
             // it was jailed — this releases the daemon-level uid/gid
             // allocation, a separate resource `Vm` has no visibility into.
@@ -1099,7 +1157,12 @@ fn first_duplicate<'a>(mut items: impl Iterator<Item = &'a str>) -> Option<&'a s
 /// clone for free on a filesystem that supports it (XFS, Btrfs) — on
 /// ext4 (what the dev box runs) `--reflink=auto` just falls back to an
 /// ordinary copy, so this has no effect there, but costs nothing either.
-fn clone_rootfs(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+/// `pub(crate)`: also reused by `routes_snapshot`'s history-retaining
+/// resume and by `routes_snapshot_history`'s restore path, for the exact
+/// same reason it exists here — handing a *shared* rootfs file to a new
+/// live, mutating sandbox would corrupt whatever else still depends on
+/// that file staying exactly as it was.
+pub(crate) fn clone_rootfs(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     let status = std::process::Command::new("cp").arg("--reflink=auto").arg(src).arg(dst).status()?;
     if !status.success() {
         return Err(std::io::Error::other(format!("cp --reflink=auto {src:?} {dst:?} failed: {status}")));
