@@ -36,6 +36,27 @@ external user of the published packages would write.
   README's "Why several attempts, not one" section before assuming a
   pool always produces a fast result; a single-attempt version of this
   example would be actively misleading given what real testing found.
+- `exec-stream-logs/` — JS/TS. Starts a multi-second command detached
+  inside a sandbox with `Sandbox.execStream()`, live-tails it via
+  `.attachLogs()` (a `WebSocket`, same shape as `pty()`), then
+  **reattaches to the same session after it has finished** and gets the
+  identical log back in milliseconds — the distinctive part of the
+  feature, since the daemon buffers a session's output independently of
+  any connection. The one example here that deviates from the
+  published-package rule below: it depends on the in-repo
+  `packages/sdk` because these three methods aren't published yet, and
+  its README says so prominently. Switch it back once a new npm version
+  ships.
+- `remote-storage-mount/` — JS/TS. Mounts an S3-compatible bucket into a
+  sandbox at `/mnt/bucket`, writes and reads a file through it with
+  ordinary `writeFile()`/`readFile()` calls, then unmounts and confirms
+  the guest-side FUSE mount is really gone. Mounts have no SDK method
+  yet, so the three `/sandboxes/:id/mounts` calls are raw `fetch()`
+  against the daemon while the rest uses the published package — its
+  README says so, and says why inventing SDK methods here would be the
+  wrong call. Needs the optional FUSE kernel + rclone-injected rootfs
+  setup from `SELF_HOSTING.md`, and an S3-compatible endpoint the user
+  supplies via `S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`.
 
 ## Conventions
 
@@ -46,7 +67,12 @@ external user of the published packages would write.
   sign the abstraction belongs in a separate library, not this
   directory.
 - Depend on the published `sandkiln` package (npm/PyPI), not on
-  in-repo package source paths.
+  in-repo package source paths. The one allowed exception is an example
+  for an SDK method that genuinely isn't published yet — point it at
+  `packages/sdk`, say so visibly in its README, and switch it back on the
+  next release (`exec-stream-logs/` is the current instance). An example
+  for a daemon feature with no SDK surface at all calls the HTTP API
+  directly instead; don't invent SDK methods to demo one.
 - Each example's `README.md` states what it does, exact commands to run
   it, the env vars that configure the daemon connection, and a pointer
   to `SELF_HOSTING.md`.

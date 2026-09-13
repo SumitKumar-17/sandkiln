@@ -1,0 +1,17 @@
+{
+  "name": "sandkiln-example-remote-storage-mount",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Reference remote-storage-mount example: mount an S3-compatible bucket into a sandkiln sandbox, write and read a file through it, then unmount.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "sandkiln": "^0.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
