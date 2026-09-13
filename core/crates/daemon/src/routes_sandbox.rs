@@ -336,9 +336,22 @@ async fn create_sandbox_cold(
         move || -> std::io::Result<(Vm, Lease, Option<u32>)> {
             let span = tracing::Span::current();
             // Copying the rootfs and leasing a network are independent —
-            // running them concurrently overlaps the (currently dominant)
-            // cost of the rootfs copy with the lease instead of paying for
-            // both serially.
+            // running them concurrently overlaps whichever one is slower
+            // with the other instead of paying for both serially. **Which
+            // one actually dominates depends on the host's filesystem**:
+            // on ext4 (no CoW) the rootfs copy is a real full-file copy
+            // and was the visible cost this concurrency was originally
+            // added to hide; on a CoW-capable filesystem (XFS, Btrfs)
+            // `clone_rootfs`'s `cp --reflink=auto` is close to free, and
+            // this join's cost shifts almost entirely onto the lease side
+            // instead — confirmed live (see ROADMAP.md's Benchmarking
+            // section): moving `SANDKILN_BASE_ROOTFS` onto XFS produced a
+            // real, measured, disk-space-free CoW clone but did **not**
+            // reduce end-to-end `POST /sandboxes` latency at all on this
+            // dev box, exactly because the copy was already hidden behind
+            // the lease here, not on the critical path to begin with.
+            // Don't assume the rootfs copy is "the" bottleneck without
+            // re-measuring on whatever filesystem is actually in play.
             let (copy_result, lease_result) = std::thread::scope(|scope| {
                 let copy_handle = scope.spawn(|| span.in_scope(|| clone_rootfs(&base_rootfs_source, &rootfs_path)));
                 let lease_handle = scope.spawn(|| span.in_scope(|| state.network.lease()));

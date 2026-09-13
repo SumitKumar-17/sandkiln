@@ -764,10 +764,34 @@ outbound HTTP both still work.
     concurrently with the lease (independent work, no reason to serialize
     them) and uses `cp --reflink=auto`, an instant copy-on-write clone on
     a filesystem that supports it (XFS, Btrfs). On this dev box's ext4,
-    `--reflink` can't help — ext4 has no CoW — so the *remaining* gap
-    (~180ms of real file-copy time) still needs either a CoW-capable
-    filesystem for image storage or a device-mapper/thin-provisioning
-    layer (ties into "Base and custom images").
+    `--reflink` can't help — ext4 has no CoW.
+  - **Follow-up, actually measured (not just assumed) live**: set up a
+    real XFS loopback filesystem on the dev box and pointed
+    `SANDKILN_BASE_ROOTFS` at it. Confirmed the CoW clone is real —
+    cloning the same 300MiB rootfs four times added a measured ~4MiB of
+    real disk usage total (`df`), not ~1.2GiB — and `cp --reflink=auto`
+    itself dropped from ~110ms (ext4) to ~0ms (XFS). **But end-to-end
+    `POST /sandboxes` latency was unchanged** (~160-170ms either way, five
+    creates each) — because the copy already runs *concurrently* with the
+    network lease (see above), shrinking it to ~0ms just means the join
+    now waits on the lease side instead; it was never truly serial once
+    that concurrency landed. This means the earlier "still needs a
+    CoW-capable filesystem or a device-mapper layer to close the gap"
+    framing was based on an assumption (the copy is *the* bottleneck)
+    that turned out not to hold once actually measured on a real
+    CoW filesystem — **a device-mapper/thin-provisioning layer would not
+    meaningfully help either, for the same reason, and isn't planned
+    now.** `scripts/preflight-check.sh` still reports whether rootfs
+    storage is on a CoW-capable filesystem (real, still a correct thing
+    to want — a disk-space-free clone is a genuine win on its own even
+    though it doesn't move today's measured latency), but the actual
+    remaining ~130-160ms gap after boot is most likely in the network
+    lease step's own `ip`/`bridge` subprocess calls (`NetworkManager::attach_tap`)
+    or in Firecracker's own per-VM API configuration calls
+    (boot-source/drives/network-interfaces/machine-config, each a
+    separate synchronous PUT) — not yet isolated further; a real
+    profiling pass of `Vm::boot` itself is the honest next step, not
+    another storage-layer change.
 - **Done: snapshot/resume benchmarked** (`bench_snapshot_take`/
   `bench_resume` in `core/crates/vmm/benches/vm_lifecycle.rs`, alongside
   the existing `bench_cold_boot`/`bench_exec_roundtrip`). Real numbers,

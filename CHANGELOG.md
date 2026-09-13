@@ -13,6 +13,24 @@ Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Changed
+- Corrected a stale assumption about sandbox-create latency: the rootfs
+  copy was believed to be the dominant remaining cost after boot, with a
+  CoW-capable filesystem (XFS/Btrfs) or a device-mapper layer proposed as
+  the fix. Live-measured on a real XFS loopback filesystem: the CoW clone
+  is real (near-zero disk growth cloning the same rootfs four times, `cp
+  --reflink=auto` dropped from ~110ms to ~0ms), but **end-to-end `POST
+  /sandboxes` latency didn't change** — the copy already runs
+  concurrently with the network lease, so shrinking it just shifts the
+  join onto the lease side instead. A device-mapper/thin-provisioning
+  layer is no longer planned for this reason (it would optimize the same
+  already-non-bottleneck operation). `scripts/preflight-check.sh` now
+  reports whether rootfs storage is on a CoW-capable filesystem (still a
+  real, disk-space-free win on its own, just not a latency one on this
+  box) instead. See `ROADMAP.md`'s Benchmarking section for the full
+  finding and the corrected next step (profile `Vm::boot`'s own
+  lease/API-call path instead of storage).
+
 ### Added
 - Streamed background exec sessions (`kiln sandbox exec-stream`/`kiln
   sandbox logs`), plus `Sandbox.execStream()`/`.listExecStreams()`/

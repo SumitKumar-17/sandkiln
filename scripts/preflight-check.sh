@@ -158,6 +158,23 @@ if [ -f "$IMAGE_TO_CHECK" ]; then
     warn "$IMAGE_LABEL is under 1GiB — this looks like the raw CI test image, not a built production rootfs (images/build-universal-image.sh's default output is several GiB). If that's intentional (e.g. you're just testing the setup mechanics), ignore this; otherwise build or point at a real image."
   fi
 
+  # Every sandbox create clones this file via `cp --reflink=auto`
+  # (routes_sandbox::clone_rootfs) -- on a CoW-capable filesystem (XFS,
+  # Btrfs) that's an instant, disk-space-free clone; on anything else
+  # (ext4, the common default) it silently falls back to a real,
+  # full-size copy, which is a measured, real part of sandbox creation
+  # latency -- see ROADMAP.md's Benchmarking section for the actual
+  # numbers behind this (confirmed live: XFS reflink clones added ~0
+  # bytes of real disk usage for four 300MiB clones; ext4 always copies
+  # the full size). Informational only, not a failure -- ext4 still
+  # works correctly, just slower per create.
+  rootfs_fstype="$(df --output=fstype "$(dirname "$IMAGE_TO_CHECK")" 2>/dev/null | tail -1 | tr -d '[:space:]')"
+  case "$rootfs_fstype" in
+    xfs | btrfs) ok "rootfs storage is on $rootfs_fstype — cp --reflink=auto clones will be instant, disk-space-free copies" ;;
+    "") : ;; # df failed (unusual) -- nothing useful to report, not worth a warning of its own
+    *) warn "rootfs storage is on $rootfs_fstype, not a CoW-capable filesystem (XFS or Btrfs) — every sandbox create will pay a real full-file-copy cost cloning $IMAGE_LABEL, instead of an instant CoW clone. Not required, just a real, measured latency cost; see ROADMAP.md's Benchmarking section." ;;
+  esac
+
   if [ "$ROOT_CHECKS" -eq 1 ]; then
     if [ "$EUID" -ne 0 ]; then
       bad "--root-checks was passed but this isn't running as root — re-run with sudo to loop-mount and verify the guest agent is baked in"

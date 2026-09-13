@@ -185,6 +185,20 @@ if `SANDKILN_BASE_ROOTFS` looks like the small test image, and
 `--root-checks` verifies the agent is actually baked into whatever image
 is configured — run it before starting the daemon for real.
 
+**Optional: put rootfs storage on a CoW-capable filesystem (XFS,
+Btrfs).** Every sandbox create clones the base rootfs via `cp
+--reflink=auto` — on XFS/Btrfs that's an instant, disk-space-free clone;
+on ext4 (the common default, including this dev setup) it silently falls
+back to a real full-size copy every time. Live-measured: this is a real,
+worthwhile disk-space win (no per-sandbox rootfs storage growth at all
+on XFS) — but it did **not** reduce measured `POST /sandboxes` latency,
+because the copy already runs concurrently with the network lease step
+(see `ROADMAP.md`'s Benchmarking section for the full finding). Worth
+doing for the disk savings alone if it's convenient; not worth
+reformatting a host just to chase startup latency.
+`scripts/preflight-check.sh` reports which filesystem your configured
+rootfs storage is actually on.
+
 ## 4b. Remote storage mounts (optional)
 
 Skip this section unless you want sandboxes to be able to mount an
