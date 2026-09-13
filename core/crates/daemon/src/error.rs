@@ -22,7 +22,7 @@ pub enum AppError {
     GatewayTimeout(String),
     /// A `POST /sandboxes` request matched a `max_count`-bounded pool
     /// that stayed at capacity for the whole queueing window (see
-    /// `routes_sandbox::POOL_QUEUE_TIMEOUT`) — genuinely temporary, a
+    /// `pool_claim::POOL_QUEUE_TIMEOUT`) — genuinely temporary, a
     /// caller retrying later is the correct response, not a client
     /// mistake (`BadRequest`) or a fixed conflict (`Conflict`).
     ServiceUnavailable(String),

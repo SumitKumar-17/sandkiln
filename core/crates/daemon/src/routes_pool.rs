@@ -3,7 +3,8 @@
 //! (booting and snapshotting warm instances in the background) lives in
 //! `crate::pool_replenisher`; the actual claiming (a matching
 //! `POST /sandboxes` resuming a warm snapshot instead of cold-booting)
-//! lives in `routes_sandbox::create_sandbox_core`. See `crate::pool`'s
+//! lives in `crate::pool_claim`, invoked from
+//! `routes_sandbox::create_sandbox_core`. See `crate::pool`'s
 //! module doc comment for the feature's overall shape and scope.
 
 use crate::error::AppError;
@@ -45,7 +46,7 @@ pub struct CreatePoolRequest {
     /// pool's profile may ever have at once. Omitted means unbounded — a
     /// claim past what's warm always just cold-creates, the original
     /// behavior from before this field existed. When set, a claim that
-    /// arrives at the ceiling queues (up to `routes_sandbox::POOL_QUEUE_TIMEOUT`)
+    /// arrives at the ceiling queues (up to `pool_claim::POOL_QUEUE_TIMEOUT`)
     /// instead of either rejecting it or exceeding the ceiling.
     #[serde(default)]
     pub max_count: Option<u32>,

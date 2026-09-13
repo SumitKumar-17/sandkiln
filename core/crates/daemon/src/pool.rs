@@ -32,7 +32,7 @@
 //!   the same image/resources is at capacity, for the same reason: it
 //!   was never going to match that pool anyway.
 //! - **A queued claim waits a bounded time, not forever** — see
-//!   `routes_sandbox::POOL_QUEUE_TIMEOUT` — and returns a real error
+//!   `pool_claim::POOL_QUEUE_TIMEOUT` — and returns a real error
 //!   (`503`) if nothing frees up in time, rather than hanging the
 //!   caller's request indefinitely.
 //! - **Pool configuration lives only in memory** (`AppState::pools`), not

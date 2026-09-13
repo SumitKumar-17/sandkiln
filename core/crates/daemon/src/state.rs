@@ -234,27 +234,19 @@ impl AppState {
         if self.pending_image_boots.lock().unwrap().get(image_id).is_some_and(|count| *count > 0) {
             return Some("a sandbox currently being created".to_string());
         }
-        if let Some(sandbox) = self.sandboxes.lock().unwrap().values().find(|s| s.image_id.as_deref() == Some(image_id))
-        {
-            return Some(format!("sandbox {}", sandbox.id));
-        }
-        if let Some(snapshot) =
-            self.snapshots.lock().unwrap().values().find(|s| s.image_id.as_deref() == Some(image_id))
-        {
-            return Some(format!("snapshot {}", snapshot.id));
-        }
-        // Same reasoning as `drive_holders`' retired-checkpoint extension
-        // just above: a retired checkpoint's rootfs was cloned from this
-        // image at the sandbox's original boot, same as a held snapshot's
-        // was — deleting the image out from under it would only matter if
-        // that checkpoint is ever restored, but the check has to happen
-        // now, not deferred to restore time.
-        if let Some(retired) =
-            self.retired_snapshots.lock().unwrap().values().find(|s| s.image_id.as_deref() == Some(image_id))
-        {
-            return Some(format!("retired snapshot {}", retired.id));
-        }
-        None
+        // A retired checkpoint (`crate::snapshot_history`) references its
+        // image exactly as durably as a held `Snapshot` does — deleting
+        // the image out from under it would only matter if that
+        // checkpoint is ever restored, but the check has to happen now,
+        // not deferred to restore time.
+        let sandboxes = self.sandboxes.lock().unwrap();
+        let snapshots = self.snapshots.lock().unwrap();
+        let retired = self.retired_snapshots.lock().unwrap();
+        first_match(sandboxes.values(), "sandbox", |s| s.id.as_str(), |s| s.image_id.as_deref() == Some(image_id))
+            .or_else(|| first_match(snapshots.values(), "snapshot", |s| s.id.as_str(), |s| s.image_id.as_deref() == Some(image_id)))
+            .or_else(|| {
+                first_match(retired.values(), "retired snapshot", |s| s.id.as_str(), |s| s.image_id.as_deref() == Some(image_id))
+            })
     }
 
     /// Where the tap device backing `tap_device` is currently held, if
@@ -277,24 +269,19 @@ impl AppState {
     /// checked out. This is the guard that makes calling it safe outside
     /// that one narrow startup circumstance.
     pub fn tap_device_holder(&self, tap_device: &str) -> Option<String> {
-        if let Some(sandbox) = self
-            .sandboxes
-            .lock()
-            .unwrap()
-            .values()
-            .find(|s| s.network.as_ref().is_some_and(|n| n.config.tap_device == tap_device))
-        {
-            return Some(format!("sandbox {}", sandbox.id));
-        }
-        if let Some(snapshot) =
-            self.snapshots.lock().unwrap().values().find(|s| s.network.config.tap_device == tap_device)
-        {
-            return Some(format!("snapshot {}", snapshot.id));
-        }
-        if self.pending_tap_restores.lock().unwrap().contains(tap_device) {
-            return Some("another restore already in progress for this checkpoint's network identity".to_string());
-        }
-        None
+        let sandboxes = self.sandboxes.lock().unwrap();
+        let snapshots = self.snapshots.lock().unwrap();
+        first_match(sandboxes.values(), "sandbox", |s| s.id.as_str(), |s| {
+            s.network.as_ref().is_some_and(|n| n.config.tap_device == tap_device)
+        })
+        .or_else(|| first_match(snapshots.values(), "snapshot", |s| s.id.as_str(), |s| s.network.config.tap_device == tap_device))
+        .or_else(|| {
+            self.pending_tap_restores
+                .lock()
+                .unwrap()
+                .contains(tap_device)
+                .then(|| "another restore already in progress for this checkpoint's network identity".to_string())
+        })
     }
 
     /// Attempts to claim `tap_device` for an in-flight restore —
@@ -370,6 +357,21 @@ impl AppState {
 /// separating a pure decision from the framework plumbing around it.
 fn find_named<'a>(mut entries: impl Iterator<Item = (&'a str, Option<&'a str>)>, name: &str) -> Option<&'a str> {
     entries.find_map(|(id, entry_name)| (entry_name == Some(name)).then_some(id))
+}
+
+/// The "first match, labeled" shape `image_holder`/`tap_device_holder`
+/// both walk three times over (live sandboxes, held snapshots, retired
+/// checkpoints) with only the label and predicate differing — pulled out
+/// once so a third resource type never has to re-derive this by hand.
+/// Returns e.g. `"sandbox sbx-1"` for the first `item` where `matches`
+/// holds, `None` if nothing does.
+fn first_match<'a, T: 'a>(
+    mut items: impl Iterator<Item = &'a T>,
+    label: &str,
+    id: impl Fn(&'a T) -> &'a str,
+    matches: impl Fn(&'a T) -> bool,
+) -> Option<String> {
+    items.find(|item| matches(item)).map(|item| format!("{label} {}", id(item)))
 }
 
 /// What a name currently resolves to — see `AppState::resolve_name`.

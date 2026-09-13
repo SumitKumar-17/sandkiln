@@ -4,6 +4,7 @@ mod error;
 mod idle_reaper;
 mod metrics;
 mod pool;
+mod pool_claim;
 mod pool_replenisher;
 mod request_id;
 mod routes_drives;

@@ -84,7 +84,17 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   comment), so nothing else already prevents two different retired
   checkpoints in the same lineage (sharing one frozen tap device) from
   both being restored at once the way `Snapshot::forked_into` alone
-  prevents two live forks of one snapshot.
+  prevents two live forks of one snapshot. `image_holder()`/
+  `tap_device_holder()` both share the same "first match, labeled" walk
+  across sandboxes/snapshots/retired checkpoints via the private
+  `first_match()` helper — pulled out once `tap_device_holder` made it a
+  third near-identical copy of `image_holder`'s own shape, so a fourth
+  resource type never has to re-derive it by hand. `drive_holders()`
+  stays its own hand-written three-collection walk rather than reusing
+  `first_match`: it returns *every* matching holder (`Vec<DriveHold>`,
+  since multiple simultaneous read-only holders are legitimate), not the
+  first one, a genuinely different shape from the single-holder
+  "who owns this" question `first_match` answers.
 - `sandbox.rs` — the `Sandbox` struct the daemon tracks per running VM
   (id, `Vm` handle, network `Lease`, rootfs path, tags, created-at,
   `last_activity`, `image_id` — the registered image this sandbox's
@@ -142,30 +152,12 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   can't race an in-flight clone) before calling it.
   `create_sandbox_core` also tries a pre-warmed pool claim first (see
   `crate::pool`) whenever the request has no `drives`/`rate_limit` and a
-  configured pool's key matches — `resolve_pool_claim` decides between
-  `PoolClaim::Warm`/`ColdSlot`/`NoPool`, queueing (up to
-  `POOL_QUEUE_TIMEOUT`, a `503` past that) on a `max_count`-bounded
-  pool's own `Notify` if neither a warm snapshot nor headroom is
-  available. A `Warm` claim's `claim_from_pool` resumes the snapshot,
-  runs a real post-resume health check (`exec true`) before trusting it,
-  and on failure releases its reserved slot (`PoolClaimGuard`'s `Drop`)
-  and **retries** `resolve_pool_claim` (bounded, `MAX_POOL_CLAIM_ATTEMPTS`)
-  before ever falling through to a plain, unattributed cold create.
-  `claim_from_pool`'s later `Vm::update_metadata` call (refreshing MMDS
-  with the caller's real name/tags after resume) is itself retried
-  (`UPDATE_METADATA_MAX_ATTEMPTS`/`UPDATE_METADATA_RETRY_DELAY`, ~3s
-  total) against an existing, already-intermittent Firecracker-level
-  race under load — confirmed independent of any one feature by
-  reproducing it against an unmodified daemon (failed 1 run out of 3).
-  See `crate::pool`'s own module doc comment for the real Firecracker/KVM
-  finding that made the health check load-bearing (not defensive
-  theater) and the real bug the retry loop itself fixes (a failed
-  claim's fallback silently not counting against `max_count`, found by
-  live-testing this exact feature, not caught on paper). `ColdSlot`
-  threads its reserved `pool_id` through `create_sandbox_cold` (the
-  factored-out boot mechanics, shared by both the `ColdSlot` and
-  unattributed paths) into `Sandbox::source_pool_id`, committing the
-  `PoolClaimGuard` on success.
+  configured pool's key matches, via `crate::pool_claim` — see that
+  file's own AGENTS.md entry for the claim/retry/health-check mechanics
+  living there now. `ColdSlot` threads its reserved `pool_id` through
+  `create_sandbox_cold` (the factored-out boot mechanics, shared by both
+  the `ColdSlot` and unattributed paths) into `Sandbox::source_pool_id`,
+  committing the `PoolClaimGuard` (from `pool_claim`) on success.
   `resolve_egress_policy` validates every CIDR in a request's optional
   `egress` field up front (one clear `400` naming the exact bad entry,
   via `sandkiln_vmm::egress::validate_cidr`) and converts it to a
@@ -224,7 +216,7 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   makes replenishment itself respect the same ceiling (never over-warms
   past the remaining headroom). `Pool::notify` (a `tokio::sync::Notify`,
   woken by `push_warm` and `record_release`) is what
-  `routes_sandbox::resolve_pool_claim` waits on when a `max_count`-bounded
+  `pool_claim::resolve_pool_claim` waits on when a `max_count`-bounded
   pool is at capacity — condvar-style: every waiter re-checks the real
   condition on wake rather than trusting the wakeup itself. No
   networking, no `AppState` beyond that `Notify` — see this file's own
@@ -238,9 +230,24 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   pool's warm queue. One slot per pool per 2-second tick, not all at
   once, so a large `warm_count` fills in gradually rather than spiking
   boot load.
+- `pool_claim.rs` — resolving and executing a `POST /sandboxes` request
+  against a configured pool: `resolve_pool_claim`/`PoolClaim`
+  (`Warm`/`ColdSlot`/`NoPool`, queueing up to `POOL_QUEUE_TIMEOUT` on a
+  `max_count`-bounded pool at capacity), `PoolClaimGuard` (RAII
+  commit-or-release for a reserved slot, used by both this file's own
+  `claim_from_pool` and `routes_sandbox::create_sandbox_cold`'s
+  `ColdSlot`/unattributed paths), and `claim_from_pool` itself (resume the
+  warm snapshot, a real post-resume health check before trusting it, a
+  bounded retry around `Vm::update_metadata`'s MMDS refresh — see that
+  call site's own doc comment for the settling-window race it covers).
+  Split out of `routes_sandbox.rs` once claiming pushed that file well
+  past a defensible size for what's nominally "sandbox lifecycle
+  handlers" — no HTTP route of its own, same as `pool_replenisher.rs`;
+  `routes_sandbox::create_sandbox_core` is still the only caller.
 - `routes_pool.rs` — `POST/GET /pools`, `DELETE /pools/:id`: pool
   *configuration* only — replenishment lives in `pool_replenisher`,
-  claiming lives in `routes_sandbox::create_sandbox_core`. `POST /pools`
+  claiming lives in `pool_claim` (invoked from
+  `routes_sandbox::create_sandbox_core`). `POST /pools`
   accepts `max_count` (rejects an explicit `0` — omit it for unbounded
   instead); `GET /pools` reports it alongside the live `claimed` count.
   `DELETE` destroys whatever the pool still has warm (via
