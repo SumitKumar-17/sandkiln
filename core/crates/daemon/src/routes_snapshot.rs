@@ -205,7 +205,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
             pool.record_release();
         }
     }
-    let Sandbox { vm, network, rootfs_path, attached_drives, image_id, tags, name, egress, parent_snapshot_id, .. } = sandbox;
+    let Sandbox { vm, network, rootfs_path, attached_drives, image_id, tags, name, egress, parent_snapshot_id, mounts, .. } = sandbox;
     // Only a forked descendant (rejected above) ever has `network: None`.
     let network = network.expect("non-fork sandboxes always hold a network lease");
 
@@ -273,6 +273,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
         // (the latter is `None` on resume by design, see that field's own
         // doc comment).
         parent_snapshot_id,
+        mounts,
     };
 
     // Persist metadata before this snapshot is visible in `AppState` at
@@ -502,6 +503,7 @@ fn retire_snapshot_files(
         name: snapshot.name.clone(),
         parent_snapshot_id: snapshot.parent_snapshot_id.clone(),
         egress: snapshot.egress.clone(),
+        mounts: snapshot.mounts.clone(),
     };
     if let Err(e) = retired.persist(&dest_dir) {
         // Best-effort: `state.snap`/`mem.bin` are already safely in
@@ -652,6 +654,11 @@ pub(crate) async fn resume_snapshot_by_id(
         // `Sandbox::parent_snapshot_id`'s doc comment for why these two
         // fields can't be the same one.
         parent_snapshot_id: Some(snapshot_id.clone()),
+        // Carried straight over, not re-applied -- a mount is a live
+        // guest-side FUSE process, already restored along with
+        // everything else in the snapshotted memory image. See
+        // `crate::routes_mounts`'s module doc comment.
+        mounts: snapshot.mounts,
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
 
@@ -811,6 +818,9 @@ pub async fn fork_snapshot(
             // for why this is still tracked as its own field rather than
             // reusing `source_snapshot_id` directly.
             parent_snapshot_id: Some(snapshot_id.clone()),
+            // Carried straight over, not re-applied -- see
+            // `resume_snapshot_by_id`'s identical field above.
+            mounts: snapshot.mounts.clone(),
         };
         (sandbox, snapshot.egress.clone(), snapshot.network.config.guest_ip, snapshot.network.config.tap_device.clone())
     };

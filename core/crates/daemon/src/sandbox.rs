@@ -1,4 +1,4 @@
-use crate::state::AttachedDrive;
+use crate::state::{AttachedDrive, Mount};
 use sandkiln_vmm::egress::EgressPolicy;
 use sandkiln_vmm::network::Lease;
 use sandkiln_vmm::vm::Vm;
@@ -134,4 +134,14 @@ pub struct Sandbox {
     /// snapshotted again — this was caught live, not on paper (see
     /// `ROADMAP.md`'s "Snapshot lineage" entry).
     pub parent_snapshot_id: Option<String>,
+    /// Remote object-store mounts currently active inside this sandbox —
+    /// see `crate::routes_mounts`'s module doc comment. Unlike
+    /// `attached_drives`/`network`/`egress`, nothing here needs
+    /// re-applying on resume/fork/restore: a mount is a live guest-side
+    /// FUSE process, and Firecracker's snapshot mechanism already
+    /// captures a running process's full state along with everything
+    /// else in guest memory. This field exists purely so `GET
+    /// /sandboxes/:id/mounts` has something to list without needing a
+    /// live round-trip into the guest to ask.
+    pub mounts: Vec<Mount>,
 }

@@ -395,9 +395,22 @@ outbound HTTP both still work.
   in the JS/TS and Python SDKs, `drives`/`DriveAttachment` on
   `Sandbox.create()`/`create()` in both, and `kiln drive create|ls|rm`
   plus `--drive <id[:ro]>` on `sandbox create`.
-- **Remote storage mounts**: mount an external object store (S3-compatible)
-  into a sandbox via FUSE, so a sandbox can read/write remote files through
-  its normal filesystem interface.
+- **Done: remote storage mounts.** `POST/GET/DELETE
+  /sandboxes/:id/mounts` mounts an S3-compatible bucket into a sandbox via
+  `rclone mount`, running entirely inside the guest — no new wire
+  protocol, just the existing `Mkdir`/`WriteFile`/`Chmod`/`Exec` guest
+  requests chained together (see `routes_mounts.rs`'s module doc comment).
+  Needs two things a stock setup doesn't have out of the box: a guest
+  kernel built with `CONFIG_FUSE_FS` (Firecracker's own default/CI kernel
+  configs don't enable it, and guest kernels can't load modules —
+  `images/build-guest-kernel.sh`) and `rclone`/`fusermount3` baked into
+  the rootfs the same way the guest agent is (`images/inject-rclone.sh`,
+  `scripts/dev.sh inject-rclone`) — see `SELF_HOSTING.md`'s "Remote
+  storage mounts (optional)" section. Credentials go into the guest as a
+  `0600` rclone config file via `WriteFile`+`Chmod`, never as a command-line
+  argument. No re-application on resume/fork/restore — a mount is a live
+  guest-side FUSE process, captured by Firecracker's own snapshot
+  mechanism along with the rest of guest memory.
 
 ## Firewall and egress policy
 

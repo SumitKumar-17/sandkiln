@@ -42,6 +42,18 @@
 #                                 injecting into a different, unrelated
 #                                 .ext4 file that happened to also exist).
 #
+# Remote storage mounts (optional; see routes_mounts.rs's module doc
+# comment for the feature itself):
+#   inject-rclone <rclone-binary> [rootfs-path]
+#                                 `sudo images/inject-rclone.sh` into
+#                                 rootfs-path (default: same
+#                                 $SANDKILN_BASE_ROOTFS/daemon-default
+#                                 resolution as inject-agent above) —
+#                                 also needs a guest kernel built with
+#                                 CONFIG_FUSE_FS; see
+#                                 images/build-guest-kernel.sh (not
+#                                 wrapped here — a rare, one-time step).
+#
 # Everything else is intentionally NOT wrapped here — one-time or
 # narrowly-scoped steps `setup.sh` already calls in the right order; run
 # them directly if you need one in isolation:
@@ -115,6 +127,12 @@ case "$subcommand" in
     agent_bin="$REPO_ROOT/core/target/x86_64-unknown-linux-musl/release/sandkiln-agent"
     echo "==> injecting into $rootfs (needs sudo)"
     exec sudo "$REPO_ROOT/images/inject-agent.sh" "$agent_bin" "$rootfs"
+    ;;
+  inject-rclone)
+    rclone_bin="${1:?path to a static rclone binary required -- see SELF_HOSTING.md's remote storage mounts section}"
+    rootfs="${2:-${SANDKILN_BASE_ROOTFS:-$HOME/sandkiln-tools/images/ubuntu-22.04.ext4}}"
+    echo "==> injecting rclone + fusermount3 into $rootfs (needs sudo)"
+    exec sudo "$REPO_ROOT/images/inject-rclone.sh" "$rclone_bin" "$rootfs"
     ;;
   help | -h | --help)
     usage

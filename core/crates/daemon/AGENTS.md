@@ -205,6 +205,20 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   `routes_exec::read_file`/`write_file` already have none — see this
   file's own module doc comment for why that's a deliberate consistency
   choice, not an oversight.
+- `routes_mounts.rs` — `POST/GET /sandboxes/:id/mounts`,
+  `DELETE /sandboxes/:id/mounts/:mount_id`: mounts an S3-compatible
+  bucket into a sandbox via `rclone mount`, built entirely on top of
+  `call_agent`/`Mkdir`/`WriteFile`/`Chmod`/`Exec` — no new wire protocol.
+  Credentials go in as a `0600` rclone config file, never a command-line
+  argument (see this file's module doc comment). No holder-tracking like
+  `AppState::drive_holders` (concurrent mounts of the same bucket aren't
+  a corruption risk the way a shared drive is) and no re-application on
+  resume/fork/restore (`Sandbox::mounts` exists purely for listing — a
+  mount is a live guest-side FUSE process, captured by Firecracker's own
+  snapshot mechanism along with the rest of guest memory). Needs a guest
+  kernel built with `CONFIG_FUSE_FS` (`images/build-guest-kernel.sh`) and
+  `rclone`/`fusermount3` baked into the rootfs (`images/inject-rclone.sh`)
+  — see `SELF_HOSTING.md`'s "Remote storage mounts (optional)" section.
 - `pool.rs` — `Pool`/`PoolConfig`/`PoolKey`: the pure state a configured
   pre-warmed pool tracks (its resolved image/resource key, a FIFO queue
   of warm snapshot ids, and `claimed` — how many live instances of this

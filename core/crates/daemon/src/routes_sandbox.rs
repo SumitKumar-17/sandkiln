@@ -447,6 +447,9 @@ async fn create_sandbox_cold(
         // A cold create -- fresh boot or a pool's own warm-replenishment
         // boot -- is always a root of its own lineage.
         parent_snapshot_id: None,
+        // A fresh boot never has any remote storage mounted yet -- see
+        // `crate::routes_mounts`.
+        mounts: Vec::new(),
     };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
     state.metrics.record_sandbox_created();

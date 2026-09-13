@@ -14,6 +14,28 @@ Changelog](https://keepachangelog.com/).
 ## Unreleased
 
 ### Added
+- Remote storage mounts (daemon only — no SDK/CLI change, nothing to
+  publish yet). `POST/GET/DELETE /sandboxes/:id/mounts` mounts an
+  S3-compatible bucket into a sandbox via `rclone mount`, running
+  entirely inside the guest through the existing
+  `Mkdir`/`WriteFile`/`Chmod`/`Exec` guest requests — no new wire
+  protocol. Credentials go in as a `0600` rclone config file, never a
+  command-line argument. See `ROADMAP.md`'s "Drives and remote storage"
+  section and `routes_mounts.rs`'s module doc comment for the full
+  design.
+  - Found live, the hard way: Firecracker's own default/CI guest kernels
+    don't enable `CONFIG_FUSE_FS`, and guest kernels can't load modules at
+    runtime, so `/dev/fuse` doesn't exist at all in a stock setup —
+    required building a custom kernel (`images/build-guest-kernel.sh`)
+    against Firecracker's own recommended config as the base. Also found
+    that rclone's Linux FUSE backend always execs `fusermount3` to do the
+    actual mount, even running as root — `images/inject-rclone.sh` bakes
+    both in as static/near-static binaries, the same way the guest agent
+    itself is injected, since apt can't be relied on inside the rootfs.
+  - Verified end-to-end against a real `rclone serve s3` test fixture:
+    mount, read an existing object, write a new one and confirm it lands
+    on the backing store, list, and unmount — not just kernel-level FUSE
+    availability.
 - Time-travel restore (daemon only — no SDK/CLI change, nothing to
   publish yet). `POST /snapshots/:id/resume` no longer deletes the
   checkpoint it consumes by default — it retires into `GET

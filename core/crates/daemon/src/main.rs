@@ -12,6 +12,7 @@ mod routes_exec;
 mod routes_fs;
 mod routes_images;
 mod routes_metrics;
+mod routes_mounts;
 mod routes_pool;
 mod routes_preview;
 mod routes_pty;
@@ -170,6 +171,7 @@ async fn async_main() {
         .route("/sandboxes/:id/readlink", post(routes_fs::readlink))
         .route("/sandboxes/:id/truncate", post(routes_fs::truncate))
         .route("/sandboxes/:id/list-dir", post(routes_fs::list_dir))
+        .merge(routes_mounts::router())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
     // Its own router, guarded by `auth::require_preview_token` rather than

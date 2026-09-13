@@ -211,6 +211,11 @@ pub(crate) async fn restore_snapshot_history_by_id(state: Arc<AppState>, id: Str
         source_pool_id: None,
         egress: retired.egress.clone(),
         parent_snapshot_id: Some(retired.id.clone()),
+        // Carried straight over, not re-applied -- a mount is a live
+        // guest-side FUSE process, restored along with everything else
+        // in the checkpoint's memory image. See
+        // `crate::routes_mounts`'s module doc comment.
+        mounts: retired.mounts.clone(),
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
 

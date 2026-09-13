@@ -185,6 +185,45 @@ if `SANDKILN_BASE_ROOTFS` looks like the small test image, and
 `--root-checks` verifies the agent is actually baked into whatever image
 is configured — run it before starting the daemon for real.
 
+## 4b. Remote storage mounts (optional)
+
+Skip this section unless you want sandboxes to be able to mount an
+S3-compatible bucket into their own filesystem (`POST
+/sandboxes/:id/mounts`). It needs two things neither the quick test path
+nor the production path above gives you by default:
+
+**A guest kernel built with `CONFIG_FUSE_FS`.** Firecracker's own
+default/CI kernel builds — including the one `images/fetch-test-image.sh`
+downloads in section 3 — don't enable FUSE, and guest kernels can't load
+modules at runtime, so this has to be compiled in:
+
+```
+images/build-guest-kernel.sh 5.10.223 ~/sandkiln-tools/images/vmlinux-5.10.223-fuse
+```
+
+Needs a kernel build toolchain (`sudo apt-get install -y build-essential
+flex bison libelf-dev bc`) and a few minutes. Point the daemon at the
+result with `SANDKILN_KERNEL_PATH=~/sandkiln-tools/images/vmlinux-5.10.223-fuse`
+(section 7) — this fully replaces the default kernel for every sandbox,
+not just ones that use mounts, so there's no reason not to just always
+use the FUSE-enabled one once you've built it.
+
+**`rclone` and `fusermount3` baked into the rootfs**, the same way the
+guest agent is (section 4) — a static binary injection rather than an
+apt package, since `rclone mount` is what actually talks to the bucket
+from inside the guest:
+
+```
+scripts/dev.sh inject-rclone <path-to-a-static-rclone-binary> [rootfs-path]
+```
+
+Download a static `rclone` build for your architecture, then run the
+above (`rootfs-path` defaults the same way `inject-agent` does).
+`fusermount3` comes along for free from this host's own `/bin/fusermount3`
+(install the `fuse3` package here if it's missing) — see
+`images/inject-rclone.sh`'s own header comment for why rclone needs it
+even though the guest agent runs as root.
+
 ### Custom and managed images
 
 `SANDKILN_BASE_ROOTFS` is the daemon-wide default every sandbox boots

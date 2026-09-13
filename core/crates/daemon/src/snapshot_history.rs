@@ -59,7 +59,7 @@
 //! fresh rootfs clone, so the retired checkpoint's own files stay exactly
 //! as they were and can be restored again later, as many times as wanted.
 
-use crate::state::AttachedDrive;
+use crate::state::{AttachedDrive, Mount};
 use sandkiln_vmm::egress::EgressPolicy;
 use sandkiln_vmm::vm::NetworkConfig;
 use serde::{Deserialize, Serialize};
@@ -107,6 +107,11 @@ pub struct RetiredSnapshot {
     /// retired instead of staying "hot."
     pub parent_snapshot_id: Option<String>,
     pub egress: Option<EgressPolicy>,
+    /// Carried over from the source `Snapshot::mounts` — see
+    /// `crate::routes_mounts`'s module doc comment. No credentials here
+    /// either; nothing to re-apply on restore, same reasoning as
+    /// `Snapshot::mounts`.
+    pub mounts: Vec<Mount>,
 }
 
 /// On-disk mirror of `RetiredSnapshot`, written by `persist`, read back by
@@ -135,6 +140,8 @@ struct RetiredSnapshotMeta {
     name: Option<String>,
     parent_snapshot_id: Option<String>,
     egress: Option<EgressPolicy>,
+    #[serde(default)]
+    mounts: Vec<Mount>,
 }
 
 impl RetiredSnapshot {
@@ -159,6 +166,7 @@ impl RetiredSnapshot {
             name: self.name.clone(),
             parent_snapshot_id: self.parent_snapshot_id.clone(),
             egress: self.egress.clone(),
+            mounts: self.mounts.clone(),
         };
         let json =
             serde_json::to_vec_pretty(&meta).map_err(|e| io::Error::other(format!("serializing retired-snapshot metadata: {e}")))?;
@@ -298,6 +306,7 @@ fn load_one(dir: &Path, id: &str) -> Option<RetiredSnapshot> {
         name: meta.name,
         parent_snapshot_id: meta.parent_snapshot_id,
         egress: meta.egress,
+        mounts: meta.mounts,
     })
 }
 
@@ -346,6 +355,13 @@ mod tests {
             name: Some("sample-checkpoint".to_string()),
             parent_snapshot_id: Some("snap-parent-1".to_string()),
             egress: None,
+            mounts: vec![Mount {
+                id: "mount-1".to_string(),
+                bucket: "my-bucket".to_string(),
+                endpoint: "https://s3.example.com".to_string(),
+                mount_path: "/mnt/data".to_string(),
+                read_only: false,
+            }],
         }
     }
 
@@ -371,6 +387,16 @@ mod tests {
         assert_eq!(loaded.retired_at.duration_since(UNIX_EPOCH).unwrap().as_secs(), 1_700_000_500);
         assert_eq!(loaded.name.as_deref(), Some("sample-checkpoint"));
         assert_eq!(loaded.parent_snapshot_id.as_deref(), Some("snap-parent-1"));
+        assert_eq!(
+            loaded.mounts,
+            vec![Mount {
+                id: "mount-1".to_string(),
+                bucket: "my-bucket".to_string(),
+                endpoint: "https://s3.example.com".to_string(),
+                mount_path: "/mnt/data".to_string(),
+                read_only: false,
+            }]
+        );
     }
 
     #[test]

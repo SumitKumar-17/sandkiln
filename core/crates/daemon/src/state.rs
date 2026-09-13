@@ -28,6 +28,26 @@ pub struct AttachedDrive {
     pub read_only: bool,
 }
 
+/// One remote object-store mount active inside a sandbox — see
+/// `crate::routes_mounts`'s module doc comment for the full design.
+/// Deliberately carries no credentials: they're written straight into
+/// the guest (a passwd file `s3fs` reads, never a command-line argument
+/// `ps aux` inside the guest could see) and never touch the daemon's own
+/// state beyond that one write, so there's nothing secret left to leak
+/// by carrying this struct around, persisting it into `Snapshot`/
+/// `meta.json`, or logging it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Mount {
+    pub id: String,
+    pub bucket: String,
+    /// Full URL of the S3-compatible endpoint this mount points at —
+    /// required, not defaulted to any particular provider, so a mount's
+    /// target is always explicit rather than implied.
+    pub endpoint: String,
+    pub mount_path: String,
+    pub read_only: bool,
+}
+
 pub struct AppState {
     pub config: Config,
     pub network: NetworkManager,
@@ -816,6 +836,7 @@ mod tests {
             archived_at: None,
             egress: None,
             parent_snapshot_id: None,
+            mounts: vec![],
         }
     }
 
@@ -841,6 +862,7 @@ mod tests {
             name: None,
             parent_snapshot_id: None,
             egress: None,
+            mounts: vec![],
         }
     }
 

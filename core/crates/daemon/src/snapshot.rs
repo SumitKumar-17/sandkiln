@@ -1,4 +1,4 @@
-use crate::state::AttachedDrive;
+use crate::state::{AttachedDrive, Mount};
 use sandkiln_vmm::egress::EgressPolicy;
 use sandkiln_vmm::network::{Lease, NetworkManager};
 use sandkiln_vmm::vm::NetworkConfig;
@@ -107,6 +107,13 @@ pub struct Snapshot {
     /// directions via that filter) rather than a fuller durable ancestry
     /// tree is the deliberately narrow first slice here.
     pub parent_snapshot_id: Option<String>,
+    /// Carried over from the source sandbox's `Sandbox::mounts` — see
+    /// `crate::routes_mounts`'s module doc comment. No credentials here
+    /// (never were, on the `Sandbox` side either), and nothing to
+    /// re-apply on resume/fork: the mount is a live guest-side FUSE
+    /// process, already captured in the snapshotted memory image along
+    /// with everything else.
+    pub mounts: Vec<Mount>,
 }
 
 /// On-disk mirror of everything about a `Snapshot` that isn't already
@@ -156,6 +163,11 @@ struct SnapshotMeta {
     /// snapshot with no parent.
     #[serde(default)]
     parent_snapshot_id: Option<String>,
+    /// Same "defaults cleanly on upgrade" reasoning as `name` — absent in
+    /// metadata written before remote storage mounts existed, or for a
+    /// snapshot whose sandbox never had any.
+    #[serde(default)]
+    mounts: Vec<Mount>,
 }
 
 impl Snapshot {
@@ -187,6 +199,7 @@ impl Snapshot {
             archived_at_unix: self.archived_at.map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()),
             egress: self.egress.clone(),
             parent_snapshot_id: self.parent_snapshot_id.clone(),
+            mounts: self.mounts.clone(),
         };
         let json = serde_json::to_vec_pretty(&meta).map_err(|e| io::Error::other(format!("serializing snapshot metadata: {e}")))?;
         write_atomically(&meta_path(dir), &json)
@@ -486,6 +499,7 @@ fn load_one(dir: &Path, id: &str, network: &NetworkManager) -> Option<Snapshot> 
         archived_at: meta.archived_at_unix.map(|secs| UNIX_EPOCH + Duration::from_secs(secs)),
         egress: meta.egress,
         parent_snapshot_id: meta.parent_snapshot_id,
+        mounts: meta.mounts,
     })
 }
 
@@ -542,6 +556,7 @@ mod tests {
             archived_at_unix: None,
             egress: None,
             parent_snapshot_id: None,
+            mounts: vec![],
         }
     }
 
@@ -635,6 +650,13 @@ mod tests {
             archived_at: None,
             egress: None,
             parent_snapshot_id: Some("snap-parent-1".to_string()),
+            mounts: vec![Mount {
+                id: "mount-1".to_string(),
+                bucket: "my-bucket".to_string(),
+                endpoint: "https://s3.example.com".to_string(),
+                mount_path: "/mnt/data".to_string(),
+                read_only: true,
+            }],
         };
 
         snapshot.persist(&real.dir).unwrap();
@@ -660,6 +682,16 @@ mod tests {
         assert_eq!(loaded.name.as_deref(), Some("round-trip-name"));
         assert_eq!(loaded.archived_at, None);
         assert_eq!(loaded.parent_snapshot_id.as_deref(), Some("snap-parent-1"));
+        assert_eq!(
+            loaded.mounts,
+            vec![Mount {
+                id: "mount-1".to_string(),
+                bucket: "my-bucket".to_string(),
+                endpoint: "https://s3.example.com".to_string(),
+                mount_path: "/mnt/data".to_string(),
+                read_only: true,
+            }]
+        );
 
         // The reconciled snapshot's tap must be pulled out of the fresh
         // manager's free pool — the actual double-lease-prevention
@@ -723,6 +755,33 @@ mod tests {
         let network = test_network(["tapA".to_string()]);
         let loaded = load_one(&dir, "snap-no-parent", &network).expect("must reconcile despite the missing parent_snapshot_id key");
         assert_eq!(loaded.parent_snapshot_id, None);
+    }
+
+    #[test]
+    fn load_one_defaults_mounts_to_empty_for_metadata_written_before_remote_mounts_existed() {
+        let t = TempDir::new("no-mounts-key");
+        let dir = t.path.join("snap-no-mounts");
+        fs::create_dir_all(&dir).unwrap();
+        let meta_without_mounts = serde_json::json!({
+            "id": "snap-no-mounts",
+            "source_sandbox_id": "sandbox-1",
+            "rootfs_path": "/tmp/sandkiln-rootfs-1.ext4",
+            "tap_device": "tapA",
+            "guest_ip": "172.16.0.5",
+            "gateway_ip": "172.16.0.1",
+            "guest_mac": "AA:FC:00:00:05:05",
+            "host_octet": 5,
+            "attached_drives": [{"drive_id": "d1", "read_only": false}],
+            "tags": {},
+            "created_at_unix": 1_700_000_000u64,
+        });
+        fs::write(meta_path(&dir), serde_json::to_vec(&meta_without_mounts).unwrap()).unwrap();
+        fs::write(state_path(&dir), b"state").unwrap();
+        fs::write(mem_path(&dir), b"mem").unwrap();
+
+        let network = test_network(["tapA".to_string()]);
+        let loaded = load_one(&dir, "snap-no-mounts", &network).expect("must reconcile despite the missing mounts key");
+        assert_eq!(loaded.mounts, Vec::new());
     }
 
     #[test]
@@ -893,6 +952,7 @@ mod tests {
             archived_at: None,
             egress: None,
             parent_snapshot_id: None,
+            mounts: vec![],
         };
 
         move_snapshot_files(&mut snapshot, &archive).unwrap();
