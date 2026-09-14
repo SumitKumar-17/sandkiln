@@ -3,7 +3,7 @@ title: Startup latency & the pre-warmed pool
 description: The pre-warmed pool is shipped — what it actually buys, what it found, and what's still the real next lever.
 ---
 
-sandkiln's cold boot measures 32.3–33.1ms (`criterion`, `core/crates/vmm/benches/vm_lifecycle.rs::bench_cold_boot`) and Firecracker's own published numbers document sub-second, even sub-125ms, boot times industry-wide — sandkiln's own number is consistent with that. But "boot fast" and "start instantly" aren't the same claim. See the project's Performance page for the full current benchmark numbers this builds on.
+sandkiln's cold boot measures 10.5–10.9ms (`criterion`, `core/crates/vmm/benches/vm_lifecycle.rs::bench_cold_boot` — was 32.3–33.1ms before a fixed 20ms socket-wait sleep was found and fixed, see below) and Firecracker's own published numbers document sub-second, even sub-125ms, boot times industry-wide — sandkiln's own number is consistent with that. But "boot fast" and "start instantly" aren't the same claim. See the project's Performance page for the full current benchmark numbers this builds on.
 
 ## The documented industry technique, now shipped proactively
 
@@ -34,13 +34,29 @@ A pool's `warm_count` is a target size, not a hard cap on how many live instance
 
 - **Pool configuration is in-memory only**, not durable across a daemon restart the way snapshot records are — a caller has to re-`POST /pools` afterward, and a restart can orphan an already-warm snapshot with no pool left to claim or clean it up.
 
-## What's next: not the rootfs copy, measured
+## What's next: measured wrong once, then measured completely
 
-Snapshot-take (~322ms) and resume (~25.8ms) are both already small — resume was never the bottleneck once measured directly. The remaining ~130–160ms between a ~32ms boot and a full cold create lives in the surrounding per-create setup.
+Snapshot-take (~322ms) and resume (~7ms, after the fix below) are both already small — resume was never the bottleneck once measured directly. This section previously named the rootfs copy as the remaining bottleneck, then measured a real XFS loopback filesystem and concluded the copy was already hidden behind the concurrent network lease, so a CoW filesystem or device-mapper layer wouldn't help. **That conclusion was wrong** — caught by actually profiling every phase rather than re-reading the reasoning.
 
-This section previously named the rootfs copy as that bottleneck and a copy-on-write filesystem — or failing that a device-mapper/thin-provisioning layer — as the next thing to build. Measuring it directly showed that was wrong. A real XFS loopback filesystem was set up on the dev box with `SANDKILN_BASE_ROOTFS` pointed at it. The clone is genuinely copy-on-write: cloning the same 300MiB rootfs four times added about 4MiB of real disk usage by `df` rather than ~1.2GiB, and `cp --reflink=auto` itself dropped from ~110ms on ext4 to ~0ms on XFS. **End-to-end `POST /sandboxes` latency was unchanged** — ~160–170ms either way, across five creates on each filesystem — because the copy already runs concurrently with the network lease, so shrinking it to nothing only moves the join onto the lease side. It stopped being the critical path the moment that concurrency landed, and a device-mapper layer would not have helped either, for the same reason.
+A full per-phase pass instrumented `create_sandbox_cold` and `Vm::boot` and ran 20 isolated cold creates, one at a time, nothing else on the box. It accounted for 167.33 of 167.65ms measured:
 
-What remains is most likely the network lease step's own `ip`/`bridge` subprocess calls (`NetworkManager::attach_tap`), or Firecracker's own per-VM configuration calls — boot-source, drives, network-interfaces and machine-config, each a separate synchronous PUT to its API socket. Neither has been isolated yet, so the honest next step is a profiling pass of `Vm::boot` itself rather than another storage-layer change. `scripts/preflight-check.sh` still reports whether rootfs storage sits on a CoW-capable filesystem, which remains a real disk-space win — just not a latency one.
+| Phase | Share of a cold create |
+| --- | --- |
+| rootfs clone (`cp --reflink=auto`) | 74.0% |
+| `Vm::boot` total | 20.3% |
+| — wait for the API socket (fixed below; was 12.0%) | 0.5% |
+| — `InstanceStart` | 7.1% |
+| — configuration PUTs, all 7 combined | 1.0% |
+| history-store write | 5.5% |
+| network lease (fully concurrent with the clone) | ~0.1% |
+
+The network lease — the thing blamed above — measured **~4.36ms**, not ~130ms. The rootfs clone measured **124.09ms, 74% of the whole create**. The two were swapped: the clone was never hidden behind the lease, because the lease was never big enough to hide anything behind.
+
+**What that same pass found and fixed**: `Vm::boot`'s wait for Firecracker's freshly spawned API socket used a fixed `sleep(20ms)` before ever trying to connect — measured **20.11ms on every single one of the 20 boots** (min 20.04, max 20.18), the signature of a sleep nobody needed to wait that long for. Replaced with a real connect-retry on a 200µs→5ms backoff, which also closes a genuine race the file-existence check had (the socket file appears at `bind()`, a moment before `listen()`). Re-measured: boot **34.00ms → 11.22/11.44ms**, cold create **167.65ms → 144.59/143.56ms** — a real **~14%** cut to every cold create, and to snapshot resume too, since it shares the same code path. Verified with the full integration suite (300/300, snapshot/resume/time-travel included) and `cargo clippy`/`cargo test` clean.
+
+**The correction, stated plainly**: the CoW filesystem test was real and its own numbers stand — only the explanation attached to them was wrong. The leading replacement, **not yet re-verified**: the per-sandbox clone always lands in `std::env::temp_dir()` regardless of where the base image lives, so the earlier test's clone could never have actually reflinked even though the base image itself sat on XFS. A device-mapper layer would have hit the identical wall for the identical reason and remains not planned. `scripts/preflight-check.sh` still reports whether rootfs storage sits on a CoW-capable filesystem — a real disk-space win regardless, just not a confirmed latency one yet.
+
+Also unexamined: the synchronous history-store write sitting on the critical path at 9.24ms (5.5% of a create), for a write whose own code already treats it as best-effort — a plausible easy win, not yet attempted. See the [Engineering notebook](../engineering-notebook/) for the full story, including this project's own mistake reaching the wrong conclusion the first time.
 
 ## What Firecracker itself already buys, for free
 

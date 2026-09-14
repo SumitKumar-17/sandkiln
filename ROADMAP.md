@@ -6,18 +6,18 @@ hardware, not just code that compiles.
 
 ## What works today
 
-- A Firecracker microVM boots under real KVM in ~30ms, with a guest agent
-  running inside it that answers `exec` / `read_file` / `write_file` /
-  `list_dir` over vsock.
+- A Firecracker microVM boots under real KVM in ~11ms (was ~32ms until a
+  fixed 20ms socket-wait sleep was found and fixed — see Benchmarking),
+  with a guest agent running inside it that answers `exec` / `read_file` /
+  `write_file` / `list_dir` over vsock.
 - **Current sandbox launch latency, measured, not estimated**: a full
-  `POST /sandboxes` create averages **211ms** (min 137ms, p95 577ms,
-  under concurrent load) — the ~30ms boot time above plus rootfs-copy
-  and network-lease overhead. The ~180ms gap between raw boot and full
-  create is the known, actively-tracked bottleneck (see Benchmarking and
-  Persistence and snapshotting below for the CoW-filesystem and
-  pre-warmed-pool plans to close it) — worth stating up front since it's
-  the number that actually matters for "how long until I can run code,"
-  not the boot time alone.
+  `POST /sandboxes` create averages **~144ms** (was ~168ms before the same
+  fix; the load-test table in Benchmarking predates both fixes and hasn't
+  been cleanly re-run yet) — a real per-phase profiling pass found the
+  rootfs clone is 74% of that, not the network lease this project had
+  suspected (~4ms). See Benchmarking below for the full breakdown and the
+  honest correction to an earlier, wrong conclusion about why a CoW
+  filesystem test didn't change end-to-end latency.
 - An HTTP daemon (`sandkilnd`) manages the full lifecycle — create, exec,
   list, stop — driving Firecracker directly from Rust rather than shelling
   out.

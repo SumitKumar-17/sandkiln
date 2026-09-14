@@ -19,7 +19,7 @@ The core is a Rust workspace, kept deliberately modular — the daemon can chang
 3. **Agent up** — the guest kernel boots, systemd starts the guest agent, it binds its vsock port.
 4. **Ready** — the host's vsock client connects; the sandbox can run anything sent to it.
 
-Measured end to end: 32.3–33.1ms. See [Startup latency & the pre-warmed pool](../startup-latency/) for what's next after boot itself is already this fast.
+Measured end to end: 10.5–10.9ms (was 32.3–33.1ms before a fixed 20ms socket-wait sleep was found and fixed — see [Startup latency & the pre-warmed pool](../startup-latency/)).
 
 ## Deeper dives
 

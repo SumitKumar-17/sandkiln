@@ -7,10 +7,10 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 // rounded midpoints: a range is published as a range, because the prettier
 // single number in the middle of it was never actually measured.
 const readout: Measurement[] = [
-  { label: "Cold boot", lo: 32.3, hi: 33.1, value: "32.3–33.1", unit: "ms", source: "criterion — spawn to InstanceStart" },
-  { label: "Exec round-trip", lo: 0.225, hi: 0.275, value: "225–275", unit: "µs", source: "criterion — over an open vsock connection" },
-  { label: "Resume from snapshot", lo: 25.5, hi: 26.2, value: "25.5–26.2", unit: "ms", source: "criterion" },
-  { label: "Full create, under load", lo: 211, hi: 211, value: "211", unit: "ms", source: "mean — 4 concurrent workers, 0 errors" },
+  { label: "Cold boot", lo: 10.5, hi: 10.9, value: "10.5–10.9", unit: "ms", source: "criterion — spawn to InstanceStart" },
+  { label: "Exec round-trip", lo: 0.22, hi: 0.25, value: "220–250", unit: "µs", source: "criterion — over an open vsock connection" },
+  { label: "Resume from snapshot", lo: 6.5, hi: 7.7, value: "6.5–7.7", unit: "ms", source: "criterion" },
+  { label: "Full create, under load", lo: 144, hi: 144, value: "144", unit: "ms", source: "mean — 20 isolated cold creates" },
 ];
 
 const consoleLines = [

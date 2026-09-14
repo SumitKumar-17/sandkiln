@@ -2,7 +2,7 @@
 const rows = [
   { axis: "Kernel", them: "Shared with the host", us: "Dedicated per sandbox" },
   { axis: "Isolation boundary", them: "Namespaces and cgroups", us: "Hardware virtualization (KVM)" },
-  { axis: "Cold start", them: "~100ms–1s+", us: "32.3–33.1ms, measured" },
+  { axis: "Cold start", them: "~100ms–1s+", us: "10.5–10.9ms, measured" },
   { axis: "Escape surface", them: "Shared syscall table", us: "The microVM boundary" },
   { axis: "Filesystem", them: "Overlay on the host filesystem", us: "Dedicated virtio-blk device" },
   { axis: "Suited to", them: "Packaging code you wrote", us: "Running code you didn't" },
