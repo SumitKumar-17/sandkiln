@@ -1,5 +1,5 @@
 import { InvalidArgumentError } from "commander";
-import type { DirEntry, DriveInfo, ImageInfo, PoolInfo, SandboxInfo, SnapshotInfo } from "sandkiln";
+import type { DirEntry, DriveInfo, ExecStreamSession, ImageInfo, PoolInfo, SandboxInfo, SnapshotInfo } from "sandkiln";
 
 /**
  * A plain `Error` here crashes with a raw stack trace instead of the
@@ -164,4 +164,17 @@ export function formatDirEntryList(entries: DirEntry[]): string {
     return "empty directory\n";
   }
   return entries.map(formatDirEntryLine).join("\n") + "\n";
+}
+
+function formatExecStreamLine(session: ExecStreamSession): string {
+  const command = [session.command, ...session.args].join(" ");
+  const status = session.exitCode === null ? "running" : `exited ${session.exitCode}`;
+  return `${session.id}  ${session.startedAt.toISOString()}  ${status}  ${command}`;
+}
+
+export function formatExecStreamList(sessions: ExecStreamSession[]): string {
+  if (sessions.length === 0) {
+    return "no exec-stream sessions\n";
+  }
+  return sessions.map(formatExecStreamLine).join("\n") + "\n";
 }

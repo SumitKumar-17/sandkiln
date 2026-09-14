@@ -11,6 +11,7 @@ export type {
   DriveInfo,
   DriveOptions,
   ExecResult,
+  ExecStreamSession,
   GetOrCreateSandboxOptions,
   ImageInfo,
   ImageOptions,

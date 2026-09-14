@@ -16,7 +16,7 @@ mod snapshot;
 use crate::firecracker_api::ApiClient;
 use crate::jailer::JailLaunch;
 use crate::vsock_client;
-use sandkiln_protocol::{Request, Response, AGENT_PORT, PTY_PORT};
+use sandkiln_protocol::{Request, Response, AGENT_PORT, EXEC_STREAM_PORT, PTY_PORT};
 use std::io;
 use std::net::Ipv4Addr;
 use std::os::unix::net::UnixStream;
@@ -155,20 +155,14 @@ impl Vm {
     /// InstanceStart returns — this retries briefly to absorb that.
     pub fn call(&self, request: &Request) -> io::Result<Response> {
         let started = Instant::now();
-        let deadline = started + Duration::from_secs(5);
-        loop {
-            match vsock_client::call(&self.vsock_socket, AGENT_PORT, request) {
-                Ok(response) => {
-                    tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "vsock call ok");
-                    return Ok(response);
-                }
-                Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
-                Err(e) => {
-                    tracing::warn!(vm_id = self.id, error = %e, "vsock call failed");
-                    return Err(e);
-                }
-            }
+        let result = retry_with_backoff(Duration::from_secs(5), Duration::from_millis(1), Duration::from_millis(20), || {
+            vsock_client::call(&self.vsock_socket, AGENT_PORT, request)
+        });
+        match &result {
+            Ok(_) => tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "vsock call ok"),
+            Err(e) => tracing::warn!(vm_id = self.id, error = %e, "vsock call failed"),
         }
+        result
     }
 
     /// Opens a new interactive PTY session inside this VM, sized to
@@ -181,20 +175,34 @@ impl Vm {
     /// PTY is usually opened well after a sandbox is already responsive.
     pub fn open_pty(&self, cols: u16, rows: u16) -> io::Result<UnixStream> {
         let started = Instant::now();
-        let deadline = started + Duration::from_secs(5);
-        loop {
-            match vsock_client::open_pty(&self.vsock_socket, PTY_PORT, cols, rows) {
-                Ok(stream) => {
-                    tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "pty session opened");
-                    return Ok(stream);
-                }
-                Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
-                Err(e) => {
-                    tracing::warn!(vm_id = self.id, error = %e, "opening pty session failed");
-                    return Err(e);
-                }
-            }
+        let result = retry_with_backoff(Duration::from_secs(5), Duration::from_millis(1), Duration::from_millis(20), || {
+            vsock_client::open_pty(&self.vsock_socket, PTY_PORT, cols, rows)
+        });
+        match &result {
+            Ok(_) => tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "pty session opened"),
+            Err(e) => tracing::warn!(vm_id = self.id, error = %e, "opening pty session failed"),
         }
+        result
+    }
+
+    /// Starts a streamed background exec session inside this VM — same
+    /// "open once, keep reading" shape as `open_pty` above, but the
+    /// returned stream carries framed `ExecStreamEvent`s (see
+    /// `sandkiln_protocol::EXEC_STREAM_PORT`'s own doc comment) rather
+    /// than raw bytes, and the process it names has no controlling
+    /// terminal — this is for a long-running background command
+    /// (`kiln logs -f`'s underlying mechanism), not an interactive shell.
+    /// Retries briefly like `call()`/`open_pty` do, for the same reason.
+    pub fn open_exec_stream(&self, command: &str, args: &[String]) -> io::Result<UnixStream> {
+        let started = Instant::now();
+        let result = retry_with_backoff(Duration::from_secs(5), Duration::from_millis(1), Duration::from_millis(20), || {
+            vsock_client::open_exec_stream(&self.vsock_socket, EXEC_STREAM_PORT, command, args)
+        });
+        match &result {
+            Ok(_) => tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "exec-stream session opened"),
+            Err(e) => tracing::warn!(vm_id = self.id, error = %e, "opening exec-stream session failed"),
+        }
+        result
     }
 
     /// Updates this VM's MMDS content in place, without a reboot or
@@ -302,15 +310,59 @@ pub(crate) fn annotate_with_console_log(err: io::Error, log_path: &Path) -> io::
     io::Error::other(format!("{err} (guest console log: {})", log_path.display()))
 }
 
-fn wait_for_socket(path: &Path, timeout: Duration) -> io::Result<()> {
+/// Retries `attempt` with an exponential backoff (starting at
+/// `initial_interval`, capped at `max_interval`) until it succeeds or
+/// `timeout` elapses, returning the last error on timeout. Shared by
+/// `connect_api_with_retry` (Firecracker's own API socket) and
+/// `Vm::call`/`open_pty`/`open_exec_stream` (the guest agent's vsock
+/// socket) — both are a plain "is the other side listening yet" race,
+/// previously solved by two separate, inconsistent fixed-sleep loops.
+/// One of them (`wait_for_socket`, this function's direct predecessor)
+/// measured a flat ~20.1ms cost on *every single* boot before being
+/// fixed this way — see ROADMAP.md's Benchmarking section for the full
+/// finding. `Vm::call`'s own fixed 100ms-per-attempt loop was the same
+/// bug, just conditional (only paid when a call actually races the
+/// guest agent's own vsock-listener startup) rather than unconditional,
+/// which is why it went unnoticed for longer.
+fn retry_with_backoff<T>(
+    timeout: Duration,
+    initial_interval: Duration,
+    max_interval: Duration,
+    mut attempt: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
     let deadline = Instant::now() + timeout;
-    while !path.exists() {
-        if Instant::now() >= deadline {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, format!("{path:?} never appeared")));
+    let mut interval = initial_interval;
+    loop {
+        match attempt() {
+            Ok(v) => return Ok(v),
+            Err(e) if Instant::now() >= deadline => return Err(e),
+            Err(_) => {
+                std::thread::sleep(interval);
+                interval = (interval * 2).min(max_interval);
+            }
         }
-        std::thread::sleep(Duration::from_millis(20));
     }
-    Ok(())
+}
+
+/// Connects to a freshly spawned Firecracker's API socket, retrying with
+/// a backoff until it actually accepts a connection or `timeout` elapses.
+///
+/// Retries the *connect* rather than waiting for the socket file to
+/// exist and then connecting once. The file appears at `bind()`, which
+/// is a moment before `listen()`, so a poll that only checks existence
+/// can win that race and hand the caller an `ECONNREFUSED`. Polling the
+/// thing actually needed has no such window — which is what makes it
+/// safe to poll this fast.
+///
+/// The interval starts far below the socket's real appearance time
+/// deliberately: the fixed 20ms poll this replaced measured a flat
+/// ~20.1ms on *every* boot (min 20.04, max 20.18 over 20 boots — the
+/// signature of one quantized sleep, not of real waiting), which was
+/// more than half of a ~34ms boot. See ROADMAP.md's Benchmarking section.
+fn connect_api_with_retry(path: &Path, timeout: Duration) -> io::Result<ApiClient> {
+    retry_with_backoff(timeout, Duration::from_micros(200), Duration::from_millis(5), || ApiClient::connect(path)).map_err(|e| {
+        io::Error::new(io::ErrorKind::TimedOut, format!("{path:?} never accepted a connection within {timeout:?}: {e}"))
+    })
 }
 
 fn path_str(p: &Path) -> &str {
@@ -321,6 +373,57 @@ fn path_str(p: &Path) -> &str {
 mod tests {
     use super::*;
     use std::io::Read;
+
+    /// A path nothing is ever going to listen on must fail as a timeout
+    /// rather than hanging or succeeding, and must take at least roughly
+    /// the timeout it was given — a backoff bug that exits the loop early
+    /// would otherwise look like a clean, fast failure.
+    #[test]
+    fn connect_api_with_retry_times_out_on_a_socket_nothing_ever_binds() {
+        let path = std::env::temp_dir().join(format!("sandkiln-never-bound-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let started = Instant::now();
+        // `ApiClient` isn't `Debug`, so `unwrap_err()` isn't available.
+        let err = match connect_api_with_retry(&path, Duration::from_millis(150)) {
+            Ok(_) => panic!("connected to a socket nothing ever bound"),
+            Err(e) => e,
+        };
+        let elapsed = started.elapsed();
+
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut, "error was: {err}");
+        assert!(elapsed >= Duration::from_millis(150), "returned after only {elapsed:?}, before the timeout elapsed");
+    }
+
+    #[test]
+    fn connect_api_with_retry_connects_to_an_already_listening_socket() {
+        let path = std::env::temp_dir().join(format!("sandkiln-already-listening-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+
+        assert!(connect_api_with_retry(&path, Duration::from_secs(2)).is_ok());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The real case this exists for: the socket isn't there yet when the
+    /// first attempt runs, and shows up partway through. This is also
+    /// what a plain file-existence poll gets wrong — see the function's
+    /// own doc comment on the `bind()`/`listen()` window.
+    #[test]
+    fn connect_api_with_retry_waits_for_a_socket_that_appears_late() {
+        let path = std::env::temp_dir().join(format!("sandkiln-late-listener-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let bind_path = path.clone();
+        let binder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            std::os::unix::net::UnixListener::bind(&bind_path).unwrap()
+        });
+
+        assert!(connect_api_with_retry(&path, Duration::from_secs(2)).is_ok());
+        drop(binder.join().unwrap());
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn console_log_path_is_keyed_by_vm_id() {

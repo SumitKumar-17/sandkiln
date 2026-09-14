@@ -5,8 +5,8 @@
 //! See: <https://github.com/firecracker-microvm/firecracker/blob/main/docs/vsock.md>
 
 use sandkiln_protocol::{
-    decode_response, encode_pty_handshake, encode_request, read_message, write_message, CodecError, PtyHandshake, Request,
-    Response,
+    decode_response, encode_exec_stream_handshake, encode_pty_handshake, encode_request, read_message, write_message, CodecError,
+    ExecStreamHandshake, PtyHandshake, Request, Response,
 };
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -54,6 +54,32 @@ pub fn open_pty(uds_path: &Path, pty_port: u32, cols: u16, rows: u16) -> io::Res
     connect_handshake(&mut stream, pty_port)?;
 
     let payload = encode_pty_handshake(&PtyHandshake { cols, rows }).map_err(to_io_err)?;
+    write_message(&mut stream, &payload)?;
+
+    stream.set_read_timeout(None)?;
+    stream.set_write_timeout(None)?;
+    Ok(stream)
+}
+
+/// Opens a new, long-lived vsock connection for a streamed background
+/// exec session — same "open once, keep reading" shape as `open_pty`
+/// above, but the caller reads a sequence of framed `ExecStreamEvent`s
+/// off the returned stream (via `sandkiln_protocol::read_message` +
+/// `decode_exec_stream_event`) rather than raw bytes, until an `Exit`
+/// event arrives and the guest closes the connection. See
+/// `sandkiln_protocol::EXEC_STREAM_PORT`'s own doc comment.
+pub fn open_exec_stream(uds_path: &Path, exec_stream_port: u32, command: &str, args: &[String]) -> io::Result<UnixStream> {
+    let mut stream = UnixStream::connect(uds_path)?;
+    // Timeouts apply only to the handshake below, not to the stream this
+    // function hands back — same reasoning as `open_pty`: a background
+    // command can run quietly (no output) for a long time without that
+    // meaning anything is stuck.
+    stream.set_read_timeout(Some(IO_TIMEOUT))?;
+    stream.set_write_timeout(Some(IO_TIMEOUT))?;
+    connect_handshake(&mut stream, exec_stream_port)?;
+
+    let payload =
+        encode_exec_stream_handshake(&ExecStreamHandshake { command: command.to_string(), args: args.to_vec() }).map_err(to_io_err)?;
     write_message(&mut stream, &payload)?;
 
     stream.set_read_timeout(None)?;

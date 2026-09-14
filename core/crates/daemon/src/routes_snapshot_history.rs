@@ -216,6 +216,7 @@ pub(crate) async fn restore_snapshot_history_by_id(state: Arc<AppState>, id: Str
         // in the checkpoint's memory image. See
         // `crate::routes_mounts`'s module doc comment.
         mounts: retired.mounts.clone(),
+        log_sessions: Default::default(),
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
 

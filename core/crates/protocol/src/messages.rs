@@ -87,6 +87,34 @@ pub struct PtyHandshake {
     pub rows: u16,
 }
 
+/// The one framed message sent at the start of a
+/// [`crate::EXEC_STREAM_PORT`] connection — same role as [`PtyHandshake`]
+/// on [`crate::PTY_PORT`], but naming the command to run instead of a
+/// terminal size. See that constant's own doc comment for why this is a
+/// third, separate connection shape rather than a new `Request` variant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecStreamHandshake {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+/// One framed message in the sequence an [`crate::EXEC_STREAM_PORT`]
+/// connection sends after the handshake. Unlike [`crate::PTY_PORT`],
+/// framing never stops here — each chunk of the spawned process's own
+/// stdout/stderr becomes one of these, in the order produced, ending
+/// with exactly one `Exit` right before the guest closes the connection.
+/// `data_base64` (not raw bytes) for the same reason `WriteFile`/`File`
+/// already encode file content that way: this whole protocol is framed
+/// JSON, and process output isn't guaranteed to be valid UTF-8.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "stream", rename_all = "snake_case")]
+pub enum ExecStreamEvent {
+    Stdout { data_base64: String },
+    Stderr { data_base64: String },
+    Exit { exit_code: i32 },
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Response {
@@ -271,6 +299,32 @@ mod tests {
         let handshake = PtyHandshake { cols: 80, rows: 24 };
         let json = serde_json::to_string(&handshake).unwrap();
         assert_eq!(json, r#"{"cols":80,"rows":24}"#);
+    }
+
+    #[test]
+    fn exec_stream_handshake_wire_shape() {
+        let handshake = ExecStreamHandshake { command: "tail".to_string(), args: vec!["-f".to_string(), "/log".to_string()] };
+        let json = serde_json::to_string(&handshake).unwrap();
+        assert_eq!(json, r#"{"command":"tail","args":["-f","/log"]}"#);
+    }
+
+    #[test]
+    fn exec_stream_handshake_args_default_to_empty_when_omitted() {
+        let handshake: ExecStreamHandshake = serde_json::from_str(r#"{"command":"tail"}"#).unwrap();
+        assert_eq!(handshake.command, "tail");
+        assert!(handshake.args.is_empty());
+    }
+
+    #[test]
+    fn exec_stream_event_wire_shapes() {
+        let stdout = ExecStreamEvent::Stdout { data_base64: "aGk=".to_string() };
+        assert_eq!(serde_json::to_string(&stdout).unwrap(), r#"{"stream":"stdout","data_base64":"aGk="}"#);
+
+        let stderr = ExecStreamEvent::Stderr { data_base64: "b29wcw==".to_string() };
+        assert_eq!(serde_json::to_string(&stderr).unwrap(), r#"{"stream":"stderr","data_base64":"b29wcw=="}"#);
+
+        let exit = ExecStreamEvent::Exit { exit_code: 0 };
+        assert_eq!(serde_json::to_string(&exit).unwrap(), r#"{"stream":"exit","exit_code":0}"#);
     }
 
     #[test]

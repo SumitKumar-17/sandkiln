@@ -13,7 +13,102 @@ Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Changed
+- **Found: `POST /sandboxes` returning 200 doesn't mean the sandbox is
+  ready to use yet** (daemon/core crates only, not an npm release). Every
+  exec after the first on a freshly cold-created sandbox measures ~3-5ms;
+  the *first* one measures ~420-460ms, entirely absorbed by `Vm::call`'s
+  retry loop waiting for the guest agent's vsock listener to actually
+  come up — a gap none of this project's existing benchmarks measured,
+  since they all stop at `InstanceStart` succeeding or `create()`
+  returning. A sandbox resumed from a pre-warmed pool (agent already
+  running in the snapshotted memory) pays almost none of it — ~4-18ms to
+  first exec, a real ~25-100x difference, not the ~2x the pre-warmed-pool
+  feature's own existing numbers suggested on their own. Along the way,
+  fixed the same fixed-sleep bug class as the `wait_for_socket` fix below
+  in `Vm::call`/`open_pty`/`open_exec_stream`'s own retry loops (flat
+  `sleep(100ms)` per attempt, 5x the cost-per-retry `wait_for_socket` had)
+  via one shared `retry_with_backoff` helper — a real, correct fix, though
+  its own measured impact turned out to be small next to the discovery
+  above. `scripts/bench-report.sh` now tracks the real gap permanently as
+  `first_exec_client`. See `ROADMAP.md`'s Benchmarking section for the
+  full write-up, including the still-open question of whether `create()`
+  should block until the agent actually answers once.
+- **Cold sandbox creates are ~14% faster** (daemon/core crates only, not
+  an npm release): `167.65ms → ~144ms` end-to-end on the dev box, and
+  `Vm::boot` itself `34.00ms → ~11.3ms`. A per-phase profiling pass found
+  that `wait_for_socket` polled for Firecracker's API socket with a fixed
+  `sleep(20ms)` and so measured a flat **20.11ms on every single boot**
+  (min 20.04, max 20.18 over 20 boots — one quantized sleep, not real
+  waiting), when Firecracker is actually ready in **~0.7ms**. Replaced
+  with `connect_api_with_retry`, which retries the *connect* on a
+  200µs→5ms backoff instead of polling for the socket file to exist —
+  which also closes a real race that faster polling would otherwise have
+  opened, since the file appears at `bind()`, a moment before `listen()`.
+  Snapshot resume uses the same helper and gets the same win. Verified
+  with the full `scripts/integration-test.sh` (300/300, snapshot/resume/
+  time-travel included).
+- Corrected a second stale assumption about where the *rest* of a
+  create's time goes. Both live candidates were wrong, and by a wide
+  margin: `NetworkManager::lease`'s three `ip`/`bridge` subprocess calls
+  total **~4.4ms** (and, running concurrently with the rootfs clone,
+  contribute ~0.17ms to the critical path), and Firecracker's seven
+  per-VM configuration PUTs total **~1.6ms**. Batching those calls or
+  switching to direct netlink would buy single-digit milliseconds off a
+  167ms create — **not planned; no netlink crate is being added.** The
+  rootfs copy is in fact the dominant cost at **124ms (74%)**, which the
+  entry below had concluded it wasn't. See `ROADMAP.md`'s Benchmarking
+  section for the full breakdown (it accounts for 167.33ms of the
+  measured 167.65ms), the leading — and explicitly unverified —
+  hypothesis for why the earlier XFS experiment showed no change, and the
+  9.24ms synchronous sqlite write also found sitting on the critical path.
+- Corrected a stale assumption about sandbox-create latency: the rootfs
+  copy was believed to be the dominant remaining cost after boot, with a
+  CoW-capable filesystem (XFS/Btrfs) or a device-mapper layer proposed as
+  the fix. Live-measured on a real XFS loopback filesystem: the CoW clone
+  is real (near-zero disk growth cloning the same rootfs four times, `cp
+  --reflink=auto` dropped from ~110ms to ~0ms), but **end-to-end `POST
+  /sandboxes` latency didn't change** — the copy already runs
+  concurrently with the network lease, so shrinking it just shifts the
+  join onto the lease side instead. A device-mapper/thin-provisioning
+  layer is no longer planned for this reason (it would optimize the same
+  already-non-bottleneck operation). `scripts/preflight-check.sh` now
+  reports whether rootfs storage is on a CoW-capable filesystem (still a
+  real, disk-space-free win on its own, just not a latency one on this
+  box) instead. See `ROADMAP.md`'s Benchmarking section for the full
+  finding and the corrected next step (profile `Vm::boot`'s own
+  lease/API-call path instead of storage).
+
 ### Added
+- Per-phase cold-create timings, so where a create's latency goes doesn't
+  have to be rediscovered by hand. `/metrics` gains
+  `create_phase_duration_ms{phase="rootfs_clone"|"network_lease"|"setup"|"total"}`
+  (`boot_duration_ms` is unchanged and stays its own metric). Finer-grained
+  detail stays debug-level `tracing` rather than becoming metrics —
+  `"cold create setup phases"`/`"cold create complete"`,
+  `"vm boot phase breakdown"` (with each Firecracker PUT timed
+  individually), and `"attached tap device"` (with each `ip`/`bridge`
+  subprocess timed individually). `scripts/dev-tools/profile-cold-create.sh`
+  drives a repeatable sequential-create run against a live daemon. Note
+  the `RUST_LOG` target is the binary name, `sandkilnd`, not the package
+  name `sandkiln-daemon`.
+- Streamed background exec sessions (`kiln sandbox exec-stream`/`kiln
+  sandbox logs`), plus `Sandbox.execStream()`/`.listExecStreams()`/
+  `.attachLogs()` in the JS/TS SDK (not published under a new npm
+  version yet). Runs a command detached inside the guest over a new,
+  dedicated vsock port (`EXEC_STREAM_PORT`) and lets any number of
+  callers attach to its output over time — each attach gets a replay of
+  everything captured so far, then a live tail, whether the process is
+  still running or already finished. See `ROADMAP.md`'s "Dev servers and
+  live preview" section for the full design.
+  - Live-verified end to end: replay-then-live-tail while a multi-second
+    command is still running, instant full replay on reattach after it
+    finishes, and two concurrent attaches (one joining a second late)
+    both getting the complete ordered log. New
+    `scripts/integration-tests/23-exec-stream-logs.sh`.
+  - Deliberately out of scope for this first version: no kill/cancel
+    endpoint, and no concurrent-session cap (unlike PTY's) — see
+    `ROADMAP.md`'s entry for why.
 - Remote storage mounts (daemon only — no SDK/CLI change, nothing to
   publish yet). `POST/GET/DELETE /sandboxes/:id/mounts` mounts an
   S3-compatible bucket into a sandbox via `rclone mount`, running
@@ -461,7 +556,8 @@ lifecycle, networking, auth, and tooling.
 
 ## Known gaps (tracked in `ROADMAP.md`)
 
-Current as of 0.3.0 — check there for anything that's landed since:
+Current as of 0.7.0 plus the unreleased work above — check `ROADMAP.md`
+for anything that's landed since:
 
 - No streamed exec output, no `kiln logs -f`.
 - No true simultaneous parallel snapshot forking — at most one live fork
@@ -473,15 +569,25 @@ Current as of 0.3.0 — check there for anything that's landed since:
 - Jailer's actual chroot/cgroup/uid-drop behavior hasn't been proven
   against a real installed jailer binary on real hardware yet — opt-in,
   not recommended as-is for adversarial workloads until verified.
-- No per-sandbox seccomp filters, firewall/egress policy, or disk-size
-  ceiling.
+- Egress policy covers IP/CIDR allow/deny only. No domain-level rules
+  and no port matching — both need the shared DNS proxy to become
+  source-IP-aware first.
+- No per-sandbox seccomp filters and no disk-size ceiling.
+- Three daemon capabilities have no SDK or CLI wrapper yet, and are
+  reachable only over the raw HTTP API: remote storage mounts, snapshot
+  history / time-travel restore, and per-sandbox egress policy.
+- Remote storage mounts additionally need a guest kernel built with
+  `CONFIG_FUSE_FS` and `rclone`/`fusermount3` in the rootfs; they are
+  not re-applied after resume, fork, or restore; and they have been
+  verified against a local S3-compatible fixture rather than a hosted
+  object store.
+- Time-travel restore has no automatic expiry — retained history grows
+  disk usage until deleted explicitly.
 - On ext4 (no copy-on-write), sandbox creation still pays real rootfs
   copy time — needs a CoW-capable filesystem or a device-mapper layer to
   actually eliminate, not just overlap with other work.
 - Python SDK not yet published to PyPI (code-side ready; needs the
-  account owner's one-time trusted-publisher registration on pypi.org).
-- Drives (attach at create, read-only sharing) aren't exposed in either
-  SDK or the CLI yet — the raw daemon HTTP API only.
+  account owner's one-time trusted-publisher registration).
 - Snapshot storage lives under `$TMPDIR` — durable across a daemon
   restart, not necessarily a host reboot (depends on whether `/tmp` is
   tmpfs on that host).

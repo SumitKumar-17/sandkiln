@@ -224,6 +224,39 @@ export interface DirEntry {
   mtime: Date;
 }
 
+export interface StartExecStreamRequestBody {
+  command: string;
+  args?: string[];
+}
+
+export interface StartExecStreamResponseBody {
+  id: string;
+}
+
+export interface ExecStreamSummaryBody {
+  id: string;
+  command: string;
+  args: string[];
+  started_at_unix: number;
+  exit_code: number | null;
+}
+
+export interface ListExecStreamsResponseBody {
+  sessions: ExecStreamSummaryBody[];
+}
+
+/** One streamed background exec session, as returned by
+ * `Sandbox.listExecStreams()` — see `Sandbox.execStream()`'s own doc
+ * comment for the feature this belongs to. `exitCode` is `null` while
+ * still running. */
+export interface ExecStreamSession {
+  id: string;
+  command: string;
+  args: string[];
+  startedAt: Date;
+  exitCode: number | null;
+}
+
 export interface PreviewUrlOptions {
   /** Path within the guest's server to preview, e.g. `/api/health`.
    * Defaults to `/`. A value with no leading slash gets one added. */

@@ -1,0 +1,17 @@
+{
+  "name": "sandkiln-example-exec-stream-logs",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Reference exec-stream/logs example: run a command detached inside a sandkiln sandbox, live-tail it, then reattach after it finishes and get the full replay.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "sandkiln": "file:../../packages/sdk"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

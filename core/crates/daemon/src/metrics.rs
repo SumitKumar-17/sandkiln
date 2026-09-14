@@ -13,6 +13,51 @@ pub struct Metrics {
     sandboxes_created_total: AtomicU64,
     boot_duration_ms: Histogram,
     exec_latency_ms: Histogram,
+    /// Indexed by `CreatePhase as usize`, parallel to `CreatePhase::ALL`.
+    create_phase_duration_ms: Vec<Histogram>,
+}
+
+/// The sub-phases of a cold `POST /sandboxes` that get their own
+/// timeseries, rendered as one `create_phase_duration_ms` histogram
+/// family with a `phase` label rather than one metric name each — adding
+/// a phase later is then a variant here, not a new field plus a new
+/// render block plus a new test assertion.
+///
+/// `Boot` is deliberately *not* a variant: `boot_duration_ms` already
+/// exists as its own metric and is the one create-related timing anything
+/// external could already be scraping, so it stays where it is instead of
+/// being duplicated or moved into this family.
+/// Variants are indexed positionally into `Metrics::create_phase_duration_ms`
+/// via `phase as usize`, so declaration order must match `ALL` — asserted
+/// by `create_phase_discriminants_match_all_ordering` below.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CreatePhase {
+    /// `clone_rootfs` — `cp --reflink=auto` of the base image.
+    RootfsClone,
+    /// `NetworkManager::lease` — tap/IP pool pops plus `attach_tap`'s
+    /// `ip`/`bridge` subprocess calls.
+    NetworkLease,
+    /// The concurrent join of the two phases above. **Not** their sum:
+    /// they run on two threads, so this is roughly the slower of the two
+    /// and is the only part of either that actually lands on the create's
+    /// critical path.
+    Setup,
+    /// The whole cold-create path, from request-validated to the sandbox
+    /// being inserted into the live map.
+    Total,
+}
+
+impl CreatePhase {
+    pub const ALL: [CreatePhase; 4] = [CreatePhase::RootfsClone, CreatePhase::NetworkLease, CreatePhase::Setup, CreatePhase::Total];
+
+    fn label(self) -> &'static str {
+        match self {
+            CreatePhase::RootfsClone => "rootfs_clone",
+            CreatePhase::NetworkLease => "network_lease",
+            CreatePhase::Setup => "setup",
+            CreatePhase::Total => "total",
+        }
+    }
 }
 
 impl Default for Metrics {
@@ -34,6 +79,15 @@ impl Metrics {
             // full HTTP path against a freshly booted agent (see
             // ROADMAP.md's load-test numbers) — bucketed accordingly.
             exec_latency_ms: Histogram::new(&[1.0, 10.0, 50.0, 250.0, 1000.0]),
+            // One shared bucket layout across every phase: the phases
+            // span roughly 1ms (a CoW rootfs clone) to a few hundred ms
+            // (a whole create), and a per-phase layout would make the
+            // family impossible to aggregate over in a single query,
+            // which is most of the point of labelling them.
+            create_phase_duration_ms: CreatePhase::ALL
+                .iter()
+                .map(|_| Histogram::new(&[1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 1000.0]))
+                .collect(),
         }
     }
 
@@ -47,6 +101,10 @@ impl Metrics {
 
     pub fn record_exec_latency_ms(&self, ms: f64) {
         self.exec_latency_ms.observe(ms);
+    }
+
+    pub fn record_create_phase_ms(&self, phase: CreatePhase, ms: f64) {
+        self.create_phase_duration_ms[phase as usize].observe(ms);
     }
 
     /// Renders the full exposition-format text. `sandboxes_active` is
@@ -72,6 +130,15 @@ impl Metrics {
         out.push_str("# HELP exec_latency_ms Guest agent exec round-trip latency in milliseconds.\n");
         out.push_str("# TYPE exec_latency_ms histogram\n");
         self.exec_latency_ms.render("exec_latency_ms", &mut out);
+
+        out.push_str(
+            "# HELP create_phase_duration_ms Duration of one sub-phase of a cold sandbox create, in milliseconds. \
+             rootfs_clone and network_lease run concurrently and do not sum to setup; boot is reported separately as boot_duration_ms.\n",
+        );
+        out.push_str("# TYPE create_phase_duration_ms histogram\n");
+        for (phase, histogram) in CreatePhase::ALL.iter().zip(self.create_phase_duration_ms.iter()) {
+            histogram.render_labeled("create_phase_duration_ms", &format!("phase=\"{}\"", phase.label()), &mut out);
+        }
 
         out
     }
@@ -110,15 +177,27 @@ impl Histogram {
     }
 
     fn render(&self, name: &str, out: &mut String) {
+        self.render_labeled(name, "", out);
+    }
+
+    /// `labels` is a pre-formatted, comma-free label fragment (e.g.
+    /// `phase="setup"`) shared by every line this emits — prepended to
+    /// the `le` label on bucket lines and used alone on `_sum`/`_count`,
+    /// which carry no `le`. Empty means an unlabelled metric, which is
+    /// exactly what `render` is.
+    fn render_labeled(&self, name: &str, labels: &str, out: &mut String) {
+        let sep = if labels.is_empty() { "" } else { "," };
+        let alone = if labels.is_empty() { String::new() } else { format!("{{{labels}}}") };
+
         let state = self.state.lock().unwrap();
         let mut cumulative = 0u64;
         for (bound, &bucket_count) in self.bounds.iter().zip(state.bucket_counts.iter()) {
             cumulative += bucket_count;
-            out.push_str(&format!("{name}_bucket{{le=\"{}\"}} {cumulative}\n", fmt_bound(*bound)));
+            out.push_str(&format!("{name}_bucket{{{labels}{sep}le=\"{}\"}} {cumulative}\n", fmt_bound(*bound)));
         }
-        out.push_str(&format!("{name}_bucket{{le=\"+Inf\"}} {}\n", state.count));
-        out.push_str(&format!("{name}_sum {}\n", fmt_bound(state.sum)));
-        out.push_str(&format!("{name}_count {}\n", state.count));
+        out.push_str(&format!("{name}_bucket{{{labels}{sep}le=\"+Inf\"}} {}\n", state.count));
+        out.push_str(&format!("{name}_sum{alone} {}\n", fmt_bound(state.sum)));
+        out.push_str(&format!("{name}_count{alone} {}\n", state.count));
     }
 }
 
@@ -142,8 +221,13 @@ mod tests {
     #[test]
     fn fresh_metrics_render_all_zero() {
         let metrics = Metrics::new();
-        assert_eq!(
-            metrics.render(0),
+        let rendered = metrics.render(0);
+        // Exact-prefix rather than exact-equals: the
+        // `create_phase_duration_ms` family below it is four labelled
+        // repetitions of the same eleven lines, checked separately by
+        // `create_phase_family_renders_one_labelled_series_per_phase`
+        // instead of pasted out in full here.
+        let rest = rendered.strip_prefix(
             "# HELP sandboxes_created_total Total number of sandboxes created since the daemon started.\n\
              # TYPE sandboxes_created_total counter\n\
              sandboxes_created_total 0\n\
@@ -170,8 +254,40 @@ mod tests {
              exec_latency_ms_bucket{le=\"1000\"} 0\n\
              exec_latency_ms_bucket{le=\"+Inf\"} 0\n\
              exec_latency_ms_sum 0\n\
-             exec_latency_ms_count 0\n"
+             exec_latency_ms_count 0\n",
         );
+        assert!(rest.is_some(), "unexpected rendering of the pre-create-phase metrics:\n{rendered}");
+    }
+
+    #[test]
+    fn create_phase_family_renders_one_labelled_series_per_phase() {
+        let metrics = Metrics::new();
+        metrics.record_create_phase_ms(CreatePhase::NetworkLease, 7.5);
+
+        let text = metrics.render(0);
+        for phase in CreatePhase::ALL {
+            assert!(
+                text.contains(&format!("create_phase_duration_ms_count{{phase=\"{}\"}} ", phase.label())),
+                "phase {phase:?} is missing from the rendered family:\n{text}"
+            );
+        }
+        // 7.5 lands in the (5, 10] bucket of the phase it was recorded
+        // against, and nowhere in any other phase's series.
+        assert!(text.contains("create_phase_duration_ms_bucket{phase=\"network_lease\",le=\"5\"} 0\n"));
+        assert!(text.contains("create_phase_duration_ms_bucket{phase=\"network_lease\",le=\"10\"} 1\n"));
+        assert!(text.contains("create_phase_duration_ms_sum{phase=\"network_lease\"} 7.5\n"));
+        assert!(text.contains("create_phase_duration_ms_count{phase=\"network_lease\"} 1\n"));
+        assert!(text.contains("create_phase_duration_ms_count{phase=\"total\"} 0\n"));
+    }
+
+    /// `record_create_phase_ms` indexes its histogram vec by
+    /// `phase as usize`, which is only correct while the enum's
+    /// declaration order matches `ALL`'s.
+    #[test]
+    fn create_phase_discriminants_match_all_ordering() {
+        for (i, phase) in CreatePhase::ALL.into_iter().enumerate() {
+            assert_eq!(phase as usize, i, "{phase:?} is out of order relative to CreatePhase::ALL");
+        }
     }
 
     #[test]

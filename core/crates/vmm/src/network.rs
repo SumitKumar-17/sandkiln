@@ -19,6 +19,7 @@ use std::io;
 use std::net::Ipv4Addr;
 use std::process::Command;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use crate::vm::NetworkConfig;
 
@@ -192,14 +193,38 @@ impl NetworkManager {
         self.free_taps.lock().unwrap().iter().cloned().collect()
     }
 
+    /// Each step is timed individually, not just the whole call: all
+    /// three are `fork`+`exec` of a real binary rather than a syscall, so
+    /// the interesting question when profiling a create is how much of a
+    /// lease is process-spawn overhead versus the netlink work itself —
+    /// one aggregate number can't answer that. Debug-level, since this is
+    /// profiling detail rather than something to alert on; the daemon
+    /// records the enclosing lease as a `/metrics` phase.
     fn attach_tap(&self, tap_device: &str) -> io::Result<()> {
+        let started = Instant::now();
         run("ip", &["link", "set", tap_device, "up"])?;
+        let link_up = started.elapsed();
+
+        let before_master = Instant::now();
         run("ip", &["link", "set", tap_device, "master", &self.bridge_name])?;
+        let set_master = before_master.elapsed();
+
         // Isolated bridge ports can still reach the bridge itself (so
         // routing out through the uplink keeps working) but can't forward
         // frames to each other — this is what actually stops one sandbox
         // from reaching another's IP on the shared bridge at L2.
+        let before_isolate = Instant::now();
         run("bridge", &["link", "set", "dev", tap_device, "isolated", "on"])?;
+        let isolate = before_isolate.elapsed();
+
+        tracing::debug!(
+            tap_device,
+            link_up_us = link_up.as_micros(),
+            set_master_us = set_master.as_micros(),
+            isolate_us = isolate.as_micros(),
+            total_us = started.elapsed().as_micros(),
+            "attached tap device"
+        );
         Ok(())
     }
 }

@@ -40,6 +40,22 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   (`routes_sandbox::create_sandbox` for boot duration and the created
   counter, `routes_exec::call_agent` for exec latency). No metrics crate
   dependency — see the module doc comment for why.
+  `CreatePhase` + `record_create_phase_ms` expose a cold create's own
+  sub-phases as one labelled family,
+  `create_phase_duration_ms{phase="rootfs_clone"|"network_lease"|"setup"|"total"}`,
+  rather than one metric name each, so adding a phase is a variant rather
+  than a new field plus a new render block. `phase="setup"` is the
+  concurrent *join* of the clone and the lease, not their sum — only the
+  join lands on the critical path. `boot_duration_ms` deliberately stays
+  a separate metric (it predates this family and is what anything
+  external would already be scraping), which is why there's no
+  `phase="boot"`. The dividing line against `tracing`: a phase total an
+  operator might watch or alert on goes here; per-subprocess and
+  per-Firecracker-PUT detail stays a debug-level `tracing` event, both
+  because nobody alerts at that granularity and because `sandkiln-vmm`,
+  where most of it is emitted, has no access to `Metrics` at all. See
+  `ROADMAP.md`'s Benchmarking section for the measurements this exists to
+  make repeatable.
 - `auth.rs` — bearer-token middleware. No-ops entirely if
   `SANDKILN_AUTH_TOKEN` is unset.
 - `state.rs` — `AppState`: the daemon's config, `NetworkManager`, an
@@ -121,6 +137,14 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   history (`GET /sandboxes/history`, reading `AppState::history` — the
   only read path for it; every write happens as a side effect of
   create/destroy/snapshot, not a caller action of its own).
+  `create_sandbox_cold` times its own sub-phases and records them into
+  `metrics::CreatePhase` (plus debug events `"cold create setup phases"`
+  and `"cold create complete"`). The rootfs clone and the network lease
+  each time themselves *on their own thread*, via the `timed` helper — a
+  timer around the `thread::scope` join can only see when both finished,
+  which is the one thing needed to tell them apart. Filter these with
+  `RUST_LOG=sandkilnd=debug`: the tracing target is the **binary** name,
+  so the package name `sandkiln_daemon` silently matches nothing.
   `create_sandbox_core` calls `state.history.record_created` right
   after a boot actually succeeds, and `destroy_sandbox_by_id` calls
   `state.history.record_ended` (`routes_snapshot::snapshot_and_stop`
@@ -445,6 +469,27 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   own `proxy_pty` just needs both `tokio::select!` arms to end the
   session as soon as either side does, which was already correct; the
   bug was entirely guest-side.
+- `log_session.rs` / `routes_logs.rs` — streamed background exec
+  sessions (`kiln logs`/`kiln sandbox exec-stream`): `POST
+  /sandboxes/:id/exec-stream` starts a command detached inside the guest
+  via `Vm::open_exec_stream` and returns immediately; a `spawn_blocking`
+  "pump" task (`routes_logs::pump_exec_stream`) reads framed
+  `ExecStreamEvent`s off that connection for as long as it stays open,
+  appending merged stdout/stderr into a `LogSession` (a bounded 1MiB ring
+  buffer plus a `tokio::sync::broadcast` channel) — independent of
+  whether anyone is attached. `GET .../exec-stream/:id/logs` (a
+  WebSocket, in the same `require_preview_token`-guarded router as
+  `routes_pty.rs` above, for the same reason) replays that buffer then
+  live-tails it; can be called any number of times, including after the
+  process has already finished. `LogSession` lives in its own file
+  (`log_session.rs`) rather than `routes_logs.rs` itself, same
+  pure-state/HTTP-surface seam `pool.rs`/`routes_pool.rs` already draw.
+  Not carried across resume/fork/restore and doesn't survive a daemon
+  restart — same in-memory-only scope as `Sandbox::pty_session_count`,
+  not a limitation unique to this feature. See either file's own module
+  doc comment for the full design and why a background process needed a
+  third vsock port (`EXEC_STREAM_PORT`) rather than reusing `PTY_PORT` or
+  a new `Request` variant.
 - `error.rs` — `AppError`, the one error type every handler returns.
   Add a variant here rather than inventing a new ad hoc error shape.
 

@@ -1,54 +1,100 @@
 ---
+// The homepage carries the shape of the surface, not its documentation: names
+// and marks only. The roadmap page holds the full per-item detail and the
+// docs hold the real reference, so repeating either here made the argument
+// harder to read rather than better supported.
+//
+// Three states, not two: "partial" exists because several capabilities are
+// genuinely built and running but reachable only through part of the surface
+// (daemon but not the SDKs, say). Collapsing those into "done" overstates them
+// and collapsing them into "planned" understates them — both were live bugs on
+// this page before the split.
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+
 interface Feature {
-  status: "done" | "planned";
+  status: "done" | "partial" | "planned";
   name: string;
-  desc: string;
 }
 
 const features: Feature[] = [
-  { status: "done", name: "Isolation", desc: "Each sandbox is a real Firecracker microVM — own kernel, own filesystem, own network namespace. Not a container with extra steps." },
-  { status: "done", name: "Networking", desc: "Per-sandbox tap device leased from a pool, attached to a bridge, NAT'd outbound, DNS through a host-local proxy. Sandboxes can't reach each other — bridge port isolation, verified." },
-  { status: "done", name: "Auth", desc: "Bearer-token gated API. Off by default for local dev, on with one env var, warns loudly if you forget." },
-  { status: "done", name: "Tags", desc: "Key/value metadata on every sandbox, filterable at list time. Categorize by environment, owner, whatever you need." },
-  { status: "done", name: "File operations", desc: "The full set — read, write, chmod, chown, mkdir, rename, copy, symlink, readlink, truncate, list-dir — over the same vsock channel exec uses. No SSH, no sidecar." },
-  { status: "done", name: "Interactive terminal", desc: "A real PTY inside the sandbox over WebSocket — a live, bidirectional shell session, not request/response exec. kiln sandbox pty, or Sandbox.pty() in the JS/TS SDK." },
-  { status: "done", name: "Guest-accessible metadata", desc: "Every named/tagged sandbox serves its own {id, name, tags} to itself via Firecracker's native MMDS — no sandkiln-specific agent call needed inside the guest." },
-  { status: "done", name: "Per-sandbox I/O rate limiting", desc: "Firecracker's own token-bucket limiter, applied per sandbox to every drive and the network interface — unlimited by default, capped with one field when you need it." },
-  { status: "done", name: "Pre-warmed pools", desc: "Configure a pool and a matching sandbox create resumes a ready-to-go snapshot instead of cold-booting — transparent, no special call. See Performance for the real numbers, wins and caveats both." },
-  { status: "done", name: "Durable sandbox history", desc: "A sqlite-backed record of every sandbox that ever existed and how it ended — survives a daemon restart, unlike the live sandbox list itself." },
-  { status: "done", name: "Observability", desc: "Structured tracing from the VM layer up, a Prometheus /metrics endpoint, JSON log output, guest console capture on crash." },
-  { status: "done", name: "Snapshots & persistence", desc: "Save a running VM's full state and resume without re-booting. Stop preserves by default; named sandboxes resolve by name, not just opaque id." },
-  { status: "done", name: "Custom & managed images", desc: "Register an already-built rootfs and boot sandboxes from it. OCI/Docker-image conversion is a real, scoped follow-up — not done yet." },
-  { status: "done", name: "Drives", desc: "Persistent storage that outlives a single sandbox, reattachable to a new one — including concurrent read-only sharing across many sandboxes at once. In both SDKs and the CLI." },
-  { status: "done", name: "Auto-suspend on idle", desc: "An idle sandbox is paused and snapshotted instead of destroyed — resources freed, state kept resumable, no caller action needed." },
-  { status: "done", name: "Multi-agent isolation", desc: "Separate Linux users with private home directories baked into the base image, so multiple AI agents can share one VM without stepping on each other." },
-  { status: "done", name: "Jailer hardening", desc: "Firecracker's jailer: chroot, cgroups v2 limits, an unprivileged uid per VM — opt-in via one env var. Not yet verified on real hardware, see the Roadmap page." },
-  { status: "done", name: "JS/TS SDK", desc: "Matches the daemon's entire API surface — Sandbox, Image, Drive, Pool. ESM + CJS + full types, published to npm, verified against a live daemon." },
-  { status: "done", name: "Python SDK", desc: "Mirrors the JS SDK exactly — zero runtime dependencies, stdlib urllib only. Not yet published to PyPI." },
-  { status: "done", name: "CLI", desc: "kiln sandbox (the full lifecycle plus every file op and pty), kiln image, kiln drive, and kiln pool — the whole surface, no code required." },
-  { status: "done", name: "Benchmarking", desc: "Criterion benches for boot, exec, snapshot, and resume latency, a scripted concurrent load test — real numbers, not estimates. See the Performance page." },
-  { status: "planned", name: "Remote storage mounts", desc: "FUSE-mounted, S3-compatible object storage read and written like local disk inside a sandbox." },
-  { status: "planned", name: "Egress firewall", desc: "Domain-level allow/deny policy enforced at the DNS proxy, before a sandbox ever opens a connection." },
-  { status: "planned", name: "System-privileged workloads", desc: "Docker-in-VM, VPN clients, FUSE drivers — workloads that need real privilege, safely contained by the microVM boundary." },
+  { status: "done", name: "Isolation" },
+  { status: "done", name: "Networking" },
+  { status: "done", name: "Auth" },
+  { status: "done", name: "Tags" },
+  { status: "done", name: "File operations" },
+  { status: "done", name: "Interactive terminal" },
+  { status: "done", name: "Guest-accessible metadata" },
+  { status: "done", name: "Per-sandbox I/O rate limiting" },
+  { status: "done", name: "Durable sandbox history" },
+  { status: "done", name: "Snapshot lineage" },
+  { status: "done", name: "Observability" },
+  { status: "done", name: "Snapshots & persistence" },
+  { status: "done", name: "Drives" },
+  { status: "done", name: "Auto-suspend on idle" },
+  { status: "done", name: "Multi-agent isolation" },
+  { status: "done", name: "Python SDK" },
+  { status: "done", name: "Benchmarking" },
+
+  // Partial, not shipped, and the roadmap says why: pool configuration is
+  // in-memory only, and resuming has a real failure rate a health check has
+  // to fall back from. This page said "shipped" while the roadmap said
+  // "partial" — one of them had to be wrong.
+  { status: "partial", name: "Pre-warmed pools" },
+  { status: "partial", name: "JS/TS SDK" },
+  { status: "partial", name: "CLI" },
+  { status: "partial", name: "Remote storage mounts" },
+  { status: "partial", name: "Time-travel restore" },
+  { status: "partial", name: "Egress firewall" },
+  { status: "partial", name: "Custom & managed images" },
+  { status: "partial", name: "Jailer hardening" },
+
+  { status: "planned", name: "Streamed output" },
+  { status: "planned", name: "Seccomp filters & disk quotas" },
+  { status: "planned", name: "System-privileged workloads" },
 ];
+
+// Counted from the list rather than written down, so the tally cannot drift
+// from the rows it describes.
+const groups = [
+  { status: "done" as const, title: "shipped", note: "verified on real hardware" },
+  { status: "partial" as const, title: "partial", note: "built, with the gap stated" },
+  { status: "planned" as const, title: "planned", note: "not built yet" },
+].map((g) => ({ ...g, rows: features.filter((f) => f.status === g.status) }));
 ---
 
-<section id="features">
-  <div class="wrap">
-    <div class="section-head">
-      <div class="eyebrow">Feature surface</div>
-      <h2>Everything a sandbox platform needs, marked by what's actually true.</h2>
-      <p>The filled square is proven on real hardware. The open square is designed and queued, not built yet. Nothing here is vaporware dressed as a feature.</p>
-    </div>
+<section class="band band-ruled" id="surface">
+  <div class="shell grid">
+    <a class="rail" href="#surface">surface</a>
+    <div class="col">
+      <h2 class="head">
+        <span class="l">Everything a sandbox needs,</span>
+        <span class="l">marked by <span class="flare">what's actually true</span>.</span>
+      </h2>
+      <p class="lede prose">
+        Three marks, because two would lie. A capability that runs but isn't reachable from
+        every client says so here rather than hiding behind a filled square.
+      </p>
 
-    <div class="fmanifest">
-      {features.map((f) => (
-        <div class={`frow ${f.status}`}>
-          <span class="fmark"></span>
-          <span class="fname">{f.name}</span>
-          <span class="fdesc">{f.desc}</span>
-        </div>
-      ))}
+      <div class="surface-groups">
+        {groups.map((g) => (
+          <div class={`sgroup sgroup-${g.status}`}>
+            <div class="sgroup-head">
+              <span class={`mark mark-${g.status}`}></span>
+              <span class="sgroup-n">{g.rows.length}</span>
+              <span>{g.title}</span>
+              <span class="sgroup-note">{g.note}</span>
+            </div>
+            <ul class="sgroup-list">
+              {g.rows.map((f) => <li>{f.name}</li>)}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      <p class="fine prose">
+        Every item above, with what it does and exactly where it stops, is on the{" "}
+        <a href={`${base}/roadmap/`}>roadmap</a>.
+      </p>
     </div>
   </div>
 </section>

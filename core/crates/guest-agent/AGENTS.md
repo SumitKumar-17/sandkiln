@@ -6,13 +6,17 @@ is scoped to this one crate.
 ## What this crate is
 
 A ~700KB static binary that runs *inside* every microVM as a systemd
-service, listening on two vsock ports: `sandkiln_protocol::AGENT_PORT`,
+service, listening on three vsock ports: `sandkiln_protocol::AGENT_PORT`,
 answering `Request`s from `sandkiln-protocol` (exec, read/write file,
 directory listing with metadata, chmod/chown/mkdir/rename/copy/symlink/
-readlink/truncate), and `sandkiln_protocol::PTY_PORT`, for interactive
-shell sessions (see `pty.rs` below) — a fundamentally different,
-long-lived-raw-bytes shape from the first port's one-request-one-response
-traffic. This is the only code that ever runs inside the guest —
+readlink/truncate), `sandkiln_protocol::PTY_PORT`, for interactive
+shell sessions (see `pty.rs` below), and `sandkiln_protocol::EXEC_STREAM_PORT`,
+for streamed background exec sessions (see `exec_stream.rs` below) — both
+of the latter two are long-lived, one-connection-per-session shapes,
+fundamentally different from the first port's one-request-one-response
+traffic (though unlike `PTY_PORT`, `EXEC_STREAM_PORT` stays framed the
+whole time rather than dropping to raw bytes — see either file's own doc
+comment). This is the only code that ever runs inside the guest —
 everything else (`vmm`, `daemon`) is host-side.
 
 Built for `x86_64-unknown-linux-musl` specifically (static linking, no
@@ -24,12 +28,13 @@ time.
 
 ## Files
 
-- `main.rs` — two listener loops, one per port, the `PTY_PORT` one on
-  its own thread from startup: the `AGENT_PORT` loop accepts a
-  connection, reads framed messages in a loop, dispatches to
-  `handler::handle`, writes the framed response, repeats until the peer
-  disconnects; the `PTY_PORT` loop accepts a connection and spawns a new
-  thread per session (`pty::handle_connection`), since a PTY session is
+- `main.rs` — three listener loops, one per port, the `PTY_PORT` and
+  `EXEC_STREAM_PORT` ones each on their own thread from startup: the
+  `AGENT_PORT` loop accepts a connection, reads framed messages in a
+  loop, dispatches to `handler::handle`, writes the framed response,
+  repeats until the peer disconnects; the other two each accept a
+  connection and spawn a new thread per session (`pty::handle_connection`/
+  `exec_stream::handle_connection`), since both kinds of session are
   expected to stay open a long time and must never block the next
   `accept()`.
 - `handler.rs` — the actual implementation of each `Request` variant.
@@ -50,6 +55,14 @@ time.
   between the vsock connection and the pty master on two threads until
   either side ends. See "Non-obvious things" below for the one real
   gotcha in that last part.
+- `exec_stream.rs` — one streamed background exec session start to
+  finish: read the `ExecStreamHandshake`, spawn that command with
+  stdout/stderr piped (no pty — this is for a background command, not an
+  interactive shell), fan both pipes into one channel so only the
+  connection-handling thread itself ever writes framed `ExecStreamEvent`s
+  back (avoiding any need to synchronize concurrent writers), wait for
+  the child only after both pipes hit EOF (waiting first risks
+  deadlocking on a full pipe buffer), then send one final `Exit` event.
 
 ## Building
 

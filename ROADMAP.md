@@ -6,18 +6,18 @@ hardware, not just code that compiles.
 
 ## What works today
 
-- A Firecracker microVM boots under real KVM in ~30ms, with a guest agent
-  running inside it that answers `exec` / `read_file` / `write_file` /
-  `list_dir` over vsock.
+- A Firecracker microVM boots under real KVM in ~11ms (was ~32ms until a
+  fixed 20ms socket-wait sleep was found and fixed — see Benchmarking),
+  with a guest agent running inside it that answers `exec` / `read_file` /
+  `write_file` / `list_dir` over vsock.
 - **Current sandbox launch latency, measured, not estimated**: a full
-  `POST /sandboxes` create averages **211ms** (min 137ms, p95 577ms,
-  under concurrent load) — the ~30ms boot time above plus rootfs-copy
-  and network-lease overhead. The ~180ms gap between raw boot and full
-  create is the known, actively-tracked bottleneck (see Benchmarking and
-  Persistence and snapshotting below for the CoW-filesystem and
-  pre-warmed-pool plans to close it) — worth stating up front since it's
-  the number that actually matters for "how long until I can run code,"
-  not the boot time alone.
+  `POST /sandboxes` create averages **~144ms** (was ~168ms before the same
+  fix; the load-test table in Benchmarking predates both fixes and hasn't
+  been cleanly re-run yet) — a real per-phase profiling pass found the
+  rootfs clone is 74% of that, not the network lease this project had
+  suspected (~4ms). See Benchmarking below for the full breakdown and the
+  honest correction to an earlier, wrong conclusion about why a CoW
+  filesystem test didn't change end-to-end latency.
 - An HTTP daemon (`sandkilnd`) manages the full lifecycle — create, exec,
   list, stop — driving Firecracker directly from Rust rather than shelling
   out.
@@ -101,11 +101,8 @@ outbound HTTP both still work.
   and fixed. **Published**:
   [npmjs.com/package/sandkiln](https://www.npmjs.com/package/sandkiln)
   (0.2.0, with signed provenance from the CI build — includes everything
-  in this bullet). Still open: streamed logs, once the daemon can stream
-  them — the shape worth copying when that's built is a replay-then-
-  live-tail model (reconnecting gets everything since the process
-  started, not just what's emitted from that point on), not just a bare
-  live tail.
+  in this bullet, though `execStream`/`listExecStreams`/`attachLogs`
+  below haven't been published under a new version yet).
 - **Done: full filesystem operations** — `chmod`/`chown`/`mkdir`
   (with `-p`-style `parents`)/`rename`/`copy`/`symlink`/`readlink`/
   `truncate`/directory listing with metadata (name, is-dir, is-symlink,
@@ -155,7 +152,9 @@ outbound HTTP both still work.
   live end to end. `cp` (a single unified copy command) was simplified to
   explicit `read`/`write` subcommands instead — less magic than parsing a
   `sandbox:path` prefix syntax for a first version.
-- Still open: `kiln logs -f`, once the daemon can stream output.
+- **Done: `kiln sandbox exec-stream`/`kiln sandbox logs`** — see the
+  "Dev servers and live preview" section's streamed background exec
+  entry.
 - Built for manual testing, agentic workflows, and debugging — mirrors the
   SDK surface, usable standalone without writing code.
 - **Published**: [npmjs.com/package/sandkiln-cli](https://www.npmjs.com/package/sandkiln-cli)
@@ -371,8 +370,9 @@ outbound HTTP both still work.
     matching the same "narrower first slice, come back for the rest"
     precedent `max_count` set for pre-warmed pools above. Also not the
     "remote storage" archive tier originally imagined (an S3-compatible
-    store, which needs the not-yet-built remote-storage-mounts feature
-    first) — `SANDKILN_ARCHIVE_DIR` is still a local filesystem path,
+    store — remote storage mounts have since shipped, so the dependency
+    is gone, but nothing wires archiving onto them yet)
+    — `SANDKILN_ARCHIVE_DIR` is still a local filesystem path,
     just a separately configured one (the real, concrete win available
     today: pointing it at a real disk instead of `snapshots_root()`'s
     default location under `$TMPDIR`, often tmpfs).
@@ -626,6 +626,48 @@ outbound HTTP both still work.
     need a small control-message side-channel over the same WebSocket
     (e.g. a JSON resize message multiplexed alongside the raw byte
     stream) to change it mid-session.
+- **Done: streamed background exec sessions (`kiln sandbox exec-stream`/
+  `kiln sandbox logs`).** Distinct from both batch `exec` (blocks for one
+  request, returns one stdout/stderr blob) and `pty` (a live interactive
+  shell): this runs a command detached inside the guest and lets any
+  number of callers attach to its output over time, each getting a
+  **replay of everything captured so far, then a live tail** — the exact
+  model this section used to call out as the shape worth copying once
+  built. `POST /sandboxes/:id/exec-stream` starts it and returns a
+  session id immediately; `GET /sandboxes/:id/exec-stream` lists sessions
+  (running or finished); `GET /sandboxes/:id/exec-stream/:id/logs`
+  (WebSocket) attaches. A third, dedicated vsock port
+  (`EXEC_STREAM_PORT`, alongside `AGENT_PORT`/`PTY_PORT`) carries framed
+  `ExecStreamEvent`s (stdout/stderr chunks, then one `Exit`) from a
+  spawned child process with no controlling terminal — the daemon does
+  the actual buffering (a bounded 1MiB ring buffer plus a
+  `tokio::sync::broadcast` fan-out, in `crate::log_session::LogSession`),
+  not the guest, since a session has to keep capturing output whether or
+  not anyone is currently watching. `Sandbox.execStream()`/
+  `.listExecStreams()`/`.attachLogs()` in the JS/TS SDK, `kiln sandbox
+  exec-stream <id> -- <command> [args...]` (start + follow in one) and
+  `kiln sandbox logs <id> [session-id]` (list, or attach/follow an
+  existing one — including one already finished) in the CLI, both
+  resolving to the remote command's own exit code.
+  Live-verified end to end (start a multi-line, multi-second command;
+  attach mid-stream and see replay-then-live-tail; reattach after it
+  finishes and see a full instant replay; two concurrent attaches to the
+  same session, one joining late, both get the complete ordered log) plus
+  a new `scripts/integration-tests/23-exec-stream-logs.sh` (a small Node
+  WebSocket helper, same pattern as `17-pty.sh`'s).
+  - Not carried across resume/fork/restore, and doesn't survive a daemon
+    restart — same in-memory-only scope as `Sandbox::pty_session_count`
+    already has, not a new limitation. A session is daemon-process state
+    tied to one specific `Sandbox` value, not the guest's own memory.
+  - No kill/cancel endpoint yet (`DELETE .../exec-stream/:id` isn't
+    implemented) — a deliberate v1 scope cut, not an oversight: the
+    guest agent would need a way to signal a specific spawned child by
+    id, which today's "one connection, one process, no server-side
+    registry" design (see `sandkiln-guest-agent`'s `exec_stream.rs`)
+    doesn't have a hook for yet.
+  - No concurrent-session cap, unlike PTY's `MAX_PTY_SESSIONS_PER_SANDBOX`
+    — each session gets its own independent vsock connection and child
+    process, with no shared resource between sessions to contend over.
 
 ## Tags and sandbox metadata
 
@@ -705,10 +747,14 @@ outbound HTTP both still work.
   `/metrics`, and error cases, all in one repeatable run against a real
   daemon. Tracks and tears down everything it creates. See root
   `AGENTS.md`'s "Integration testing" section.
-- **Real measured results** (dev box, single node, 8-tap pool):
-  - Cold boot (criterion): **32.3–33.1ms**.
+- **Real measured results** (dev box, single node, 8-tap pool). The
+  numbers below predate the `wait_for_socket`/`Vm::call` retry fixes
+  further down this section — re-run with `cargo bench -p sandkiln-vmm
+  --bench vm_lifecycle` after those landed:
+  - Cold boot (criterion): **10.5–10.9ms** (was 32.3–33.1ms before the
+    `wait_for_socket` fix — see below).
   - Exec round-trip on an already-open vsock connection (criterion):
-    **225–275µs**.
+    **220–250µs**.
   - Load test, 4 concurrent workers × 5 cycles, 0 errors:
     **before** the fix below — 5.59 cycles/sec, `create` mean 369ms
     (p95 588ms).
@@ -723,10 +769,194 @@ outbound HTTP both still work.
     concurrently with the lease (independent work, no reason to serialize
     them) and uses `cp --reflink=auto`, an instant copy-on-write clone on
     a filesystem that supports it (XFS, Btrfs). On this dev box's ext4,
-    `--reflink` can't help — ext4 has no CoW — so the *remaining* gap
-    (~180ms of real file-copy time) still needs either a CoW-capable
-    filesystem for image storage or a device-mapper/thin-provisioning
-    layer (ties into "Base and custom images").
+    `--reflink` can't help — ext4 has no CoW.
+  - **Follow-up, actually measured (not just assumed) live**: set up a
+    real XFS loopback filesystem on the dev box and pointed
+    `SANDKILN_BASE_ROOTFS` at it. Confirmed the CoW clone is real —
+    cloning the same 300MiB rootfs four times added a measured ~4MiB of
+    real disk usage total (`df`), not ~1.2GiB — and `cp --reflink=auto`
+    itself dropped from ~110ms (ext4) to ~0ms (XFS). **But end-to-end
+    `POST /sandboxes` latency was unchanged** (~160-170ms either way, five
+    creates each) — because the copy already runs *concurrently* with the
+    network lease (see above), shrinking it to ~0ms just means the join
+    now waits on the lease side instead; it was never truly serial once
+    that concurrency landed. This means the earlier "still needs a
+    CoW-capable filesystem or a device-mapper layer to close the gap"
+    framing was based on an assumption (the copy is *the* bottleneck)
+    that turned out not to hold once actually measured on a real
+    CoW filesystem. `scripts/preflight-check.sh` still reports whether
+    rootfs storage is on a CoW-capable filesystem (real, still a correct
+    thing to want — a disk-space-free clone is a genuine win on its own).
+    **The reasoning in this entry for *why* XFS didn't help is itself
+    wrong — see the profiling pass immediately below, which measured the
+    network lease at ~4ms and so rules out "the join now waits on the
+    lease side instead" as an explanation.** The entry is left standing
+    rather than edited because the measurements in it (the CoW clone is
+    real; end-to-end latency didn't move) are correct and reproducible —
+    only the causal story attached to them was guesswork.
+- **Done: a real per-phase profiling pass of the cold-create path**, the
+  "honest next step" the entry above asked for. Instrumented every
+  sub-step of `create_sandbox_cold` and `Vm::boot` (see "Instrumentation"
+  at the end of this entry) and ran 20 sequential `POST /sandboxes`
+  creates on the dev box, one at a time, each sandbox destroyed before
+  the next, with nothing else running on the box.
+  - **What we measured.** Means over 20 creates (ext4, 300MiB base
+    rootfs, no jailer, 2 vCPU / 512MiB, `POST /sandboxes` with an empty
+    body). Total **167.65ms** (min 161.41, max 179.10):
+
+    | phase | mean | share |
+    | --- | --- | --- |
+    | rootfs clone (`cp --reflink=auto`) | 124.09ms | 74.0% |
+    | `Vm::boot` total | 34.00ms | 20.3% |
+    | — process spawn | 0.34ms | 0.2% |
+    | — wait for the API socket | 20.11ms | 12.0% |
+    | — the 7 configuration PUTs | 1.61ms | 1.0% |
+    | — `InstanceStart` | 11.87ms | 7.1% |
+    | history-store sqlite write | 9.24ms | 5.5% |
+    | network lease (concurrent) | 4.36ms | ~0.1% of the critical path |
+
+    Those add to 167.33ms of the measured 167.65ms — **0.32ms
+    unaccounted**, so this is a complete breakdown, not a partial one.
+  - **What we found — the two live hypotheses going in were both wrong,
+    and in the same direction.** `NetworkManager::lease` is **~4.36ms**,
+    not the ~130ms it was suspected of: its three `ip`/`bridge`
+    subprocess calls measure 1.39ms / 1.46ms / 1.46ms, and because the
+    lease runs concurrently with the rootfs clone it contributes only
+    **~0.17ms** to the critical path (setup join 124.26ms vs. the clone's
+    own 124.09ms). Firecracker's per-VM API configuration is **~1.61ms**
+    across all seven PUTs — the slowest single one is
+    `/network-interfaces/eth0` at 0.51ms. Batching the `ip`/`bridge`
+    calls or replacing them with direct netlink would therefore buy at
+    most a couple of milliseconds off a 167ms create; **a netlink crate
+    is not worth adding for this, and isn't planned.**
+  - **The rootfs copy *is* the dominant cost after all — 74% of a cold
+    create** — which is what the entry above set out to disprove. Both
+    entries are measured and both are correct; what was wrong was the
+    *explanation* offered above for the XFS null result. The copy was
+    never "hidden behind the lease", because the lease is ~4ms.
+  - **Leading hypothesis for the XFS null result, explicitly not yet
+    verified.** `clone_rootfs` copies *into* `std::env::temp_dir()`, and
+    `cp --reflink=auto` silently falls back to a full byte copy when
+    source and destination are on different filesystems. The XFS
+    experiment moved only `SANDKILN_BASE_ROOTFS` onto the XFS loopback;
+    the destination stayed on `/tmp` (ext4), so the daemon's actual clone
+    could never have reflinked, even though a standalone `cp` *within*
+    the XFS mount did. That fits every number in both entries, but it has
+    **not** been re-tested: the XFS loopback no longer exists on the box
+    and mounting one needs root. Treat it as the next thing to check, not
+    as established.
+  - **What's still open.** If that hypothesis holds, the fix is to give
+    the per-sandbox rootfs copy a configurable destination directory so
+    it can be placed on the same filesystem as the base image, instead of
+    always landing in `std::env::temp_dir()`. That is a config-surface
+    change that also touches snapshot/archive path assumptions, so it was
+    deliberately **not** attempted in this pass — and on this ext4-only
+    box its payoff can't be measured at all, which is exactly the
+    situation that produced the wrong conclusion above. Also unexamined:
+    the **9.24ms synchronous sqlite write** (`history.record_created`)
+    sitting on the critical path, 5.5% of a create, for a write whose own
+    doc comment already calls it best-effort. Moving it off the request
+    path looks easy and worth ~9ms, but wasn't measured as a change here.
+  - **What we fixed: the API-socket wait.** `wait_for_socket` polled for
+    Firecracker's API socket with a fixed `sleep(20ms)`. It measured
+    **20.11ms on every single boot** (min 20.04, max 20.18 across 20) —
+    the signature of one quantized sleep rather than of real waiting.
+    Replaced with `connect_api_with_retry`, which retries the *connect*
+    (not a file-existence check) on a 200µs→5ms backoff. Retrying the
+    connect also closes a real race the faster polling would otherwise
+    have opened: the socket file appears at `bind()`, a moment before
+    `listen()`, so a fast existence-poll can win that race and get
+    `ECONNREFUSED`.
+    - **Measured after, same methodology, 2×20 creates:** socket wait
+      **20.11ms → 0.67ms / 0.69ms** (so Firecracker really is ready in
+      well under 1ms, and ~19.4ms of every boot was dead sleep);
+      `boot_duration_ms` **34.00ms → 11.22ms / 11.44ms**; end-to-end
+      create **167.65ms → 144.59ms / 143.56ms**. A **~23ms (~14%)** cut
+      to every cold create, and it applies to snapshot resume too, which
+      used the same helper. `InstanceStart` also read lower afterwards
+      (11.87ms → 8.75/9.13ms); that wasn't the target of the change and
+      isn't confidently attributed to it.
+    - Verified with the full `scripts/integration-test.sh` — snapshot,
+      resume, and time-travel restore all pass. One run out of four
+      failed a pool-claim MMDS assertion; the three runs after it were
+      300/300 clean, and the code path that assertion covers
+      (`Vm::update_metadata`) is untouched by this change, so this reads
+      as the already-documented intermittent resume failure below rather
+      than a regression — stated as a reading of the evidence, not as
+      something proven.
+  - **Instrumentation left behind**, so none of this has to be
+    rediscovered by hand: `/metrics` gains
+    `create_phase_duration_ms{phase="rootfs_clone"|"network_lease"|"setup"|"total"}`
+    (`boot_duration_ms` stays its own metric, unchanged). Finer detail is
+    debug-level `tracing` rather than metrics — nobody alerts on "one
+    `ip` exec took 1.4ms", and `sandkiln-vmm` has no access to the
+    daemon's `Metrics` anyway: `"cold create setup phases"` and
+    `"cold create complete"` (`sandkilnd::routes_sandbox`),
+    `"vm boot phase breakdown"` with per-endpoint PUT timings
+    (`sandkiln_vmm::vm::boot`), and `"attached tap device"` with each
+    subprocess call timed separately (`sandkiln_vmm::network`).
+    `scripts/dev-tools/profile-cold-create.sh` drives the run. Note the
+    log filter is the **binary** name: `RUST_LOG=sandkilnd=debug`, not
+    `sandkiln_daemon=debug`, which silently matches nothing.
+  - **Caveat, same as every number in this section:** a shared dev box,
+    small samples, one create at a time. The phase *shares* are large and
+    consistent enough to act on; the absolute totals move a few percent
+    run to run.
+- **Done: fixed `Vm::call`/`open_pty`/`open_exec_stream`'s own retry
+  loop** — the same fixed-sleep bug class as `wait_for_socket` above,
+  found by auditing the codebase for siblings after that fix landed.
+  Each retried a failed vsock call on a flat `sleep(100ms)` rather than a
+  backoff — 5x the cost per wasted retry that `wait_for_socket`'s 20ms
+  sleep had. Replaced with the same `retry_with_backoff` helper
+  `connect_api_with_retry` now shares (1ms→20ms backoff for the vsock
+  case, since a guest agent's own startup is a slower, more variable
+  race than Firecracker's bare API socket appearing) — one generic
+  helper instead of three near-identical hand-rolled loops.
+  **Live-measured, and the fix's real benefit turned out to be a much
+  smaller part of a much bigger story**: A/B'd old vs. new code, timing
+  a fresh sandbox's first real `exec` end to end. Both measured
+  **~420-460ms** — indistinguishable within noise. This *is* still a
+  real, correct fix (worst-case wasted overshoot per retry drops from
+  ~100ms to ~20ms), but on this box the guest agent's own startup time
+  (kernel finishing boot, systemd, the agent binary starting and binding
+  vsock) so thoroughly dominates the ~420-460ms that shaving retry-loop
+  overshoot doesn't show up as a measurable win by itself. That
+  measurement is the real finding — see below.
+  - **The real discovery: `POST /sandboxes` returning 200 does not mean
+    the sandbox is actually ready to use, and nothing before this
+    measured that gap.** Every exec *after* the first, on the same
+    sandbox, measured **~3-5ms** — confirming the ~420-460ms is a
+    one-time "is the guest agent listening yet" tax, currently paid
+    silently by whichever caller happens to make the first real call,
+    misattributed to "exec is slow" rather than being visible as its own
+    thing. Every benchmark elsewhere in this document stops at
+    Firecracker's `InstanceStart` succeeding or the daemon's own
+    `create()` returning — none of them measure through to "the guest
+    agent actually answered a real request," which is the number that
+    actually matters for "how long until my code runs."
+  - **A resumed sandbox skips almost all of it.** Same test against a
+    snapshot resumed from an already-warmed sandbox (agent confirmed
+    live before the snapshot was taken): first exec after resume
+    measured **~4-18ms** — a **~25-100x** difference from a cold
+    create's ~420-460ms, confirmed repeatedly, not a one-off. This is a
+    dramatically bigger, more real version of the pre-warmed-pool win
+    already documented below — that section's own "70-200ms vs.
+    160-200ms" framing only ever compared `create()` returning, never
+    "time until the sandbox can actually run something," which is where
+    almost this entire gap actually lives.
+  - **`scripts/bench-report.sh` now tracks this permanently** as
+    `first_exec_client`, timed the same way a real caller would
+    experience it (client-side, immediately after `create()` returns),
+    alongside its existing daemon-`/metrics`-based phase breakdown — so
+    this doesn't have to be rediscovered by hand again, the same
+    motivation behind that script's own creation.
+  - **What's still open**: whether the daemon should block `create()`
+    until the guest agent actually answers once, so `POST /sandboxes`
+    returning 200 genuinely means "ready," not just "Firecracker
+    started it" — a real API-semantics question, not just a performance
+    one, since today's fast `create()` number is honest about what it
+    measures but easy to misread as "time until usable." Not changed
+    yet — this needs a decision, not just a fix.
 - **Done: snapshot/resume benchmarked** (`bench_snapshot_take`/
   `bench_resume` in `core/crates/vmm/benches/vm_lifecycle.rs`, alongside
   the existing `bench_cold_boot`/`bench_exec_roundtrip`). Real numbers,
@@ -735,16 +965,37 @@ outbound HTTP both still work.
     (309.6–335.0ms) — expensive, dominated by writing the guest's full
     memory to disk synchronously; a real cost for auto-suspend and any
     future tiered-idle-lifecycle work, not free.
+    **This dev box is a real, actively-used desktop** (an editor, a
+    browser, a remote-desktop client all running concurrently), not a
+    dedicated bench machine, and `snapshot_take`'s synchronous disk
+    write is far more exposed to that than the other benchmarks here.
+    Re-running it later measured 552.7ms (a 20-iteration bench-report.sh
+    run) and, in isolation via `cargo bench -- snapshot_take`,
+    560-915ms with criterion's own significance test reporting no
+    detected change from its prior run (p=0.14) — genuinely wide
+    variance under today's real background load, not a regression and
+    not a data error. The ~322ms figure stands as a real measurement
+    from a quieter moment; treat both as real, load-dependent readings
+    rather than picking one as authoritative.
   - `resume_from_snapshot`: **~25.8ms** (25.5–26.2ms) — only **~19%
     faster than `cold_boot`'s ~31.9ms** (31.5–32.4ms), not the dramatic
     win the earlier framing below assumed. Both numbers are already
     small on this base image (lightweight kernel, minimal guest-agent
     init) — cold boot has little slack left for resume to undercut.
+    **Both predate the `wait_for_socket` fix** (see further down this
+    section) — re-measured afterward: `resume_from_snapshot`
+    **6.5–7.7ms**, `cold_boot` **10.5–10.9ms**, still only a modest gap
+    between them for the same reason as before. The real, much larger
+    gap this framing was missing entirely — resume vs. cold create
+    counted through to "the sandbox can actually run something," not
+    just "boot finished" — is the `first_exec_client` finding later in
+    this section.
   - **This changes what a pre-warmed pool actually buys**: the ~180ms
     gap between a ~32ms boot and the measured 211ms full-create (see
     "What works today" above) isn't in the boot/resume step at all —
     both are ~25–32ms either way — it's in the surrounding per-create
-    setup (rootfs prep, network lease). A pre-warmed pool's real value
+    setup (rootfs prep, network lease; since profiled, and it is almost
+    entirely the rootfs prep — the lease is ~4ms). A pre-warmed pool's real value
     is pre-doing *that* setup ahead of a request, not shaving boot
     latency itself, which was never the bottleneck. Worth re-measuring
     once a pool exists, rather than assumed up front.
@@ -765,14 +1016,24 @@ outbound HTTP both still work.
   an important, honestly-measured caveat (see the finding right below
   this): a **clean** claim (the resumed snapshot passes its health check)
   measured at roughly **70–200ms** across repeated runs vs. a cold
-  create's own **~160–200ms** on the same box — a real but modest win at
-  this sample size (small-sample numbers on a shared, variable-load dev
-  box, not a controlled benchmark — see the Benchmarking section for the
+  create's own **~160–200ms** on the same box, comparing `create()`
+  returning in each case — a real but modest win at this sample size
+  (small-sample numbers on a shared, variable-load dev box, not a
+  controlled benchmark — see the Benchmarking section for the
   underlying boot/resume/setup breakdown this is built on). That clean
   win is **not** the reliable common case on this dev box today, though —
   see the failure-rate finding immediately below, which affects a large
   enough fraction of claims that "pools make creates faster" needs that
   caveat attached, not stated as a clean, unconditional result.
+  **This still understates the real win, found later**: `create()`
+  returning isn't the same as "ready to use" — see the Benchmarking
+  section's `first_exec_client` finding. A cold create's *first real
+  exec* pays an extra, currently-unmeasured-here **~420-460ms** the
+  guest agent needs to actually start listening; a pool claim, resuming
+  an already-warm agent, pays almost none of it (~4-18ms). Counting
+  through to "the sandbox actually ran something," not just "`create()`
+  returned," the real gap this feature closes is closer to **25-100x**,
+  not the modest 2x this bullet's own numbers suggest on their own.
   - **A real Firecracker/KVM finding from building this, not a sandkiln
     bug — and a significant one, not a rare edge case.** Resuming a
     snapshot has a failure mode where the restored guest kernel panics

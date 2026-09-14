@@ -4,6 +4,7 @@ import { Drive, Image, Pool, Sandbox, SandkilnApiError } from "sandkiln";
 import {
   formatDirEntryList,
   formatDriveList,
+  formatExecStreamList,
   formatImageList,
   formatPoolList,
   formatSandboxList,
@@ -422,6 +423,45 @@ sandbox
   });
 
 sandbox
+  .command("exec-stream <id> <command> [args...]")
+  .description(
+    "Run a long-running command inside a sandbox in the background and follow its output live (replay so far, then a live tail) until it exits. Ctrl+C detaches without stopping the command -- reattach later with 'kiln sandbox logs <id> <session-id>'.",
+  )
+  .action(async function (this: Command, id: string, command: string, args: string[]) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const sbx = attachSandbox(id, baseUrl, token);
+      const sessionId = await sbx.execStream(command, args);
+      process.stderr.write(`session ${sessionId} started\n`);
+      const exitCode = await followLogs(sbx, sessionId);
+      process.exit(exitCode ?? 0);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("logs <id> [session-id]")
+  .description(
+    "Without <session-id>: list this sandbox's exec-stream sessions. With one: attach and follow it (replay so far, then a live tail), the same way as right after 'exec-stream' starts it -- works any number of times, including after the process has already finished.",
+  )
+  .action(async function (this: Command, id: string, sessionId: string | undefined) {
+    const { baseUrl, token } = clientOptions(this);
+    const sbx = attachSandbox(id, baseUrl, token);
+    try {
+      if (sessionId === undefined) {
+        const sessions = await sbx.listExecStreams();
+        process.stdout.write(formatExecStreamList(sessions));
+        return;
+      }
+      const exitCode = await followLogs(sbx, sessionId);
+      process.exit(exitCode ?? 0);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
   .command("preview <id> <port>")
   .description("Print the URL to reach a server listening on <port> inside a sandbox, proxied through the daemon.")
   .option("--path <path>", "path within the sandbox's server to preview", "/")
@@ -499,6 +539,38 @@ sandbox
  * needs the id plus the same client config already used to reach it. */
 function attachSandbox(id: string, baseUrl: string | undefined, token: string | undefined): Sandbox {
   return Sandbox.attach(id, { baseUrl, authToken: token });
+}
+
+/** Shared by both `exec-stream` (attach right after starting) and `logs`
+ * (attach to an already-running or already-finished session): prints a
+ * replay-then-live-tail of the session's output to stdout, and resolves
+ * with the remote command's own exit code once it's known (from the
+ * daemon's "[process exited with code N]" notice, printed to stderr
+ * alongside every other bracketed notice like a truncation warning) --
+ * `undefined` if the connection just closes without ever seeing one
+ * (e.g. the daemon restarted mid-session). */
+async function followLogs(sbx: Sandbox, sessionId: string): Promise<number | undefined> {
+  const ws = sbx.attachLogs(sessionId);
+  ws.binaryType = "arraybuffer";
+
+  return new Promise<number | undefined>((resolve) => {
+    let exitCode: number | undefined;
+    ws.addEventListener("message", (event) => {
+      if (typeof event.data === "string") {
+        const match = /^\[process exited with code (-?\d+)\]/.exec(event.data);
+        if (match) {
+          exitCode = Number(match[1]);
+        }
+        process.stderr.write(event.data);
+        return;
+      }
+      const buf = event.data instanceof ArrayBuffer ? Buffer.from(event.data) : Buffer.from(String(event.data));
+      process.stdout.write(buf);
+    });
+    const end = () => resolve(exitCode);
+    ws.addEventListener("close", end);
+    ws.addEventListener("error", end);
+  });
 }
 
 const image = program.command("image").description("Register, inspect, and manage rootfs images sandboxes can boot from.");

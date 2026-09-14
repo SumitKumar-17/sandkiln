@@ -5,9 +5,12 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "preview": "astro preview"
+    "preview": "astro preview",
+    "check": "astro check"
   },
   "dependencies": {
+    "@astrojs/mdx": "^8.0.0",
+    "@astrojs/starlight": "^0.42.0",
     "astro": "^7.3.1"
   }
 }
