@@ -2,6 +2,10 @@
 target/
 Cargo.lock
 
+# Local benchmark history (scripts/bench-report.sh) -- dev-box-specific
+# and directional, not meant to be committed or shared across machines.
+scripts/bench-results/
+
 # Node
 node_modules/
 dist/

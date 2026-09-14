@@ -28,6 +28,16 @@
 # Against a running daemon:
 #   integration-test [base-url]                       scripts/integration-test.sh
 #   load-test [concurrency] [iterations] [base-url]    scripts/load-test.sh
+#   bench-report [iterations] [base-url]               scripts/bench-report.sh
+#                                cold-create phase breakdown (rootfs clone,
+#                                network lease, setup join, boot, total) from
+#                                the daemon's own /metrics, diffed against the
+#                                last run automatically -- the fast, routine
+#                                complement to `bench` above (which re-runs the
+#                                full criterion suite) and to
+#                                scripts/dev-tools/profile-cold-create.sh
+#                                (which needs debug logs for finer detail than
+#                                /metrics exposes).
 #
 # Guest agent (after any protocol/guest-agent/vmm change):
 #   inject-agent [rootfs-path]   builds sandkiln-guest-agent for the musl
@@ -118,6 +128,9 @@ case "$subcommand" in
     ;;
   load-test)
     exec "$SCRIPT_DIR/load-test.sh" "$@"
+    ;;
+  bench-report)
+    exec "$SCRIPT_DIR/bench-report.sh" "$@"
     ;;
   inject-agent)
     rootfs="${1:-${SANDKILN_BASE_ROOTFS:-$HOME/sandkiln-tools/images/ubuntu-22.04.ext4}}"

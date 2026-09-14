@@ -282,11 +282,26 @@ Concretely, in this repo:
   exec latency, snapshot-take, and resume-from-snapshot, against the real
   Firecracker binary. See `ROADMAP.md`'s Benchmarking section for the env
   vars needed and the current numbers.
+- **`scripts/bench-report.sh [iterations] [base-url]`** — the fast,
+  routine complement to the criterion suite above: drives N sequential
+  cold creates against a running daemon and diffs its own `/metrics`
+  histograms (`create_phase_duration_ms{phase=...}`, `boot_duration_ms`)
+  before/after to print a phase-by-phase breakdown (rootfs clone, network
+  lease, the concurrent join, boot, total) — no debug logging needed,
+  since these are metrics, not tracing. Saves each run under
+  `scripts/bench-results/` (gitignored) and automatically compares
+  against the last run, flagging anything that moved >10% either way —
+  built specifically so a real regression (or a real win) shows up on the
+  next run instead of needing someone to notice it by chance. For finer
+  detail than `/metrics` exposes (each Firecracker API PUT, the socket
+  wait, `InstanceStart` alone), use `scripts/dev-tools/profile-cold-create.sh`
+  with `RUST_LOG=sandkiln_daemon=debug,sandkiln_vmm=debug` instead.
 - **`scripts/dev.sh <subcommand>`** — a thin dispatcher in front of the
-  scripts above (`build`/`unit-test`/`bench`/`integration-test`/
-  `load-test`/`preflight`/`setup`/`start`/`stop`/`restart`/`status`/
-  `logs`), each just exec'ing the real script with whatever args follow —
-  run `scripts/dev.sh help` for the full list. Saves remembering which
+  scripts above (`build`/`unit-test`/`bench`/`bench-report`/
+  `integration-test`/`load-test`/`preflight`/`setup`/`start`/`stop`/
+  `restart`/`status`/`logs`), each just exec'ing the real script with
+  whatever args follow — run `scripts/dev.sh help` for the full list.
+  Saves remembering which
   file does what during a normal edit/rebuild/test loop; every script
   still works standalone with its own full flag set, this doesn't replace
   any of them.
