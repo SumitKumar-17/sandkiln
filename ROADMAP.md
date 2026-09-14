@@ -747,10 +747,14 @@ outbound HTTP both still work.
   `/metrics`, and error cases, all in one repeatable run against a real
   daemon. Tracks and tears down everything it creates. See root
   `AGENTS.md`'s "Integration testing" section.
-- **Real measured results** (dev box, single node, 8-tap pool):
-  - Cold boot (criterion): **32.3–33.1ms**.
+- **Real measured results** (dev box, single node, 8-tap pool). The
+  numbers below predate the `wait_for_socket`/`Vm::call` retry fixes
+  further down this section — re-run with `cargo bench -p sandkiln-vmm
+  --bench vm_lifecycle` after those landed:
+  - Cold boot (criterion): **10.5–10.9ms** (was 32.3–33.1ms before the
+    `wait_for_socket` fix — see below).
   - Exec round-trip on an already-open vsock connection (criterion):
-    **225–275µs**.
+    **220–250µs**.
   - Load test, 4 concurrent workers × 5 cycles, 0 errors:
     **before** the fix below — 5.59 cycles/sec, `create` mean 369ms
     (p95 588ms).
@@ -966,6 +970,14 @@ outbound HTTP both still work.
     win the earlier framing below assumed. Both numbers are already
     small on this base image (lightweight kernel, minimal guest-agent
     init) — cold boot has little slack left for resume to undercut.
+    **Both predate the `wait_for_socket` fix** (see further down this
+    section) — re-measured afterward: `resume_from_snapshot`
+    **6.5–7.7ms**, `cold_boot` **10.5–10.9ms**, still only a modest gap
+    between them for the same reason as before. The real, much larger
+    gap this framing was missing entirely — resume vs. cold create
+    counted through to "the sandbox can actually run something," not
+    just "boot finished" — is the `first_exec_client` finding later in
+    this section.
   - **This changes what a pre-warmed pool actually buys**: the ~180ms
     gap between a ~32ms boot and the measured 211ms full-create (see
     "What works today" above) isn't in the boot/resume step at all —
