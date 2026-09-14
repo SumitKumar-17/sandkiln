@@ -659,6 +659,32 @@ a.rail:hover {
   color: var(--tty-flare);
 }
 
+/* The hero console is the one place worth dramatizing a real boot: the
+   actual sequence is ~10ms end to end, too fast to read a single line of,
+   so each line reveals staggered by --d instead of all at once -- closer
+   to how the real console output actually arrives than a static block of
+   text pretending to be a live boot log. Plays once on load, not looped:
+   a boot happens once, and replaying it forever would read as decoration
+   rather than as the thing it's depicting. */
+.cl {
+  opacity: 0;
+  animation: cl-in 0.5s var(--ease) forwards;
+  animation-delay: var(--d, 0s);
+}
+
+@keyframes cl-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cl {
+    opacity: 1;
+    animation: none;
+    transform: none;
+  }
+}
+
 @media (min-width: 720px) {
   .tty {
     font-size: 0.8125rem;
@@ -1345,4 +1371,14 @@ a.rail:hover {
 
 .foot-links a:hover {
   color: var(--flare);
+}
+
+.foot-version {
+  color: var(--flare);
+}
+
+.foot-github {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
 }

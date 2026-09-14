@@ -1,15 +1,23 @@
 ---
+import sdkPkg from "../../../packages/sdk/package.json";
+
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const version = sdkPkg.version;
 ---
 
 <footer class="foot">
   <div class="shell foot-in">
-    <span>sandkiln — MIT licensed</span>
+    <span>sandkiln <span class="foot-version">v{version}</span> — MIT licensed</span>
     <span class="foot-links">
       <a href={`${base}/docs/`}>Docs</a>
       <a href="https://www.npmjs.com/package/sandkiln">sandkiln</a>
       <a href="https://www.npmjs.com/package/sandkiln-cli">sandkiln-cli</a>
-      <a href="https://github.com/SumitKumar-17/sandkiln">Source</a>
+      <a class="foot-github" href="https://github.com/SumitKumar-17/sandkiln" aria-label="Source on GitHub">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="currentColor">
+          <path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.62 2.29 6.7 5.47 7.78.4.08.55-.18.55-.39 0-.19-.01-.82-.01-1.49-2.01.38-2.53-.5-2.7-.96-.09-.24-.48-.96-.82-1.16-.28-.15-.68-.53-.01-.54.63-.01 1.08.59 1.23.83.72 1.24 1.87.89 2.33.68.07-.53.28-.89.51-1.1-1.78-.2-3.64-.91-3.64-4.02 0-.89.31-1.62.82-2.19-.08-.2-.36-1.04.08-2.16 0 0 .67-.22 2.2.84a7.4 7.4 0 0 1 4 0c1.53-1.06 2.2-.84 2.2-.84.44 1.12.16 1.96.08 2.16.51.57.82 1.29.82 2.19 0 3.12-1.87 3.82-3.65 4.02.29.26.54.76.54 1.53 0 1.11-.01 2-.01 2.27 0 .21.15.48.55.39A8.21 8.21 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z" />
+        </svg>
+        Source
+      </a>
     </span>
   </div>
 </footer>

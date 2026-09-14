@@ -59,7 +59,7 @@ const consoleLines = [
         <span>guest console — ttyS0</span>
         <span class="live">10.5–10.9ms to InstanceStart</span>
       </div>
-      <pre>{consoleLines.map((l) => <div class={l.c}>{l.t || " "}</div>)}</pre>
+      <pre>{consoleLines.map((l, i) => <div class={`cl ${l.c}`} style={`--d:${(i * 0.09).toFixed(2)}s`}>{l.t || " "}</div>)}</pre>
     </div>
 
     <div class="gauges">
