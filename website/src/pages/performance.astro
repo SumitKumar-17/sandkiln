@@ -12,7 +12,7 @@ const metrics = [
   { label: "Cold boot", value: "10.5–10.9", unit: "ms", ctx: "Process spawn to InstanceStart acknowledged — was 32.3–33.1ms before fixing a 20ms fixed-sleep poll below" },
   { label: "Exec round-trip", value: "220–250", unit: "µs", ctx: "Over an already-open vsock connection" },
   { label: "Resume from snapshot", value: "6.5–7.7", unit: "ms", ctx: "Was 25.5–26.2ms — shares the same fixed socket wait" },
-  { label: "Snapshot take", value: "309.6–335.0", unit: "ms", ctx: "Pause plus a full synchronous write of guest memory" },
+  { label: "Snapshot take", value: "309.6–335.0", unit: "ms", ctx: "Pause plus a full synchronous write of guest memory. The most load-sensitive figure here; re-runs on a busier box have read 550-900ms." },
 ];
 
 const phases = [

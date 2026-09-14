@@ -965,6 +965,18 @@ outbound HTTP both still work.
     (309.6–335.0ms) — expensive, dominated by writing the guest's full
     memory to disk synchronously; a real cost for auto-suspend and any
     future tiered-idle-lifecycle work, not free.
+    **This dev box is a real, actively-used desktop** (an editor, a
+    browser, a remote-desktop client all running concurrently), not a
+    dedicated bench machine, and `snapshot_take`'s synchronous disk
+    write is far more exposed to that than the other benchmarks here.
+    Re-running it later measured 552.7ms (a 20-iteration bench-report.sh
+    run) and, in isolation via `cargo bench -- snapshot_take`,
+    560-915ms with criterion's own significance test reporting no
+    detected change from its prior run (p=0.14) — genuinely wide
+    variance under today's real background load, not a regression and
+    not a data error. The ~322ms figure stands as a real measurement
+    from a quieter moment; treat both as real, load-dependent readings
+    rather than picking one as authoritative.
   - `resume_from_snapshot`: **~25.8ms** (25.5–26.2ms) — only **~19%
     faster than `cold_boot`'s ~31.9ms** (31.5–32.4ms), not the dramatic
     win the earlier framing below assumed. Both numbers are already
