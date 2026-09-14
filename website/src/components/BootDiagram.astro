@@ -35,8 +35,17 @@ const delay = (i: number) => ((i / (nodes.length - 1)) * TRAVEL_S).toFixed(2);
 </div>
 
 <style>
+  /* Scaled to the column, but not below the width at which its own labels
+     stop being readable — under that it scrolls rather than shrinking into
+     illegibility. */
+  .boot {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding-block: var(--s-2);
+  }
   .boot svg {
     width: 100%;
+    min-width: 540px;
     height: auto;
     overflow: visible;
   }
@@ -67,7 +76,7 @@ const delay = (i: number) => ((i / (nodes.length - 1)) * TRAVEL_S).toFixed(2);
   }
 
   .pulse {
-    fill: var(--signal);
+    fill: var(--flare);
     offset-path: path("M60,34 L540,34");
     offset-rotate: 0deg;
     animation: travel 6.4s linear infinite;
@@ -81,11 +90,11 @@ const delay = (i: number) => ((i / (nodes.length - 1)) * TRAVEL_S).toFixed(2);
     100% { offset-distance: 100%; opacity: 0; }
   }
   @keyframes ring-hit {
-    0%, 6% { stroke: var(--signal); }
+    0%, 6% { stroke: var(--flare); }
     12%, 100% { stroke: var(--rule-strong); }
   }
   @keyframes core-hit {
-    0%, 6% { fill: var(--signal); }
+    0%, 6% { fill: var(--flare); }
     12%, 100% { fill: var(--ink-3); }
   }
 

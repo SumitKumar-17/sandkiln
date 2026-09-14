@@ -41,7 +41,10 @@ const createPhases = [
   <main>
     <section class="page-hero">
       <div class="shell">
-        <h1>Real numbers from real hardware.</h1>
+        <h1>
+          <span class="l">Real numbers from</span>
+          <span class="l"><span class="flare">real hardware</span>.</span>
+        </h1>
         <p class="lede prose">
           Every figure came from a <code>criterion</code> benchmark or a scripted load test
           against a live daemon on real KVM. One shared dev box, single node — directional,
@@ -71,7 +74,12 @@ const createPhases = [
               <thead><tr><th>Phase</th><th>Min</th><th>Mean</th><th>P95</th></tr></thead>
               <tbody>
                 {phases.map((p) => (
-                  <tr><td>{p.phase}</td><td>{p.min}</td><td>{p.mean}</td><td>{p.p95}</td></tr>
+                  <tr>
+                    <td>{p.phase}</td>
+                    {[p.min, p.mean, p.p95].map((v) => (
+                      <td>{v === "—" ? <span class="nil">—</span> : v}</td>
+                    ))}
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -85,13 +93,16 @@ const createPhases = [
       <div class="shell grid">
         <a class="rail" href="#rootfs">correction</a>
         <div class="col">
-          <h2 class="head">A measurement that overturned the plan.</h2>
+          <h2 class="head">
+            <span class="l">A measurement that</span>
+            <span class="l"><span class="flare">overturned the plan</span>.</span>
+          </h2>
           <p class="lede prose">
             <code>create</code> averaged 369ms against a ~33ms cold boot. Closing that gap took
             two attempts, and the second one proved the first explanation wrong.
           </p>
 
-          <div class="finding finding-signal">
+          <div class="finding">
             <p>
               <span class="term">Fixed.</span> The ~300MB rootfs copy ran synchronously after the
               network lease. They are independent work, so they now run concurrently, and the copy
@@ -164,7 +175,10 @@ const createPhases = [
       <div class="shell grid">
         <a class="rail" href="#pools">pools</a>
         <div class="col">
-          <h2 class="head">Pre-warmed pools: a much bigger win than first measured, and a real failure mode.</h2>
+          <h2 class="head">
+            <span class="l">Pre-warmed pools win far bigger</span>
+            <span class="l">than measured, and <span class="flare">fail often</span>.</span>
+          </h2>
           <p class="lede prose">
             <code>POST /pools</code> configures a pool, a replenisher keeps resumable snapshots
             ready, and a matching <code>Sandbox.create()</code> claims one instead of cold-booting.
@@ -172,7 +186,7 @@ const createPhases = [
             comparing how fast <code>create()</code> itself returns in each case.
           </p>
 
-          <div class="finding finding-signal">
+          <div class="finding">
             <p>
               <span class="term">That comparison was measuring the wrong finish line.</span>{" "}
               <code>create()</code> returning 200 means Firecracker's <code>InstanceStart</code>{" "}
@@ -195,7 +209,7 @@ const createPhases = [
             </p>
           </div>
 
-          <div class="finding finding-caution">
+          <div class="finding finding-open">
             <p>
               <span class="term">The clean case is not the common case.</span> Building a pool means
               resuming far more often than any manual test had, and a resumed guest kernel can panic
@@ -221,7 +235,10 @@ const createPhases = [
       <div class="shell grid">
         <a class="rail" href="#next">next</a>
         <div class="col">
-          <h2 class="head">Where the remaining gap actually lives, now that it's measured.</h2>
+          <h2 class="head">
+            <span class="l">Where the remaining gap</span>
+            <span class="l"><span class="flare">actually lives</span>, now measured.</span>
+          </h2>
           <p class="lede prose">
             The rootfs clone is <b>74% of a cold create</b> — the genuine dominant cost, confirmed by
             direct measurement rather than assumption. Whether a CoW-capable filesystem actually
@@ -231,7 +248,7 @@ const createPhases = [
             is a configurable clone destination, then a clean re-measurement — not another filesystem
             swap without fixing that first.
           </p>
-          <div class="finding finding-caution">
+          <div class="finding finding-open">
             <p>
               <span class="term">Also unexamined:</span> a synchronous history-store write sits on
               the create critical path at <b>9.24ms, 5.5%</b> of a create — for a write its own code

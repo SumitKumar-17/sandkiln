@@ -32,12 +32,15 @@ as a bug, exactly like a stale doc comment in code.
   `DocsSiteTitle.astro` overrides Starlight's site title so the docs
   header carries the same top-level nav; without it the docs are a
   one-way trip out of the marketing pages.
-- `src/lib/scale.ts` — the shared log axis behind the homepage latency
-  readout. Positions are derived from the measurements themselves, so
-  correcting a figure moves its mark too; nothing hard-codes a
-  percentage. A measured range renders as a range and a single recorded
-  figure renders as a tick, which is the publish-ranges-as-ranges rule
-  below made visible rather than merely stated.
+- `src/lib/scale.ts` — the shared log axis behind the homepage gauge row.
+  All four gauges plot on one axis (100µs to 1s, a tick per decade), so
+  their marks are directly comparable across columns. Positions are
+  derived from the measurements themselves, so correcting a figure moves
+  its mark too; nothing hard-codes a percentage. A measured range renders
+  as a range and a single recorded figure renders as a tick, which is the
+  publish-ranges-as-ranges rule below made visible rather than merely
+  stated. A point mark needs `min-width`, not `width`: `markStyle` emits
+  an inline `width:0.00%` that beats any class.
 - `src/styles/tokens.css` — **the** design system, imported by both
   surfaces. `global.css` (marketing) and `starlight.css` (docs, via
   `customCss`) both consume it; `starlight.css` maps Starlight's own
@@ -50,21 +53,41 @@ as a bug, exactly like a stale doc comment in code.
 Stated in `tokens.css`'s header comment, repeated here because breaking
 one of them is easy and invisible in a single-page diff:
 
-- **Colour means data.** `--signal` marks a measured number or a
-  verified status; `--caution` marks something not built. Chrome — nav,
-  headings, body, rules, buttons — is achromatic, which is why the
-  primary button is ink-filled and prose links are underlined rather
-  than coloured. Spending the accent on furniture drains it of meaning.
-- **Panels are recessed wells, not raised cards.** No shadow is defined
-  anywhere in the system, and none should be added; depth is a fill
-  difference plus a hairline.
+- **One family, headlines included.** Everything — display, headings,
+  labels, body — is set in `--mono`. There is no second typeface and no
+  `--sans`; hierarchy is carried by size, weight and colour. Because mono
+  sets wide, `--measure` counts mono characters (58 ≈ 72 proportional
+  ones) and headline measures are set in `ch` so a written line renders
+  as one line. Labels stay lowercase, never tracked-out caps.
+- **One hue: `--flare`.** The greys are warm and desaturated so the
+  palette is a single axis. The accent is used liberally and
+  deliberately — every measured number, exactly one phrase per section
+  headline, the primary control, the live marks, the console's
+  significant lines. It never tints a background or a body paragraph.
+  Two ambers exist because one cannot do both jobs: `--flare` is the
+  text-safe value in each theme, `--flare-solid` is the fill that carries
+  `--flare-ink`.
+- **Status is achromatic.** shipped / partial / planned are a filled,
+  half-filled and hollow square of the same accent, not three hues. Same
+  for findings: a solid left rule means settled, a dashed one means open.
+  A second colour for "not done" would compete with the only hue there
+  is.
+- **Panels are plates, not cards.** No shadow is defined anywhere in the
+  system, and none should be added; depth is a fill difference plus a
+  hairline. A panel is sized to its content — a console or code block
+  stretched well past its longest line reads as a layout accident, which
+  is why the hero console caps at 75% (exactly three of the four gauge
+  columns below it).
 - **Radius is 0 everywhere**, including on Starlight's own controls,
   which `starlight.css` squares off explicitly.
-- **Mono means literal** — a value, a path, an API name, or code. Mono
-  labels are lowercase, never tracked-out caps.
-- **Section separation is whitespace.** A rule appears only where it
+- **Section separation is whitespace, and there is a lot of it.** Each
+  band is short — a two-line headline, a sentence or two, one visual —
+  with `--section-y` of air before the next. A rule appears only where it
   marks real structure; a divider under every section flattens the page
   into identical slabs.
+- **Headlines are two terse lines** with one phrase in `--flare`, written
+  as two `.l` block spans rather than a `<br>` so a narrow screen wraps
+  inside a line instead of fighting a hard break.
 - **One non-user-triggered animation exists on the whole site** — the
   boot diagram's pulse, which traces the real four-step create path.
   Everything else animates only in response to a person's action, and

@@ -5,15 +5,15 @@
   accent swapped" — and so a change happens in one file, not two. Every value
   here is a var(), never a hex literal.
 */
-@import url("https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&display=swap");
 
 :root {
-  --sl-font: var(--sans);
+  --sl-font: var(--mono);
   --sl-font-mono: var(--mono);
 
-  --sl-color-accent-low: var(--signal-wash);
-  --sl-color-accent: var(--signal);
-  --sl-color-accent-high: var(--signal-soft);
+  --sl-color-accent-low: var(--flare-wash);
+  --sl-color-accent: var(--flare);
+  --sl-color-accent-high: var(--flare-soft);
 
   /* Starlight names these for its dark-first default: --sl-color-white is
      the strongest foreground, --sl-color-black the page ground. In light
@@ -41,11 +41,20 @@
      keeps a docs page and a marketing page recognisably one site. */
   --sl-text-h1: var(--t-title);
   --sl-text-h2: var(--t-h2);
-  --sl-text-h3: 1.3125rem;
+  --sl-text-h3: 1.25rem;
   --sl-text-h4: var(--t-h3);
   --sl-text-h5: var(--t-body);
   --sl-text-code: 0.8125rem;
   --sl-text-code-sm: 0.75rem;
+
+  /* The whole site is set in one mono family, so Starlight's own text sizes
+     have to come down a step: mono at the default 16px/1.75 sets physically
+     wider and heavier than the proportional face this scale was drawn for. */
+  --sl-text-body: var(--t-body);
+  --sl-text-body-sm: var(--t-sm);
+  --sl-text-sm: var(--t-sm);
+  --sl-text-xs: var(--t-xs);
+  --sl-line-height: 1.75;
 }
 
 :root[data-theme="dark"],
@@ -56,14 +65,21 @@
 /* Headings carry the same tightened tracking as the marketing pages, so
    crossing between the two halves never feels like leaving the site. */
 :is(h1, h2, h3, h4) {
-  font-family: var(--sans);
+  font-family: var(--mono);
   font-weight: 600;
-  letter-spacing: -0.022em;
+  letter-spacing: -0.035em;
 }
 
 .sl-markdown-content h1,
 .content-panel h1 {
-  letter-spacing: -0.028em;
+  letter-spacing: -0.045em;
+  font-weight: 700;
+}
+
+/* Mono prose needs a shorter line than the proportional default Starlight
+   sizes its content column for — see --measure in tokens.css. */
+.sl-markdown-content > :is(p, ul, ol, blockquote) {
+  max-width: var(--measure);
 }
 
 /* Square corners and hairlines, matching the rest of the site: no radius and
@@ -130,7 +146,7 @@
   background: transparent;
   color: var(--ink);
   font-weight: 600;
-  box-shadow: inset 2px 0 0 var(--signal);
+  box-shadow: inset 2px 0 0 var(--flare);
 }
 
 a.site-title {

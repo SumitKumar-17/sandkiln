@@ -12,14 +12,17 @@ const tabs = [
   <div class="shell grid">
     <a class="rail" href="#sdk">client</a>
     <div class="col">
-      <h2 class="head">A thin, fully-typed client. Nothing more.</h2>
+      <h2 class="head">
+        <span class="l">A thin, fully-typed client.</span>
+        <span class="l"><span class="flare">Nothing more</span>.</span>
+      </h2>
       <p class="lede prose">
         The daemon's HTTP API is the source of truth. Every SDK method is a thin wrapper over
         it, verified against a live daemon rather than designed in isolation — so the same
         four calls read the same way in all three.
       </p>
 
-      <div>
+      <div class="codegroup">
         <div class="tabs" role="tablist" aria-label="SDK examples">
           {tabs.map((t, i) => (
             <button
@@ -34,37 +37,37 @@ const tabs = [
           ))}
         </div>
 
-        <div class="codeblock tabpanel" role="tabpanel" id="panel-js" aria-labelledby="tab-js" tabindex="0"><pre><span class="k">import</span> {'{'} Sandbox {'}'} <span class="k">from</span> <span class="s">"sandkiln"</span>;
+        <div class="codeblock tabpanel" role="tabpanel" id="panel-js" aria-labelledby="tab-js" tabindex="0"><pre><span class="k">import</span> {'{'} <span class="n">Sandbox</span> {'}'} <span class="k">from</span> <span class="s">"sandkiln"</span>;
 
 <span class="c">// Boots a real Firecracker microVM — own kernel, own filesystem, own network.</span>
-<span class="k">const</span> sandbox = <span class="k">await</span> Sandbox.create({'{'}
+<span class="k">const</span> sandbox = <span class="k">await</span> <span class="n">Sandbox</span>.<span class="n">create</span>({'{'}
   tags: {'{'} env: <span class="s">"ci"</span>, owner: <span class="s">"pipeline"</span> {'}'},
 {'}'});
 
-<span class="k">const</span> result = <span class="k">await</span> sandbox.runCommand(<span class="s">"python3"</span>, [<span class="s">"analyze.py"</span>]);
-console.log(result.stdout, result.exitCode);
+<span class="k">const</span> result = <span class="k">await</span> sandbox.<span class="n">runCommand</span>(<span class="s">"python3"</span>, [<span class="s">"analyze.py"</span>]);
+console.<span class="n">log</span>(result.stdout, result.exitCode);
 
-<span class="k">await</span> sandbox.stop(); <span class="c">// preserved as a resumable snapshot by default</span></pre></div>
+<span class="k">await</span> sandbox.<span class="n">stop</span>(); <span class="c">// preserved as a resumable snapshot by default</span></pre></div>
 
-        <div class="codeblock tabpanel" role="tabpanel" id="panel-py" aria-labelledby="tab-py" tabindex="0" hidden><pre><span class="k">from</span> sandkiln <span class="k">import</span> Sandbox
-
-<span class="c"># Boots a real Firecracker microVM — own kernel, own filesystem, own network.</span>
-sandbox = Sandbox.create(tags={'{'}<span class="s">"env"</span>: <span class="s">"ci"</span>, <span class="s">"owner"</span>: <span class="s">"pipeline"</span>{'}'})
-
-result = sandbox.run_command(<span class="s">"python3"</span>, [<span class="s">"analyze.py"</span>])
-print(result.stdout, result.exit_code)
-
-sandbox.stop()  <span class="c"># preserved as a resumable snapshot by default</span></pre></div>
-
-        <div class="codeblock tabpanel" role="tabpanel" id="panel-cli" aria-labelledby="tab-cli" tabindex="0" hidden><pre>npm install -g sandkiln-cli   <span class="c"># installs the `kiln` command</span>
+        <div class="codeblock tabpanel" role="tabpanel" id="panel-py" aria-labelledby="tab-py" tabindex="0" hidden><pre><span class="k">from</span> sandkiln <span class="k">import</span> <span class="n">Sandbox</span>
 
 <span class="c"># Boots a real Firecracker microVM — own kernel, own filesystem, own network.</span>
-kiln sandbox create --tag env=ci --tag owner=pipeline
+sandbox = <span class="n">Sandbox</span>.<span class="n">create</span>(tags={'{'}<span class="s">"env"</span>: <span class="s">"ci"</span>, <span class="s">"owner"</span>: <span class="s">"pipeline"</span>{'}'})
 
-kiln sandbox exec &lt;id&gt; python3 analyze.py
-kiln sandbox ls --tag env=ci
+result = sandbox.<span class="n">run_command</span>(<span class="s">"python3"</span>, [<span class="s">"analyze.py"</span>])
+<span class="n">print</span>(result.stdout, result.exit_code)
 
-kiln sandbox rm &lt;id&gt;           <span class="c"># preserves state as a snapshot by default</span></pre></div>
+sandbox.<span class="n">stop</span>()  <span class="c"># preserved as a resumable snapshot by default</span></pre></div>
+
+        <div class="codeblock tabpanel" role="tabpanel" id="panel-cli" aria-labelledby="tab-cli" tabindex="0" hidden><pre><span class="n">npm</span> install -g sandkiln-cli   <span class="c"># installs the `kiln` command</span>
+
+<span class="c"># Boots a real Firecracker microVM — own kernel, own filesystem, own network.</span>
+<span class="n">kiln</span> sandbox <span class="k">create</span> --tag env=ci --tag owner=pipeline
+
+<span class="n">kiln</span> sandbox <span class="k">exec</span> &lt;id&gt; python3 analyze.py
+<span class="n">kiln</span> sandbox <span class="k">ls</span> --tag env=ci
+
+<span class="n">kiln</span> sandbox <span class="k">rm</span> &lt;id&gt;           <span class="c"># preserves state as a snapshot by default</span></pre></div>
       </div>
 
       <p class="fine prose">

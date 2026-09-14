@@ -13,11 +13,14 @@ const rows = [
   <div class="shell grid">
     <a class="rail" href="#isolation">isolation</a>
     <div class="col">
-      <h2 class="head">Containers share a kernel. Sandboxes can't afford to.</h2>
+      <h2 class="head">
+        <span class="l">Containers share a kernel.</span>
+        <span class="l">Sandboxes <span class="flare">can't afford to</span>.</span>
+      </h2>
       <p class="lede prose">
-        Running code you didn't write — agent output, user uploads, third-party scripts —
-        beside your own systems is a bad bet when the boundary is a namespace. A compromised
-        container can still be a compromised kernel. A compromised microVM is a compromised microVM.
+        Agent output, user uploads, third-party scripts. Running code you didn't write beside
+        your own systems is a bad bet when the boundary is a namespace. A compromised container
+        can still be a compromised kernel.
       </p>
 
       <div class="scroller">
@@ -36,13 +39,3 @@ const rows = [
   </div>
 </section>
 
-<style>
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-</style>

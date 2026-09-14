@@ -11,8 +11,10 @@ const {
   description = "A compute primitive for safely running untrusted or AI-generated code — hardware-isolated Firecracker microVMs, real benchmarks, SDKs for JS/TS, Python, and a CLI.",
 } = Astro.props;
 
+// An amber plate carrying a block cursor: the site's two ideas — a serial
+// console and one accent hue — at 16px.
 const favicon =
-  'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="%230b6c74"/><path d="M4 22h6l4-12 4 16 4-10h6" fill="none" stroke="white" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+  'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="%23f2870f"/><rect x="7" y="7" width="11" height="14" fill="%23150d02"/><rect x="7" y="24" width="18" height="3" fill="%23150d02"/></svg>';
 ---
 
 <!doctype html>
@@ -26,8 +28,9 @@ const favicon =
   <link rel="icon" href={favicon} />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  {/* One family for the whole site, headlines included — see tokens.css. */}
   <link
-    href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&display=swap"
     rel="stylesheet"
   />
   {/* Starlight owns the theme toggle and persists the choice under its own

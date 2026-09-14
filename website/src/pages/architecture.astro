@@ -33,7 +33,7 @@ const crates = [
   {
     name: "sandkiln-daemon",
     role: "The axum + tokio HTTP API wrapping the lifecycle — create, exec, list, stop, snapshot, images, drives, pools — with auth, tags and tracing built in from the start.",
-    uses: "protocol · vmm · store",
+    uses: "protocol, vmm, store",
   },
 ];
 
@@ -58,7 +58,10 @@ const essays = [
   <main>
     <section class="page-hero">
       <div class="shell">
-        <h1>Five crates. None reaches into another's internals.</h1>
+        <h1>
+          <span class="l">Five crates. None reaches</span>
+          <span class="l">into <span class="flare">another's internals</span>.</span>
+        </h1>
         <p class="lede">
           The core is a Rust workspace kept deliberately modular: the daemon can change without
           touching the guest agent, and the guest agent ships as its own static binary,
@@ -71,7 +74,10 @@ const essays = [
       <div class="shell grid">
         <a class="rail" href="#crates">workspace</a>
         <div class="col">
-          <h2 class="head">What each crate owns.</h2>
+          <h2 class="head">
+            <span class="l">Five crates, and exactly</span>
+            <span class="l">what each one <span class="flare">owns</span>.</span>
+          </h2>
           <div class="stack">
             <div class="crate crate-legend">
               <span>crate</span><span>what it owns</span><span class="crate-uses">depends on</span>
@@ -92,7 +98,10 @@ const essays = [
       <div class="shell grid">
         <a class="rail" href="#boot">lifecycle</a>
         <div class="col">
-          <h2 class="head">What happens inside a create.</h2>
+          <h2 class="head">
+            <span class="l">What actually happens</span>
+            <span class="l">inside <span class="flare">a create</span>.</span>
+          </h2>
           <BootDiagram />
           <div class="steps">
             {steps.map((s) => (
@@ -111,7 +120,10 @@ const essays = [
       <div class="shell grid">
         <a class="rail" href="#rationale">rationale</a>
         <div class="col">
-          <h2 class="head">Why it's built this way, and what broke before it was.</h2>
+          <h2 class="head">
+            <span class="l">Why it's built this way,</span>
+            <span class="l">and <span class="flare">what broke before</span>.</span>
+          </h2>
           <p class="lede prose">
             The full essays live in the docs, next to the API they explain — the privilege model
             behind ambient <code>CAP_NET_ADMIN</code>, the vsock wire protocol, why a snapshot

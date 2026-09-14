@@ -1,8 +1,10 @@
-// Shared log axis for the measured-latency readout.
+// Shared log axis for the homepage's measured-latency gauges.
 //
-// The readout plots every figure on one axis so the two orders of magnitude
-// between an exec round-trip and a full create are visible rather than merely
-// stated. A linear axis can't hold 0.225ms and 211ms at once, hence log.
+// The four gauges are small multiples of one axis: each draws the same
+// 100µs-to-1s range with a tick per decade, in equal-width columns, so their
+// marks can be read against each other and the two orders of magnitude
+// between an exec round-trip and a full create are visible rather than
+// merely stated. A linear axis can't hold 0.225ms and 144ms at once.
 //
 // Positions are derived from the measurements themselves — nothing here
 // hard-codes a percentage, so correcting a figure moves its mark too.

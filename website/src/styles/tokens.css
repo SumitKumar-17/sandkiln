@@ -4,17 +4,40 @@
   Starlight's own --sl-* variables onto these and holds no hex literal of its
   own. Add a value here or nowhere, or it breaks in one theme or on one half.
 
-  The organising rule: COLOUR MEANS DATA. Chrome — nav, buttons, headings,
-  body, rules — is achromatic. --signal appears only on a number someone
-  measured or a status someone verified; --caution only on something not
-  built yet. That is why the primary button is ink-filled rather than
-  accent-filled, and why links in prose are underlined rather than coloured:
-  spending the accent on ordinary furniture would make it stop meaning
-  anything. Greys are desaturated cyan and --signal is saturated cyan, so the
-  whole palette is one axis and the lone ochre reads as the exception it is.
+  ─ The organising rule: ONE VOICE, ONE HUE. ────────────────────────────────
 
-  Panels are recessed wells, not raised cards, which is why no shadow is
-  defined anywhere in this system and none should be added.
+  TYPE. Everything on this site is set in one monospaced family, headlines
+  included. Not as decoration: the subject is a serial console, a boot log
+  and a table of timings, and all three are things that only line up when
+  every glyph is the same width. A proportional headline sitting above a
+  column of measurements would be the one element on the page pretending to
+  be from somewhere else. Weight, size and colour carry the whole hierarchy,
+  so the scale below is wider apart than a two-family system would need.
+
+  Because mono runs wide, --measure is counted in mono characters: 58 of
+  them is about the physical line length of 72 proportional ones, which is
+  where a line stops being comfortable.
+
+  COLOUR. --flare is the only hue in the system. Greys are warm — a hint of
+  the same amber, desaturated — so the palette is a single axis and the
+  accent reads as the saturated end of it rather than as a second colour
+  dropped on top. Amber against a warm near-black is what a serial terminal
+  actually looked like, which is the same reason the console panel is the
+  darkest surface here rather than an inverted card.
+
+  --flare is used liberally and deliberately: every measured number, exactly
+  one phrase per section headline, the primary control, the live marks, the
+  console's own significant lines. What it never does is tint a background
+  or a body paragraph.
+
+  Status is achromatic on purpose. shipped / partial / planned are a filled,
+  half-filled and hollow square of the same accent, not three hues — a
+  second colour for "planned" would compete with the one hue the system has.
+  Same for findings: a solid left rule means settled, a dashed one means
+  still open.
+
+  SURFACE. No radius and no shadow is defined anywhere in this file, and
+  none should be added. Depth is a fill difference plus a hairline.
 
   Three theme states have to agree: no data-theme (follow the OS),
   data-theme="light", and data-theme="dark". Starlight's toggle writes the
@@ -22,42 +45,58 @@
 */
 :root {
   --ground: #ffffff;
-  --well: #f1f4f5;
-  --well-2: #e6ebed;
-  --rule: #dbe2e5;
-  --rule-strong: #b7c3c8;
+  --well: #f5f3f0;
+  --well-2: #eae5df;
+  --rule: #e3ded7;
+  --rule-strong: #bcb2a6;
 
-  --ink: #0a1114;
-  --ink-2: #455960;
-  --ink-3: #6e838b;
+  --ink: #14110d;
+  --ink-2: #575047;
+  /* Dark enough to clear 4.5:1 on --well as well as on --ground: tertiary
+     text lands on both, and a lighter value passed on one and failed on the
+     other. */
+  --ink-3: #6e6559;
 
-  --signal: #0b6c74;
-  --signal-soft: #3e8e95;
-  --signal-wash: #e0eef0;
-  --caution: #8a5410;
+  /* Two ambers, because one cannot do both jobs across two themes. --flare
+     is the text-safe one (5.2:1 on white here, 9.5:1 on the dark ground);
+     --flare-solid is the fill, which carries --flare-ink on top of it. */
+  --flare: #ae5309;
+  --flare-solid: #f2870f;
+  --flare-ink: #1b0f00;
+  --flare-soft: #d08a4a;
+  --flare-wash: #fbf0e3;
 
   /* The one surface that is dark in both themes: it quotes a real serial
-     console, and inverting it is what makes it read as one. */
-  --tty-bg: #060a0b;
-  --tty-fg: #cfdbdd;
-  --tty-dim: #5a6e74;
-  --tty-signal: #59c8ce;
-  --tty-ok: #57b894;
+     console, and inverting it is what makes it read as one. Monochrome
+     amber, like the phosphor it is imitating — no second hue for "ok". */
+  --tty-bg: #050403;
+  --tty-fg: #cdc4b6;
+  --tty-dim: #85796a;
+  --tty-flare: #ffa13b;
 
-  --sans: "Instrument Sans", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  /* Syntax roles, named by what they mark rather than by colour, so a code
+     sample and the console panel highlight the same things the same way.
+     They resolve to the one hue plus the ink ramp: a keyword and a number
+     are the parts of a sample worth looking at, so they get the accent, and
+     everything else stays achromatic. */
+  --syn-keyword: var(--flare);
+  --syn-number: var(--flare);
+  --syn-string: var(--ink-2);
+  --syn-name: var(--ink);
+  --syn-comment: var(--ink-3);
 
-  --t-display: clamp(2.5rem, 1.3rem + 3.9vw, 4rem);
-  --t-title: clamp(1.75rem, 1.1rem + 2.1vw, 2.5rem);
-  --t-h2: clamp(1.5rem, 1.2rem + 1.1vw, 1.9rem);
-  --t-h3: 1.125rem;
-  --t-lead: 1.0625rem;
-  --t-body: 1rem;
+  --mono: "Azeret Mono", ui-monospace, "SFMono-Regular", Menlo, "Cascadia Mono", monospace;
+
+  --t-display: clamp(2rem, 1rem + 3.4vw, 3.5rem);
+  --t-title: clamp(1.6rem, 1.1rem + 1.7vw, 2.25rem);
+  --t-h2: clamp(1.35rem, 1.05rem + 1.1vw, 1.85rem);
+  --t-h3: 1.0625rem;
+  --t-lead: 1rem;
+  --t-body: 0.9375rem;
   --t-sm: 0.875rem;
   --t-xs: 0.8125rem;
   --t-micro: 0.75rem;
-  --t-data: 1.375rem;
-  --t-data-lg: clamp(1.75rem, 1.2rem + 1.6vw, 2.25rem);
+  --t-stat: clamp(1.55rem, 0.95rem + 2.1vw, 2.4rem);
 
   --s-1: 4px;
   --s-2: 8px;
@@ -70,48 +109,53 @@
   --s-9: 96px;
   --s-10: 128px;
 
-  --section-y: clamp(56px, 7.5vw, 104px);
-  --shell: 1200px;
-  --rail: 152px;
-  --rail-gap: 48px;
-  --measure: 68ch;
+  /* Sections are short and far apart. The page is meant to be read in
+     single breaths with real silence between them, not scrolled through as
+     a stack of touching slabs. */
+  --section-y: clamp(80px, 10.5vw, 168px);
+  --shell: 1180px;
+  --rail: 124px;
+  --rail-gap: 56px;
+  --measure: 58ch;
 
-  --motion: 110ms;
-  --ease: cubic-bezier(0.32, 0.08, 0.24, 1);
+  --motion: 120ms;
+  --ease: cubic-bezier(0.3, 0.1, 0.25, 1);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --ground: #0d1517;
-    --well: #05090b;
-    --well-2: #141d20;
-    --rule: #1c272b;
-    --rule-strong: #33454b;
+    --ground: #0c0b09;
+    --well: #131110;
+    --well-2: #1c1815;
+    --rule: #241f1a;
+    --rule-strong: #3f372e;
 
-    --ink: #dce6e8;
-    --ink-2: #93a5ab;
-    --ink-3: #65787e;
+    --ink: #efeae2;
+    --ink-2: #b3a99b;
+    --ink-3: #8a8073;
 
-    --signal: #49bcc2;
-    --signal-soft: #2c8087;
-    --signal-wash: #0b2529;
-    --caution: #d2a055;
+    --flare: #ffa13b;
+    --flare-solid: #ffa13b;
+    --flare-ink: #150d02;
+    --flare-soft: #a86c2c;
+    --flare-wash: #241606;
   }
 }
 
 :root[data-theme="dark"] {
-  --ground: #0d1517;
-  --well: #05090b;
-  --well-2: #141d20;
-  --rule: #1c272b;
-  --rule-strong: #33454b;
+  --ground: #0c0b09;
+  --well: #131110;
+  --well-2: #1c1815;
+  --rule: #241f1a;
+  --rule-strong: #3f372e;
 
-  --ink: #dce6e8;
-  --ink-2: #93a5ab;
-  --ink-3: #65787e;
+  --ink: #efeae2;
+  --ink-2: #b3a99b;
+  --ink-3: #8a8073;
 
-  --signal: #49bcc2;
-  --signal-soft: #2c8087;
-  --signal-wash: #0b2529;
-  --caution: #d2a055;
+  --flare: #ffa13b;
+  --flare-solid: #ffa13b;
+  --flare-ink: #150d02;
+  --flare-soft: #a86c2c;
+  --flare-wash: #241606;
 }
