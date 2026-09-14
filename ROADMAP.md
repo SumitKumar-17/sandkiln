@@ -898,6 +898,61 @@ outbound HTTP both still work.
     small samples, one create at a time. The phase *shares* are large and
     consistent enough to act on; the absolute totals move a few percent
     run to run.
+- **Done: fixed `Vm::call`/`open_pty`/`open_exec_stream`'s own retry
+  loop** — the same fixed-sleep bug class as `wait_for_socket` above,
+  found by auditing the codebase for siblings after that fix landed.
+  Each retried a failed vsock call on a flat `sleep(100ms)` rather than a
+  backoff — 5x the cost per wasted retry that `wait_for_socket`'s 20ms
+  sleep had. Replaced with the same `retry_with_backoff` helper
+  `connect_api_with_retry` now shares (1ms→20ms backoff for the vsock
+  case, since a guest agent's own startup is a slower, more variable
+  race than Firecracker's bare API socket appearing) — one generic
+  helper instead of three near-identical hand-rolled loops.
+  **Live-measured, and the fix's real benefit turned out to be a much
+  smaller part of a much bigger story**: A/B'd old vs. new code, timing
+  a fresh sandbox's first real `exec` end to end. Both measured
+  **~420-460ms** — indistinguishable within noise. This *is* still a
+  real, correct fix (worst-case wasted overshoot per retry drops from
+  ~100ms to ~20ms), but on this box the guest agent's own startup time
+  (kernel finishing boot, systemd, the agent binary starting and binding
+  vsock) so thoroughly dominates the ~420-460ms that shaving retry-loop
+  overshoot doesn't show up as a measurable win by itself. That
+  measurement is the real finding — see below.
+  - **The real discovery: `POST /sandboxes` returning 200 does not mean
+    the sandbox is actually ready to use, and nothing before this
+    measured that gap.** Every exec *after* the first, on the same
+    sandbox, measured **~3-5ms** — confirming the ~420-460ms is a
+    one-time "is the guest agent listening yet" tax, currently paid
+    silently by whichever caller happens to make the first real call,
+    misattributed to "exec is slow" rather than being visible as its own
+    thing. Every benchmark elsewhere in this document stops at
+    Firecracker's `InstanceStart` succeeding or the daemon's own
+    `create()` returning — none of them measure through to "the guest
+    agent actually answered a real request," which is the number that
+    actually matters for "how long until my code runs."
+  - **A resumed sandbox skips almost all of it.** Same test against a
+    snapshot resumed from an already-warmed sandbox (agent confirmed
+    live before the snapshot was taken): first exec after resume
+    measured **~4-18ms** — a **~25-100x** difference from a cold
+    create's ~420-460ms, confirmed repeatedly, not a one-off. This is a
+    dramatically bigger, more real version of the pre-warmed-pool win
+    already documented below — that section's own "70-200ms vs.
+    160-200ms" framing only ever compared `create()` returning, never
+    "time until the sandbox can actually run something," which is where
+    almost this entire gap actually lives.
+  - **`scripts/bench-report.sh` now tracks this permanently** as
+    `first_exec_client`, timed the same way a real caller would
+    experience it (client-side, immediately after `create()` returns),
+    alongside its existing daemon-`/metrics`-based phase breakdown — so
+    this doesn't have to be rediscovered by hand again, the same
+    motivation behind that script's own creation.
+  - **What's still open**: whether the daemon should block `create()`
+    until the guest agent actually answers once, so `POST /sandboxes`
+    returning 200 genuinely means "ready," not just "Firecracker
+    started it" — a real API-semantics question, not just a performance
+    one, since today's fast `create()` number is honest about what it
+    measures but easy to misread as "time until usable." Not changed
+    yet — this needs a decision, not just a fix.
 - **Done: snapshot/resume benchmarked** (`bench_snapshot_take`/
   `bench_resume` in `core/crates/vmm/benches/vm_lifecycle.rs`, alongside
   the existing `bench_cold_boot`/`bench_exec_roundtrip`). Real numbers,
@@ -937,14 +992,24 @@ outbound HTTP both still work.
   an important, honestly-measured caveat (see the finding right below
   this): a **clean** claim (the resumed snapshot passes its health check)
   measured at roughly **70–200ms** across repeated runs vs. a cold
-  create's own **~160–200ms** on the same box — a real but modest win at
-  this sample size (small-sample numbers on a shared, variable-load dev
-  box, not a controlled benchmark — see the Benchmarking section for the
+  create's own **~160–200ms** on the same box, comparing `create()`
+  returning in each case — a real but modest win at this sample size
+  (small-sample numbers on a shared, variable-load dev box, not a
+  controlled benchmark — see the Benchmarking section for the
   underlying boot/resume/setup breakdown this is built on). That clean
   win is **not** the reliable common case on this dev box today, though —
   see the failure-rate finding immediately below, which affects a large
   enough fraction of claims that "pools make creates faster" needs that
   caveat attached, not stated as a clean, unconditional result.
+  **This still understates the real win, found later**: `create()`
+  returning isn't the same as "ready to use" — see the Benchmarking
+  section's `first_exec_client` finding. A cold create's *first real
+  exec* pays an extra, currently-unmeasured-here **~420-460ms** the
+  guest agent needs to actually start listening; a pool claim, resuming
+  an already-warm agent, pays almost none of it (~4-18ms). Counting
+  through to "the sandbox actually ran something," not just "`create()`
+  returned," the real gap this feature closes is closer to **25-100x**,
+  not the modest 2x this bullet's own numbers suggest on their own.
   - **A real Firecracker/KVM finding from building this, not a sandkiln
     bug — and a significant one, not a rare edge case.** Resuming a
     snapshot has a failure mode where the restored guest kernel panics

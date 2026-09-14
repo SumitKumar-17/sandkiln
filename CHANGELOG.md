@@ -14,6 +14,26 @@ Changelog](https://keepachangelog.com/).
 ## Unreleased
 
 ### Changed
+- **Found: `POST /sandboxes` returning 200 doesn't mean the sandbox is
+  ready to use yet** (daemon/core crates only, not an npm release). Every
+  exec after the first on a freshly cold-created sandbox measures ~3-5ms;
+  the *first* one measures ~420-460ms, entirely absorbed by `Vm::call`'s
+  retry loop waiting for the guest agent's vsock listener to actually
+  come up — a gap none of this project's existing benchmarks measured,
+  since they all stop at `InstanceStart` succeeding or `create()`
+  returning. A sandbox resumed from a pre-warmed pool (agent already
+  running in the snapshotted memory) pays almost none of it — ~4-18ms to
+  first exec, a real ~25-100x difference, not the ~2x the pre-warmed-pool
+  feature's own existing numbers suggested on their own. Along the way,
+  fixed the same fixed-sleep bug class as the `wait_for_socket` fix below
+  in `Vm::call`/`open_pty`/`open_exec_stream`'s own retry loops (flat
+  `sleep(100ms)` per attempt, 5x the cost-per-retry `wait_for_socket` had)
+  via one shared `retry_with_backoff` helper — a real, correct fix, though
+  its own measured impact turned out to be small next to the discovery
+  above. `scripts/bench-report.sh` now tracks the real gap permanently as
+  `first_exec_client`. See `ROADMAP.md`'s Benchmarking section for the
+  full write-up, including the still-open question of whether `create()`
+  should block until the agent actually answers once.
 - **Cold sandbox creates are ~14% faster** (daemon/core crates only, not
   an npm release): `167.65ms → ~144ms` end-to-end on the dev box, and
   `Vm::boot` itself `34.00ms → ~11.3ms`. A per-phase profiling pass found

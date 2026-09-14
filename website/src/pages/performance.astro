@@ -164,12 +164,36 @@ const createPhases = [
       <div class="shell grid">
         <a class="rail" href="#pools">pools</a>
         <div class="col">
-          <h2 class="head">Pre-warmed pools: a modest win, and a real failure mode.</h2>
+          <h2 class="head">Pre-warmed pools: a much bigger win than first measured, and a real failure mode.</h2>
           <p class="lede prose">
             <code>POST /pools</code> configures a pool, a replenisher keeps resumable snapshots
             ready, and a matching <code>Sandbox.create()</code> claims one instead of cold-booting.
-            A claim that resumes cleanly measured 70–200ms against a cold create's 160–200ms.
+            A claim that resumes cleanly measured 70–200ms against a cold create's 160–200ms —
+            comparing how fast <code>create()</code> itself returns in each case.
           </p>
+
+          <div class="finding finding-signal">
+            <p>
+              <span class="term">That comparison was measuring the wrong finish line.</span>{" "}
+              <code>create()</code> returning 200 means Firecracker's <code>InstanceStart</code>{" "}
+              succeeded — not that the guest agent is actually listening yet. Timed a cold sandbox's
+              real first <code>exec</code> end to end: <b>~420-460ms</b>, entirely inside the vsock
+              client's own retry loop waiting for the agent to come up. Every <code>exec</code> after
+              the first, on the same sandbox, measured <b>~3-5ms</b> — confirming it's a one-time tax
+              nothing before this had ever isolated, since every other benchmark on this page stops at
+              boot or at <code>create()</code> returning.
+            </p>
+            <p>
+              <span class="term">A resumed sandbox skips almost all of it.</span> Same test against a
+              snapshot resumed from an already-warm agent: <b>~4-18ms</b> to first exec — a real{" "}
+              <b>~25-100x</b> difference, repeated, not a one-off. Counted through to "the sandbox can
+              actually run something" rather than just "<code>create()</code> returned," the real win
+              a pre-warmed pool buys is closer to that 25-100x than the modest 2x the paragraph above
+              suggests on its own — the feature was always this good, nothing had been able to see it
+              yet. <code>scripts/bench-report.sh</code> now tracks this permanently as{" "}
+              <code>first_exec_client</code>.
+            </p>
+          </div>
 
           <div class="finding finding-caution">
             <p>

@@ -29,6 +29,17 @@
 # `scripts/dev-tools/profile-cold-create.sh` with RUST_LOG=...=debug for
 # that finer level instead.
 #
+# Also reports `first_exec_client`, timed client-side rather than from
+# /metrics: the gap between create() returning and a real caller's first
+# exec actually succeeding, which none of the daemon-side phases above
+# capture -- create() returning 200 means Firecracker's InstanceStart
+# succeeded, not that the guest agent is listening yet. Found live: a
+# cold sandbox's first real exec absorbed ~420-460ms in Vm::call's own
+# retry loop on this dev box, while every exec after the first on that
+# same sandbox measured ~3-5ms -- and a *resumed* sandbox (agent already
+# running in the snapshotted memory) skipped almost all of it, ~4-18ms
+# to first exec. See ROADMAP.md's Benchmarking section.
+#
 # Usage: scripts/bench-report.sh [iterations] [base-url]
 # Example: scripts/bench-report.sh 20 http://127.0.0.1:7777
 
@@ -84,6 +95,23 @@ count_for() {
 echo "sandkiln bench-report: $ITERATIONS sequential cold creates against $BASE_URL"
 BEFORE="$(metrics_snapshot)"
 
+# Client-side, not from /metrics: this is deliberately the FIRST exec a
+# caller would actually make right after create() returns, timed exactly
+# the way a real caller experiences it -- not the daemon's own boot/setup
+# timing. Found live: create() returning 200 does not mean the guest
+# agent is actually listening yet (that only means Firecracker's
+# InstanceStart succeeded) -- a cold sandbox's first real exec measured
+# ~420-460ms on this dev box, entirely absorbed by Vm::call's own retry
+# loop, while every exec after the first on that same sandbox measured
+# ~3-5ms. A resumed sandbox (agent already running in the snapshotted
+# memory) skips this almost entirely -- ~4-18ms to first exec, a ~25-100x
+# difference this project's other benchmarks never captured, since none
+# of them measure past "the VM process started" through to "the guest
+# agent actually answered something." See ROADMAP.md's Benchmarking
+# section for the full write-up.
+FIRST_EXEC_TOTAL_MS=0
+FIRST_EXEC_N=0
+
 for i in $(seq 1 "$ITERATIONS"); do
   body="$(curl -s "${AUTH[@]}" -X POST "$BASE_URL/sandboxes" -H 'Content-Type: application/json' -d '{}')"
   id="$(printf '%s' "$body" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
@@ -91,6 +119,14 @@ for i in $(seq 1 "$ITERATIONS"); do
     echo "create $i FAILED: $body" >&2
     continue
   fi
+
+  exec_start_ns="$(date +%s%N)"
+  curl -s -o /dev/null "${AUTH[@]}" -X POST "$BASE_URL/sandboxes/$id/exec" -H 'Content-Type: application/json' -d '{"command":"true","args":[]}'
+  exec_end_ns="$(date +%s%N)"
+  exec_ms="$(( (exec_end_ns - exec_start_ns) / 1000000 ))"
+  FIRST_EXEC_TOTAL_MS=$((FIRST_EXEC_TOTAL_MS + exec_ms))
+  FIRST_EXEC_N=$((FIRST_EXEC_N + 1))
+
   # keep=false: a full destroy, not the default snapshot-then-stop --
   # a snapshot per iteration would add several hundred ms of unrelated
   # work between samples, corrupting the very thing being measured.
@@ -100,6 +136,9 @@ done
 echo
 
 AFTER="$(metrics_snapshot)"
+
+FIRST_EXEC_MEAN="n/a"
+[ "$FIRST_EXEC_N" -gt 0 ] && FIRST_EXEC_MEAN="$(awk -v s="$FIRST_EXEC_TOTAL_MS" -v n="$FIRST_EXEC_N" 'BEGIN { printf "%.3f", s / n }')"
 
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 GIT_SHA="$(git -C "$SCRIPT_DIR/.." rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -132,6 +171,14 @@ for spec in "${METRIC_SPECS[@]}"; do
   ROW_LABELS+=("$label"); ROW_N+=("$delta_count"); ROW_MEAN+=("$mean")
   JSON_PHASES="${JSON_PHASES}{\"phase\":\"${label}\",\"n\":${delta_count},\"mean_ms\":$( [ "$mean" = "n/a" ] && echo null || echo "$mean" )},"
 done
+
+# Client-side, not from /metrics -- see the loop above's own comment for
+# why this one isn't just another daemon-side phase: it's the gap
+# between "create() returned" and "the guest agent actually answered,"
+# which none of the daemon-side phases above cover at all.
+ROW_LABELS+=("first_exec_client"); ROW_N+=("$FIRST_EXEC_N"); ROW_MEAN+=("$FIRST_EXEC_MEAN")
+JSON_PHASES="${JSON_PHASES}{\"phase\":\"first_exec_client\",\"n\":${FIRST_EXEC_N},\"mean_ms\":$( [ "$FIRST_EXEC_MEAN" = "n/a" ] && echo null || echo "$FIRST_EXEC_MEAN" )},"
+
 JSON_PHASES="[${JSON_PHASES%,}]"
 
 RESULT_FILE="$RESULTS_DIR/${TIMESTAMP}.json"

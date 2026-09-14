@@ -167,7 +167,18 @@ not in `daemon`.
   this connection, since a PTY session is meant to sit idle between
   keystrokes). `Vm::open_pty` (in `vm/mod.rs`) wraps this the same way
   `Vm::call` wraps the request/response path — retrying for up to 5s
-  while the guest agent's second listener comes up.
+  while the guest agent's second listener comes up, via the shared
+  `retry_with_backoff` helper (`vm/mod.rs`) both this and
+  `connect_api_with_retry` (Firecracker's own API socket) use — a 1ms→20ms
+  backoff here, since the guest agent's own startup (kernel finishing
+  boot, systemd, the agent binary binding vsock) is a slower, more
+  variable race than Firecracker's bare API socket appearing. This
+  replaced a flat `sleep(100ms)`-per-attempt loop, the same bug class as
+  `wait_for_socket`'s own fixed sleep — see `ROADMAP.md`'s Benchmarking
+  section for why fixing it turned out to matter far less than the
+  bigger thing it led to finding: a cold sandbox's *first* real exec
+  measures ~420-460ms end to end (a resumed one, ~4-18ms), a gap nothing
+  had measured before because it lives entirely inside this retry loop.
 - Also `open_exec_stream` — same shape as `open_pty` (a long-lived
   `UnixStream` handed back after one handshake, timeouts cleared), but
   against `sandkiln_protocol::EXEC_STREAM_PORT` with an

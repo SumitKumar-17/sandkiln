@@ -13,7 +13,8 @@ Production Firecracker users solve cold-start latency by not booting from scratc
 
 ## What was measured
 
-- **A clean claim** (the resumed snapshot passes its post-resume health check, below) lands at roughly **70–200ms**, against a cold create's own **~160–200ms** on the same box — a real, modest win, consistent with resume's own criterion number (~25.8ms, only ~19% faster than cold boot's ~31.9ms) sitting well under a full create's overhead.
+- **A clean claim** (the resumed snapshot passes its post-resume health check, below) lands at roughly **70–200ms**, against a cold create's own **~160–200ms** on the same box, comparing how fast each one's `create()`/claim call itself returns — a real, modest win on its own.
+- **That comparison undersells it — a later investigation found the real gap is 25-100x, not 2x.** `create()` returning 200 means Firecracker's `InstanceStart` succeeded, not that the guest agent is listening yet: a cold sandbox's actual first `exec` measures **~420-460ms** end to end (every exec after the first on the same sandbox measures ~3-5ms, confirming it's a one-time tax), while a resumed sandbox — agent already running in the snapshotted memory — measures **~4-18ms** to first exec. Counted through to "the sandbox can actually run something," not just "the call returned," a pre-warmed pool's real win is far larger than either number above suggests on its own. See the [Engineering notebook](../engineering-notebook/) for the full story of how this was found (auditing a retry-loop bug fix that turned out to matter far less than what it led to discovering).
 - That clean case is **not the reliable common case on this dev box today** — see the failure-rate finding below, which is the more significant result this work actually produced.
 
 ## The real finding: resuming a snapshot has a non-rare failure mode

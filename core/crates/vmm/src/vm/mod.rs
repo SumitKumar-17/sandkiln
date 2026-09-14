@@ -155,20 +155,14 @@ impl Vm {
     /// InstanceStart returns — this retries briefly to absorb that.
     pub fn call(&self, request: &Request) -> io::Result<Response> {
         let started = Instant::now();
-        let deadline = started + Duration::from_secs(5);
-        loop {
-            match vsock_client::call(&self.vsock_socket, AGENT_PORT, request) {
-                Ok(response) => {
-                    tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "vsock call ok");
-                    return Ok(response);
-                }
-                Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
-                Err(e) => {
-                    tracing::warn!(vm_id = self.id, error = %e, "vsock call failed");
-                    return Err(e);
-                }
-            }
+        let result = retry_with_backoff(Duration::from_secs(5), Duration::from_millis(1), Duration::from_millis(20), || {
+            vsock_client::call(&self.vsock_socket, AGENT_PORT, request)
+        });
+        match &result {
+            Ok(_) => tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "vsock call ok"),
+            Err(e) => tracing::warn!(vm_id = self.id, error = %e, "vsock call failed"),
         }
+        result
     }
 
     /// Opens a new interactive PTY session inside this VM, sized to
@@ -181,20 +175,14 @@ impl Vm {
     /// PTY is usually opened well after a sandbox is already responsive.
     pub fn open_pty(&self, cols: u16, rows: u16) -> io::Result<UnixStream> {
         let started = Instant::now();
-        let deadline = started + Duration::from_secs(5);
-        loop {
-            match vsock_client::open_pty(&self.vsock_socket, PTY_PORT, cols, rows) {
-                Ok(stream) => {
-                    tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "pty session opened");
-                    return Ok(stream);
-                }
-                Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
-                Err(e) => {
-                    tracing::warn!(vm_id = self.id, error = %e, "opening pty session failed");
-                    return Err(e);
-                }
-            }
+        let result = retry_with_backoff(Duration::from_secs(5), Duration::from_millis(1), Duration::from_millis(20), || {
+            vsock_client::open_pty(&self.vsock_socket, PTY_PORT, cols, rows)
+        });
+        match &result {
+            Ok(_) => tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "pty session opened"),
+            Err(e) => tracing::warn!(vm_id = self.id, error = %e, "opening pty session failed"),
         }
+        result
     }
 
     /// Starts a streamed background exec session inside this VM — same
@@ -207,20 +195,14 @@ impl Vm {
     /// Retries briefly like `call()`/`open_pty` do, for the same reason.
     pub fn open_exec_stream(&self, command: &str, args: &[String]) -> io::Result<UnixStream> {
         let started = Instant::now();
-        let deadline = started + Duration::from_secs(5);
-        loop {
-            match vsock_client::open_exec_stream(&self.vsock_socket, EXEC_STREAM_PORT, command, args) {
-                Ok(stream) => {
-                    tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "exec-stream session opened");
-                    return Ok(stream);
-                }
-                Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
-                Err(e) => {
-                    tracing::warn!(vm_id = self.id, error = %e, "opening exec-stream session failed");
-                    return Err(e);
-                }
-            }
+        let result = retry_with_backoff(Duration::from_secs(5), Duration::from_millis(1), Duration::from_millis(20), || {
+            vsock_client::open_exec_stream(&self.vsock_socket, EXEC_STREAM_PORT, command, args)
+        });
+        match &result {
+            Ok(_) => tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "exec-stream session opened"),
+            Err(e) => tracing::warn!(vm_id = self.id, error = %e, "opening exec-stream session failed"),
         }
+        result
     }
 
     /// Updates this VM's MMDS content in place, without a reboot or
@@ -328,6 +310,40 @@ pub(crate) fn annotate_with_console_log(err: io::Error, log_path: &Path) -> io::
     io::Error::other(format!("{err} (guest console log: {})", log_path.display()))
 }
 
+/// Retries `attempt` with an exponential backoff (starting at
+/// `initial_interval`, capped at `max_interval`) until it succeeds or
+/// `timeout` elapses, returning the last error on timeout. Shared by
+/// `connect_api_with_retry` (Firecracker's own API socket) and
+/// `Vm::call`/`open_pty`/`open_exec_stream` (the guest agent's vsock
+/// socket) — both are a plain "is the other side listening yet" race,
+/// previously solved by two separate, inconsistent fixed-sleep loops.
+/// One of them (`wait_for_socket`, this function's direct predecessor)
+/// measured a flat ~20.1ms cost on *every single* boot before being
+/// fixed this way — see ROADMAP.md's Benchmarking section for the full
+/// finding. `Vm::call`'s own fixed 100ms-per-attempt loop was the same
+/// bug, just conditional (only paid when a call actually races the
+/// guest agent's own vsock-listener startup) rather than unconditional,
+/// which is why it went unnoticed for longer.
+fn retry_with_backoff<T>(
+    timeout: Duration,
+    initial_interval: Duration,
+    max_interval: Duration,
+    mut attempt: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    let deadline = Instant::now() + timeout;
+    let mut interval = initial_interval;
+    loop {
+        match attempt() {
+            Ok(v) => return Ok(v),
+            Err(e) if Instant::now() >= deadline => return Err(e),
+            Err(_) => {
+                std::thread::sleep(interval);
+                interval = (interval * 2).min(max_interval);
+            }
+        }
+    }
+}
+
 /// Connects to a freshly spawned Firecracker's API socket, retrying with
 /// a backoff until it actually accepts a connection or `timeout` elapses.
 ///
@@ -344,26 +360,9 @@ pub(crate) fn annotate_with_console_log(err: io::Error, log_path: &Path) -> io::
 /// signature of one quantized sleep, not of real waiting), which was
 /// more than half of a ~34ms boot. See ROADMAP.md's Benchmarking section.
 fn connect_api_with_retry(path: &Path, timeout: Duration) -> io::Result<ApiClient> {
-    const INITIAL_POLL: Duration = Duration::from_micros(200);
-    const MAX_POLL: Duration = Duration::from_millis(5);
-
-    let deadline = Instant::now() + timeout;
-    let mut interval = INITIAL_POLL;
-    loop {
-        match ApiClient::connect(path) {
-            Ok(api) => return Ok(api),
-            Err(e) if Instant::now() >= deadline => {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("{path:?} never accepted a connection within {timeout:?}: {e}"),
-                ));
-            }
-            Err(_) => {
-                std::thread::sleep(interval);
-                interval = (interval * 2).min(MAX_POLL);
-            }
-        }
-    }
+    retry_with_backoff(timeout, Duration::from_micros(200), Duration::from_millis(5), || ApiClient::connect(path)).map_err(|e| {
+        io::Error::new(io::ErrorKind::TimedOut, format!("{path:?} never accepted a connection within {timeout:?}: {e}"))
+    })
 }
 
 fn path_str(p: &Path) -> &str {
