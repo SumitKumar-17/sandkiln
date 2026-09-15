@@ -29,6 +29,19 @@ external user of the published packages would write.
   and wires it to this process's own terminal (raw mode, keystrokes
   passed straight through) — distinct from `code-playground`'s
   request/response `runCommand()`.
+- `snapshot-lifecycle/` — JS/TS, the `sandkiln` npm package. Does a
+  one-time setup step, freezes it with `Sandbox.snapshot()`, then forks
+  two independent branches from the same frozen state with
+  `Sandbox.fork()` and proves neither branch's writes leak into the
+  other, before finally consuming the snapshot with `Sandbox.resume()`
+  and confirming it's gone afterward — the concrete distinction between
+  the two ways to boot from a snapshot.
+- `named-persistent-sandbox/` — JS/TS, the `sandkiln` npm package.
+  Resolves a name to a sandbox with `Sandbox.getOrCreate()`, writes a
+  counter file, and stops it with the *default* (state-keeping) options —
+  then does it again as a second simulated process invocation to prove
+  the counter picks up where it left off, purely by name, with no id ever
+  tracked by the caller.
 - `pool-warm-start/` — JS/TS, the `sandkiln` npm package. Configures a
   pre-warmed pool with `Pool.create()` and claims from it several times
   in a row (not just once), reporting each attempt as a clean claim or a

@@ -2,14 +2,15 @@
 
 Tracks notable changes across the whole project (daemon, core crates,
 clients). The JS/TS SDK is published as [`sandkiln` on
-npm](https://www.npmjs.com/package/sandkiln) and the CLI as
+npm](https://www.npmjs.com/package/sandkiln), the CLI as
 [`sandkiln-cli`](https://www.npmjs.com/package/sandkiln-cli) (installs
-the `kiln` command) — both versioned together below, since every CLI
-release depends on the SDK release it was built against. Everything else
-(daemon, core crates, Python SDK) doesn't have its own release yet; where
-a change only affects one of those, it's called out explicitly instead
-of implying it shipped to npm. Format loosely follows [Keep a
-Changelog](https://keepachangelog.com/).
+the `kiln` command), and the Python SDK as [`sandkiln` on
+PyPI](https://pypi.org/project/sandkiln/) — each versioned
+independently, since a Python-only or CLI-only change doesn't require
+bumping the others. The daemon and core crates don't have their own
+release yet; where a change only affects one of those, it's called out
+explicitly instead of implying it shipped to a package registry. Format
+loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
@@ -285,6 +286,15 @@ Changelog](https://keepachangelog.com/).
   passing overall (with `SANDKILN_AUTH_TOKEN` set — auth-gated cases
   bring the total above 209 too).
 
+## sandkiln (Python) [0.1.0] — 2026-09-15
+
+First PyPI release (`pip install sandkiln`) — the package itself has
+mirrored the JS/TS SDK's full surface for a while (see the `[0.7.0]`
+entry below and earlier), this just ships it to PyPI via
+`.github/workflows/publish-python-sdk.yml`'s OIDC trusted-publishing
+flow. No code change; versioned separately from the JS/TS SDK/CLI table
+below from here on, since the two don't need to move in lockstep.
+
 ## [0.7.0] — 2026-09-08
 
 ### Added
@@ -559,7 +569,6 @@ lifecycle, networking, auth, and tooling.
 Current as of 0.7.0 plus the unreleased work above — check `ROADMAP.md`
 for anything that's landed since:
 
-- No streamed exec output, no `kiln logs -f`.
 - No true simultaneous parallel snapshot forking — at most one live fork
   of a given snapshot at a time (see the Persistence section).
 - No OCI/Docker-image conversion for custom images — only an
@@ -586,8 +595,6 @@ for anything that's landed since:
 - On ext4 (no copy-on-write), sandbox creation still pays real rootfs
   copy time — needs a CoW-capable filesystem or a device-mapper layer to
   actually eliminate, not just overlap with other work.
-- Python SDK not yet published to PyPI (code-side ready; needs the
-  account owner's one-time trusted-publisher registration).
 - Snapshot storage lives under `$TMPDIR` — durable across a daemon
   restart, not necessarily a host reboot (depends on whether `/tmp` is
   tmpfs on that host).

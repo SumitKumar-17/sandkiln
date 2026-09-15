@@ -116,26 +116,25 @@ wheel CI and the publish workflow use — run it if you're touching
 
 ## Publishing
 
-Not yet published to PyPI. Code-side, this package is ready:
-`pyproject.toml` is filled in with real values (no placeholders), the
-package builds a clean wheel/sdist (`python -m build`), and it carries a
-`py.typed` marker.
+**Published**: [`sandkiln` on PyPI](https://pypi.org/project/sandkiln/),
+currently at `0.1.0`. Code-side, this package is ready: `pyproject.toml`
+is filled in with real values (no placeholders), the package builds a
+clean wheel/sdist (`python -m build`), and it carries a `py.typed`
+marker.
 
-**Already automated** — `.github/workflows/publish-python-sdk.yml`:
+Publishing is automated — `.github/workflows/publish-python-sdk.yml`:
 triggers on a manual dispatch or a `py-v*.*.*` tag push, builds the
 sdist/wheel, and on a tag push additionally checks the tag's version
 against `pyproject.toml`'s `project.version` and fails the run if they
 don't match. It then publishes via `pypa/gh-action-pypi-publish` using
 PyPI's OIDC trusted publishing — no stored token, no 2FA-on-publish
 friction (the workflow's own `id-token: write` permission is what makes
-the OIDC exchange possible).
+the OIDC exchange possible). The one-time trusted-publisher registration
+on pypi.org (owner `SumitKumar-17`, repo `sandkiln`, workflow file
+`publish-python-sdk.yml`) is done.
 
-**Still manual, one-time, needs the account owner** — trusted publishing
-has to be registered on pypi.org *before* the workflow above can
-succeed: register the `sandkiln` project name on PyPI, then under its
-"Publishing" settings add a trusted publisher pointing at owner
-`SumitKumar-17`, repo `sandkiln`, workflow file
-`publish-python-sdk.yml` (environment left blank unless one is added to
-the workflow later). This needs the pypi.org account itself — no agent
-or CI job can do it. Once registered, either push a `py-v0.1.0` tag or
-run the workflow manually to publish.
+**To ship a new version**: bump `project.version` in `pyproject.toml`,
+then either push a matching `py-vX.Y.Z` tag or run the workflow manually
+(`gh workflow run publish-python-sdk.yml`). A tag push additionally
+guards against a version mismatch; a manual dispatch does not, so
+double-check the version bump landed first.

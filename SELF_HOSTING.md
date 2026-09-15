@@ -570,10 +570,9 @@ Or point a real client at it instead of `curl`:
 ```
 npm install sandkiln
 ```
-The Python SDK mirrors it exactly but isn't published to PyPI yet —
-install it from the repo instead:
+The Python SDK mirrors it exactly:
 ```
-pip install ./packages/python
+pip install sandkiln
 ```
 
 The CLI installs as `sandkiln-cli` (the bare name `kiln` was already

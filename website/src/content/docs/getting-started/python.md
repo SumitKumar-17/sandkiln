@@ -3,10 +3,8 @@ title: "First sandbox: Python"
 description: Boot and run your first sandbox with the Python SDK.
 ---
 
-Not yet published to PyPI — install it from the repository:
-
 ```bash
-pip install ./packages/python
+pip install sandkiln
 ```
 
 ```python

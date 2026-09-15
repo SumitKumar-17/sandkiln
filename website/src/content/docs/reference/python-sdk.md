@@ -3,10 +3,8 @@ title: Python SDK
 description: Every Sandbox and Image method, with runnable examples.
 ---
 
-Not yet published to PyPI — install from the repository:
-
 ```bash
-pip install ./packages/python
+pip install sandkiln
 ```
 
 Everything this SDK wraps is listed below. One daemon feature has no wrapper yet: remote storage mounts (an S3-compatible bucket mounted inside a sandbox) are available on the daemon HTTP API only — see [Daemon HTTP API](../http-api/#remote-storage-mounts).

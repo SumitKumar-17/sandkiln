@@ -1,0 +1,17 @@
+{
+  "name": "sandkiln-example-snapshot-lifecycle",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Reference snapshot/resume/fork example: prepare a sandbox once, freeze it, then boot two independent branches from the same frozen state without repeating the setup.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "sandkiln": "^0.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
