@@ -7,7 +7,7 @@ description: Every Sandbox and Image method, with runnable examples.
 pip install sandkiln
 ```
 
-Everything this SDK wraps is listed below. One daemon feature has no wrapper yet: remote storage mounts (an S3-compatible bucket mounted inside a sandbox) are available on the daemon HTTP API only — see [Daemon HTTP API](../http-api/#remote-storage-mounts).
+Everything this SDK wraps is listed below. Two daemon features have no wrapper yet, both available only via the [JS/TS SDK](../js-sdk/), the [CLI](../cli/), or the daemon HTTP API directly: streamed background exec (`exec_stream`, following a long-running command's live output) and interactive `pty` sessions. Remote storage mounts (an S3-compatible bucket mounted inside a sandbox) have no wrapper in either SDK yet — see [Daemon HTTP API](../http-api/#remote-storage-mounts).
 
 ## Configuration
 

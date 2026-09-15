@@ -118,6 +118,33 @@ console.log(url); // open this in a browser, or fetch() it yourself
 
 - **`sandbox.previewUrl(port, options?)`** — the URL a browser can open to reach a server listening on `port` inside the sandbox.
 
+### Streamed background exec
+
+`runCommand` waits for the process to exit and returns everything at once — for a long-running command you want to watch live instead, start it in the background and attach a `WebSocket` to its output:
+
+```ts
+const sessionId = await sandbox.execStream("sh", ["-c", "for i in 1 2 3; do echo tick $i; sleep 1; done"]);
+
+const ws = sandbox.attachLogs(sessionId);
+ws.onmessage = async (event) => {
+  // Buffered replay lines arrive as a Blob; the final "[process exited
+  // with code N]" sentinel arrives as a plain string -- handle both.
+  const text = typeof event.data === "string" ? event.data : await event.data.text();
+  console.log(text.trimEnd());
+};
+// replays everything captured so far, then live-tails anything new --
+// reconnecting later (even after this connection closes) replays the
+// same full history again, since the daemon buffers it, not the socket.
+
+const sessions = await sandbox.listExecStreams();
+console.log(sessions); // [{ id, command, args, startedAt, exitCode }, ...]
+```
+
+- **`sandbox.execStream(command, args?)`** — starts `command` in the background, returns a session id immediately.
+- **`sandbox.attachLogs(sessionId)`** — returns a `WebSocket` (requires Node.js >= 22 or a browser's built-in `WebSocket`) that replays buffered output then live-tails new output, whether or not the process has already finished.
+- **`sandbox.listExecStreams()`** — lists every streamed session tracked against this sandbox, running or finished.
+- Not carried across `resume()`/`fork()`, and doesn't survive the daemon restarting — a fresh sandbox (or one just resumed) has no sessions yet.
+
 ### Snapshot, resume, fork
 
 ```ts
