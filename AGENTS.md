@@ -27,7 +27,7 @@ packages/cli/            kiln CLI, wraps the JS/TS SDK
 images/                  rootfs/kernel build + agent-injection scripts
 scripts/                 one-command dev-box bootstrap + daemon lifecycle control, plus tap pool, network bridge, DNS proxy, sync, integration/load tests, preflight checks, systemd install
 website/                 the whole public site — one Astro project holding both the marketing pages and, under /docs, the full Starlight docs
-examples/                runnable reference projects (code playground, agent runner)
+examples/                runnable reference projects (code playground, agent runner, dev-server preview, interactive terminal, snapshot lifecycle, named persistent sandbox, pre-warmed pool, exec-stream logs, remote storage mount) -- see examples/AGENTS.md for the full, current list
 ```
 
 Personal-project status does **not** justify shortcuts in correctness,
@@ -162,6 +162,23 @@ independently, or reads past ~250–300 lines for no structural reason:
 split along that seam. This also keeps parallel-agent work from producing
 merge conflicts on one shared giant file.
 
+Both `routes_sandbox.rs` and `routes_snapshot.rs` have since grown back
+past that guideline (~1080 and ~990 lines respectively, as of this
+writing) without being split again — checked deliberately rather than
+left unnoticed. Their size comes from extensive, load-bearing doc
+comments explaining genuinely non-obvious invariants (the
+`source_snapshot_id`/`parent_snapshot_id` distinction, the
+`forked_into` single-live-descendant lock, egress re-apply semantics
+across resume/fork) rather than mixed concerns crammed into one file —
+`routes_snapshot.rs`'s resume and fork handlers in particular share the
+same locking invariant and retirement machinery closely enough that
+splitting them would fragment a genuinely cohesive unit, not separate
+two independent ones. The size guideline above is a heuristic for
+"probably covers two things," not a hard cap — don't force a split here
+without first checking whether the length is actually duplicated/mixed
+concerns (split it) or dense, cohesive documentation of one hard problem
+(leave it, and say so, the way this note does).
+
 ---
 
 # 3. Inspect Before Editing
@@ -268,10 +285,21 @@ Concretely, in this repo:
   final pass/fail count) — shared `req`/`assert_*`/`section` helpers live
   in `scripts/lib/integration-test-helpers.sh`, and each topic (lifecycle,
   drives, snapshots, fork, named sandboxes, images, rate limiting, auth,
-  ...) is its own numbered file under `scripts/integration-tests/`,
-  sourced in order into the same shell process — splitting it up is
-  purely organizational, every helper and global is visible in every
-  topic file exactly as if it were still one script. **Every new
+  ...) is its own numbered file under `scripts/integration-tests/`, run as
+  its own subshell (private `WORKDIR`/`PASS`/`FAIL`/`CREATED_*`) so topics
+  execute **concurrently** by default (`SANDKILN_INTEGRATION_TEST_PARALLELISM`,
+  default 4, set to 1 for the old fully-sequential behavior) — ~4m10s
+  down to ~70-90s on the dev box. Every topic file still assumes the same
+  helpers/globals exist in its own top-level scope exactly as when this
+  was one sourced script; what changed is that each topic gets its own
+  private copy instead of one shared set, which is what makes running
+  them in parallel safe. A topic must never depend on another topic's
+  leftover state (already true before parallelism existed) or assert on
+  a *global* count across the whole daemon (`GET /snapshots`'s total
+  size, say) rather than its own specific ids — a concurrent topic's own
+  churn will make that flaky; compare exact id sets instead, see
+  `scripts/integration-tests/18-pool.sh`'s own pool-delete check for the
+  pattern. **Every new
   HTTP-facing feature should add a case in the topic file it belongs to
   (or a new numbered file if it doesn't fit an existing one)** — that's
   the entire point of it existing instead of staying tribal knowledge in

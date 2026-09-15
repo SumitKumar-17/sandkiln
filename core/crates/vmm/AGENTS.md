@@ -141,13 +141,24 @@ not in `daemon`.
   gateway-bound traffic (DNS to the bridge's own IP) never transits the
   uplink at all, so it's structurally exempt from any policy without an
   allowlist entry — live-verified (see `ROADMAP.md`'s "Firewall and
-  egress policy" entry). `apply()` is idempotent (flushes-and-repopulates
-  an already-existing chain) so callers (fresh boot, pool claim, resume,
-  fork) can call it unconditionally without distinguishing "chain
-  survived a plain daemon restart" (iptables state lives in the kernel,
-  independent of the daemon process) from "chain was wiped by an actual
-  host reboot." `remove()` is best-effort and safe to call even if
-  nothing was ever applied. `validate_cidr()` only checks the STRING
+  egress policy" entry). `apply()`'s chain population (create-or-flush
+  plus every deny/allow/default rule) is one `iptables-restore --noflush`
+  call rather than one `iptables` spawn per rule — measured on a real
+  box, a 6-CIDR policy cost ~8.3ms average per create under the old
+  one-spawn-per-rule shape, ~3.1ms after batching (see `ROADMAP.md`'s
+  Benchmarking section and `metrics::CreatePhase::EgressApply`, which
+  makes this cost visible per-create going forward). A restore-format
+  chain declaration (`:CHAIN - [0:0]`) resets-or-creates uniformly, so
+  `apply()` stays idempotent the same way it always was: callers (fresh
+  boot, pool claim, resume, fork) call it unconditionally without
+  distinguishing "chain survived a plain daemon restart" (iptables state
+  lives in the kernel, independent of the daemon process) from "chain
+  was wiped by an actual host reboot." Only the two rules that touch the
+  shared `FORWARD` chain stay as individual `iptables` calls (a `-C`
+  check, and an `-I` only when it's missing) — `--noflush` means the
+  restore call can't touch `FORWARD` without risking every other
+  sandbox's own jump rule in it. `remove()` is best-effort and safe to
+  call even if nothing was ever applied. `validate_cidr()` only checks the STRING
   format (iptables itself understands CIDR notation natively) — plain
   `std::net::Ipv4Addr::from_str` plus manual prefix-length bounds
   checking, no new crate dependency. Enforcement is tied to the

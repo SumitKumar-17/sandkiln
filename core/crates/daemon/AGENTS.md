@@ -42,11 +42,15 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   dependency — see the module doc comment for why.
   `CreatePhase` + `record_create_phase_ms` expose a cold create's own
   sub-phases as one labelled family,
-  `create_phase_duration_ms{phase="rootfs_clone"|"network_lease"|"setup"|"total"}`,
+  `create_phase_duration_ms{phase="rootfs_clone"|"network_lease"|"setup"|"egress_apply"|"total"}`,
   rather than one metric name each, so adding a phase is a variant rather
   than a new field plus a new render block. `phase="setup"` is the
   concurrent *join* of the clone and the lease, not their sum — only the
-  join lands on the critical path. `boot_duration_ms` deliberately stays
+  join lands on the critical path. `phase="egress_apply"` is only
+  recorded when a create actually requests an egress policy (most
+  don't), so its count is expected to sit far lower than the other
+  phases' — see `sandkiln_vmm::egress::apply`'s own doc comment for what
+  it measures. `boot_duration_ms` deliberately stays
   a separate metric (it predates this family and is what anything
   external would already be scraping), which is why there's no
   `phase="boot"`. The dividing line against `tracing`: a phase total an
