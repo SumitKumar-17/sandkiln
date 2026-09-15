@@ -145,6 +145,33 @@ outbound HTTP both still work.
   ship the next version.
 - Both talk to the daemon's HTTP API — no logic duplicated between them
   beyond what each language's idioms require.
+- **Not yet built: an async Python client.** `packages/python`'s
+  `Sandbox` is entirely synchronous (`urllib`-backed, blocking calls) —
+  there's no `asyncio`-based counterpart today, so a caller already
+  running an async event loop (an async web framework, an async agent
+  runner) has to fall back to a thread pool to use this SDK without
+  blocking it. A real gap for that use case specifically, not a
+  correctness issue with the sync client itself.
+- **Not yet built: per-exec/per-create environment variables.** Checked
+  all the way down the stack: `ExecRequestBody` (`routes_exec.rs`) has
+  only `command`/`args`, and the guest agent's own exec handler
+  (`guest-agent/src/handler.rs`) calls plain `Command::new(command)
+  .args(args)`, no `.env(...)` at all — there's no way today to hand a
+  command a custom environment variable, at either `POST /sandboxes`
+  (baked in for the sandbox's whole lifetime) or per `exec` call. A
+  real, complete gap (protocol message, guest agent, daemon route, both
+  SDKs, CLI), not a small extension of something half-built.
+- File operations, SSH/PTY-style interactive access, and image
+  build/import from an existing container image were also checked
+  against this same "is it actually built" standard: file
+  operations are already covered in full (see the filesystem-ops bullet
+  above); an interactive session already exists as `kiln sandbox pty`
+  (see the CLI section below) over a WebSocket, so that's shipped, not a
+  gap; converting an existing OCI/Docker image into a bootable rootfs is
+  explicitly out of scope today (see `routes_images.rs`'s own module
+  doc comment) — a custom image today has to already be a bootable
+  ext4 rootfs, built via `images/build-universal-image.sh` or handed in
+  directly, not derived from a container image on the fly.
 
 ## CLI (`kiln`) — working
 
@@ -486,9 +513,14 @@ outbound HTTP both still work.
   A new `egress_apply` `CreatePhase` metric (only recorded when a create
   actually requests a policy, so its count is expected to be far lower
   than the other phases') makes this cost visible going forward instead
-  of hiding inside `setup`. Verified live: `cargo test --workspace` and
-  `cargo clippy --workspace --all-targets` clean, full integration suite
-  300/300 including `19-egress.sh`'s allow/deny/deny-wins-on-overlap and
+  of hiding inside `setup`. Re-measured the same way afterward (same
+  6-CIDR policy, `create_phase_duration_ms{phase="egress_apply"}`'s own
+  delta over 17 fresh creates): **~3.1ms average, down from ~8.3ms — a
+  real ~63% cut**, consistent with going from ~9-10 `iptables` spawns to
+  ~3 (one `iptables-restore` plus the two `FORWARD` calls left as-is).
+  Verified live: `cargo test --workspace` and `cargo clippy --workspace
+  --all-targets` clean, full integration suite 300/300 including
+  `19-egress.sh`'s allow/deny/deny-wins-on-overlap and
   survive-snapshot/resume/fork checks.
 - Request-level matchers (path, method, query, header) with a rule that
   either forwards or transforms the request are a further-out stretch
@@ -605,6 +637,13 @@ outbound HTTP both still work.
   owning one). WebSocket proxying (dev-server HMR/live-reload) is a real,
   explicitly-scoped-out follow-up, not silently broken — plain HTTP only
   for now.
+- **Not yet built: the reverse direction (a local tunnel).** Everything
+  above exposes a port *inside* the sandbox outward; there's nothing
+  today that reaches the other way — a sandboxed process reaching a
+  service running on the caller's own machine (a local database, a local
+  API a coding agent needs to call during a test run) without that
+  service already being reachable from the sandbox's own network
+  namespace. Checked and confirmed absent, not just undocumented.
 - **Alternative worth considering alongside the proxy**: today's
   `/preview/:port` is a daemon-proxied *path*, not a real routable
   domain. A dedicated public domain/subdomain per exposed port (the
