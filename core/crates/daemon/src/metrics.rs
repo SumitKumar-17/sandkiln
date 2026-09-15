@@ -42,19 +42,25 @@ pub enum CreatePhase {
     /// and is the only part of either that actually lands on the create's
     /// critical path.
     Setup,
+    /// `sandkiln_vmm::egress::apply` -- only recorded when a create
+    /// actually requests an egress policy (most don't), so this
+    /// histogram's count is expected to be far lower than the others'.
+    EgressApply,
     /// The whole cold-create path, from request-validated to the sandbox
     /// being inserted into the live map.
     Total,
 }
 
 impl CreatePhase {
-    pub const ALL: [CreatePhase; 4] = [CreatePhase::RootfsClone, CreatePhase::NetworkLease, CreatePhase::Setup, CreatePhase::Total];
+    pub const ALL: [CreatePhase; 5] =
+        [CreatePhase::RootfsClone, CreatePhase::NetworkLease, CreatePhase::Setup, CreatePhase::EgressApply, CreatePhase::Total];
 
     fn label(self) -> &'static str {
         match self {
             CreatePhase::RootfsClone => "rootfs_clone",
             CreatePhase::NetworkLease => "network_lease",
             CreatePhase::Setup => "setup",
+            CreatePhase::EgressApply => "egress_apply",
             CreatePhase::Total => "total",
         }
     }
@@ -223,7 +229,7 @@ mod tests {
         let metrics = Metrics::new();
         let rendered = metrics.render(0);
         // Exact-prefix rather than exact-equals: the
-        // `create_phase_duration_ms` family below it is four labelled
+        // `create_phase_duration_ms` family below it is five labelled
         // repetitions of the same eleven lines, checked separately by
         // `create_phase_family_renders_one_labelled_series_per_phase`
         // instead of pasted out in full here.

@@ -138,10 +138,11 @@ outbound HTTP both still work.
   and resource overrides. Zero runtime dependencies (stdlib `urllib`,
   matching the JS SDK's own zero-dependency `fetch` approach). Verified
   live end to end, including `attach()` reconstructing a handle without a
-  network call and correct 404 handling on a stopped sandbox. Not
-  published to PyPI yet (see `packages/python/AGENTS.md`'s Publishing
-  section — code-side ready, needs the account owner's one-time
-  trusted-publisher registration).
+  network call and correct 404 handling on a stopped sandbox. **Done:
+  published to PyPI** (`pip install sandkiln`) via
+  `.github/workflows/publish-python-sdk.yml`'s OIDC trusted-publishing
+  flow — see `packages/python/AGENTS.md`'s Publishing section for how to
+  ship the next version.
 - Both talk to the daemon's HTTP API — no logic duplicated between them
   beyond what each language's idioms require.
 
@@ -470,6 +471,25 @@ outbound HTTP both still work.
 - **Not yet exposed in the SDKs/CLI** — daemon HTTP API only so far. A
   deliberate scope cut for this first slice, same as pool `max_count`'s
   own SDK/CLI follow-up; worth doing in a pass of its own.
+- **Fixed: `egress::apply`'s hot path.** Flagged by the same audit that
+  found the `Vm::call` retry-loop bug (see the Benchmarking section) as
+  a real, unmeasured cost: applying a policy spawned one `iptables`
+  subprocess per rule (chain create/flush, each `deny_cidrs` entry, each
+  `allow_cidrs` entry, the default verdict), each paying a full
+  fork+exec regardless of how little work it does. A 6-CIDR policy (9
+  spawns under the old shape) measured **~8.3ms average per create** —
+  real, and easy to cut since none of that work needs separate
+  processes. Now loaded as one `iptables-restore --noflush` call instead
+  (`sandkiln-vmm::egress::apply`); the two rules that actually touch the
+  shared `FORWARD` chain stay as individual `iptables` calls, already
+  minimal (a `-C` existence check, and an `-I` only when it's missing).
+  A new `egress_apply` `CreatePhase` metric (only recorded when a create
+  actually requests a policy, so its count is expected to be far lower
+  than the other phases') makes this cost visible going forward instead
+  of hiding inside `setup`. Verified live: `cargo test --workspace` and
+  `cargo clippy --workspace --all-targets` clean, full integration suite
+  300/300 including `19-egress.sh`'s allow/deny/deny-wins-on-overlap and
+  survive-snapshot/resume/fork checks.
 - Request-level matchers (path, method, query, header) with a rule that
   either forwards or transforms the request are a further-out stretch
   beyond all of the above, useful for a proxy sitting in front of a
@@ -1280,5 +1300,9 @@ eventually if there's appetite," not "next."
   `/docs` subpath of the main site (GitHub Pages and the merged Vercel
   build) and standalone at its own domain root
   (sandkiln-docs.vercel.app) — see `website/AGENTS.md`.
-- Example projects: **done** — code playground (JS/TS), AI-agent sandbox
-  runner (Python), and dev-server preview (JS/TS), see `examples/`.
+- Example projects: **done** — nine real, runnable reference projects
+  against each SDK's published API, one per major feature surface: code
+  playground, AI-agent sandbox runner, dev-server preview, interactive
+  terminal, pre-warmed pool, streamed exec/logs, remote storage mount,
+  snapshot/resume/fork lifecycle, and named/persistent sandboxes. See
+  `examples/AGENTS.md` for what each one demonstrates and why.

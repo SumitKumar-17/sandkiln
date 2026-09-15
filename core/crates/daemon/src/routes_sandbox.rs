@@ -426,7 +426,11 @@ async fn create_sandbox_cold(
                     // the error rather than let a broken-but-unenforced
                     // policy through.
                     if let Some(policy) = &egress {
-                        if let Err(e) = sandkiln_vmm::egress::apply(lease.config.guest_ip, &lease.config.tap_device, state.network.uplink(), policy) {
+                        let egress_started = Instant::now();
+                        let egress_result =
+                            sandkiln_vmm::egress::apply(lease.config.guest_ip, &lease.config.tap_device, state.network.uplink(), policy);
+                        state.metrics.record_create_phase_ms(CreatePhase::EgressApply, ms(egress_started.elapsed()));
+                        if let Err(e) = egress_result {
                             let _ = vm.stop();
                             let _ = state.network.release(lease);
                             if let (Some(id), Some(pool)) = (jail_id, &state.jailer_ids) {
