@@ -57,16 +57,23 @@ const essays = [
 
   <main>
     <section class="page-hero">
-      <div class="shell">
-        <h1>
-          <span class="l">Five crates. None reaches</span>
-          <span class="l">into <span class="flare">another's internals</span>.</span>
-        </h1>
-        <p class="lede">
-          The core is a Rust workspace kept deliberately modular: the daemon can change without
-          touching the guest agent, and the guest agent ships as its own static binary,
-          independent of everything that talks to it.
-        </p>
+      <div class="shell page-hero-layout">
+        <div>
+          <h1>
+            <span class="l">Five crates. None reaches</span>
+            <span class="l">into <span class="flare">another's internals</span>.</span>
+          </h1>
+          <p class="lede">
+            The core is a Rust workspace kept deliberately modular: the daemon can change without
+            touching the guest agent, and the guest agent ships as its own static binary,
+            independent of everything that talks to it.
+          </p>
+        </div>
+        <nav class="page-hero-nav" aria-label="On this page">
+          <a href="#crates">workspace</a>
+          <a href="#boot">lifecycle</a>
+          <a href="#rationale">rationale</a>
+        </nav>
       </div>
     </section>
 

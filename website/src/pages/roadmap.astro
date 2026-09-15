@@ -82,28 +82,33 @@ const tally = (["done", "partial", "planned"] as const).map((status) => ({
 
   <main>
     <section class="page-hero">
-      <div class="shell">
-        <h1>
-          <span class="l">The plan,</span>
-          <span class="l"><span class="flare">not a promise</span>.</span>
-        </h1>
-        <p class="lede prose">
-          Rewritten as we learn things — including when a measurement overturns an item outright.
-          Every entry is scoped rather than vague; <code>ROADMAP.md</code> in the repository carries
-          the full reasoning this page tracks.
-        </p>
-        <div class="tally" style="margin-top:var(--s-5)">
-          {tally.map((t) => (
-            <span class="tally-item">
-              <span class={`mark mark-${t.status}`}></span>
-              <span class="tally-n">{t.n}</span> {t.label}
-            </span>
-          ))}
-          {/* A wider set than the homepage's capability list: this one also
-              tracks ideas deliberately not started, so the two tallies count
-              different things and should say so. */}
-          <span class="tally-item">across {all.length} tracked items, ideas included</span>
+      <div class="shell page-hero-layout">
+        <div>
+          <h1>
+            <span class="l">The plan,</span>
+            <span class="l"><span class="flare">not a promise</span>.</span>
+          </h1>
+          <p class="lede prose">
+            Rewritten as we learn things — including when a measurement overturns an item outright.
+            Every entry is scoped rather than vague; <code>ROADMAP.md</code> in the repository carries
+            the full reasoning this page tracks.
+          </p>
+          <div class="tally" style="margin-top:var(--s-5)">
+            {tally.map((t) => (
+              <span class="tally-item">
+                <span class={`mark mark-${t.status}`}></span>
+                <span class="tally-n">{t.n}</span> {t.label}
+              </span>
+            ))}
+            {/* A wider set than the homepage's capability list: this one also
+                tracks ideas deliberately not started, so the two tallies count
+                different things and should say so. */}
+            <span class="tally-item">across {all.length} tracked items, ideas included</span>
+          </div>
         </div>
+        <nav class="page-hero-nav" aria-label="On this page">
+          {sections.map((s) => <a href={`#${s.id}`}>{s.id}</a>)}
+        </nav>
       </div>
     </section>
 

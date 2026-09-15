@@ -32,53 +32,57 @@ const consoleLines = [
 ---
 
 <section class="hero">
-  <div class="shell">
-    <h1>
-      <span class="l">Run untrusted code on</span>
-      <span class="l">hardware <span class="flare">you control</span>.</span>
-    </h1>
-    <p class="hero-sub">
-      Every execution gets its own Firecracker microVM. Its own kernel, its own filesystem,
-      its own network. Not a container with extra steps.
-    </p>
-    <p class="hero-fine">
-      A Rust VMM, a static guest agent on vsock, an HTTP daemon driving both. Self-hosted,
-      MIT licensed, benchmarked in the open.
-    </p>
+  <div class="shell hero-layout">
+    <div class="hero-text">
+      <h1>
+        <span class="l">Run untrusted code on</span>
+        <span class="l">hardware <span class="flare">you control</span>.</span>
+      </h1>
+      <p class="hero-sub">
+        Every execution gets its own Firecracker microVM. Its own kernel, its own filesystem,
+        its own network. Not a container with extra steps.
+      </p>
+      <p class="hero-fine">
+        A Rust VMM, a static guest agent on vsock, an HTTP daemon driving both. Self-hosted,
+        MIT licensed, benchmarked in the open.
+      </p>
 
-    <div class="actions">
-      <button class="btn btn-primary copy-install" type="button" data-copy="npm install sandkiln">
-        <span class="copy-label">npm install sandkiln</span>
-      </button>
-      <a class="btn btn-quiet" href={`${base}/docs/getting-started/self-hosting/`}>Self-hosting quickstart</a>
-    </div>
-    <p class="sr-live" role="status" aria-live="polite"></p>
-
-    <div class="tty hero-console">
-      <div class="tty-head">
-        <span>guest console — ttyS0</span>
-        <span class="live">10.5–10.9ms to InstanceStart</span>
+      <div class="actions">
+        <button class="btn btn-primary copy-install" type="button" data-copy="npm install sandkiln">
+          <span class="copy-label">npm install sandkiln</span>
+        </button>
+        <a class="btn btn-quiet" href={`${base}/docs/getting-started/self-hosting/`}>Self-hosting quickstart</a>
       </div>
-      <pre>{consoleLines.map((l, i) => <div class={`cl ${l.c}`} style={`--d:${(i * 0.09).toFixed(2)}s`}>{l.t || " "}</div>)}</pre>
+      <p class="sr-live" role="status" aria-live="polite"></p>
     </div>
 
-    <div class="gauges">
-      {readout.map((m) => (
-        <div class="gauge">
-          <div class="gauge-label">{m.label}</div>
-          <div class="gauge-val">{m.value}<span class="u">{m.unit}</span></div>
-          <div class="gauge-track" aria-hidden="true">
-            {ticks.map((t) => <span class="gauge-decade" style={`left:${t.at}%`}></span>)}
-            <span class={`gauge-mark${m.lo === m.hi ? " gauge-mark-point" : ""}`} style={markStyle(m)}></span>
-          </div>
-          <div class="gauge-src">{m.source}</div>
+    <div class="hero-visual">
+      <div class="tty hero-console">
+        <div class="tty-head">
+          <span>guest console — ttyS0</span>
+          <span class="live">10.5–10.9ms to InstanceStart</span>
         </div>
-      ))}
+        <pre>{consoleLines.map((l, i) => <div class={`cl ${l.c}`} style={`--d:${(i * 0.09).toFixed(2)}s`}>{l.t || " "}</div>)}</pre>
+      </div>
+
+      <div class="gauges">
+        {readout.map((m) => (
+          <div class="gauge">
+            <div class="gauge-label">{m.label}</div>
+            <div class="gauge-val">{m.value}<span class="u">{m.unit}</span></div>
+            <div class="gauge-track" aria-hidden="true">
+              {ticks.map((t) => <span class="gauge-decade" style={`left:${t.at}%`}></span>)}
+              <span class={`gauge-mark${m.lo === m.hi ? " gauge-mark-point" : ""}`} style={markStyle(m)}></span>
+            </div>
+            <div class="gauge-src">{m.source}</div>
+          </div>
+        ))}
+      </div>
+      <p class="gauge-legend">
+        Every track is the same log axis, {ticks[0].label} to {ticks[ticks.length - 1].label}, one tick
+        per decade — so the marks compare directly. One dev box, single node.
+      </p>
     </div>
-    <p class="gauge-legend">
-      Every track is the same log axis, {ticks[0].label} to {ticks[ticks.length - 1].label}, one tick
-      per decade — so the marks compare directly. One dev box, single node.
-    </p>
   </div>
 </section>
 
