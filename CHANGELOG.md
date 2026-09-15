@@ -12,279 +12,106 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## Unreleased
+## Daemon & core — 2026-09-16
 
-### Changed
-- **Found: `POST /sandboxes` returning 200 doesn't mean the sandbox is
-  ready to use yet** (daemon/core crates only, not an npm release). Every
-  exec after the first on a freshly cold-created sandbox measures ~3-5ms;
-  the *first* one measures ~420-460ms, entirely absorbed by `Vm::call`'s
-  retry loop waiting for the guest agent's vsock listener to actually
-  come up — a gap none of this project's existing benchmarks measured,
-  since they all stop at `InstanceStart` succeeding or `create()`
-  returning. A sandbox resumed from a pre-warmed pool (agent already
-  running in the snapshotted memory) pays almost none of it — ~4-18ms to
-  first exec, a real ~25-100x difference, not the ~2x the pre-warmed-pool
-  feature's own existing numbers suggested on their own. Along the way,
-  fixed the same fixed-sleep bug class as the `wait_for_socket` fix below
-  in `Vm::call`/`open_pty`/`open_exec_stream`'s own retry loops (flat
-  `sleep(100ms)` per attempt, 5x the cost-per-retry `wait_for_socket` had)
-  via one shared `retry_with_backoff` helper — a real, correct fix, though
-  its own measured impact turned out to be small next to the discovery
-  above. `scripts/bench-report.sh` now tracks the real gap permanently as
-  `first_exec_client`. See `ROADMAP.md`'s Benchmarking section for the
-  full write-up, including the still-open question of whether `create()`
-  should block until the agent actually answers once.
-- **Cold sandbox creates are ~14% faster** (daemon/core crates only, not
-  an npm release): `167.65ms → ~144ms` end-to-end on the dev box, and
-  `Vm::boot` itself `34.00ms → ~11.3ms`. A per-phase profiling pass found
-  that `wait_for_socket` polled for Firecracker's API socket with a fixed
-  `sleep(20ms)` and so measured a flat **20.11ms on every single boot**
-  (min 20.04, max 20.18 over 20 boots — one quantized sleep, not real
-  waiting), when Firecracker is actually ready in **~0.7ms**. Replaced
-  with `connect_api_with_retry`, which retries the *connect* on a
-  200µs→5ms backoff instead of polling for the socket file to exist —
-  which also closes a real race that faster polling would otherwise have
-  opened, since the file appears at `bind()`, a moment before `listen()`.
-  Snapshot resume uses the same helper and gets the same win. Verified
-  with the full `scripts/integration-test.sh` (300/300, snapshot/resume/
-  time-travel included).
-- Corrected a second stale assumption about where the *rest* of a
-  create's time goes. Both live candidates were wrong, and by a wide
-  margin: `NetworkManager::lease`'s three `ip`/`bridge` subprocess calls
-  total **~4.4ms** (and, running concurrently with the rootfs clone,
-  contribute ~0.17ms to the critical path), and Firecracker's seven
-  per-VM configuration PUTs total **~1.6ms**. Batching those calls or
-  switching to direct netlink would buy single-digit milliseconds off a
-  167ms create — **not planned; no netlink crate is being added.** The
-  rootfs copy is in fact the dominant cost at **124ms (74%)**, which the
-  entry below had concluded it wasn't. See `ROADMAP.md`'s Benchmarking
-  section for the full breakdown (it accounts for 167.33ms of the
-  measured 167.65ms), the leading — and explicitly unverified —
-  hypothesis for why the earlier XFS experiment showed no change, and the
-  9.24ms synchronous sqlite write also found sitting on the critical path.
-- Corrected a stale assumption about sandbox-create latency: the rootfs
-  copy was believed to be the dominant remaining cost after boot, with a
-  CoW-capable filesystem (XFS/Btrfs) or a device-mapper layer proposed as
-  the fix. Live-measured on a real XFS loopback filesystem: the CoW clone
-  is real (near-zero disk growth cloning the same rootfs four times, `cp
-  --reflink=auto` dropped from ~110ms to ~0ms), but **end-to-end `POST
-  /sandboxes` latency didn't change** — the copy already runs
-  concurrently with the network lease, so shrinking it just shifts the
-  join onto the lease side instead. A device-mapper/thin-provisioning
-  layer is no longer planned for this reason (it would optimize the same
-  already-non-bottleneck operation). `scripts/preflight-check.sh` now
-  reports whether rootfs storage is on a CoW-capable filesystem (still a
-  real, disk-space-free win on its own, just not a latency one on this
-  box) instead. See `ROADMAP.md`'s Benchmarking section for the full
-  finding and the corrected next step (profile `Vm::boot`'s own
-  lease/API-call path instead of storage).
+The daemon and core crates don't have their own release train (see the
+note above), so everything below is dated instead of versioned — it
+covers every daemon/`sandkiln-vmm`/`sandkiln-store` change since the last
+SDK/CLI release (`0.7.0`, 2026-09-08). None of it needed an SDK, CLI, or
+package-registry change unless a line says otherwise. Full narrative for
+any of this lives in `ROADMAP.md`'s matching section (linked per entry);
+this list stays terse on purpose.
+
+### Fixed
+- `POST /sandboxes` returning `200` doesn't mean the guest agent is
+  listening yet: a cold sandbox's real first `exec` measured
+  ~420-460ms (every exec after: ~3-5ms) — a gap no existing benchmark
+  caught, since they all stopped at `InstanceStart` succeeding. A
+  pre-warmed pool's resumed sandbox pays ~4-18ms instead: a real
+  ~25-100x win, not the ~2x previously measured. Also fixed the same
+  fixed-sleep bug in `Vm::call`/`open_pty`/`open_exec_stream`'s retry
+  loops via one shared `retry_with_backoff` helper. See ROADMAP's
+  Benchmarking section.
+- `wait_for_socket` polled Firecracker's API socket with a fixed
+  `sleep(20ms)` on every single boot; replaced with a real connect-retry.
+  `Vm::boot` 34.00ms → ~11.3ms, cold create 167.65ms → ~144ms (~14%
+  faster). 300/300 integration suite.
+- Corrected two earlier benchmarking conclusions after a full per-phase
+  profiling pass: the network lease (~4.4ms) and Firecracker's
+  config-PUT calls (~1.6ms) were never the bottleneck, and neither was a
+  non-CoW filesystem — the rootfs clone is the actual dominant cost
+  (74% of a cold create). A device-mapper/CoW-filesystem layer is no
+  longer planned for this reason. See ROADMAP's Benchmarking section for
+  the full corrected story.
+- `egress::apply` batched from ~9 sequential `iptables` spawns into one
+  `iptables-restore` call: ~8.3ms → ~3.1ms average per policy-bearing
+  create. New `egress_apply` `CreatePhase` metric makes this cost
+  visible going forward.
+- `scripts/integration-test.sh`'s topic files now run in parallel
+  (default 4 at a time, `SANDKILN_INTEGRATION_TEST_PARALLELISM=1` for
+  the old fully-sequential behavior) instead of one shared sourced
+  shell — each topic gets its own `WORKDIR`/counters/tracked-resource
+  arrays, and the untracked-checkpoint history sweep moved to run once,
+  after every topic finishes, instead of once per topic (racing another
+  still-running topic's own checkpoints otherwise).
 
 ### Added
-- Per-phase cold-create timings, so where a create's latency goes doesn't
-  have to be rediscovered by hand. `/metrics` gains
-  `create_phase_duration_ms{phase="rootfs_clone"|"network_lease"|"setup"|"total"}`
-  (`boot_duration_ms` is unchanged and stays its own metric). Finer-grained
-  detail stays debug-level `tracing` rather than becoming metrics —
-  `"cold create setup phases"`/`"cold create complete"`,
-  `"vm boot phase breakdown"` (with each Firecracker PUT timed
-  individually), and `"attached tap device"` (with each `ip`/`bridge`
-  subprocess timed individually). `scripts/dev-tools/profile-cold-create.sh`
-  drives a repeatable sequential-create run against a live daemon. Note
-  the `RUST_LOG` target is the binary name, `sandkilnd`, not the package
-  name `sandkiln-daemon`.
-- Streamed background exec sessions (`kiln sandbox exec-stream`/`kiln
-  sandbox logs`), plus `Sandbox.execStream()`/`.listExecStreams()`/
-  `.attachLogs()` in the JS/TS SDK (not published under a new npm
-  version yet). Runs a command detached inside the guest over a new,
-  dedicated vsock port (`EXEC_STREAM_PORT`) and lets any number of
-  callers attach to its output over time — each attach gets a replay of
-  everything captured so far, then a live tail, whether the process is
-  still running or already finished. See `ROADMAP.md`'s "Dev servers and
-  live preview" section for the full design.
-  - Live-verified end to end: replay-then-live-tail while a multi-second
-    command is still running, instant full replay on reattach after it
-    finishes, and two concurrent attaches (one joining a second late)
-    both getting the complete ordered log. New
-    `scripts/integration-tests/23-exec-stream-logs.sh`.
-  - Deliberately out of scope for this first version: no kill/cancel
-    endpoint, and no concurrent-session cap (unlike PTY's) — see
-    `ROADMAP.md`'s entry for why.
-- Remote storage mounts (daemon only — no SDK/CLI change, nothing to
-  publish yet). `POST/GET/DELETE /sandboxes/:id/mounts` mounts an
-  S3-compatible bucket into a sandbox via `rclone mount`, running
-  entirely inside the guest through the existing
-  `Mkdir`/`WriteFile`/`Chmod`/`Exec` guest requests — no new wire
-  protocol. Credentials go in as a `0600` rclone config file, never a
-  command-line argument. See `ROADMAP.md`'s "Drives and remote storage"
-  section and `routes_mounts.rs`'s module doc comment for the full
-  design.
-  - Found live, the hard way: Firecracker's own default/CI guest kernels
-    don't enable `CONFIG_FUSE_FS`, and guest kernels can't load modules at
-    runtime, so `/dev/fuse` doesn't exist at all in a stock setup —
-    required building a custom kernel (`images/build-guest-kernel.sh`)
-    against Firecracker's own recommended config as the base. Also found
-    that rclone's Linux FUSE backend always execs `fusermount3` to do the
-    actual mount, even running as root — `images/inject-rclone.sh` bakes
-    both in as static/near-static binaries, the same way the guest agent
-    itself is injected, since apt can't be relied on inside the rootfs.
-  - Verified end-to-end against a real `rclone serve s3` test fixture:
-    mount, read an existing object, write a new one and confirm it lands
-    on the backing store, list, and unmount — not just kernel-level FUSE
-    availability.
-- Time-travel restore (daemon only — no SDK/CLI change, nothing to
-  publish yet). `POST /snapshots/:id/resume` no longer deletes the
-  checkpoint it consumes by default — it retires into `GET
-  /snapshots/history`, restorable again later via `POST
-  /snapshots/history/:id/restore` (as many times as wanted — restoring
-  doesn't consume it either), and reclaimable outright via `DELETE
-  /snapshots/history/:id`. `?retain_history=false` opts back into the
-  original, zero-retention behavior. Sequential ("go back to any earlier
-  point"), not branching: restoring refuses (`409`, naming the current
-  holder) while anything else sharing that checkpoint's frozen network
-  identity is live or held, generalizing the same one-live-descendant
-  rule `Snapshot::forked_into` already enforces for fork across a whole
-  lineage's history instead of just its latest snapshot. A restored
-  sandbox owns its network lease and rootfs outright (unlike a fork), so
-  it stays snapshottable afterward. See `ROADMAP.md`'s "Persistence and
-  snapshotting" section for the full design.
-  - Found and fixed a real, pre-existing corruption bug while building
-    this: `POST /snapshots/:id/fork` shared its source snapshot's rootfs
-    file directly rather than a private copy — safe for two simultaneous
-    forks (blocked by `forked_into` already) but not two sequential ones
-    (fork, mutate, stop the fork, then resume the original directly —
-    the resumed memory state and the now-mutated shared file disagree).
-    Reproduced live, fixed by giving every fork its own private rootfs
-    clone, same as retirement's own checkpoints get.
-  - Found live, the operational way: retaining every resume's checkpoint
-    by default has a real, unbounded disk cost (a full guest-memory dump
-    plus a private rootfs copy, forever, until deleted) — routine manual
-    verification alone filled a 468GB dev-box disk during development.
-    `DELETE /snapshots/history/:id` was added specifically in response,
-    not part of the original design; automatic expiry is a deliberately
-    deferred follow-up (see `SELF_HOSTING.md`'s new "Time-travel restore
-    and its disk cost" guidance).
-  - Deliberately out of scope: true parallel branching (two checkpoints
-    from one lineage live at once) — blocked by the same
-    frozen-guest-network-identity constraint that already rules out true
-    concurrent forking, not a scope choice.
-  - 20 new `scripts/integration-test.sh` checks; also hardened
-    `claim_from_pool`'s post-resume MMDS metadata refresh with a bounded
-    retry (an existing, already-intermittent Firecracker-level race under
-    load, confirmed independent of this change by reproducing it against
-    an unmodified daemon) and fixed `integration-test.sh`'s own cleanup to
-    sweep `GET /snapshots/history` for anything retired during a run,
-    rather than trying to track every resume by hand across every topic
-    file — 294/294 passing overall.
-- Snapshot lineage (daemon only — no SDK/CLI change, nothing to publish
-  yet). `Snapshot.parent_snapshot_id` records the snapshot a new
-  snapshot's source sandbox was itself resumed/forked from, `None` for a
-  lineage root (a cold-booted source sandbox). Exposed on every `GET
-  /snapshots` result and queryable in the other direction too, via a new
-  `?parent_snapshot_id=<id>` filter (can genuinely match more than one
-  snapshot over time, unlike the existing `?source_sandbox_id=` filter) —
-  together enough to walk a full lineage tree in either direction without
-  a dedicated tree-shaped endpoint. Found and fixed a real bug live while
-  building this: the first version sourced the new pointer from the
-  already-existing `Sandbox::source_snapshot_id`, which is deliberately
-  `None` on resume (so a resumed sandbox stays eligible to be snapshotted
-  again) and only ever `Some` on a fork (which, by existing design, can
-  *never* be snapshotted again) — reusing it would have silently
-  dead-ended lineage for the common resume case while compiling and
-  passing every test written against it. Fixed with a second, dedicated
-  `Sandbox::parent_snapshot_id` field. See `ROADMAP.md`'s "Persistence
-  and snapshotting" section for the full story. 10 new
-  `scripts/integration-test.sh` checks, 267/267 passing overall.
-- Per-sandbox egress (outbound network) policy (daemon only — no SDK/CLI
-  change, nothing to publish yet). A new `egress: { mode, allow_cidrs,
-  deny_cidrs }` field on `POST /sandboxes`/`POST /sandboxes/get-or-create`
-  — `mode` is `allow_all` or `deny_all`, enforced via one dedicated
-  iptables chain per sandbox (`sandkiln_vmm::egress`) with deny always
-  beating allow on overlap via rule ordering, not special-casing. Applied
-  once a lease goes live (boot, pool claim, resume, fork) and removed
-  only when the lease is finally released, so it survives a plain
-  snapshot-and-stop the same way the underlying tap device does, and
-  persists correctly across snapshot/resume/fork (re-applied fresh each
-  time, with a re-apply failure on resume/fork treated as a loud warning
-  rather than fatal, since both are one-way operations). See
-  `ROADMAP.md`'s "Firewall and egress policy" section for the full design
-  and what's still deferred (domain/port-level rules, SDK/CLI exposure).
-  Live-verified against the real dev box: `deny_all`/`allow_cidrs`/
-  `deny_cidrs`/deny-wins-on-overlap all behave correctly, gateway-bound
-  (DNS) traffic stays reachable regardless of policy, and a policy
-  survives snapshot/resume/fork and is fully torn down on destroy. 12 new
-  `scripts/integration-test.sh` checks (the actual allow/deny behavior
-  needs a second real LAN address to test against, not guaranteed on
-  every machine this suite runs on, so that part is verified manually
-  instead — same tradeoff already made for the daemon-restart case
-  below), 257/257 passing overall.
-- Tiered idle lifecycle, archive tier (daemon only — no SDK/CLI change,
-  nothing to publish): `SANDKILN_ARCHIVE_TIMEOUT_SECS` moves a held
-  snapshot's `state.snap`/`mem.bin` onto a separately configured
-  `SANDKILN_ARCHIVE_DIR` once it's sat unresumed that long, applying to
-  any held snapshot regardless of how it arose. `GET /snapshots` reports
-  `archived_at_unix`. Live-verified end to end, including a real
-  Firecracker constraint found mid-build (the rootfs backing file's path
-  is baked into `state.snap` with no override at resume time — confirmed
-  by an actual resume failure after moving it — so only `state.snap`/
-  `mem.bin` move, `rootfs_path` never does) and a real latent bug it
-  surfaced (two existing snapshot-cleanup code paths derived the
-  directory to remove from a hardcoded hot-root path instead of the
-  snapshot's own current location, which would have silently leaked an
-  archived snapshot's files forever). See `ROADMAP.md`'s "Persistence and
-  snapshotting" section for the full story. 1 new
-  `scripts/integration-test.sh` check (the archive-after-timeout
-  behavior itself needs a differently-configured daemon, verified
-  manually instead — same tradeoff already made for the sqlite-history
-  restart case), 245/245 passing overall.
-- Pre-warmed pools: `max_count` ceiling with queueing (daemon only — no
-  SDK/CLI change, nothing to publish). `PoolConfig.max_count` caps the
-  total live instances (warm + claimed) a pool's profile may have at
-  once; a `POST /sandboxes` claim arriving at the ceiling with nothing
-  warm queues (a `tokio::sync::Notify` per pool) for up to 30s before a
-  real `503`, instead of rejecting outright or silently exceeding the
-  ceiling. `GET /pools` now also reports `max_count`/`claimed`.
-  Live-verified: blocks a second claim at capacity, wakes it the instant
-  a slot frees (not on a poll interval), and 503s cleanly after the full
-  30s when nothing frees up. Also fixed a real bug found by live-testing
-  this exact feature: a failed warm claim's cold-create fallback wasn't
-  being attributed back to the pool, letting `max_count` be silently
-  exceeded under this project's own already-documented high resume
-  failure rate — fixed with a bounded 3-attempt retry so the fallback
-  re-resolves pool capacity instead of falling through unattributed. See
-  `ROADMAP.md`'s "Persistence and snapshotting" section for the full
-  story. 8 new `scripts/integration-test.sh` checks, 244/244 passing
-  overall.
-- Pre-warmed pools (0.7.0, above) added to the Python SDK too
-  (`Pool.create/list/delete`, `packages/python/src/sandkiln/pool.py`) —
-  not published to PyPI yet, so nothing to version here, but live-verified
-  end to end against a real daemon the same way the JS/TS SDK version was.
-- Guest-accessible metadata service (daemon/`sandkiln-vmm` only — no
-  SDK/CLI change, nothing to publish): every sandbox with a name and/or
-  tags now automatically serves its own `{id, name, tags}` via
-  Firecracker's native MMDS at `http://169.254.169.254/` inside the
-  guest, V2 (token-gated). Live-verified by curling it from inside a
-  real sandbox — 5 new `scripts/integration-test.sh` checks, 194/194
-  passing. See `ROADMAP.md`'s "Tags and sandbox metadata" section for
-  the `Accept: application/json` header requirement and other details.
-- Durable sandbox history (daemon/new `sandkiln-store` crate only — no
-  SDK/CLI change, nothing to publish): `GET /sandboxes/history`
-  (`?live_only=`, `?limit=`) backed by a new sqlite database, surviving
-  a daemon restart unlike `GET /sandboxes`. Explicitly does **not** mean
-  live sandboxes survive a restart — nothing can make that true today —
-  see `ROADMAP.md`'s "Tags and sandbox metadata" section for exactly
-  what this does and doesn't solve, and the real restart test that
-  verified it (a live record correctly flips to `orphaned_by_restart`
-  with its tags intact; already-ended records are untouched). 15 new
-  `scripts/integration-test.sh` checks, 209/209 passing overall.
-- PTY WebSocket sessions (0.6.0, above) now covered by
-  `scripts/integration-test.sh` itself (`17-pty.sh`) via a small Node
-  helper (`scripts/lib/pty-check.mjs`) — a real command's output
-  round-tripping through a real shell, plus a real check that the
-  SIGHUP-on-hangup guest-agent fix actually prevents an orphaned shell
-  after a client disconnects without exiting one. 6 new checks, 220/220
-  passing overall (with `SANDKILN_AUTH_TOKEN` set — auth-gated cases
-  bring the total above 209 too).
+- Per-phase cold-create timings: `/metrics` gains
+  `create_phase_duration_ms{phase="rootfs_clone"|"network_lease"|"setup"|"egress_apply"|"total"}`.
+  `scripts/dev-tools/profile-cold-create.sh` drives a repeatable run.
+- Streamed background exec sessions (`kiln sandbox exec-stream`/`logs`,
+  `Sandbox.execStream()`/`.listExecStreams()`/`.attachLogs()` in the
+  JS/TS SDK — not published under a new npm version yet). Any number of
+  callers can attach to one running/finished command's output over time,
+  each getting a full replay then a live tail. See ROADMAP's "Dev
+  servers and live preview" section.
+- Remote storage mounts (daemon HTTP API only so far):
+  `POST/GET/DELETE /sandboxes/:id/mounts` mounts an S3-compatible bucket
+  via `rclone mount` inside the guest. Needed a custom guest kernel
+  (`CONFIG_FUSE_FS`, not in Firecracker's stock kernels) and a
+  statically-linked `rclone`+`fusermount3` baked into the rootfs. See
+  ROADMAP's "Drives and remote storage" section.
+- Time-travel restore (daemon HTTP API only so far): `POST
+  /snapshots/:id/resume` retires its checkpoint into `GET
+  /snapshots/history` instead of deleting it by default, restorable
+  again via `POST /snapshots/history/:id/restore`, reclaimable via
+  `DELETE /snapshots/history/:id`. Found and fixed a real pre-existing
+  bug along the way: `fork` shared its source's rootfs file directly
+  instead of a private copy, corrupting state across two *sequential*
+  forks of the same snapshot. See ROADMAP's "Persistence and
+  snapshotting" section, including the real unbounded-disk-growth cost
+  this surfaced.
+- Snapshot lineage: `Snapshot.parent_snapshot_id` plus a
+  `?parent_snapshot_id=` filter, walking a full resume/fork lineage tree
+  in either direction. See ROADMAP's "Persistence and snapshotting"
+  section.
+- Per-sandbox egress (outbound) policy (daemon HTTP API only so far):
+  `egress: {mode, allow_cidrs, deny_cidrs}` on `POST /sandboxes`,
+  enforced via one iptables chain per sandbox, deny always beating allow
+  by rule order. Survives snapshot/resume/fork. See ROADMAP's "Firewall
+  and egress policy" section.
+- Tiered idle lifecycle, archive tier: `SANDKILN_ARCHIVE_TIMEOUT_SECS`
+  moves a held snapshot's memory/state files to a separate
+  `SANDKILN_ARCHIVE_DIR` once it's sat unresumed that long. See
+  ROADMAP's "Persistence and snapshotting" section.
+- Pre-warmed pools: `max_count` ceiling with queueing — a claim at
+  capacity queues (event-driven, not polled) for up to 30s instead of
+  rejecting outright or silently exceeding the ceiling. Also added to
+  the Python SDK (`Pool.create/list/delete`, not published to PyPI under
+  a new version yet).
+- Guest-accessible metadata service: every named/tagged sandbox serves
+  `{id, name, tags}` via Firecracker's native MMDS. See ROADMAP's "Tags
+  and sandbox metadata" section.
+- Durable sandbox history: `GET /sandboxes/history`, backed by a new
+  `sandkiln-store` sqlite crate, surviving a daemon restart (live
+  sandboxes themselves still don't). See ROADMAP's "Tags and sandbox
+  metadata" section.
+- PTY WebSocket sessions now covered by `scripts/integration-test.sh`
+  itself, plus a fix for an orphaned-shell-on-client-disconnect bug.
+- Two new reference examples verifying real distinctions live against
+  the daemon: `examples/snapshot-lifecycle` (fork vs. resume) and
+  `examples/named-persistent-sandbox` (persistent-by-default stop
+  across two separate process runs).
 
 ## sandkiln (Python) [0.1.0] — 2026-09-15
 

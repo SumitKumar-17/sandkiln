@@ -1,0 +1,118 @@
+---
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { marked } from "marked";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+
+// The single source of truth is the repository's own CHANGELOG.md --
+// parsed at build time rather than hand-transcribed, so this page can
+// never drift from what the file actually says the way a copy-pasted
+// version could. CHANGELOG.md's own entries are themselves written from
+// real shipped commits/tags (see its header note and root AGENTS.md), so
+// parsing it is parsing the project's real history, just already
+// curated into one entry per shipped change instead of one per commit.
+//
+// Resolved from process.cwd() (astro build/dev always runs from
+// website/), not import.meta.url -- the build bundles this file into
+// dist/.prerender/chunks/, which breaks any path resolved relative to
+// its own source location.
+const changelogPath = path.resolve(process.cwd(), "../CHANGELOG.md");
+const raw = readFileSync(changelogPath, "utf-8");
+
+interface Entry {
+  id: string;
+  heading: string;
+  railLabel: string;
+  bodyHtml: string;
+}
+
+// The rail is a table of contents, not the heading repeated -- a version
+// tag (`[0.7.0]`) is the terse, scannable form. Two entries share the bare
+// tag `[0.1.0]` (the JS/TS SDK's first release and the Python SDK's much
+// later one), so the Python entry is prefixed to disambiguate; the dated
+// daemon/core bucket has no version tag at all, so it falls back to its
+// date instead.
+const railLabelFor = (heading: string): string => {
+  const versionMatch = heading.match(/\[([^\]]+)\]/);
+  if (versionMatch) {
+    const isPython = /^sandkiln \(python\)/i.test(heading);
+    return isPython ? `py ${versionMatch[1]}` : versionMatch[1];
+  }
+  const dateMatch = heading.match(/(\d{4}-\d{2}-\d{2})/);
+  return dateMatch ? dateMatch[1] : heading;
+};
+
+// Split on top-level "## " headings. The leading chunk (before the first
+// one) is the file's own intro paragraph, reused as this page's lede
+// instead of restating it. "Known gaps" is real content but reads as a
+// standing caveat list, not a dated release -- rendered separately,
+// below the dated entries, rather than mixed into the same rail.
+const sections = raw.split(/\n(?=## )/).map((s) => s.trim());
+const intro = sections[0].replace(/^# Changelog\n*/, "").trim();
+const rest = sections.slice(1);
+
+const slugify = (s: string) =>
+  s.replace(/[`*_]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+
+const known_gaps_marker = "known gaps";
+const releaseSections = rest.filter((s) => !s.slice(3).toLowerCase().startsWith(known_gaps_marker));
+const gapsSection = rest.find((s) => s.slice(3).toLowerCase().startsWith(known_gaps_marker));
+
+const entries: Entry[] = releaseSections.map((section) => {
+  const headingLine = section.split("\n", 1)[0].replace(/^##\s*/, "").trim();
+  const body = section.slice(section.indexOf("\n") + 1).trim();
+  return {
+    id: slugify(headingLine),
+    heading: headingLine,
+    railLabel: railLabelFor(headingLine),
+    bodyHtml: marked.parse(body, { async: false }) as string,
+  };
+});
+
+const gapsHtml = gapsSection
+  ? (marked.parse(gapsSection.slice(gapsSection.indexOf("\n") + 1).trim(), { async: false }) as string)
+  : "";
+---
+
+<BaseLayout title="Changelog — sandkiln">
+  <Header active="changelog" />
+
+  <main>
+    <section class="page-hero">
+      <div class="shell">
+        <h1>
+          <span class="l">Every real change,</span>
+          <span class="l"><span class="flare">nothing rounded up</span>.</span>
+        </h1>
+        <p class="lede prose" set:html={marked.parseInline(intro, { async: false })} />
+      </div>
+    </section>
+
+    <section class="band band-ruled">
+      <div class="shell grid">
+        <nav class="rail rail-toc" aria-label="Changelog entries">
+          {entries.map((e) => <a href={`#${e.id}`}>{e.railLabel}</a>)}
+        </nav>
+        <div class="col">
+          {entries.map((e) => (
+            <div class="finding changelog-entry" id={e.id}>
+              <p class="term changelog-heading" set:html={marked.parseInline(e.heading, { async: false })} />
+              <div class="changelog-body" set:html={e.bodyHtml} />
+            </div>
+          ))}
+
+          {gapsHtml && (
+            <div class="finding finding-open changelog-entry" id="known-gaps">
+              <p class="term changelog-heading">Known gaps</p>
+              <div class="changelog-body" set:html={gapsHtml} />
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <Footer />
+</BaseLayout>
