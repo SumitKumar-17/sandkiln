@@ -152,15 +152,34 @@ outbound HTTP both still work.
   runner) has to fall back to a thread pool to use this SDK without
   blocking it. A real gap for that use case specifically, not a
   correctness issue with the sync client itself.
-- **Not yet built: per-exec/per-create environment variables.** Checked
-  all the way down the stack: `ExecRequestBody` (`routes_exec.rs`) has
-  only `command`/`args`, and the guest agent's own exec handler
-  (`guest-agent/src/handler.rs`) calls plain `Command::new(command)
-  .args(args)`, no `.env(...)` at all — there's no way today to hand a
-  command a custom environment variable, at either `POST /sandboxes`
-  (baked in for the sandbox's whole lifetime) or per `exec` call. A
-  real, complete gap (protocol message, guest agent, daemon route, both
-  SDKs, CLI), not a small extension of something half-built.
+- **Done: per-exec/per-create environment variables.** `POST /sandboxes`
+  accepts an `env: {key: value}` map baked in for that sandbox's whole
+  lifetime; `exec`/`exec-stream` each accept their own `env`, merged on
+  top of the sandbox's create-time env with the per-call value winning on
+  a key conflict — resolved daemon-side (`routes_exec::resolve_env`)
+  before the request ever reaches the guest, so the guest agent stays a
+  "dumb executor" with a single already-resolved `env` field on
+  `Request::Exec`/`ExecStreamHandshake` rather than any notion of
+  "sandbox-level" vs. "call-level." Persists through
+  snapshot/resume/fork exactly like `tags` (unlike `egress`, there's no
+  external resource to re-apply, so a fork gets the identical value a
+  resume would, no ownership asymmetry). `Sandbox.create({env})`/
+  `.runCommand(cmd, args, {env})`/`.execStream(cmd, args, {env})` in the
+  JS/TS SDK, matching `env=` kwargs in the Python SDK's `create()`/
+  `get_or_create()`/`run_command()` (Python has no `execStream()` at
+  all, see the SDK bullet above), `--env key=value` (repeatable) on
+  `kiln sandbox create|get-or-create|exec|exec-stream` in the CLI.
+  Live-verified end to end on the real dev box across all three
+  languages (Rust daemon via curl, the JS/TS SDK, the Python SDK) and
+  the CLI: create-time env reaching an unmodified exec, a per-call
+  override winning on a shared key while an unrelated create-time key
+  survives untouched, a per-call key that didn't exist at create time
+  still reaching the process, and the merged behavior working
+  identically for `exec` and `exec-stream`. Also verified surviving
+  snapshot → resume and snapshot → fork unchanged. New
+  `scripts/integration-tests/24-env-vars.sh`, full suite passing
+  (`cargo test --workspace` and `cargo clippy --workspace --all-targets`
+  clean throughout).
 - File operations, SSH/PTY-style interactive access, and image
   build/import from an existing container image were also checked
   against this same "is it actually built" standard: file

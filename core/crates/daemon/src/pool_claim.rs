@@ -188,7 +188,11 @@ pub(crate) async fn claim_from_pool(
         move || {
             let sandboxes = state.sandboxes.lock().unwrap();
             let sandbox = sandboxes.get(&id).expect("resume_snapshot_by_id above just inserted this id");
-            sandbox.vm.call(&sandkiln_protocol::Request::Exec { command: "true".to_string(), args: vec![] })
+            sandbox.vm.call(&sandkiln_protocol::Request::Exec {
+                command: "true".to_string(),
+                args: vec![],
+                env: std::collections::HashMap::new(),
+            })
         }
     })
     .await;
@@ -274,6 +278,7 @@ pub(crate) async fn claim_from_pool(
         sandbox.name = request.name.clone();
         sandbox.created_at = created_at;
         sandbox.egress = egress;
+        sandbox.env = request.env.clone();
         // The slot `resolve_pool_claim` reserved for this claim is now
         // durably owned by this live `Sandbox` — released later by
         // `destroy_sandbox_by_id`/`snapshot_and_stop`, matching how

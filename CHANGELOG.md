@@ -122,6 +122,21 @@ entry below and earlier), this just ships it to PyPI via
 flow. No code change; versioned separately from the JS/TS SDK/CLI table
 below from here on, since the two don't need to move in lockstep.
 
+## [0.9.0] — 2026-09-16
+
+### Added
+- Per-exec/per-create environment variables: `env: {key: value}` on
+  `POST /sandboxes`/`get-or-create` is baked in for a sandbox's whole
+  lifetime; `exec`/`exec-stream` each accept their own `env`, merged on
+  top with the per-call value winning on a key conflict.
+  `Sandbox.create({env})`/`.runCommand(cmd, args, {env})`/
+  `.execStream(cmd, args, {env})` (JS/TS SDK), matching `env=` kwargs
+  (Python SDK — `create()`/`get_or_create()`/`run_command()`, no
+  `execStream()` there yet), `--env key=value` (repeatable) on
+  `kiln sandbox create|get-or-create|exec|exec-stream` (CLI). Persists
+  through snapshot/resume/fork like `tags`. See `ROADMAP.md`'s Client
+  SDKs section.
+
 ## [0.8.0] — 2026-09-16
 
 ### Added

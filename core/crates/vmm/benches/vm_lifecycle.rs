@@ -146,7 +146,7 @@ fn bench_exec_roundtrip(c: &mut Criterion) {
 
     let rootfs_path = fresh_rootfs_copy(&config.base_rootfs_path);
     let vm = Vm::boot(&config.vm_config(rootfs_path.clone())).expect("Vm::boot failed setting up exec benchmark");
-    let request = Request::Exec { command: "true".to_string(), args: vec![] };
+    let request = Request::Exec { command: "true".to_string(), args: vec![], env: std::collections::HashMap::new() };
 
     let mut group = c.benchmark_group("vm_lifecycle");
     group.bench_function("exec_roundtrip", |b| {

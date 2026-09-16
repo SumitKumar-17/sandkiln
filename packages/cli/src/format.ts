@@ -16,6 +16,17 @@ export function parseTag(value: string, previous: Record<string, string>): Recor
   return previous;
 }
 
+/** Same `key=value` shape as `parseTag`, a separate function (not a
+ * shared factory) purely so the error message names the right flag. */
+export function parseEnvVar(value: string, previous: Record<string, string>): Record<string, string> {
+  const separatorIndex = value.indexOf("=");
+  if (separatorIndex === -1) {
+    throw new InvalidArgumentError(`--env expects key=value, got: ${value}`);
+  }
+  previous[value.slice(0, separatorIndex)] = value.slice(separatorIndex + 1);
+  return previous;
+}
+
 /**
  * Parses a repeatable `--drive <id>` / `--drive <id>:ro` flag into the
  * `{ id, readOnly }` shape `Sandbox.create`'s `drives` option expects —

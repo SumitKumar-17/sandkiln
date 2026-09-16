@@ -39,6 +39,7 @@ pub fn handle_connection(mut stream: VsockStream) {
 
     let mut child = match Command::new(&handshake.command)
         .args(&handshake.args)
+        .envs(&handshake.env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -62,6 +62,11 @@ pub struct StartExecStreamRequest {
     command: String,
     #[serde(default)]
     args: Vec<String>,
+    /// Merged on top of the sandbox's own create-time `env` (this wins on
+    /// a key conflict) -- same shape and reasoning as
+    /// `routes_exec::ExecRequestBody::env`.
+    #[serde(default)]
+    env: std::collections::HashMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -99,7 +104,9 @@ pub async fn start_exec_stream(
         move || -> Result<std::os::unix::net::UnixStream, AppError> {
             let sandboxes = state.sandboxes.lock().unwrap();
             let sandbox = sandboxes.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
-            let stream = sandbox.vm.open_exec_stream(&request.command, &request.args).map_err(AppError::from)?;
+            let mut env = sandbox.env.clone();
+            env.extend(request.env.clone());
+            let stream = sandbox.vm.open_exec_stream(&request.command, &request.args, &env).map_err(AppError::from)?;
             sandbox.log_sessions.lock().unwrap().insert(session.id.clone(), session.clone());
             Ok(stream)
         }

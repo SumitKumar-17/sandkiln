@@ -118,6 +118,7 @@ class Sandbox:
         rate_limit_bandwidth_bytes_per_sec: int | None = None,
         rate_limit_ops_per_sec: int | None = None,
         drives: list[DriveAttachment] | None = None,
+        env: dict[str, str] | None = None,
     ) -> "Sandbox":
         """`name` is a caller-given identity, unique among live sandboxes
         and held snapshots at the moment it's claimed — the daemon rejects
@@ -146,7 +147,13 @@ class Sandbox:
 
         `drives` attaches existing persistent drives (see `Drive.create`)
         at boot time. Omitted means no drives, unchanged from before this
-        existed."""
+        existed.
+
+        `env` is baked in for this sandbox's whole lifetime: merged as the
+        base layer under any `env` passed to `run_command()` (that wins on
+        a key conflict), so a variable doesn't need repeating on every
+        call. Persists through `snapshot()`/`resume()`/`fork()`, exactly
+        like `tags`."""
         resolved_base_url = resolve_base_url(base_url)
         resolved_token = resolve_auth_token(auth_token)
         body: dict[str, object] = {}
@@ -165,6 +172,8 @@ class Sandbox:
             body["rate_limit"] = rate_limit
         if drives is not None:
             body["drives"] = [_drive_attachment_to_dict(d) for d in drives]
+        if env is not None:
+            body["env"] = env
         response = request(resolved_base_url, "POST", "/sandboxes", resolved_token, body or None)
         return cls(response["id"], resolved_base_url, resolved_token)
 
@@ -201,6 +210,7 @@ class Sandbox:
         rate_limit_bandwidth_bytes_per_sec: int | None = None,
         rate_limit_ops_per_sec: int | None = None,
         drives: list[DriveAttachment] | None = None,
+        env: dict[str, str] | None = None,
     ) -> tuple["Sandbox", bool]:
         """Resolves `name` to a sandbox in one call, creating it if it
         doesn't exist yet: a live sandbox with this name is returned
@@ -231,6 +241,8 @@ class Sandbox:
             body["rate_limit"] = rate_limit
         if drives is not None:
             body["drives"] = [_drive_attachment_to_dict(d) for d in drives]
+        if env is not None:
+            body["env"] = env
         response = request(resolved_base_url, "POST", "/sandboxes/get-or-create", resolved_token, body)
         return cls(response["id"], resolved_base_url, resolved_token), response["created"]
 
@@ -263,8 +275,13 @@ class Sandbox:
             for summary in response["sandboxes"]
         ]
 
-    def run_command(self, command: str, args: list[str] | None = None) -> ExecResult:
-        body = {"command": command, "args": args or []}
+    def run_command(self, command: str, args: list[str] | None = None, env: dict[str, str] | None = None) -> ExecResult:
+        """`env` is merged on top of this sandbox's own create-time `env`
+        (this wins on a key conflict) — omit it entirely to just use the
+        sandbox's own defaults, unchanged."""
+        body: dict[str, object] = {"command": command, "args": args or []}
+        if env is not None:
+            body["env"] = env
         response = self._request("POST", f"/sandboxes/{self.id}/exec", body)
         return ExecResult(response["stdout"], response["stderr"], response["exit_code"])
 

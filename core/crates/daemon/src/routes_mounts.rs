@@ -62,6 +62,7 @@ use axum::{Json, Router};
 use base64::Engine;
 use sandkiln_protocol::{Request, Response as AgentResponse};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -231,12 +232,15 @@ pub async fn create_mount(
 
     let args = rclone_mount_args(&config_path, &request.bucket, &request.mount_path, request.read_only);
     let mount_response =
-        call_agent(state.clone(), id.clone(), Request::Exec { command: "rclone".to_string(), args }).await?;
+        call_agent(state.clone(), id.clone(), Request::Exec { command: "rclone".to_string(), args, env: HashMap::new() }).await?;
     let (stdout, stderr, exit_code) = exec_ok(mount_response)?;
     if exit_code != 0 {
-        let _ =
-            call_agent(state.clone(), id.clone(), Request::Exec { command: "rm".to_string(), args: vec!["-f".to_string(), config_path] })
-                .await;
+        let _ = call_agent(
+            state.clone(),
+            id.clone(),
+            Request::Exec { command: "rm".to_string(), args: vec!["-f".to_string(), config_path], env: HashMap::new() },
+        )
+        .await;
         return Err(AppError::BadRequest(format!("rclone mount failed (exit {exit_code}): {stderr}{stdout}")));
     }
 
@@ -246,19 +250,22 @@ pub async fn create_mount(
     let verify = call_agent(
         state.clone(),
         id.clone(),
-        Request::Exec { command: "mountpoint".to_string(), args: vec!["-q".to_string(), request.mount_path.clone()] },
+        Request::Exec { command: "mountpoint".to_string(), args: vec!["-q".to_string(), request.mount_path.clone()], env: HashMap::new() },
     )
     .await?;
     if !matches!(verify, AgentResponse::Exec { exit_code: 0, .. }) {
         let _ = call_agent(
             state.clone(),
             id.clone(),
-            Request::Exec { command: "umount".to_string(), args: vec![request.mount_path.clone()] },
+            Request::Exec { command: "umount".to_string(), args: vec![request.mount_path.clone()], env: HashMap::new() },
         )
         .await;
-        let _ =
-            call_agent(state.clone(), id.clone(), Request::Exec { command: "rm".to_string(), args: vec!["-f".to_string(), config_path] })
-                .await;
+        let _ = call_agent(
+            state.clone(),
+            id.clone(),
+            Request::Exec { command: "rm".to_string(), args: vec!["-f".to_string(), config_path], env: HashMap::new() },
+        )
+        .await;
         return Err(AppError::Internal(io::Error::other(
             "rclone reported success but the mount point isn't actually mounted",
         )));
@@ -306,13 +313,16 @@ pub async fn delete_mount(
         sandbox.mounts.remove(idx)
     };
 
-    let unmount_result =
-        call_agent(state.clone(), id.clone(), Request::Exec { command: "umount".to_string(), args: vec![mount.mount_path.clone()] })
-            .await;
+    let unmount_result = call_agent(
+        state.clone(),
+        id.clone(),
+        Request::Exec { command: "umount".to_string(), args: vec![mount.mount_path.clone()], env: HashMap::new() },
+    )
+    .await;
     let _ = call_agent(
         state.clone(),
         id.clone(),
-        Request::Exec { command: "rm".to_string(), args: vec!["-f".to_string(), config_path_for(&mount.id)] },
+        Request::Exec { command: "rm".to_string(), args: vec!["-f".to_string(), config_path_for(&mount.id)], env: HashMap::new() },
     )
     .await;
 

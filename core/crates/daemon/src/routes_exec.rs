@@ -15,6 +15,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use sandkiln_protocol::{Request, Response as AgentResponse};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -23,6 +24,11 @@ pub struct ExecRequestBody {
     command: String,
     #[serde(default)]
     args: Vec<String>,
+    /// Merged on top of the sandbox's own create-time `env` (this wins on
+    /// a key conflict) — see `resolve_env`. Omitted entirely means "just
+    /// the sandbox's own defaults, unchanged," not "clear them."
+    #[serde(default)]
+    env: HashMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -38,12 +44,31 @@ pub async fn exec(
     Path(id): Path<String>,
     Json(body): Json<ExecRequestBody>,
 ) -> Result<Json<ExecResponseBody>, AppError> {
-    let response = call_agent(state, id, Request::Exec { command: body.command, args: body.args }).await?;
+    let env = resolve_env(&state, &id, body.env)?;
+    let response = call_agent(state, id, Request::Exec { command: body.command, args: body.args, env }).await?;
 
     match response {
         AgentResponse::Exec { stdout, stderr, exit_code } => Ok(Json(ExecResponseBody { stdout, stderr, exit_code })),
         other => Err(AppError::Internal(std::io::Error::other(format!("unexpected agent response: {other:?}")))),
     }
+}
+
+/// Merges a sandbox's create-time `env` (the base layer) with a per-call
+/// override (`call_env`, wins on a key conflict) into the one map the
+/// guest agent actually receives — the guest agent has no notion of
+/// "sandbox-level" vs. "call-level" env, it just executes with whatever
+/// `Request::Exec::env`/`ExecStreamHandshake::env` says (see this crate's
+/// `AGENTS.md`). A quick, synchronous lock (a `HashMap` clone, not I/O),
+/// separate from `call_agent`'s own lock acquisition inside its blocking
+/// task -- cheap enough not to need `spawn_blocking` of its own, same
+/// reasoning already applied to other short `state.sandboxes.lock()`
+/// reads elsewhere in this daemon.
+pub(crate) fn resolve_env(state: &AppState, id: &str, call_env: HashMap<String, String>) -> Result<HashMap<String, String>, AppError> {
+    let sandboxes = state.sandboxes.lock().unwrap();
+    let sandbox = sandboxes.get(id).ok_or_else(|| AppError::NotFound(id.to_string()))?;
+    let mut env = sandbox.env.clone();
+    env.extend(call_env);
+    Ok(env)
 }
 
 #[derive(Deserialize)]

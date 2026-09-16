@@ -136,7 +136,11 @@ should mostly be: parse a request, call into `vmm`, shape a response.
   sandbox remains snapshottable — lineage tracking needs the opposite
   shape (`Some` on both resume and fork), and conflating the two was a
   real bug caught live, not on paper, while building snapshot lineage —
-  see `ROADMAP.md`'s "Persistence and snapshotting" section).
+  see `ROADMAP.md`'s "Persistence and snapshotting" section), and `env` —
+  unlike `egress`, carried identically onto **both** a resumed and a
+  forked sandbox (no `None`-for-fork special case), since it's plain
+  data with no external resource an ownership convention needs to
+  protect.
 - `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop/
   history (`GET /sandboxes/history`, reading `AppState::history` — the
   only read path for it; every write happens as a side effect of
@@ -223,7 +227,14 @@ should mostly be: parse a request, call into `vmm`, shape a response.
 - `routes_exec.rs` — exec/read-file/write-file handlers. `pub(crate) async fn
   call_agent()` is the shared helper every route in both this file and
   `routes_fs.rs` uses — extend it, don't duplicate its pattern. It's
-  also what bumps a sandbox's `last_activity`.
+  also what bumps a sandbox's `last_activity`. `resolve_env()` is the
+  other shared helper worth knowing about: a sandbox's create-time `env`
+  merged with a per-call override (the call wins on a key conflict) into
+  the one map that actually reaches the guest agent — `routes_logs.rs`'s
+  `start_exec_stream` inlines the identical merge rather than importing
+  this function, since it already holds `state.sandboxes`'s lock for an
+  unrelated reason at that point and a second lock acquisition would be
+  redundant, not because the logic is meant to diverge.
 - `routes_fs.rs` — filesystem metadata/structure handlers: chmod, chown,
   mkdir, rename, copy, symlink, readlink, truncate, directory listing.
   Split out of `routes_exec.rs` (2026-09-08) once adding all of these

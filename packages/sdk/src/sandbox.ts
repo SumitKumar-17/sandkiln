@@ -37,6 +37,7 @@ import type {
   ReadlinkResponseBody,
   RenameRequestBody,
   ResumeSnapshotResponseBody,
+  RunCommandOptions,
   SandboxByNameResponseBody,
   SandboxInfo,
   SandboxOptions,
@@ -152,6 +153,7 @@ export class Sandbox {
     if (rateLimit !== undefined) requestBody.rate_limit = rateLimit;
     const drives = buildDrivesRequestBody(options.drives);
     if (drives !== undefined) requestBody.drives = drives;
+    if (options.env !== undefined) requestBody.env = options.env;
 
     const body = await request<GetOrCreateSandboxResponseBody>({
       ...client,
@@ -162,8 +164,9 @@ export class Sandbox {
     return { sandbox: new Sandbox(body.id, client), created: body.created };
   }
 
-  async runCommand(command: string, args: string[] = []): Promise<ExecResult> {
+  async runCommand(command: string, args: string[] = [], options: RunCommandOptions = {}): Promise<ExecResult> {
     const requestBody: ExecRequestBody = { command, args };
+    if (options.env !== undefined) requestBody.env = options.env;
     const body = await request<ExecResponseBody>({
       ...this.client,
       method: "POST",
@@ -326,8 +329,9 @@ export class Sandbox {
    * doesn't survive the daemon restarting — see
    * `routes_logs`'s own module doc comment in the daemon for why.
    */
-  async execStream(command: string, args: string[] = []): Promise<string> {
+  async execStream(command: string, args: string[] = [], options: RunCommandOptions = {}): Promise<string> {
     const requestBody: StartExecStreamRequestBody = { command, args };
+    if (options.env !== undefined) requestBody.env = options.env;
     const body = await request<StartExecStreamResponseBody>({
       ...this.client,
       method: "POST",
@@ -566,5 +570,6 @@ function buildCreateSandboxRequestBody(options: CreateSandboxOptions): CreateSan
   if (rateLimit !== undefined) body.rate_limit = rateLimit;
   const drives = buildDrivesRequestBody(options.drives);
   if (drives !== undefined) body.drives = drives;
+  if (options.env !== undefined) body.env = options.env;
   return Object.keys(body).length > 0 ? body : undefined;
 }

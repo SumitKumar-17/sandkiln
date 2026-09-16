@@ -8,6 +8,7 @@ use sandkiln_protocol::{
     decode_response, encode_exec_stream_handshake, encode_pty_handshake, encode_request, read_message, write_message, CodecError,
     ExecStreamHandshake, PtyHandshake, Request, Response,
 };
+use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -68,7 +69,13 @@ pub fn open_pty(uds_path: &Path, pty_port: u32, cols: u16, rows: u16) -> io::Res
 /// `decode_exec_stream_event`) rather than raw bytes, until an `Exit`
 /// event arrives and the guest closes the connection. See
 /// `sandkiln_protocol::EXEC_STREAM_PORT`'s own doc comment.
-pub fn open_exec_stream(uds_path: &Path, exec_stream_port: u32, command: &str, args: &[String]) -> io::Result<UnixStream> {
+pub fn open_exec_stream(
+    uds_path: &Path,
+    exec_stream_port: u32,
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+) -> io::Result<UnixStream> {
     let mut stream = UnixStream::connect(uds_path)?;
     // Timeouts apply only to the handshake below, not to the stream this
     // function hands back — same reasoning as `open_pty`: a background
@@ -78,8 +85,8 @@ pub fn open_exec_stream(uds_path: &Path, exec_stream_port: u32, command: &str, a
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
     connect_handshake(&mut stream, exec_stream_port)?;
 
-    let payload =
-        encode_exec_stream_handshake(&ExecStreamHandshake { command: command.to_string(), args: args.to_vec() }).map_err(to_io_err)?;
+    let payload = encode_exec_stream_handshake(&ExecStreamHandshake { command: command.to_string(), args: args.to_vec(), env: env.clone() })
+        .map_err(to_io_err)?;
     write_message(&mut stream, &payload)?;
 
     stream.set_read_timeout(None)?;

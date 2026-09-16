@@ -10,6 +10,7 @@ import {
   formatSandboxList,
   formatSnapshotList,
   parseDriveAttachment,
+  parseEnvVar,
   parseNonNegativeInt,
   parseOctalMode,
   parseTag,
@@ -37,6 +38,22 @@ test("parseTag rejects a value with no = with a commander InvalidArgumentError",
 test("parseTag treats a leading = as an empty key", () => {
   const acc = parseTag("=value", {});
   assert.deepEqual(acc, { "": "value" });
+});
+
+test("parseEnvVar splits on the first = and accumulates into the previous object", () => {
+  const acc = parseEnvVar("NODE_ENV=production", {});
+  assert.deepEqual(acc, { NODE_ENV: "production" });
+
+  parseEnvVar("CONN=user=pass", acc);
+  assert.deepEqual(acc, { NODE_ENV: "production", CONN: "user=pass" });
+});
+
+test("parseEnvVar rejects a value with no = with a commander InvalidArgumentError, naming --env not --tag", () => {
+  assert.throws(() => parseEnvVar("noequals", {}), (err) => {
+    assert.ok(err instanceof InvalidArgumentError);
+    assert.match(err.message, /--env expects key=value, got: noequals/);
+    return true;
+  });
 });
 
 test("formatSandboxList reports an empty list distinctly", () => {

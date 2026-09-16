@@ -210,6 +210,7 @@ pub(crate) async fn restore_snapshot_history_by_id(state: Arc<AppState>, id: Str
         pty_session_count: Default::default(),
         source_pool_id: None,
         egress: retired.egress.clone(),
+        env: retired.env.clone(),
         parent_snapshot_id: Some(retired.id.clone()),
         // Carried straight over, not re-applied -- a mount is a live
         // guest-side FUSE process, restored along with everything else

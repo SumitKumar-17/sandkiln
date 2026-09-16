@@ -5,7 +5,7 @@ use std::process::Command;
 
 pub fn handle(req: Request) -> Response {
     match req {
-        Request::Exec { command, args } => exec(&command, &args),
+        Request::Exec { command, args, env } => exec(&command, &args, &env),
         Request::ReadFile { path } => read_file(&path),
         Request::WriteFile { path, content_base64 } => write_file(&path, &content_base64),
         Request::ListDir { path } => list_dir(&path),
@@ -20,8 +20,8 @@ pub fn handle(req: Request) -> Response {
     }
 }
 
-fn exec(command: &str, args: &[String]) -> Response {
-    match Command::new(command).args(args).output() {
+fn exec(command: &str, args: &[String], env: &std::collections::HashMap<String, String>) -> Response {
+    match Command::new(command).args(args).envs(env).output() {
         Ok(out) => Response::Exec {
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),

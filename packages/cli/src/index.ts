@@ -10,6 +10,7 @@ import {
   formatSandboxList,
   formatSnapshotList,
   parseDriveAttachment,
+  parseEnvVar,
   parseNonNegativeInt,
   parseOctalMode,
   parsePositiveInt,
@@ -22,6 +23,7 @@ interface GlobalOptions {
 }
 
 const tagOption = () => new Option("--tag <key=value>", "tag to attach (repeatable)").argParser(parseTag).default({});
+const envOption = (help: string) => new Option("--env <key=value>", help).argParser(parseEnvVar).default({});
 
 function clientOptions(cmd: Command): GlobalOptions {
   return cmd.optsWithGlobals();
@@ -64,6 +66,7 @@ sandbox
     parseDriveAttachment,
     [] as { id: string; readOnly?: boolean }[],
   )
+  .addOption(envOption("environment variable baked in for this sandbox's whole lifetime (repeatable); a later 'exec --env' with the same key overrides it for that one call"))
   .action(async function (
     this: Command,
     opts: {
@@ -75,6 +78,7 @@ sandbox
       rateBandwidth?: number;
       rateOps?: number;
       drive: { id: string; readOnly?: boolean }[];
+      env: Record<string, string>;
     },
   ) {
     const { baseUrl, token } = clientOptions(this);
@@ -92,6 +96,7 @@ sandbox
             ? undefined
             : { bandwidthBytesPerSec: opts.rateBandwidth, opsPerSec: opts.rateOps },
         drives: opts.drive.length > 0 ? opts.drive : undefined,
+        env: Object.keys(opts.env).length > 0 ? opts.env : undefined,
       });
       process.stdout.write(`${created.id}\n`);
     } catch (error) {
@@ -126,6 +131,7 @@ sandbox
     parseDriveAttachment,
     [] as { id: string; readOnly?: boolean }[],
   )
+  .addOption(envOption("environment variable baked in for the whole sandbox lifetime, used only if a fresh sandbox is created (repeatable)"))
   .action(async function (
     this: Command,
     opts: {
@@ -136,6 +142,7 @@ sandbox
       rateBandwidth?: number;
       rateOps?: number;
       drive: { id: string; readOnly?: boolean }[];
+      env: Record<string, string>;
     },
   ) {
     const { baseUrl, token } = clientOptions(this);
@@ -152,6 +159,7 @@ sandbox
             ? undefined
             : { bandwidthBytesPerSec: opts.rateBandwidth, opsPerSec: opts.rateOps },
         drives: opts.drive.length > 0 ? opts.drive : undefined,
+        env: Object.keys(opts.env).length > 0 ? opts.env : undefined,
       });
       process.stdout.write(`${resolved.id}  ${created ? "created" : "existing"}\n`);
     } catch (error) {
@@ -210,10 +218,13 @@ sandbox
 sandbox
   .command("exec <id> <command> [args...]")
   .description("Run a command inside a sandbox. Exits with the command's own exit code.")
-  .action(async function (this: Command, id: string, command: string, args: string[]) {
+  .addOption(envOption("environment variable for this one call (repeatable); overrides a same-named one baked in at create time"))
+  .action(async function (this: Command, id: string, command: string, args: string[], opts: { env: Record<string, string> }) {
     const { baseUrl, token } = clientOptions(this);
     try {
-      const result = await attachSandbox(id, baseUrl, token).runCommand(command, args);
+      const result = await attachSandbox(id, baseUrl, token).runCommand(command, args, {
+        env: Object.keys(opts.env).length > 0 ? opts.env : undefined,
+      });
       process.stdout.write(result.stdout);
       process.stderr.write(result.stderr);
       process.exit(result.exitCode);
@@ -427,11 +438,12 @@ sandbox
   .description(
     "Run a long-running command inside a sandbox in the background and follow its output live (replay so far, then a live tail) until it exits. Ctrl+C detaches without stopping the command -- reattach later with 'kiln sandbox logs <id> <session-id>'.",
   )
-  .action(async function (this: Command, id: string, command: string, args: string[]) {
+  .addOption(envOption("environment variable for this one call (repeatable); overrides a same-named one baked in at create time"))
+  .action(async function (this: Command, id: string, command: string, args: string[], opts: { env: Record<string, string> }) {
     const { baseUrl, token } = clientOptions(this);
     try {
       const sbx = attachSandbox(id, baseUrl, token);
-      const sessionId = await sbx.execStream(command, args);
+      const sessionId = await sbx.execStream(command, args, { env: Object.keys(opts.env).length > 0 ? opts.env : undefined });
       process.stderr.write(`session ${sessionId} started\n`);
       const exitCode = await followLogs(sbx, sessionId);
       process.exit(exitCode ?? 0);

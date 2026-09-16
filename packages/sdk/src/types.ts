@@ -46,6 +46,11 @@ export interface CreateSandboxOptions extends SandboxOptions {
    * still conflicts with an existing read-write one. Omitted means no
    * drives, unchanged from before this existed. */
   drives?: DriveAttachmentOptions[];
+  /** Baked in for this sandbox's whole lifetime: merged as the base layer
+   * under any `env` passed to `runCommand()`/`execStream()` (those win on
+   * a key conflict), so a variable doesn't need repeating on every call.
+   * Persists through `snapshot()`/`resume()`/`fork()`, exactly like `tags`. */
+  env?: Record<string, string>;
 }
 
 export interface DriveAttachmentOptions {
@@ -64,6 +69,7 @@ export interface GetOrCreateSandboxOptions extends SandboxOptions {
   memSizeMib?: number;
   rateLimit?: RateLimitOptions;
   drives?: DriveAttachmentOptions[];
+  env?: Record<string, string>;
 }
 
 export interface ListSandboxesOptions extends SandboxOptions {
@@ -102,6 +108,7 @@ export interface CreateSandboxRequestBody {
   image_id?: string;
   rate_limit?: RateLimitRequestBody;
   drives?: DriveAttachmentRequestBody[];
+  env?: Record<string, string>;
 }
 
 export interface CreateSandboxResponseBody {
@@ -122,6 +129,14 @@ export interface ListSandboxesResponseBody {
 export interface ExecRequestBody {
   command: string;
   args: string[];
+  env?: Record<string, string>;
+}
+
+/** Options for `Sandbox.runCommand()`/`Sandbox.execStream()` — merged on
+ * top of the sandbox's own create-time `env` (this wins on a key
+ * conflict), not a replacement for it. */
+export interface RunCommandOptions {
+  env?: Record<string, string>;
 }
 
 export interface ExecResponseBody {
@@ -227,6 +242,7 @@ export interface DirEntry {
 export interface StartExecStreamRequestBody {
   command: string;
   args?: string[];
+  env?: Record<string, string>;
 }
 
 export interface StartExecStreamResponseBody {
@@ -335,6 +351,7 @@ export interface GetOrCreateSandboxRequestBody {
   mem_size_mib?: number;
   rate_limit?: RateLimitRequestBody;
   drives?: DriveAttachmentRequestBody[];
+  env?: Record<string, string>;
 }
 
 export interface GetOrCreateSandboxResponseBody {
