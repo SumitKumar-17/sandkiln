@@ -118,6 +118,16 @@ this list stays terse on purpose.
   `examples/named-persistent-sandbox` (persistent-by-default stop
   across two separate process runs).
 
+## sandkiln (Python) [0.2.0] — 2026-09-16
+
+### Added
+- `AsyncSandbox`/`AsyncDrive`/`AsyncImage`/`AsyncPool` — `asyncio`-native
+  mirrors of `Sandbox`/`Drive`/`Image`/`Pool`, same methods, built on a
+  hand-rolled `asyncio.open_connection`-based HTTP client
+  (`_http_async.py`) rather than a new dependency. Separate classes from
+  the sync ones by design, not a mixed sync/async API on one class — see
+  `packages/python/AGENTS.md`.
+
 ## sandkiln (Python) [0.1.0] — 2026-09-15
 
 First PyPI release (`pip install sandkiln`) — the package itself has

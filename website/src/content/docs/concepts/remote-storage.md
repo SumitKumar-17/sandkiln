@@ -15,6 +15,13 @@ There is no preflight capability check. The routes are always registered, so a m
 
 ## Mounting, listing, unmounting
 
+`Sandbox.mount()`/`.listMounts()`/`.unmount()` (JS/TS), `mount()`/
+`list_mounts()`/`unmount()` (Python), and `kiln sandbox mount|mounts|
+unmount` (CLI) all wrap the same three routes below — reach for those
+first; the raw HTTP shown here is what they call underneath, and is the
+only surface if you're integrating from a language without a published
+SDK.
+
 ```bash
 TOKEN=...
 BASE=http://127.0.0.1:7777
@@ -43,8 +50,6 @@ The daemon verifies the result rather than trusting rclone's exit code: after a 
 Credentials go into the guest as a small single-remote rclone config file, written with the same `write-file` and `chmod` guest operations the filesystem routes expose, locked to `0600` before rclone ever runs. They're never passed as a command-line argument, so nothing inside the guest can read them out of `ps`. The daemon doesn't log them, doesn't persist them on the host, and never echoes them back — a mount response carries only `id`, `bucket`, `endpoint`, `mount_path`, and `read_only`.
 
 ## What's not done yet
-
-Daemon HTTP API only — no JS/TS SDK, Python SDK, or `kiln` surface yet.
 
 Mounts are not re-applied on resume, fork, or restore. A mount is a live guest-side FUSE process, captured along with everything else in the snapshot of guest memory, so a restored sandbox's mount keeps working with no daemon involvement — but nothing re-establishes one that didn't survive. The recorded metadata is carried on snapshots purely so `GET /sandboxes/:id/mounts` can answer without a round-trip into the guest; it isn't surfaced in sandbox or snapshot list responses.
 

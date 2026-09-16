@@ -1,3 +1,7 @@
+from .adrive import AsyncDrive
+from .aimage import AsyncImage
+from .apool import AsyncPool
+from .asandbox import AsyncSandbox
 from .drive import Drive, DriveHolder, DriveInfo
 from .errors import SandkilnApiError
 from .image import Image, ImageInfo
@@ -6,6 +10,7 @@ from .sandbox import DirEntry, DriveAttachment, ExecResult, MountInfo, Sandbox, 
 
 __all__ = [
     "Sandbox",
+    "AsyncSandbox",
     "SandboxInfo",
     "SnapshotInfo",
     "ExecResult",
@@ -14,11 +19,14 @@ __all__ = [
     "DriveAttachment",
     "MountInfo",
     "Image",
+    "AsyncImage",
     "ImageInfo",
     "Drive",
+    "AsyncDrive",
     "DriveInfo",
     "DriveHolder",
     "Pool",
+    "AsyncPool",
     "PoolInfo",
     "SandkilnApiError",
 ]

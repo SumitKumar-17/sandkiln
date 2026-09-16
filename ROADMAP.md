@@ -145,13 +145,21 @@ outbound HTTP both still work.
   ship the next version.
 - Both talk to the daemon's HTTP API — no logic duplicated between them
   beyond what each language's idioms require.
-- **Not yet built: an async Python client.** `packages/python`'s
-  `Sandbox` is entirely synchronous (`urllib`-backed, blocking calls) —
-  there's no `asyncio`-based counterpart today, so a caller already
-  running an async event loop (an async web framework, an async agent
-  runner) has to fall back to a thread pool to use this SDK without
-  blocking it. A real gap for that use case specifically, not a
-  correctness issue with the sync client itself.
+- **Done: an async Python client.** `AsyncSandbox`/`AsyncDrive`/
+  `AsyncImage`/`AsyncPool` mirror `Sandbox`/`Drive`/`Image`/`Pool` method
+  for method, built on `asyncio.open_connection` (`_http_async.py`)
+  rather than `urllib` — a hand-rolled minimal HTTP/1.1 client, the same
+  shape `sandkiln-vmm` already hand-rolls in Rust for Firecracker's own
+  API, kept for the same zero-runtime-dependency reason (no `aiohttp`/
+  `httpx`). Deliberately separate classes from the sync ones, not one
+  class with both sync and async methods — see `packages/python/AGENTS.md`
+  for why a mixed class is a worse failure mode (a silent event-loop
+  stall, not a clear error) than a wrong-class import. Live-verified end
+  to end against the real daemon: create/exec/read/write/list-dir with
+  `env` reaching the process, five concurrent `run_command()` calls via
+  `asyncio.gather` (proving requests genuinely don't block each other),
+  and a full snapshot → resume round trip with `env` surviving it, plus
+  `AsyncDrive`/`AsyncPool` create/list/delete.
 - **Done: per-exec/per-create environment variables.** `POST /sandboxes`
   accepts an `env: {key: value}` map baked in for that sandbox's whole
   lifetime; `exec`/`exec-stream` each accept their own `env`, merged on

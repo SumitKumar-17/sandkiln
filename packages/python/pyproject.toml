@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sandkiln"
-version = "0.1.0"
+version = "0.2.0"
 description = "Client SDK for sandkiln: hardware-isolated Firecracker microVM sandboxes for running untrusted code."
 readme = "README.md"
 license = "MIT"
