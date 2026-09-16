@@ -17,7 +17,7 @@ There is no preflight capability check. The routes are always registered, so a m
 
 `Sandbox.mount()`/`.listMounts()`/`.unmount()` (JS/TS), `mount()`/
 `list_mounts()`/`unmount()` (Python), and `kiln sandbox mount|mounts|
-unmount` (CLI) all wrap the same three routes below — reach for those
+unmount` (CLI) all wrap the same three routes below, reach for those
 first; the raw HTTP shown here is what they call underneath, and is the
 only surface if you're integrating from a language without a published
 SDK.
