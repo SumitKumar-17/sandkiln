@@ -17,6 +17,7 @@ use crate::firecracker_api::ApiClient;
 use crate::jailer::JailLaunch;
 use crate::vsock_client;
 use sandkiln_protocol::{Request, Response, AGENT_PORT, EXEC_STREAM_PORT, PTY_PORT};
+use std::collections::HashMap;
 use std::io;
 use std::net::Ipv4Addr;
 use std::os::unix::net::UnixStream;
@@ -193,10 +194,10 @@ impl Vm {
     /// terminal — this is for a long-running background command
     /// (`kiln logs -f`'s underlying mechanism), not an interactive shell.
     /// Retries briefly like `call()`/`open_pty` do, for the same reason.
-    pub fn open_exec_stream(&self, command: &str, args: &[String]) -> io::Result<UnixStream> {
+    pub fn open_exec_stream(&self, command: &str, args: &[String], env: &HashMap<String, String>) -> io::Result<UnixStream> {
         let started = Instant::now();
         let result = retry_with_backoff(Duration::from_secs(5), Duration::from_millis(1), Duration::from_millis(20), || {
-            vsock_client::open_exec_stream(&self.vsock_socket, EXEC_STREAM_PORT, command, args)
+            vsock_client::open_exec_stream(&self.vsock_socket, EXEC_STREAM_PORT, command, args, env)
         });
         match &result {
             Ok(_) => tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "exec-stream session opened"),
@@ -248,7 +249,7 @@ impl Vm {
         // Best-effort: if the agent isn't reachable for any reason, fall
         // through to the kill rather than hang shutdown on it.
         if sync_first {
-            if let Err(e) = self.call(&Request::Exec { command: "sync".to_string(), args: vec![] }) {
+            if let Err(e) = self.call(&Request::Exec { command: "sync".to_string(), args: vec![], env: HashMap::new() }) {
                 tracing::warn!(vm_id = self.id, error = %e, "sync before stop failed, proceeding anyway");
             }
         }

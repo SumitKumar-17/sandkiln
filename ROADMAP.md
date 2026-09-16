@@ -95,14 +95,14 @@ outbound HTTP both still work.
   `vcpuCount`/`memSizeMib` overrides), `Sandbox.list()` (tag-filterable),
   `Sandbox.resume()`/`Sandbox.fork()` (static, boot from a snapshot),
   `runCommand()`, `readFile()`/`writeFile()`, `snapshot()`, `previewUrl()`,
-  `stop()`. ESM + CJS + full type definitions via `tsup`. Verified against
-  a live, auth-enabled daemon end to end — not just typechecked, which is
-  how `stop()` returning `200` instead of the documented `204` got caught
-  and fixed. **Published**:
+  `stop()`, `execStream()`/`listExecStreams()`/`attachLogs()`,
+  `mount()`/`listMounts()`/`unmount()`. ESM + CJS + full type definitions
+  via `tsup`. Verified against a live, auth-enabled daemon end to end —
+  not just typechecked, which is how `stop()` returning `200` instead of
+  the documented `204` got caught and fixed. **Published**:
   [npmjs.com/package/sandkiln](https://www.npmjs.com/package/sandkiln)
-  (0.2.0, with signed provenance from the CI build — includes everything
-  in this bullet, though `execStream`/`listExecStreams`/`attachLogs`
-  below haven't been published under a new version yet).
+  (0.10.0, with signed provenance from the CI build — includes
+  everything in this bullet).
 - **Done: full filesystem operations** — `chmod`/`chown`/`mkdir`
   (with `-p`-style `parents`)/`rename`/`copy`/`symlink`/`readlink`/
   `truncate`/directory listing with metadata (name, is-dir, is-symlink,
@@ -138,12 +138,67 @@ outbound HTTP both still work.
   and resource overrides. Zero runtime dependencies (stdlib `urllib`,
   matching the JS SDK's own zero-dependency `fetch` approach). Verified
   live end to end, including `attach()` reconstructing a handle without a
-  network call and correct 404 handling on a stopped sandbox. Not
-  published to PyPI yet (see `packages/python/AGENTS.md`'s Publishing
-  section — code-side ready, needs the account owner's one-time
-  trusted-publisher registration).
+  network call and correct 404 handling on a stopped sandbox. **Done:
+  published to PyPI** (`pip install sandkiln`) via
+  `.github/workflows/publish-python-sdk.yml`'s OIDC trusted-publishing
+  flow — see `packages/python/AGENTS.md`'s Publishing section for how to
+  ship the next version.
 - Both talk to the daemon's HTTP API — no logic duplicated between them
   beyond what each language's idioms require.
+- **Done: an async Python client.** `AsyncSandbox`/`AsyncDrive`/
+  `AsyncImage`/`AsyncPool` mirror `Sandbox`/`Drive`/`Image`/`Pool` method
+  for method, built on `asyncio.open_connection` (`_http_async.py`)
+  rather than `urllib` — a hand-rolled minimal HTTP/1.1 client, the same
+  shape `sandkiln-vmm` already hand-rolls in Rust for Firecracker's own
+  API, kept for the same zero-runtime-dependency reason (no `aiohttp`/
+  `httpx`). Deliberately separate classes from the sync ones, not one
+  class with both sync and async methods — see `packages/python/AGENTS.md`
+  for why a mixed class is a worse failure mode (a silent event-loop
+  stall, not a clear error) than a wrong-class import. Live-verified end
+  to end against the real daemon: create/exec/read/write/list-dir with
+  `env` reaching the process, five concurrent `run_command()` calls via
+  `asyncio.gather` (proving requests genuinely don't block each other),
+  and a full snapshot → resume round trip with `env` surviving it, plus
+  `AsyncDrive`/`AsyncPool` create/list/delete.
+- **Done: per-exec/per-create environment variables.** `POST /sandboxes`
+  accepts an `env: {key: value}` map baked in for that sandbox's whole
+  lifetime; `exec`/`exec-stream` each accept their own `env`, merged on
+  top of the sandbox's create-time env with the per-call value winning on
+  a key conflict — resolved daemon-side (`routes_exec::resolve_env`)
+  before the request ever reaches the guest, so the guest agent stays a
+  "dumb executor" with a single already-resolved `env` field on
+  `Request::Exec`/`ExecStreamHandshake` rather than any notion of
+  "sandbox-level" vs. "call-level." Persists through
+  snapshot/resume/fork exactly like `tags` (unlike `egress`, there's no
+  external resource to re-apply, so a fork gets the identical value a
+  resume would, no ownership asymmetry). `Sandbox.create({env})`/
+  `.runCommand(cmd, args, {env})`/`.execStream(cmd, args, {env})` in the
+  JS/TS SDK, matching `env=` kwargs in the Python SDK's `create()`/
+  `get_or_create()`/`run_command()` (Python has no `execStream()` at
+  all, see the SDK bullet above), `--env key=value` (repeatable) on
+  `kiln sandbox create|get-or-create|exec|exec-stream` in the CLI.
+  Live-verified end to end on the real dev box across all three
+  languages (Rust daemon via curl, the JS/TS SDK, the Python SDK) and
+  the CLI: create-time env reaching an unmodified exec, a per-call
+  override winning on a shared key while an unrelated create-time key
+  survives untouched, a per-call key that didn't exist at create time
+  still reaching the process, and the merged behavior working
+  identically for `exec` and `exec-stream`. Also verified surviving
+  snapshot → resume and snapshot → fork unchanged. New
+  `scripts/integration-tests/24-env-vars.sh`, full suite passing
+  (`cargo test --workspace` and `cargo clippy --workspace --all-targets`
+  clean throughout).
+- File operations, SSH/PTY-style interactive access, and image
+  build/import from an existing container image were also checked
+  against this same "is it actually built" standard: file
+  operations are already covered in full (see the filesystem-ops bullet
+  above); an interactive session already exists as `kiln sandbox pty`
+  (see the CLI section below) over a WebSocket, so that's shipped, not a
+  gap; converting an existing OCI/Docker image into a bootable rootfs is
+  explicitly out of scope today (see `routes_images.rs`'s own module
+  doc comment) — a custom image today has to already be a bootable
+  ext4 rootfs, built via `images/build-universal-image.sh` or handed in
+  directly, not derived from a container image on the fly.
 
 ## CLI (`kiln`) — working
 
@@ -411,6 +466,17 @@ outbound HTTP both still work.
   argument. No re-application on resume/fork/restore — a mount is a live
   guest-side FUSE process, captured by Firecracker's own snapshot
   mechanism along with the rest of guest memory.
+- **Done: exposed in both SDKs and the CLI.** Was daemon-HTTP-API-only
+  for a while (see this project's own `examples/remote-storage-mount`,
+  which called the three routes with raw `fetch()` until this landed).
+  `Sandbox.mount()`/`.listMounts()`/`.unmount()` (JS/TS),
+  `mount()`/`list_mounts()`/`unmount()` (Python), `kiln sandbox
+  mount|mounts|unmount` (CLI). Live-verified against a real daemon
+  (`listMounts()` on a mount-free sandbox, and a mount attempt against an
+  unreachable endpoint failing cleanly as a `SandkilnApiError` rather
+  than hanging or crashing) — full success needs a real S3-compatible
+  endpoint this dev box doesn't have configured, same caveat
+  `scripts/integration-tests/22-mounts.sh` already carries.
 
 ## Firewall and egress policy
 
@@ -467,9 +533,43 @@ outbound HTTP both still work.
   --dport`, a straightforward extension of the same rule shape, just not
   built yet). IPv4 only, matching every other networking type in this
   codebase.
-- **Not yet exposed in the SDKs/CLI** — daemon HTTP API only so far. A
-  deliberate scope cut for this first slice, same as pool `max_count`'s
-  own SDK/CLI follow-up; worth doing in a pass of its own.
+- **Done: exposed in both SDKs and the CLI.** Was daemon-HTTP-API-only
+  for a while, same deliberate first-slice scope cut pool `max_count`
+  also had. `Sandbox.create({ egress })`/`Sandbox.getOrCreate({ egress })`
+  (JS/TS, `EgressPolicyOptions`), `egress_mode`/`egress_allow_cidrs`/
+  `egress_deny_cidrs` kwargs (Python), `--egress-mode <allow_all|
+  deny_all>` + repeatable `--allow-cidr`/`--deny-cidr` (CLI, on both
+  `create` and `get-or-create`). Live-verified end to end in all three —
+  a real LAN address (not a public IP: this dev box's own network turned
+  out to have no outbound internet route at all, discovered live while
+  building this and worth remembering as its own finding) pinged
+  successfully with no policy, blocked under `deny_all`, and reachable
+  again under `deny_all` + a matching `allow_cidrs` entry. New
+  `examples/egress-policy` reference project.
+- **Fixed: `egress::apply`'s hot path.** Flagged by the same audit that
+  found the `Vm::call` retry-loop bug (see the Benchmarking section) as
+  a real, unmeasured cost: applying a policy spawned one `iptables`
+  subprocess per rule (chain create/flush, each `deny_cidrs` entry, each
+  `allow_cidrs` entry, the default verdict), each paying a full
+  fork+exec regardless of how little work it does. A 6-CIDR policy (9
+  spawns under the old shape) measured **~8.3ms average per create** —
+  real, and easy to cut since none of that work needs separate
+  processes. Now loaded as one `iptables-restore --noflush` call instead
+  (`sandkiln-vmm::egress::apply`); the two rules that actually touch the
+  shared `FORWARD` chain stay as individual `iptables` calls, already
+  minimal (a `-C` existence check, and an `-I` only when it's missing).
+  A new `egress_apply` `CreatePhase` metric (only recorded when a create
+  actually requests a policy, so its count is expected to be far lower
+  than the other phases') makes this cost visible going forward instead
+  of hiding inside `setup`. Re-measured the same way afterward (same
+  6-CIDR policy, `create_phase_duration_ms{phase="egress_apply"}`'s own
+  delta over 17 fresh creates): **~3.1ms average, down from ~8.3ms — a
+  real ~63% cut**, consistent with going from ~9-10 `iptables` spawns to
+  ~3 (one `iptables-restore` plus the two `FORWARD` calls left as-is).
+  Verified live: `cargo test --workspace` and `cargo clippy --workspace
+  --all-targets` clean, full integration suite 300/300 including
+  `19-egress.sh`'s allow/deny/deny-wins-on-overlap and
+  survive-snapshot/resume/fork checks.
 - Request-level matchers (path, method, query, header) with a rule that
   either forwards or transforms the request are a further-out stretch
   beyond all of the above, useful for a proxy sitting in front of a
@@ -543,6 +643,24 @@ outbound HTTP both still work.
   `rate_limit_bandwidth_bytes_per_sec`+`rate_limit_ops_per_sec` on
   `create`/`getOrCreate`) and the CLI (`--rate-bandwidth`/`--rate-ops` on
   `kiln sandbox create`/`get-or-create`).
+- **Encryption at rest: deliberately scoped to filesystem-level, not
+  application-level.** Every snapshot's `mem.bin` (a full guest-RAM
+  dump), persistent drives, registered images, and rootfs clones are
+  plain files on disk. Considered building application-level encryption
+  and decided against it for now: Firecracker itself opens and writes
+  `mem.bin`/`state.snap` directly during pause-and-snapshot (see
+  `sandkiln_vmm::vm::snapshot`), so sandkiln's own code never holds the
+  plaintext bytes to encrypt — a real scheme would mean decrypting
+  before every Firecracker read and re-encrypting after every
+  Firecracker write, on top of a real key-management story (where does
+  the key come from? a passphrase? an external KMS?) this project
+  doesn't have, doesn't want to answer half-built, and that would add
+  real per-snapshot latency for however many hundred MB a guest's RAM
+  is. See `SELF_HOSTING.md`'s "Operational and security considerations"
+  section for the actual recommendation: put snapshot/drive/image/
+  archive storage on an encrypted filesystem (LUKS or equivalent) at the
+  host level, which covers the real threat (raw disk access) without
+  any of the above.
 
 ## Multi-agent isolation
 
@@ -585,6 +703,13 @@ outbound HTTP both still work.
   owning one). WebSocket proxying (dev-server HMR/live-reload) is a real,
   explicitly-scoped-out follow-up, not silently broken — plain HTTP only
   for now.
+- **Not yet built: the reverse direction (a local tunnel).** Everything
+  above exposes a port *inside* the sandbox outward; there's nothing
+  today that reaches the other way — a sandboxed process reaching a
+  service running on the caller's own machine (a local database, a local
+  API a coding agent needs to call during a test run) without that
+  service already being reachable from the sandbox's own network
+  namespace. Checked and confirmed absent, not just undocumented.
 - **Alternative worth considering alongside the proxy**: today's
   `/preview/:port` is a daemon-proxied *path*, not a real routable
   domain. A dedicated public domain/subdomain per exposed port (the
@@ -855,8 +980,27 @@ outbound HTTP both still work.
     situation that produced the wrong conclusion above. Also unexamined:
     the **9.24ms synchronous sqlite write** (`history.record_created`)
     sitting on the critical path, 5.5% of a create, for a write whose own
-    doc comment already calls it best-effort. Moving it off the request
-    path looks easy and worth ~9ms, but wasn't measured as a change here.
+    doc comment already calls it best-effort — **since fixed**, immediately
+    below.
+  - **Done: the sqlite write.** `sandkiln-store` opened its database with
+    sqlite's defaults (`journal_mode=DELETE`, `synchronous=FULL`), which
+    fsyncs twice per write — once for the rollback journal, once for the
+    main database file. Switched to `journal_mode=WAL` +
+    `synchronous=NORMAL` (safe specifically in WAL mode, and reasonable
+    here regardless given this write was already best-effort by design —
+    see `HistoryStore::configure_for_write_latency`'s own doc comment).
+    Measured with a direct, isolated A/B on the same disk (20 sequential
+    `record_created` calls, default settings vs. the fix, nothing else
+    running): **1897.8µs → 37.1µs mean, a real ~51x cut** — a more
+    dramatic win than the original 9.24ms-on-a-live-daemon figure
+    predicted, and not directly comparable to it (different measurement
+    conditions: an isolated fresh database file here vs. a live daemon's
+    real one there), but the relative improvement from removing the
+    double-fsync is the real, reproducible finding either way. 300/300
+    workspace tests, `cargo clippy --workspace --all-targets` clean, plus
+    a new test (`open_sets_wal_and_synchronous_normal_for_write_latency`)
+    asserting the pragmas actually took effect, not just that opening the
+    store doesn't error.
   - **What we fixed: the API-socket wait.** `wait_for_socket` polled for
     Firecracker's API socket with a fixed `sleep(20ms)`. It measured
     **20.11ms on every single boot** (min 20.04, max 20.18 across 20) —
@@ -1280,5 +1424,9 @@ eventually if there's appetite," not "next."
   `/docs` subpath of the main site (GitHub Pages and the merged Vercel
   build) and standalone at its own domain root
   (sandkiln-docs.vercel.app) — see `website/AGENTS.md`.
-- Example projects: **done** — code playground (JS/TS), AI-agent sandbox
-  runner (Python), and dev-server preview (JS/TS), see `examples/`.
+- Example projects: **done** — ten real, runnable reference projects
+  against each SDK's published API, one per major feature surface: code
+  playground, AI-agent sandbox runner, dev-server preview, interactive
+  terminal, pre-warmed pool, streamed exec/logs, remote storage mount,
+  snapshot/resume/fork lifecycle, named/persistent sandboxes, and egress
+  policy. See `examples/AGENTS.md` for what each one demonstrates and why.

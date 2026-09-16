@@ -7,15 +7,36 @@ is scoped to this one package.
 
 The Python client, mirroring `packages/sdk` (the JS/TS SDK) exactly —
 same operations, same daemon, Python-idiomatic naming (`run_command` not
-`runCommand`, snake_case fields, a plain synchronous API — no `asyncio`).
-If you're adding something here, check whether the JS SDK has it first;
-these two should never drift apart in capability, only in the idioms of
-each language.
+`runCommand`, snake_case fields). If you're adding something here, check
+whether the JS SDK has it first; these two should never drift apart in
+capability, only in the idioms of each language.
 
-Zero runtime dependencies on purpose — `urllib` from the standard
-library, not `requests`. Match this if you add anything; don't introduce
-a dependency the JS SDK's equivalent doesn't need either (it uses native
-`fetch`).
+Ships two parallel APIs: a synchronous one (`Sandbox`/`Drive`/`Image`/
+`Pool`, built on `urllib`) and an `asyncio`-native one (`AsyncSandbox`/
+`AsyncDrive`/`AsyncImage`/`AsyncPool`, built on `asyncio.open_connection`
+— see `_http_async.py`). **Deliberately two separate class hierarchies,
+not one class with both sync and async methods on it**: they share no
+state, and mixing them on one class invites calling the wrong one by
+accident — a sync call in an async context blocks the event loop
+silently (no exception, just a stall), which is a much worse failure
+mode than a clear `AttributeError` from having imported the wrong class
+name. The async classes share every dataclass and body-building helper
+with their sync counterparts (`sandbox.py`'s `DriveAttachment`,
+`_build_rate_limit`, `_build_egress`, etc.) — those are pure data/
+formatting with no I/O, so there's nothing "sync" about them to mirror;
+only re-export them from `asandbox.py`/`adrive.py`/etc. rather than
+redefining anything.
+
+Zero runtime dependencies on purpose — `urllib`/`asyncio` from the
+standard library, not `requests`/`aiohttp`/`httpx`. Match this if you add
+anything; don't introduce a dependency the JS SDK's equivalent doesn't
+need either (it uses native `fetch`). The async HTTP client
+(`_http_async.py`) hand-rolls the same ~90-line minimal HTTP/1.1 shape
+`sandkiln-vmm` already hand-rolls in Rust for Firecracker's own API (see
+`core/crates/vmm/src/firecracker_api.rs`) — one connection per request,
+no keep-alive, since this
+SDK's call pattern is occasional request/response calls against a local
+or nearby daemon, not a high-throughput client where reuse would matter.
 
 ## Files
 
@@ -48,8 +69,20 @@ a dependency the JS SDK's equivalent doesn't need either (it uses native
   `drive.py`'s `create`). No "claim from pool" method here at all —
   claiming is entirely transparent, done by a plain `Sandbox.create()`
   whose image/resources match a configured pool.
+- `asandbox.py`/`adrive.py`/`aimage.py`/`apool.py` — `AsyncSandbox`/
+  `AsyncDrive`/`AsyncImage`/`AsyncPool`: `asyncio`-native mirrors of
+  `Sandbox`/`Drive`/`Image`/`Pool`, same method names/arguments/return
+  shapes, just `async def` and awaited. See this file's own module doc
+  comments for why these are separate classes rather than sync+async
+  methods on one class. Changing a method on the sync side means
+  changing its async mirror the same way — the same lockstep discipline
+  `sandbox.py`/`sandbox.ts` already require across languages, just
+  within this one package instead.
 - `_http.py` — the one place `urllib.request` gets called. Leading
   underscore: not part of the public API, same convention as `_config.py`.
+- `_http_async.py` — the one place `asyncio.open_connection` gets
+  called, for `AsyncSandbox`/etc. Same `SandkilnApiError` shape and error
+  handling as `_http.py`, different transport underneath.
 - `_config.py` — env var fallback resolution
   (`SANDKILN_DAEMON_URL`/`SANDKILN_AUTH_TOKEN`), matching the JS SDK's
   `config.ts` exactly (same env var names, same default).
@@ -116,26 +149,25 @@ wheel CI and the publish workflow use — run it if you're touching
 
 ## Publishing
 
-Not yet published to PyPI. Code-side, this package is ready:
-`pyproject.toml` is filled in with real values (no placeholders), the
-package builds a clean wheel/sdist (`python -m build`), and it carries a
-`py.typed` marker.
+**Published**: [`sandkiln` on PyPI](https://pypi.org/project/sandkiln/),
+currently at `0.1.0`. Code-side, this package is ready: `pyproject.toml`
+is filled in with real values (no placeholders), the package builds a
+clean wheel/sdist (`python -m build`), and it carries a `py.typed`
+marker.
 
-**Already automated** — `.github/workflows/publish-python-sdk.yml`:
+Publishing is automated — `.github/workflows/publish-python-sdk.yml`:
 triggers on a manual dispatch or a `py-v*.*.*` tag push, builds the
 sdist/wheel, and on a tag push additionally checks the tag's version
 against `pyproject.toml`'s `project.version` and fails the run if they
 don't match. It then publishes via `pypa/gh-action-pypi-publish` using
 PyPI's OIDC trusted publishing — no stored token, no 2FA-on-publish
 friction (the workflow's own `id-token: write` permission is what makes
-the OIDC exchange possible).
+the OIDC exchange possible). The one-time trusted-publisher registration
+on pypi.org (owner `SumitKumar-17`, repo `sandkiln`, workflow file
+`publish-python-sdk.yml`) is done.
 
-**Still manual, one-time, needs the account owner** — trusted publishing
-has to be registered on pypi.org *before* the workflow above can
-succeed: register the `sandkiln` project name on PyPI, then under its
-"Publishing" settings add a trusted publisher pointing at owner
-`SumitKumar-17`, repo `sandkiln`, workflow file
-`publish-python-sdk.yml` (environment left blank unless one is added to
-the workflow later). This needs the pypi.org account itself — no agent
-or CI job can do it. Once registered, either push a `py-v0.1.0` tag or
-run the workflow manually to publish.
+**To ship a new version**: bump `project.version` in `pyproject.toml`,
+then either push a matching `py-vX.Y.Z` tag or run the workflow manually
+(`gh workflow run publish-python-sdk.yml`). A tag push additionally
+guards against a version mismatch; a manual dispatch does not, so
+double-check the version bump landed first.

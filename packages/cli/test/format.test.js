@@ -2,14 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InvalidArgumentError } from "commander";
 import {
+  accumulate,
   formatDirEntryList,
   formatDriveList,
   formatExecStreamList,
   formatImageList,
+  formatMountList,
   formatPoolList,
   formatSandboxList,
   formatSnapshotList,
   parseDriveAttachment,
+  parseEnvVar,
   parseNonNegativeInt,
   parseOctalMode,
   parseTag,
@@ -37,6 +40,22 @@ test("parseTag rejects a value with no = with a commander InvalidArgumentError",
 test("parseTag treats a leading = as an empty key", () => {
   const acc = parseTag("=value", {});
   assert.deepEqual(acc, { "": "value" });
+});
+
+test("parseEnvVar splits on the first = and accumulates into the previous object", () => {
+  const acc = parseEnvVar("NODE_ENV=production", {});
+  assert.deepEqual(acc, { NODE_ENV: "production" });
+
+  parseEnvVar("CONN=user=pass", acc);
+  assert.deepEqual(acc, { NODE_ENV: "production", CONN: "user=pass" });
+});
+
+test("parseEnvVar rejects a value with no = with a commander InvalidArgumentError, naming --env not --tag", () => {
+  assert.throws(() => parseEnvVar("noequals", {}), (err) => {
+    assert.ok(err instanceof InvalidArgumentError);
+    assert.match(err.message, /--env expects key=value, got: noequals/);
+    return true;
+  });
 });
 
 test("formatSandboxList reports an empty list distinctly", () => {
@@ -172,6 +191,27 @@ test("formatDriveList renders id, size, timestamp, and comma-joined holders per 
     "drv-1  64MiB  2026-01-01T00:00:00.000Z  sandbox sb-1\n" +
       "drv-2  128MiB  2026-01-02T00:00:00.000Z  not attached\n" +
       "drv-3  256MiB  2026-01-03T00:00:00.000Z  sandbox sb-2:ro,sandbox sb-3:ro\n",
+  );
+});
+
+test("accumulate appends each value onto the previous array, in order", () => {
+  let acc = accumulate("10.0.0.0/8", []);
+  acc = accumulate("192.168.0.0/16", acc);
+  assert.deepEqual(acc, ["10.0.0.0/8", "192.168.0.0/16"]);
+});
+
+test("formatMountList reports an empty list distinctly", () => {
+  assert.equal(formatMountList([]), "no mounts\n");
+});
+
+test("formatMountList renders id, bucket@endpoint, mount path, and a (ro) suffix when read-only", () => {
+  const mounts = [
+    { id: "mnt-1", bucket: "my-bucket", endpoint: "https://s3.example.com", mountPath: "/mnt/data", readOnly: false },
+    { id: "mnt-2", bucket: "other-bucket", endpoint: "https://s3.example.com", mountPath: "/mnt/ro", readOnly: true },
+  ];
+  assert.equal(
+    formatMountList(mounts),
+    "mnt-1  my-bucket@https://s3.example.com -> /mnt/data\n" + "mnt-2  other-bucket@https://s3.example.com -> /mnt/ro (ro)\n",
   );
 });
 

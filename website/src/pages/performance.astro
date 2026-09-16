@@ -40,16 +40,24 @@ const createPhases = [
 
   <main>
     <section class="page-hero">
-      <div class="shell">
-        <h1>
-          <span class="l">Real numbers from</span>
-          <span class="l"><span class="flare">real hardware</span>.</span>
-        </h1>
-        <p class="lede prose">
-          Every figure came from a <code>criterion</code> benchmark or a scripted load test
-          against a live daemon on real KVM. One shared dev box, single node — directional,
-          not authoritative.
-        </p>
+      <div class="shell page-hero-layout">
+        <div>
+          <h1>
+            <span class="l">Real numbers from</span>
+            <span class="l"><span class="flare">real hardware</span>.</span>
+          </h1>
+          <p class="lede prose">
+            Every figure came from a <code>criterion</code> benchmark or a scripted load test
+            against a live daemon on real KVM. One shared dev box, single node — directional,
+            not authoritative.
+          </p>
+        </div>
+        <nav class="page-hero-nav" aria-label="On this page">
+          <a href="#measured">measured</a>
+          <a href="#rootfs">correction</a>
+          <a href="#pools">pools</a>
+          <a href="#next">next</a>
+        </nav>
       </div>
     </section>
 

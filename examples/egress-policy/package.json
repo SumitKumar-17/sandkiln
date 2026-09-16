@@ -1,0 +1,17 @@
+{
+  "name": "sandkiln-example-egress-policy",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Reference egress-policy example: deny_all blocking an unlisted destination, allow_cidrs opening it back up, and gateway-bound traffic staying reachable regardless.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "sandkiln": "^0.10.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

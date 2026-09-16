@@ -28,7 +28,13 @@ that code belongs in `sandkiln-vmm` or `sandkiln-guest-agent` instead.
   `sandkiln-guest-agent`'s `handler.rs`, then exposing it from the
   daemon (`core/crates/daemon/src/routes_exec.rs` for data transfer,
   `routes_fs.rs` for filesystem-structure ops — see either file's own
-  module doc comment for which is which).
+  module doc comment for which is which). `Exec`/`ExecStreamHandshake`
+  both carry an `env: HashMap<String, String>` that's already fully
+  resolved by the time it reaches this crate's wire format — the daemon
+  merges a sandbox's create-time `env` with any per-call override
+  (`routes_exec::resolve_env`) before building the request, so this
+  crate and the guest agent never need to know the difference between
+  the two layers, only the one final map to apply.
 - `framing.rs` — length-prefixed message framing (4-byte LE length +
   payload) over anything implementing `Read`/`Write`. Chosen over
   newline-delimited framing specifically so binary file contents in a

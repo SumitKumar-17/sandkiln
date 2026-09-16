@@ -6,7 +6,12 @@ section "pre-warmed pools"
 # fixed sleep is enough.
 wait_for_warm() {
   local pool_id="$1" want="$2" tries=0 ready
-  while [ "$tries" -lt 15 ]; do
+  # 30 tries * 2s = 60s, not 30s: this suite's topics now run concurrently
+  # (see scripts/integration-test.sh), so a real cold boot + snapshot here
+  # competes for CPU/host resources with whatever else is mid-boot in
+  # another topic at the same moment -- a bound tuned for "the only thing
+  # happening on the box" was too tight once that stopped being true.
+  while [ "$tries" -lt 30 ]; do
     req GET /pools >/dev/null
     # `extract` only handles a plain top-level field, and this needs to
     # find one pool by id within a list -- read it directly with jq/grep
@@ -30,7 +35,7 @@ CREATED_POOLS+=("it-pool-$$")
 if wait_for_warm "it-pool-$$" 1; then
   pass "pool replenished a warm snapshot in the background"
 else
-  fail "pool never became warm within 30s"
+  fail "pool never became warm within 60s"
 fi
 
 status="$(req GET /pools)"
@@ -73,9 +78,11 @@ else
   # resumed guest is up, but MMDS rides the guest's separate network
   # readiness path, which has its own brief settling window right after a
   # resume, especially under this dev box's own concurrent load from
-  # other tests/replenishment running at the same time.
+  # other tests/replenishment running at the same time -- 15 tries, not
+  # 8, now that this suite's topics run concurrently by default (see
+  # scripts/integration-test.sh) and really can stretch that window.
   mmds_ok=""
-  for _ in $(seq 1 8); do
+  for _ in $(seq 1 15); do
     status="$(req POST "/sandboxes/$CLAIMED_SBX/exec" "{\"command\":\"sh\",\"args\":[\"-c\",\"TOKEN=\$(curl -s -X PUT http://169.254.169.254/latest/api/token -H \\\"X-metadata-token-ttl-seconds: 21600\\\") && curl -s -H \\\"X-metadata-token: \$TOKEN\\\" -H \\\"Accept: application/json\\\" http://169.254.169.254/\"]}")"
     mmds_body="$(cat "$WORKDIR/resp.json")"
     case "$mmds_body" in
@@ -111,14 +118,25 @@ if wait_for_warm "it-pool-$$" 1; then
     CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$BYPASS_SBX}")
   fi
 else
-  fail "pool never re-warmed after the first claim within 30s — skipping the bypass check"
+  fail "pool never re-warmed after the first claim within 60s — skipping the bypass check"
 fi
 
 # Deleting a pool must clean up whatever it still has warm, not leak it
-# as an orphaned, untracked snapshot on disk.
-status="$(req GET /snapshots)"
-snapshots_before_delete="$(cat "$WORKDIR/resp.json")"
-snapshot_count_before="$(echo "$snapshots_before_delete" | grep -o '"id"' | wc -l)"
+# as an orphaned, untracked snapshot on disk. Compared by exact id set,
+# not a before/after total count -- this suite's topic files run
+# concurrently against one shared daemon (see scripts/integration-test.sh),
+# so another topic's own snapshot churn happening in this same window
+# must not make this assertion flaky in either direction.
+snapshot_ids() {
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.snapshots[]?.id // empty' < "$WORKDIR/resp.json"
+  else
+    grep -o '"id":"[^"]*"' "$WORKDIR/resp.json" | sed -E 's/"id":"([^"]*)"/\1/'
+  fi
+}
+
+req GET /snapshots >/dev/null
+ids_before_delete="$(snapshot_ids | sort)"
 
 status="$(req DELETE "/pools/it-pool-$$")"
 assert_status "delete the pool" 204 "$status"
@@ -127,9 +145,10 @@ CREATED_POOLS=("${CREATED_POOLS[@]/it-pool-$$}")
 status="$(req GET /pools)"
 assert_not_contains "deleted pool no longer appears in the pool list" "$(cat "$WORKDIR/resp.json")" "it-pool-$$"
 
-status="$(req GET /snapshots)"
-snapshot_count_after="$(cat "$WORKDIR/resp.json" | grep -o '"id"' | wc -l)"
-assert_eq "deleting the pool also cleaned up its warm snapshot" "$((snapshot_count_before - 1))" "$snapshot_count_after"
+req GET /snapshots >/dev/null
+ids_after_delete="$(snapshot_ids | sort)"
+removed_count="$(comm -23 <(printf '%s\n' "$ids_before_delete") <(printf '%s\n' "$ids_after_delete") | grep -c .)"
+assert_eq "deleting the pool also cleaned up exactly its own warm snapshot" "1" "$removed_count"
 
 status="$(req DELETE "/pools/it-pool-$$")"
 assert_status "deleting an already-deleted pool is a 404" 404 "$status"

@@ -82,6 +82,13 @@ pub struct CreateSandboxRequest {
     /// boot used.
     #[serde(default)]
     pub(crate) egress: Option<EgressPolicyRequest>,
+    /// Baked in for this sandbox's whole lifetime: merged as the base
+    /// layer under every `exec`/`exec-stream` call's own `env` (a
+    /// per-call key wins on conflict) rather than needing to be repeated
+    /// on every call. See `routes_exec::resolve_env`. Persists through
+    /// snapshot/resume/fork exactly like `tags`.
+    #[serde(default)]
+    pub(crate) env: HashMap<String, String>,
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -426,7 +433,11 @@ async fn create_sandbox_cold(
                     // the error rather than let a broken-but-unenforced
                     // policy through.
                     if let Some(policy) = &egress {
-                        if let Err(e) = sandkiln_vmm::egress::apply(lease.config.guest_ip, &lease.config.tap_device, state.network.uplink(), policy) {
+                        let egress_started = Instant::now();
+                        let egress_result =
+                            sandkiln_vmm::egress::apply(lease.config.guest_ip, &lease.config.tap_device, state.network.uplink(), policy);
+                        state.metrics.record_create_phase_ms(CreatePhase::EgressApply, ms(egress_started.elapsed()));
+                        if let Err(e) = egress_result {
                             let _ = vm.stop();
                             let _ = state.network.release(lease);
                             if let (Some(id), Some(pool)) = (jail_id, &state.jailer_ids) {
@@ -476,6 +487,7 @@ async fn create_sandbox_cold(
         pty_session_count: Default::default(),
         source_pool_id: pool_id,
         egress,
+        env: request.env,
         // A cold create -- fresh boot or a pool's own warm-replenishment
         // boot -- is always a root of its own lineage.
         parent_snapshot_id: None,

@@ -114,6 +114,11 @@ pub struct Snapshot {
     /// process, already captured in the snapshotted memory image along
     /// with everything else.
     pub mounts: Vec<Mount>,
+    /// Carried over from the source sandbox's `Sandbox::env` — see that
+    /// field's doc comment. Restored onto a resumed **or** forked
+    /// sandbox identically (no `egress`-style ownership asymmetry: this
+    /// is plain data, not a live external resource).
+    pub env: HashMap<String, String>,
 }
 
 /// On-disk mirror of everything about a `Snapshot` that isn't already
@@ -168,6 +173,11 @@ struct SnapshotMeta {
     /// snapshot whose sandbox never had any.
     #[serde(default)]
     mounts: Vec<Mount>,
+    /// Same "defaults cleanly on upgrade" reasoning as `name` — absent in
+    /// metadata written before per-sandbox environment variables existed,
+    /// or for a snapshot whose sandbox never had any.
+    #[serde(default)]
+    env: HashMap<String, String>,
 }
 
 impl Snapshot {
@@ -200,6 +210,7 @@ impl Snapshot {
             egress: self.egress.clone(),
             parent_snapshot_id: self.parent_snapshot_id.clone(),
             mounts: self.mounts.clone(),
+            env: self.env.clone(),
         };
         let json = serde_json::to_vec_pretty(&meta).map_err(|e| io::Error::other(format!("serializing snapshot metadata: {e}")))?;
         write_atomically(&meta_path(dir), &json)
@@ -500,6 +511,7 @@ fn load_one(dir: &Path, id: &str, network: &NetworkManager) -> Option<Snapshot> 
         egress: meta.egress,
         parent_snapshot_id: meta.parent_snapshot_id,
         mounts: meta.mounts,
+        env: meta.env,
     })
 }
 
@@ -555,6 +567,7 @@ mod tests {
             name: Some("sample-snapshot".to_string()),
             archived_at_unix: None,
             egress: None,
+            env: HashMap::new(),
             parent_snapshot_id: None,
             mounts: vec![],
         }
@@ -649,6 +662,7 @@ mod tests {
             forked_into: None,
             archived_at: None,
             egress: None,
+            env: HashMap::from([("API_KEY".to_string(), "shh".to_string())]),
             parent_snapshot_id: Some("snap-parent-1".to_string()),
             mounts: vec![Mount {
                 id: "mount-1".to_string(),
@@ -681,6 +695,7 @@ mod tests {
         assert_eq!(loaded.created_at.duration_since(UNIX_EPOCH).unwrap().as_secs(), 1_700_000_123);
         assert_eq!(loaded.name.as_deref(), Some("round-trip-name"));
         assert_eq!(loaded.archived_at, None);
+        assert_eq!(loaded.env.get("API_KEY"), Some(&"shh".to_string()));
         assert_eq!(loaded.parent_snapshot_id.as_deref(), Some("snap-parent-1"));
         assert_eq!(
             loaded.mounts,
@@ -951,6 +966,7 @@ mod tests {
             forked_into: None,
             archived_at: None,
             egress: None,
+            env: HashMap::new(),
             parent_snapshot_id: None,
             mounts: vec![],
         };

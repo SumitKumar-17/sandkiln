@@ -98,6 +98,8 @@ pub struct GetOrCreateSandboxRequest {
     rate_limit: Option<crate::routes_sandbox::RateLimitRequest>,
     #[serde(default)]
     egress: Option<crate::routes_sandbox::EgressPolicyRequest>,
+    #[serde(default)]
+    env: HashMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -155,6 +157,7 @@ pub async fn get_or_create_sandbox(
                 image_id: None,
                 rate_limit: request.rate_limit,
                 egress: request.egress,
+                env: request.env,
             };
             let id = create_sandbox_core(&state, create_request).await?;
             Ok(Json(GetOrCreateSandboxResponse { id, created: true }))

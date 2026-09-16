@@ -7,9 +7,6 @@ const accessKey = requireEnv("S3_ACCESS_KEY");
 const secretKey = requireEnv("S3_SECRET_KEY");
 const bucket = requireEnv("S3_BUCKET");
 
-const daemonUrl = (process.env.SANDKILN_DAEMON_URL ?? "http://127.0.0.1:7777").replace(/\/+$/, "");
-const authToken = process.env.SANDKILN_AUTH_TOKEN;
-
 function requireEnv(name) {
   const value = process.env[name];
   if (!value) {
@@ -17,18 +14,6 @@ function requireEnv(name) {
     process.exit(2);
   }
   return value;
-}
-
-// Mounts have no SDK surface yet, only the daemon's HTTP API -- see
-// README.md. Everything else here goes through the published SDK.
-async function daemon(method, path, body) {
-  const res = await fetch(`${daemonUrl}${path}`, {
-    method,
-    headers: { "content-type": "application/json", ...(authToken ? { authorization: `Bearer ${authToken}` } : {}) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status} ${await res.text()}`);
-  return res.status === 204 ? null : await res.json();
 }
 
 async function main() {
@@ -39,19 +24,12 @@ async function main() {
   let mountId = null;
   try {
     console.log(`Mounting bucket "${bucket}" from ${endpoint} at ${MOUNT_PATH}...`);
-    const mount = await daemon("POST", `/sandboxes/${sandbox.id}/mounts`, {
-      bucket,
-      endpoint,
-      access_key: accessKey,
-      secret_key: secretKey,
-      mount_path: MOUNT_PATH,
-      read_only: false,
-    });
+    const mount = await sandbox.mount({ bucket, endpoint, accessKey, secretKey, mountPath: MOUNT_PATH });
     mountId = mount.id;
     console.log(`Mounted as ${mountId}.`);
 
-    const { mounts } = await daemon("GET", `/sandboxes/${sandbox.id}/mounts`);
-    console.log(`Sandbox reports ${mounts.length} mount(s): ${mounts.map((m) => `${m.bucket} -> ${m.mount_path}`).join(", ")}\n`);
+    const mounts = await sandbox.listMounts();
+    console.log(`Sandbox reports ${mounts.length} mount(s): ${mounts.map((m) => `${m.bucket} -> ${m.mountPath}`).join(", ")}\n`);
 
     const objectName = `sandkiln-example-${Date.now()}.txt`;
     const contents = `written from inside sandbox ${sandbox.id} at ${new Date().toISOString()}\n`;
@@ -66,7 +44,7 @@ async function main() {
     console.log(`${objectName} is now a real object in "${bucket}" -- it outlives this sandbox.\n`);
 
     console.log("Unmounting...");
-    await daemon("DELETE", `/sandboxes/${sandbox.id}/mounts/${mountId}`);
+    await sandbox.unmount(mountId);
     mountId = null;
 
     // `mountpoint` exits non-zero for a path that isn't a mount point --
@@ -76,7 +54,7 @@ async function main() {
     console.log(check.exitCode === 0 ? `${MOUNT_PATH} still reports as mounted.` : `${MOUNT_PATH} is no longer a mount point.`);
   } finally {
     if (mountId !== null) {
-      await daemon("DELETE", `/sandboxes/${sandbox.id}/mounts/${mountId}`).catch(() => {});
+      await sandbox.unmount(mountId).catch(() => {});
     }
     await sandbox.stop({ keep: false });
     console.log(`\nSandbox ${sandbox.id} stopped.`);

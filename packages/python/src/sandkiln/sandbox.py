@@ -64,6 +64,19 @@ class StopResult:
 
 
 @dataclass(frozen=True)
+class MountInfo:
+    """One active remote-storage mount, as returned by `Sandbox.mount()`/
+    `Sandbox.list_mounts()`. Never carries credentials — those exist only
+    as a `0600` file inside the guest, not in any daemon-side record."""
+
+    id: str
+    bucket: str
+    endpoint: str
+    mount_path: str
+    read_only: bool
+
+
+@dataclass(frozen=True)
 class SnapshotInfo:
     id: str
     source_sandbox_id: str
@@ -82,6 +95,16 @@ def _drive_attachment_to_dict(attachment: DriveAttachment) -> dict[str, object]:
     return {"id": attachment.id, "read_only": attachment.read_only}
 
 
+def _mount_info_from_response(response: dict[str, object]) -> MountInfo:
+    return MountInfo(
+        id=response["id"],
+        bucket=response["bucket"],
+        endpoint=response["endpoint"],
+        mount_path=response["mount_path"],
+        read_only=response["read_only"],
+    )
+
+
 def _build_rate_limit(bandwidth_bytes_per_sec: int | None, ops_per_sec: int | None) -> dict[str, int] | None:
     """`None` when the caller didn't set either sub-field — only includes
     the ones actually set, mirroring the daemon's own per-field
@@ -93,6 +116,20 @@ def _build_rate_limit(bandwidth_bytes_per_sec: int | None, ops_per_sec: int | No
         body["bandwidth_bytes_per_sec"] = bandwidth_bytes_per_sec
     if ops_per_sec is not None:
         body["ops_per_sec"] = ops_per_sec
+    return body
+
+
+def _build_egress(mode: str | None, allow_cidrs: list[str] | None, deny_cidrs: list[str] | None) -> dict[str, object] | None:
+    """`None` when `mode` wasn't set — `allow_cidrs`/`deny_cidrs` alone,
+    without a `mode`, are meaningless and silently ignored, same as
+    omitting an egress policy entirely."""
+    if mode is None:
+        return None
+    body: dict[str, object] = {"mode": mode}
+    if allow_cidrs is not None:
+        body["allow_cidrs"] = allow_cidrs
+    if deny_cidrs is not None:
+        body["deny_cidrs"] = deny_cidrs
     return body
 
 
@@ -118,6 +155,10 @@ class Sandbox:
         rate_limit_bandwidth_bytes_per_sec: int | None = None,
         rate_limit_ops_per_sec: int | None = None,
         drives: list[DriveAttachment] | None = None,
+        env: dict[str, str] | None = None,
+        egress_mode: str | None = None,
+        egress_allow_cidrs: list[str] | None = None,
+        egress_deny_cidrs: list[str] | None = None,
     ) -> "Sandbox":
         """`name` is a caller-given identity, unique among live sandboxes
         and held snapshots at the moment it's claimed — the daemon rejects
@@ -146,7 +187,23 @@ class Sandbox:
 
         `drives` attaches existing persistent drives (see `Drive.create`)
         at boot time. Omitted means no drives, unchanged from before this
-        existed."""
+        existed.
+
+        `env` is baked in for this sandbox's whole lifetime: merged as the
+        base layer under any `env` passed to `run_command()` (that wins on
+        a key conflict), so a variable doesn't need repeating on every
+        call. Persists through `snapshot()`/`resume()`/`fork()`, exactly
+        like `tags`.
+
+        `egress_mode` (`"allow_all"` or `"deny_all"`) sets the sandbox's
+        outbound network policy — omitted means today's behavior,
+        unchanged: unrestricted outbound through the shared bridge's
+        existing catch-all rule. `egress_allow_cidrs`/`egress_deny_cidrs`
+        are meaningless without `egress_mode` set. Enforced with one
+        dedicated iptables chain per sandbox, deny always winning over
+        allow on overlap. Gateway-bound traffic (DNS to the bridge's own
+        IP) is structurally exempt from either mode. Persists through
+        `snapshot()`/`resume()`/`fork()`."""
         resolved_base_url = resolve_base_url(base_url)
         resolved_token = resolve_auth_token(auth_token)
         body: dict[str, object] = {}
@@ -165,6 +222,11 @@ class Sandbox:
             body["rate_limit"] = rate_limit
         if drives is not None:
             body["drives"] = [_drive_attachment_to_dict(d) for d in drives]
+        if env is not None:
+            body["env"] = env
+        egress = _build_egress(egress_mode, egress_allow_cidrs, egress_deny_cidrs)
+        if egress is not None:
+            body["egress"] = egress
         response = request(resolved_base_url, "POST", "/sandboxes", resolved_token, body or None)
         return cls(response["id"], resolved_base_url, resolved_token)
 
@@ -201,15 +263,20 @@ class Sandbox:
         rate_limit_bandwidth_bytes_per_sec: int | None = None,
         rate_limit_ops_per_sec: int | None = None,
         drives: list[DriveAttachment] | None = None,
+        env: dict[str, str] | None = None,
+        egress_mode: str | None = None,
+        egress_allow_cidrs: list[str] | None = None,
+        egress_deny_cidrs: list[str] | None = None,
     ) -> tuple["Sandbox", bool]:
         """Resolves `name` to a sandbox in one call, creating it if it
         doesn't exist yet: a live sandbox with this name is returned
         as-is, a stopped (snapshotted) one is resumed, and otherwise a
         fresh sandbox is created and given this name. `tags`/
-        `vcpu_count`/`mem_size_mib`/rate limit options only apply to the
-        create-fresh case — resuming an existing snapshot uses what was
-        recorded on it when it was taken, same as `Sandbox.resume`. See
-        `Sandbox.create` for what the rate-limit options mean.
+        `vcpu_count`/`mem_size_mib`/rate limit/egress options only apply
+        to the create-fresh case — resuming an existing snapshot uses
+        what was recorded on it when it was taken, same as
+        `Sandbox.resume`. See `Sandbox.create` for what the rate-limit
+        and egress options mean.
 
         Returns `(sandbox, created)` — `created` is `True` only when this
         call actually booted a brand-new sandbox from the base rootfs.
@@ -231,6 +298,11 @@ class Sandbox:
             body["rate_limit"] = rate_limit
         if drives is not None:
             body["drives"] = [_drive_attachment_to_dict(d) for d in drives]
+        if env is not None:
+            body["env"] = env
+        egress = _build_egress(egress_mode, egress_allow_cidrs, egress_deny_cidrs)
+        if egress is not None:
+            body["egress"] = egress
         response = request(resolved_base_url, "POST", "/sandboxes/get-or-create", resolved_token, body)
         return cls(response["id"], resolved_base_url, resolved_token), response["created"]
 
@@ -263,8 +335,13 @@ class Sandbox:
             for summary in response["sandboxes"]
         ]
 
-    def run_command(self, command: str, args: list[str] | None = None) -> ExecResult:
-        body = {"command": command, "args": args or []}
+    def run_command(self, command: str, args: list[str] | None = None, env: dict[str, str] | None = None) -> ExecResult:
+        """`env` is merged on top of this sandbox's own create-time `env`
+        (this wins on a key conflict) — omit it entirely to just use the
+        sandbox's own defaults, unchanged."""
+        body: dict[str, object] = {"command": command, "args": args or []}
+        if env is not None:
+            body["env"] = env
         response = self._request("POST", f"/sandboxes/{self.id}/exec", body)
         return ExecResult(response["stdout"], response["stderr"], response["exit_code"])
 
@@ -326,6 +403,56 @@ class Sandbox:
             )
             for e in response["entries"]
         ]
+
+    def mount(
+        self,
+        bucket: str,
+        endpoint: str,
+        access_key: str,
+        secret_key: str,
+        mount_path: str,
+        read_only: bool = False,
+    ) -> MountInfo:
+        """Mounts an S3-compatible bucket into this sandbox at
+        `mount_path` via `rclone mount` — ordinary `read_file()`/
+        `write_file()` calls against that path read/write through to the
+        bucket. `endpoint` is the full URL of the S3-compatible service
+        (never defaulted to any particular provider, so the target is
+        always explicit); `access_key`/`secret_key` are written into a
+        `0600` rclone config file inside the guest, never passed as a
+        command-line argument. Needs the optional FUSE kernel +
+        rclone-injected rootfs setup described in `SELF_HOSTING.md`;
+        raises `SandkilnApiError` if the guest can't actually mount
+        (missing FUSE support, bad credentials, unreachable endpoint).
+        Not carried across `resume()`/`fork()`/a restored checkpoint —
+        the mount is a live guest-side FUSE process, already captured by
+        Firecracker's own snapshot mechanism along with everything else
+        in guest memory, so nothing needs re-establishing."""
+        body = {
+            "bucket": bucket,
+            "endpoint": endpoint,
+            "access_key": access_key,
+            "secret_key": secret_key,
+            "mount_path": mount_path,
+            "read_only": read_only,
+        }
+        response = self._request("POST", f"/sandboxes/{self.id}/mounts", body)
+        return _mount_info_from_response(response)
+
+    def list_mounts(self) -> list[MountInfo]:
+        """Lists every remote-storage mount currently active in this
+        sandbox."""
+        response = self._request("GET", f"/sandboxes/{self.id}/mounts")
+        return [_mount_info_from_response(m) for m in response["mounts"]]
+
+    def unmount(self, mount_id: str) -> None:
+        """Unmounts and tears down one remote-storage mount (see
+        `mount()`'s returned/listed `id`). Best-effort on the guest side —
+        a failed `umount` inside the guest is a loud warning in the
+        daemon's own logs, not a failed request, since there's no useful
+        way for a caller to retry a cleanup step that already removed
+        this mount from the sandbox's tracked list."""
+        self._request("DELETE", f"/sandboxes/{self.id}/mounts/{mount_id}")
 
     def stop(self, keep: bool | None = None) -> StopResult:
         """Stops this sandbox. By default (`keep` omitted, or `True`) this

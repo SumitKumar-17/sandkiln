@@ -112,11 +112,11 @@ await sandbox.stop();
 ## Status
 
 Published and real. This SDK matches the daemon's current HTTP API
-exactly — no more, no less. Streamed command output and attaching
-persistent drives at create time (supported by the daemon and CLI, not
-yet exposed here) are still open; see the [roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md)
-in the main repository for what's next. A [Python equivalent](https://github.com/SumitKumar-17/sandkiln/tree/main/packages/python)
-mirrors this exactly, but isn't published to PyPI yet.
+exactly — no more, no less. Remote storage mounts, snapshot history /
+time-travel restore, and per-sandbox egress policy are supported by the
+daemon and CLI but not yet exposed here; see the [roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md)
+in the main repository for what's next. A [Python equivalent](https://pypi.org/project/sandkiln/) mirrors this
+exactly.
 
 ## License
 

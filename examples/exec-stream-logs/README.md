@@ -5,14 +5,6 @@ command running detached inside a sandbox, watch it live, then reattach
 to the same session *after it has already finished* and get the whole log
 back — via `Sandbox.execStream()`/`.listExecStreams()`/`.attachLogs()`.
 
-> **This example points at the in-repo SDK source (`packages/sdk`), not
-> the published `sandkiln` npm package**, because
-> `execStream`/`listExecStreams`/`attachLogs` haven't been published yet.
-> Every other example here depends on the published package, as
-> `examples/AGENTS.md` requires — this one deliberately deviates until a
-> new version ships, and should be switched back to the published
-> `sandkiln` dependency once it does.
-
 ## What it does
 
 1. Creates a sandbox with `Sandbox.create()`.
@@ -46,16 +38,6 @@ Node.js >= 22: `attachLogs()` needs a global `WebSocket`, same as
 `pty()`.
 
 ## Run it
-
-Because this example uses the in-repo SDK (see the note above), build it
-once from the repo root first:
-
-```
-npm install
-npm run build
-```
-
-Then:
 
 ```
 cd examples/exec-stream-logs

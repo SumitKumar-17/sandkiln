@@ -835,6 +835,7 @@ mod tests {
             forked_into: None,
             archived_at: None,
             egress: None,
+            env: HashMap::new(),
             parent_snapshot_id: None,
             mounts: vec![],
         }
@@ -862,6 +863,7 @@ mod tests {
             name: None,
             parent_snapshot_id: None,
             egress: None,
+            env: HashMap::new(),
             mounts: vec![],
         }
     }

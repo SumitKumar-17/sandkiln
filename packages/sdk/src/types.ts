@@ -14,6 +14,22 @@ export interface RateLimitOptions {
   opsPerSec?: number;
 }
 
+/** Outbound (egress) network policy for a sandbox — enforced with one
+ * dedicated iptables chain per sandbox, `denyCidrs` always winning over
+ * `allowCidrs` on overlap (deny rules are appended first, and iptables
+ * evaluates a chain top-to-bottom, first match wins). `"deny_all"` blocks
+ * everything except what `allowCidrs` explicitly opens back up;
+ * `"allow_all"` (today's default when `egress` is omitted entirely)
+ * allows everything except what `denyCidrs` explicitly blocks.
+ * Gateway-bound traffic (DNS to the bridge's own IP) is structurally
+ * exempt from either mode — it never transits the uplink this policy
+ * scopes to. Survives `snapshot()`/`resume()`/`fork()`. */
+export interface EgressPolicyOptions {
+  mode: "allow_all" | "deny_all";
+  allowCidrs?: string[];
+  denyCidrs?: string[];
+}
+
 export interface CreateSandboxOptions extends SandboxOptions {
   /** Caller-given identity, unique among live sandboxes and held
    * snapshots at the moment it's claimed — the daemon rejects a taken
@@ -46,6 +62,15 @@ export interface CreateSandboxOptions extends SandboxOptions {
    * still conflicts with an existing read-write one. Omitted means no
    * drives, unchanged from before this existed. */
   drives?: DriveAttachmentOptions[];
+  /** Baked in for this sandbox's whole lifetime: merged as the base layer
+   * under any `env` passed to `runCommand()`/`execStream()` (those win on
+   * a key conflict), so a variable doesn't need repeating on every call.
+   * Persists through `snapshot()`/`resume()`/`fork()`, exactly like `tags`. */
+  env?: Record<string, string>;
+  /** Omitted means today's behavior, unchanged: unrestricted outbound
+   * through the shared bridge's existing catch-all rule. See
+   * `EgressPolicyOptions`. */
+  egress?: EgressPolicyOptions;
 }
 
 export interface DriveAttachmentOptions {
@@ -53,9 +78,9 @@ export interface DriveAttachmentOptions {
   readOnly?: boolean;
 }
 
-/** `tags`/`vcpuCount`/`memSizeMib`/`rateLimit` are used only when
- * `Sandbox.getOrCreate` actually creates a fresh sandbox — resuming an
- * existing snapshot under this name ignores them, using what was
+/** `tags`/`vcpuCount`/`memSizeMib`/`rateLimit`/`egress` are used only
+ * when `Sandbox.getOrCreate` actually creates a fresh sandbox — resuming
+ * an existing snapshot under this name ignores them, using what was
  * recorded on it when it was taken, same as `Sandbox.resume`. */
 export interface GetOrCreateSandboxOptions extends SandboxOptions {
   name: string;
@@ -64,6 +89,8 @@ export interface GetOrCreateSandboxOptions extends SandboxOptions {
   memSizeMib?: number;
   rateLimit?: RateLimitOptions;
   drives?: DriveAttachmentOptions[];
+  env?: Record<string, string>;
+  egress?: EgressPolicyOptions;
 }
 
 export interface ListSandboxesOptions extends SandboxOptions {
@@ -94,6 +121,12 @@ export interface DriveAttachmentRequestBody {
   read_only?: boolean;
 }
 
+export interface EgressPolicyRequestBody {
+  mode: "allow_all" | "deny_all";
+  allow_cidrs?: string[];
+  deny_cidrs?: string[];
+}
+
 export interface CreateSandboxRequestBody {
   name?: string;
   tags?: Record<string, string>;
@@ -102,6 +135,8 @@ export interface CreateSandboxRequestBody {
   image_id?: string;
   rate_limit?: RateLimitRequestBody;
   drives?: DriveAttachmentRequestBody[];
+  env?: Record<string, string>;
+  egress?: EgressPolicyRequestBody;
 }
 
 export interface CreateSandboxResponseBody {
@@ -122,6 +157,14 @@ export interface ListSandboxesResponseBody {
 export interface ExecRequestBody {
   command: string;
   args: string[];
+  env?: Record<string, string>;
+}
+
+/** Options for `Sandbox.runCommand()`/`Sandbox.execStream()` — merged on
+ * top of the sandbox's own create-time `env` (this wins on a key
+ * conflict), not a replacement for it. */
+export interface RunCommandOptions {
+  env?: Record<string, string>;
 }
 
 export interface ExecResponseBody {
@@ -227,6 +270,7 @@ export interface DirEntry {
 export interface StartExecStreamRequestBody {
   command: string;
   args?: string[];
+  env?: Record<string, string>;
 }
 
 export interface StartExecStreamResponseBody {
@@ -335,6 +379,8 @@ export interface GetOrCreateSandboxRequestBody {
   mem_size_mib?: number;
   rate_limit?: RateLimitRequestBody;
   drives?: DriveAttachmentRequestBody[];
+  env?: Record<string, string>;
+  egress?: EgressPolicyRequestBody;
 }
 
 export interface GetOrCreateSandboxResponseBody {
@@ -478,4 +524,52 @@ export interface PoolInfo {
    * (warm or cold-created, either way) — only meaningful relative to
    * `maxCount`. */
   claimed: number;
+}
+
+/** Mounts an S3-compatible bucket into a sandbox via `rclone mount` — see
+ * `Sandbox.mount()`. `endpoint` is the full URL of the S3-compatible
+ * service (never defaulted to any particular provider, so the target is
+ * always explicit); `accessKey`/`secretKey` are written into a `0600`
+ * rclone config file inside the guest, never passed as a command-line
+ * argument. `mountPath` is created (`mkdir -p`) inside the guest if it
+ * doesn't already exist. */
+export interface MountOptions {
+  bucket: string;
+  endpoint: string;
+  accessKey: string;
+  secretKey: string;
+  mountPath: string;
+  readOnly?: boolean;
+}
+
+/** One active remote-storage mount, as returned by `Sandbox.mount()`/
+ * `Sandbox.listMounts()`. Never carries credentials — those exist only
+ * as a `0600` file inside the guest, not in any daemon-side record. */
+export interface MountInfo {
+  id: string;
+  bucket: string;
+  endpoint: string;
+  mountPath: string;
+  readOnly: boolean;
+}
+
+export interface CreateMountRequestBody {
+  bucket: string;
+  endpoint: string;
+  access_key: string;
+  secret_key: string;
+  mount_path: string;
+  read_only?: boolean;
+}
+
+export interface MountResponseBody {
+  id: string;
+  bucket: string;
+  endpoint: string;
+  mount_path: string;
+  read_only: boolean;
+}
+
+export interface ListMountsResponseBody {
+  mounts: MountResponseBody[];
 }

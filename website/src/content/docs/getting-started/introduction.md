@@ -9,7 +9,7 @@ sandkiln is a compute primitive for safely running untrusted or AI-generated cod
 
 - **`sandkilnd`** — the daemon. An axum + tokio HTTP API that drives Firecracker directly: boot, snapshot/resume, networking, drives, images.
 - **JS/TS SDK** (`sandkiln` on npm) — a thin, fully-typed client over the daemon's HTTP API.
-- **Python SDK** (not yet on PyPI — install from the repo) — mirrors the JS SDK exactly.
+- **Python SDK** (`sandkiln` on PyPI) — mirrors the JS SDK exactly.
 - **CLI** (`sandkiln-cli` on npm, installs the `kiln` command) — every operation the SDKs expose, from the command line.
 
 ## Where to go from here

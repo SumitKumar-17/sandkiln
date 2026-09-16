@@ -1,0 +1,17 @@
+{
+  "name": "sandkiln-example-named-persistent-sandbox",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Reference named/persistent sandbox example: a named sandbox survives a stop by default, so a second process run resumes exactly where the first one left off.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "sandkiln": "^0.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

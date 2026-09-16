@@ -112,6 +112,10 @@ pub struct RetiredSnapshot {
     /// either; nothing to re-apply on restore, same reasoning as
     /// `Snapshot::mounts`.
     pub mounts: Vec<Mount>,
+    /// Carried over from the source `Snapshot::env` — see that field's
+    /// doc comment. Restored onto the new sandbox unchanged when this
+    /// checkpoint is later restored.
+    pub env: HashMap<String, String>,
 }
 
 /// On-disk mirror of `RetiredSnapshot`, written by `persist`, read back by
@@ -142,6 +146,8 @@ struct RetiredSnapshotMeta {
     egress: Option<EgressPolicy>,
     #[serde(default)]
     mounts: Vec<Mount>,
+    #[serde(default)]
+    env: HashMap<String, String>,
 }
 
 impl RetiredSnapshot {
@@ -167,6 +173,7 @@ impl RetiredSnapshot {
             parent_snapshot_id: self.parent_snapshot_id.clone(),
             egress: self.egress.clone(),
             mounts: self.mounts.clone(),
+            env: self.env.clone(),
         };
         let json =
             serde_json::to_vec_pretty(&meta).map_err(|e| io::Error::other(format!("serializing retired-snapshot metadata: {e}")))?;
@@ -307,6 +314,7 @@ fn load_one(dir: &Path, id: &str) -> Option<RetiredSnapshot> {
         parent_snapshot_id: meta.parent_snapshot_id,
         egress: meta.egress,
         mounts: meta.mounts,
+        env: meta.env,
     })
 }
 
@@ -355,6 +363,7 @@ mod tests {
             name: Some("sample-checkpoint".to_string()),
             parent_snapshot_id: Some("snap-parent-1".to_string()),
             egress: None,
+            env: HashMap::from([("API_KEY".to_string(), "shh".to_string())]),
             mounts: vec![Mount {
                 id: "mount-1".to_string(),
                 bucket: "my-bucket".to_string(),
@@ -387,6 +396,7 @@ mod tests {
         assert_eq!(loaded.retired_at.duration_since(UNIX_EPOCH).unwrap().as_secs(), 1_700_000_500);
         assert_eq!(loaded.name.as_deref(), Some("sample-checkpoint"));
         assert_eq!(loaded.parent_snapshot_id.as_deref(), Some("snap-parent-1"));
+        assert_eq!(loaded.env.get("API_KEY"), Some(&"shh".to_string()));
         assert_eq!(
             loaded.mounts,
             vec![Mount {

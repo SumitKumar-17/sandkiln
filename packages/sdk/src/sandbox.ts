@@ -5,12 +5,15 @@ import type {
   ChmodRequestBody,
   ChownRequestBody,
   CopyRequestBody,
+  CreateMountRequestBody,
   CreateSandboxOptions,
   CreateSandboxRequestBody,
   CreateSandboxResponseBody,
   DirEntry,
   DriveAttachmentOptions,
   DriveAttachmentRequestBody,
+  EgressPolicyOptions,
+  EgressPolicyRequestBody,
   ExecRequestBody,
   ExecResponseBody,
   ExecResult,
@@ -24,9 +27,13 @@ import type {
   ListExecStreamsResponseBody,
   ListSandboxesOptions,
   ListSandboxesResponseBody,
+  ListMountsResponseBody,
   ListSnapshotsOptions,
   ListSnapshotsResponseBody,
   MkdirRequestBody,
+  MountInfo,
+  MountOptions,
+  MountResponseBody,
   PreviewUrlOptions,
   PtyOptions,
   RateLimitOptions,
@@ -37,6 +44,7 @@ import type {
   ReadlinkResponseBody,
   RenameRequestBody,
   ResumeSnapshotResponseBody,
+  RunCommandOptions,
   SandboxByNameResponseBody,
   SandboxInfo,
   SandboxOptions,
@@ -152,6 +160,9 @@ export class Sandbox {
     if (rateLimit !== undefined) requestBody.rate_limit = rateLimit;
     const drives = buildDrivesRequestBody(options.drives);
     if (drives !== undefined) requestBody.drives = drives;
+    if (options.env !== undefined) requestBody.env = options.env;
+    const egress = buildEgressRequestBody(options.egress);
+    if (egress !== undefined) requestBody.egress = egress;
 
     const body = await request<GetOrCreateSandboxResponseBody>({
       ...client,
@@ -162,8 +173,9 @@ export class Sandbox {
     return { sandbox: new Sandbox(body.id, client), created: body.created };
   }
 
-  async runCommand(command: string, args: string[] = []): Promise<ExecResult> {
+  async runCommand(command: string, args: string[] = [], options: RunCommandOptions = {}): Promise<ExecResult> {
     const requestBody: ExecRequestBody = { command, args };
+    if (options.env !== undefined) requestBody.env = options.env;
     const body = await request<ExecResponseBody>({
       ...this.client,
       method: "POST",
@@ -326,8 +338,9 @@ export class Sandbox {
    * doesn't survive the daemon restarting — see
    * `routes_logs`'s own module doc comment in the daemon for why.
    */
-  async execStream(command: string, args: string[] = []): Promise<string> {
+  async execStream(command: string, args: string[] = [], options: RunCommandOptions = {}): Promise<string> {
     const requestBody: StartExecStreamRequestBody = { command, args };
+    if (options.env !== undefined) requestBody.env = options.env;
     const body = await request<StartExecStreamResponseBody>({
       ...this.client,
       method: "POST",
@@ -376,6 +389,60 @@ export class Sandbox {
       url.searchParams.set("token", this.client.authToken);
     }
     return new WebSocket(url);
+  }
+
+  /**
+   * Mounts an S3-compatible bucket into this sandbox at `options.mountPath`
+   * via `rclone mount` — ordinary `readFile()`/`writeFile()` calls
+   * against that path read/write through to the bucket. Needs the
+   * optional FUSE kernel + rclone-injected rootfs setup described in
+   * `SELF_HOSTING.md`; raises `SandkilnApiError` if the guest can't
+   * actually mount (missing FUSE support, bad credentials, unreachable
+   * endpoint). Not carried across `resume()`/`fork()`/a restored
+   * checkpoint — the mount is a live guest-side FUSE process, already
+   * captured by Firecracker's own snapshot mechanism along with
+   * everything else in guest memory, so nothing needs re-establishing.
+   */
+  async mount(options: MountOptions): Promise<MountInfo> {
+    const requestBody: CreateMountRequestBody = {
+      bucket: options.bucket,
+      endpoint: options.endpoint,
+      access_key: options.accessKey,
+      secret_key: options.secretKey,
+      mount_path: options.mountPath,
+    };
+    if (options.readOnly !== undefined) requestBody.read_only = options.readOnly;
+    const body = await request<MountResponseBody>({
+      ...this.client,
+      method: "POST",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/mounts`,
+      body: requestBody,
+    });
+    return mountInfoFromBody(body);
+  }
+
+  /** Lists every remote-storage mount currently active in this sandbox. */
+  async listMounts(): Promise<MountInfo[]> {
+    const body = await request<ListMountsResponseBody>({
+      ...this.client,
+      method: "GET",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/mounts`,
+    });
+    return body.mounts.map(mountInfoFromBody);
+  }
+
+  /** Unmounts and tears down one remote-storage mount (see `mount()`'s
+   * returned/listed `id`). Best-effort on the guest side — a failed
+   * `umount` inside the guest is a loud warning in the daemon's own
+   * logs, not a failed request, since there's no useful way for a
+   * caller to retry a cleanup step that already removed this mount from
+   * the sandbox's tracked list. */
+  async unmount(mountId: string): Promise<void> {
+    await request<void>({
+      ...this.client,
+      method: "DELETE",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/mounts/${encodeURIComponent(mountId)}`,
+    });
   }
 
   /**
@@ -541,6 +608,10 @@ function buildDrivesRequestBody(drives: DriveAttachmentOptions[] | undefined): D
   return drives.map((d) => ({ id: d.id, read_only: d.readOnly }));
 }
 
+function mountInfoFromBody(body: MountResponseBody): MountInfo {
+  return { id: body.id, bucket: body.bucket, endpoint: body.endpoint, mountPath: body.mount_path, readOnly: body.read_only };
+}
+
 /** Only includes the sub-fields the caller actually set — mirrors the
  * daemon's own per-field `#[serde(default)]` optionality on
  * `RateLimitRequest` rather than always sending both keys. */
@@ -549,6 +620,14 @@ function buildRateLimitRequestBody(rateLimit: RateLimitOptions | undefined): Rat
   const body: RateLimitRequestBody = {};
   if (rateLimit.bandwidthBytesPerSec !== undefined) body.bandwidth_bytes_per_sec = rateLimit.bandwidthBytesPerSec;
   if (rateLimit.opsPerSec !== undefined) body.ops_per_sec = rateLimit.opsPerSec;
+  return body;
+}
+
+function buildEgressRequestBody(egress: EgressPolicyOptions | undefined): EgressPolicyRequestBody | undefined {
+  if (egress === undefined) return undefined;
+  const body: EgressPolicyRequestBody = { mode: egress.mode };
+  if (egress.allowCidrs !== undefined) body.allow_cidrs = egress.allowCidrs;
+  if (egress.denyCidrs !== undefined) body.deny_cidrs = egress.denyCidrs;
   return body;
 }
 
@@ -566,5 +645,8 @@ function buildCreateSandboxRequestBody(options: CreateSandboxOptions): CreateSan
   if (rateLimit !== undefined) body.rate_limit = rateLimit;
   const drives = buildDrivesRequestBody(options.drives);
   if (drives !== undefined) body.drives = drives;
+  if (options.env !== undefined) body.env = options.env;
+  const egress = buildEgressRequestBody(options.egress);
+  if (egress !== undefined) body.egress = egress;
   return Object.keys(body).length > 0 ? body : undefined;
 }

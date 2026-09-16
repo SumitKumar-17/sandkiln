@@ -42,9 +42,11 @@ A CLI ships the same operations:
 npm install -g sandkiln-cli   # installs the `kiln` command
 ```
 
-Python mirrors the JS/TS SDK exactly too, but isn't published to PyPI
-yet — install it from this repo (`pip install ./packages/python`) or
-just track the source there directly.
+Python mirrors the JS/TS SDK exactly too:
+
+```
+pip install sandkiln
+```
 
 See [`packages/python`](packages/python) and [`packages/cli`](packages/cli).
 
@@ -56,9 +58,9 @@ read-only shared drives, auto-suspend on idle, custom/managed images,
 per-sandbox I/O rate limiting, and all three clients (JS/TS, Python, CLI)
 work and are verified against real hardware — see
 [CHANGELOG.md](CHANGELOG.md) for what shipped and
-[ROADMAP.md](ROADMAP.md) for what's still open (streamed log output,
-OCI-image conversion, firewall/egress policy, multi-node). The plan is a
-direction, not a spec, and keeps changing as the project gets built.
+[ROADMAP.md](ROADMAP.md) for what's still open (OCI-image conversion,
+multi-node, snapshot encryption at rest). The plan is a direction, not a
+spec, and keeps changing as the project gets built.
 
 Picking this up as a contributor (human or agent)? Read
 [AGENTS.md](AGENTS.md) first — it covers non-obvious things this project
@@ -73,8 +75,8 @@ already hit and fixed once.
   sqlite), `sandkiln-daemon` (the HTTP API, `sandkilnd`).
 - **`packages/sdk`** — [`sandkiln`](https://www.npmjs.com/package/sandkiln)
   on npm, the JS/TS client.
-- **`packages/python`** — `sandkiln` on PyPI (not yet published), the
-  Python client, mirroring the JS SDK exactly.
+- **`packages/python`** — [`sandkiln`](https://pypi.org/project/sandkiln/)
+  on PyPI, the Python client, mirroring the JS SDK exactly.
 - **`packages/cli`** — `kiln`, the command-line interface.
 - **`images/`** — kernel and rootfs build scripts for sandbox base images.
 - **`scripts/`** — dev-box setup and daily-use tooling (`dev.sh` is the

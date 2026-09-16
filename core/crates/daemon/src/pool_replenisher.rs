@@ -68,6 +68,10 @@ async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) {
         // of time -- the actual claimer's own policy (if any) is applied
         // fresh at claim time instead, see `routes_sandbox::claim_from_pool`.
         egress: None,
+        // Same reasoning as `egress` above -- the actual claimer's own
+        // env (if any) is written onto the claimed `Sandbox` directly in
+        // `claim_from_pool`, not baked into this placeholder boot.
+        env: HashMap::new(),
     };
     let sandbox_id = match create_sandbox_core(state, request).await {
         Ok(id) => id,

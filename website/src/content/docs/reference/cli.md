@@ -44,7 +44,9 @@ kiln sandbox rm build-worker
 | `by-name <name>` | Resolve a name to a live sandbox's id. |
 | `ls` | List sandboxes. `--tag <key=value>` (repeatable) filters. |
 | `rm <id>` | Stop a sandbox. Preserves state as a snapshot by default; `--destroy` fully destroys it instead — no snapshot, nothing left to resume. |
-| `exec <id> <command> [args...]` | Run a command inside a sandbox. Exits with the command's own exit code. |
+| `exec <id> <command> [args...]` | Run a command inside a sandbox, wait for it to finish, print its output. Exits with the command's own exit code. An arg starting with `-` needs a `--` before it, or `commander` parses it as a `kiln` flag instead of passing it through. |
+| `exec-stream <id> <command> [args...]` | Start a command in the background and follow its output live (replay so far, then a live tail) until it exits. Ctrl+C detaches without stopping the command. |
+| `logs <id> [session-id]` | Without `session-id`: list this sandbox's `exec-stream` sessions. With one: attach and follow it, exactly like right after `exec-stream` started it — works any number of times, including after the process has already finished. Neither survives `resume()`/`fork()`/a daemon restart. |
 | `read <id> <path>` | Read a file from a sandbox and print it to stdout. |
 | `write <id> <path> <local-file>` | Write a local file into a sandbox at the given path. |
 | `chmod <id> <path> <mode>` | Change a file's permission bits (octal, e.g. `644`). |

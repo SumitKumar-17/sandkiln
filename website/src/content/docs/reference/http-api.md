@@ -64,6 +64,9 @@ curl -s -X POST "$BASE/sandboxes/get-or-create" \
 | `POST /sandboxes/:id/truncate` | Body: `{"path": "...", "size": <n>}`. |
 | `POST /sandboxes/:id/list-dir` | Body: `{"path": "..."}`. Returns real per-entry metadata: type, permission bits, size, mtime. |
 | `GET /sandboxes/:id/pty[?cols=&rows=]` | Upgrades to a WebSocket: a live, bidirectional shell session, distinct from `exec`'s request/response shape. Accepts the token as `?token=` as well as a header, since neither browsers' nor Node's native `WebSocket` constructor can set a custom header. A per-sandbox concurrent-session cap (64) is enforced. |
+| `POST /sandboxes/:id/exec-stream` | Starts a command in the background, returns `{"id": "..."}` immediately — the command itself may not even be spawned yet. Attach to the `logs` route below to actually see its output. Not `exec`'s request/response shape: this is for a long-running command you want to watch live, not wait on. |
+| `GET /sandboxes/:id/exec-stream` | Lists every streamed session tracked against this sandbox, running or finished: `{"sessions": [{"id", "command", "args", "started_at_unix", "exit_code"}, ...]}` — `exit_code` is `null` while still running. |
+| `GET /sandboxes/:id/exec-stream/:session_id/logs` | Upgrades to a WebSocket: replays everything captured so far, then live-tails anything new, until the process exits (one final `"[process exited with code N]"` text message, then the socket closes) or the client disconnects. Callable again any number of times for the same session, including long after it finished — it's just a replay with nothing to tail. Buffered replay frames arrive as binary; the final exit notice arrives as text — a client needs to handle both frame types. Sessions aren't carried across `resume()`/`fork()` and don't survive a daemon restart. |
 
 ## Snapshots
 

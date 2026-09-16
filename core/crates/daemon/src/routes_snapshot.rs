@@ -205,7 +205,8 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
             pool.record_release();
         }
     }
-    let Sandbox { vm, network, rootfs_path, attached_drives, image_id, tags, name, egress, parent_snapshot_id, mounts, .. } = sandbox;
+    let Sandbox { vm, network, rootfs_path, attached_drives, image_id, tags, name, egress, env, parent_snapshot_id, mounts, .. } =
+        sandbox;
     // Only a forked descendant (rejected above) ever has `network: None`.
     let network = network.expect("non-fork sandboxes always hold a network lease");
 
@@ -265,6 +266,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
         forked_into: None,
         archived_at: None,
         egress,
+        env,
         // The snapshot this sandbox itself was resumed/forked from, if
         // any -- `None` for a sandbox that was cold-booted, making this
         // new snapshot a root of its own lineage. See
@@ -503,6 +505,7 @@ fn retire_snapshot_files(
         name: snapshot.name.clone(),
         parent_snapshot_id: snapshot.parent_snapshot_id.clone(),
         egress: snapshot.egress.clone(),
+        env: snapshot.env.clone(),
         mounts: snapshot.mounts.clone(),
     };
     if let Err(e) = retired.persist(&dest_dir) {
@@ -648,6 +651,7 @@ pub(crate) async fn resume_snapshot_by_id(
         // pool. See `crate::pool`'s module doc comment.
         source_pool_id: None,
         egress: egress.clone(),
+        env: snapshot.env,
         // Unlike `source_snapshot_id` above (deliberately `None` here so
         // this resumed sandbox stays snapshottable), lineage tracking
         // wants this sandbox's real origin recorded regardless — see
@@ -813,6 +817,11 @@ pub async fn fork_snapshot(
             // *snapshot* still owns for a fork. See `Snapshot::egress`
             // for the copy that's actually (re-)applied, just below.
             egress: None,
+            // Unlike `egress` just above, there's no external resource
+            // to worry about owning twice -- `env` is plain data, so a
+            // fork just gets its own copy of the same value the snapshot
+            // carries, identically to how resume restores it.
+            env: snapshot.env.clone(),
             // Same value as `source_snapshot_id` above for a fork
             // specifically (unlike resume, where the two deliberately
             // diverge) — see `Sandbox::parent_snapshot_id`'s doc comment

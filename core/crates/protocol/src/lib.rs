@@ -113,7 +113,8 @@ mod tests {
     /// is the one test proving they compose correctly together.
     #[test]
     fn full_request_pipeline_host_to_guest() {
-        let request = Request::Exec { command: "echo".to_string(), args: vec!["hi".to_string()] };
+        let request =
+            Request::Exec { command: "echo".to_string(), args: vec!["hi".to_string()], env: std::collections::HashMap::new() };
 
         let payload = encode_request(&request).unwrap();
         let mut wire = Vec::new();
@@ -122,7 +123,7 @@ mod tests {
         let received_payload = read_message(&mut Cursor::new(wire)).unwrap();
         let decoded = decode_request(&received_payload).unwrap();
 
-        let Request::Exec { command, args } = decoded else { panic!("expected Exec") };
+        let Request::Exec { command, args, .. } = decoded else { panic!("expected Exec") };
         assert_eq!(command, "echo");
         assert_eq!(args, vec!["hi"]);
     }

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -7,6 +8,14 @@ pub enum Request {
         command: String,
         #[serde(default)]
         args: Vec<String>,
+        /// Already fully resolved by the daemon (create-time defaults
+        /// merged with any per-call override, per-call winning) -- the
+        /// guest agent is a dumb executor and has no notion of
+        /// "sandbox-level" vs. "call-level" env, see this crate's own
+        /// `AGENTS.md`. Added to the process's own inherited
+        /// environment, not a replacement for it.
+        #[serde(default)]
+        env: HashMap<String, String>,
     },
     ReadFile {
         path: String,
@@ -97,6 +106,10 @@ pub struct ExecStreamHandshake {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Same already-resolved-by-the-daemon shape as `Request::Exec`'s
+    /// own `env` field -- see its doc comment.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
 
 /// One framed message in the sequence an [`crate::EXEC_STREAM_PORT`]
@@ -152,17 +165,25 @@ mod tests {
 
     #[test]
     fn exec_request_wire_shape() {
-        let req = Request::Exec { command: "echo".to_string(), args: vec!["hi".to_string()] };
+        let req = Request::Exec { command: "echo".to_string(), args: vec!["hi".to_string()], env: HashMap::new() };
         let json = serde_json::to_string(&req).unwrap();
-        assert_eq!(json, r#"{"cmd":"exec","command":"echo","args":["hi"]}"#);
+        assert_eq!(json, r#"{"cmd":"exec","command":"echo","args":["hi"],"env":{}}"#);
     }
 
     #[test]
-    fn exec_request_args_default_to_empty_when_omitted() {
+    fn exec_request_args_and_env_default_to_empty_when_omitted() {
         let req: Request = serde_json::from_str(r#"{"cmd":"exec","command":"echo"}"#).unwrap();
-        let Request::Exec { command, args } = req else { panic!("expected Exec") };
+        let Request::Exec { command, args, env } = req else { panic!("expected Exec") };
         assert_eq!(command, "echo");
         assert!(args.is_empty());
+        assert!(env.is_empty());
+    }
+
+    #[test]
+    fn exec_request_carries_env() {
+        let req: Request = serde_json::from_str(r#"{"cmd":"exec","command":"env","env":{"FOO":"bar"}}"#).unwrap();
+        let Request::Exec { env, .. } = req else { panic!("expected Exec") };
+        assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
     }
 
     #[test]
@@ -303,16 +324,18 @@ mod tests {
 
     #[test]
     fn exec_stream_handshake_wire_shape() {
-        let handshake = ExecStreamHandshake { command: "tail".to_string(), args: vec!["-f".to_string(), "/log".to_string()] };
+        let handshake =
+            ExecStreamHandshake { command: "tail".to_string(), args: vec!["-f".to_string(), "/log".to_string()], env: HashMap::new() };
         let json = serde_json::to_string(&handshake).unwrap();
-        assert_eq!(json, r#"{"command":"tail","args":["-f","/log"]}"#);
+        assert_eq!(json, r#"{"command":"tail","args":["-f","/log"],"env":{}}"#);
     }
 
     #[test]
-    fn exec_stream_handshake_args_default_to_empty_when_omitted() {
+    fn exec_stream_handshake_args_and_env_default_to_empty_when_omitted() {
         let handshake: ExecStreamHandshake = serde_json::from_str(r#"{"command":"tail"}"#).unwrap();
         assert_eq!(handshake.command, "tail");
         assert!(handshake.args.is_empty());
+        assert!(handshake.env.is_empty());
     }
 
     #[test]
@@ -330,7 +353,7 @@ mod tests {
     #[test]
     fn every_request_variant_roundtrips() {
         let requests = [
-            Request::Exec { command: "ls".to_string(), args: vec!["-la".to_string()] },
+            Request::Exec { command: "ls".to_string(), args: vec!["-la".to_string()], env: HashMap::new() },
             Request::ReadFile { path: "/a".to_string() },
             Request::WriteFile { path: "/a".to_string(), content_base64: "x".to_string() },
             Request::ListDir { path: "/a".to_string() },

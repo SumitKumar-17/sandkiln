@@ -9,7 +9,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "sandkiln": "file:../../packages/sdk"
+    "sandkiln": "^0.10.0"
   },
   "engines": {
     "node": ">=22"

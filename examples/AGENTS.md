@@ -29,6 +29,19 @@ external user of the published packages would write.
   and wires it to this process's own terminal (raw mode, keystrokes
   passed straight through) — distinct from `code-playground`'s
   request/response `runCommand()`.
+- `snapshot-lifecycle/` — JS/TS, the `sandkiln` npm package. Does a
+  one-time setup step, freezes it with `Sandbox.snapshot()`, then forks
+  two independent branches from the same frozen state with
+  `Sandbox.fork()` and proves neither branch's writes leak into the
+  other, before finally consuming the snapshot with `Sandbox.resume()`
+  and confirming it's gone afterward — the concrete distinction between
+  the two ways to boot from a snapshot.
+- `named-persistent-sandbox/` — JS/TS, the `sandkiln` npm package.
+  Resolves a name to a sandbox with `Sandbox.getOrCreate()`, writes a
+  counter file, and stops it with the *default* (state-keeping) options —
+  then does it again as a second simulated process invocation to prove
+  the counter picks up where it left off, purely by name, with no id ever
+  tracked by the caller.
 - `pool-warm-start/` — JS/TS, the `sandkiln` npm package. Configures a
   pre-warmed pool with `Pool.create()` and claims from it several times
   in a row (not just once), reporting each attempt as a clean claim or a
@@ -42,21 +55,23 @@ external user of the published packages would write.
   **reattaches to the same session after it has finished** and gets the
   identical log back in milliseconds — the distinctive part of the
   feature, since the daemon buffers a session's output independently of
-  any connection. The one example here that deviates from the
-  published-package rule below: it depends on the in-repo
-  `packages/sdk` because these three methods aren't published yet, and
-  its README says so prominently. Switch it back once a new npm version
-  ships.
+  any connection.
 - `remote-storage-mount/` — JS/TS. Mounts an S3-compatible bucket into a
-  sandbox at `/mnt/bucket`, writes and reads a file through it with
-  ordinary `writeFile()`/`readFile()` calls, then unmounts and confirms
-  the guest-side FUSE mount is really gone. Mounts have no SDK method
-  yet, so the three `/sandboxes/:id/mounts` calls are raw `fetch()`
-  against the daemon while the rest uses the published package — its
-  README says so, and says why inventing SDK methods here would be the
-  wrong call. Needs the optional FUSE kernel + rclone-injected rootfs
-  setup from `SELF_HOSTING.md`, and an S3-compatible endpoint the user
-  supplies via `S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`.
+  sandbox at `/mnt/bucket` via `sandbox.mount()`, writes and reads a file
+  through it with ordinary `writeFile()`/`readFile()` calls, then
+  `sandbox.unmount()`s and confirms the guest-side FUSE mount is really
+  gone. Needs the optional FUSE kernel + rclone-injected rootfs setup
+  from `SELF_HOSTING.md`, and an S3-compatible endpoint the user supplies
+  via `S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`.
+- `egress-policy/` — JS/TS. Pings a caller-supplied real IP address
+  (`EGRESS_EXAMPLE_TARGET_IP`) from three sandboxes in turn: no policy
+  (reaches it), `deny_all` with no `allowCidrs` (blocked), `deny_all` +
+  `allowCidrs: ["<target>/32"]` (reaches it again) — the actual
+  allow/deny behavior, not just that a policy doesn't break normal use.
+  Deliberately doesn't hardcode a target: a public IP would silently
+  "pass" on a machine with no outbound internet route (a real dev-box
+  finding while building this), and a LAN IP wouldn't be portable across
+  networks.
 
 ## Conventions
 

@@ -113,6 +113,7 @@ impl HistoryStore {
             })?;
         }
         let conn = Connection::open(path)?;
+        Self::configure_for_write_latency(&conn)?;
         Self::init_schema(&conn)?;
         Ok(Self { conn: Mutex::new(conn) })
     }
@@ -123,6 +124,31 @@ impl HistoryStore {
         let conn = Connection::open_in_memory()?;
         Self::init_schema(&conn)?;
         Ok(Self { conn: Mutex::new(conn) })
+    }
+
+    /// Default sqlite settings (`journal_mode=DELETE`,
+    /// `synchronous=FULL`) fsync twice per write — once for the rollback
+    /// journal, once for the main database file — which measured at
+    /// ~9.24ms on a real create's critical path (see `ROADMAP.md`'s
+    /// Benchmarking section), a real cost for a store this code already
+    /// treats as best-effort (`record_created`'s caller only warns on
+    /// error, never fails the request over it — see
+    /// `routes_sandbox.rs`). WAL mode fsyncs the write-ahead log, not the
+    /// main database file, on every write, and `synchronous=NORMAL`
+    /// (safe specifically in WAL mode, unlike in the default rollback
+    /// journal mode) only syncs at WAL checkpoints instead of every
+    /// transaction — durable against an application crash, and against
+    /// an OS/power loss too except for whichever transactions landed in
+    /// the last, not-yet-checkpointed part of the WAL, a risk this
+    /// store's own already-established best-effort tolerance absorbs
+    /// without a design change. Not applied to `open_in_memory` — WAL
+    /// isn't meaningful for `:memory:` (sqlite silently keeps its
+    /// in-memory journal mode instead), and durability doesn't apply to
+    /// a store nothing persists anyway.
+    fn configure_for_write_latency(conn: &Connection) -> rusqlite::Result<()> {
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        Ok(())
     }
 
     fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -363,6 +389,20 @@ mod tests {
         store.record_created("sbx-1", None, &HashMap::new(), None, SystemTime::now()).unwrap();
         assert!(db_path.exists());
         assert!(store.get("sbx-1").unwrap().is_some());
+    }
+
+    #[test]
+    fn open_sets_wal_and_synchronous_normal_for_write_latency() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("history.db");
+        let store = HistoryStore::open(&db_path).unwrap();
+        let conn = store.conn.lock().unwrap();
+        let journal_mode: String = conn.pragma_query_value(None, "journal_mode", |row| row.get(0)).unwrap();
+        assert_eq!(journal_mode, "wal");
+        let synchronous: i64 = conn.pragma_query_value(None, "synchronous", |row| row.get(0)).unwrap();
+        // sqlite reports `synchronous` back as its integer level, not the
+        // name it was set with -- 1 is NORMAL (0 OFF, 2 FULL, 3 EXTRA).
+        assert_eq!(synchronous, 1);
     }
 
     #[test]

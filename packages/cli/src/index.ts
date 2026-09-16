@@ -2,14 +2,17 @@ import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
 import { Drive, Image, Pool, Sandbox, SandkilnApiError } from "sandkiln";
 import {
+  accumulate,
   formatDirEntryList,
   formatDriveList,
   formatExecStreamList,
   formatImageList,
+  formatMountList,
   formatPoolList,
   formatSandboxList,
   formatSnapshotList,
   parseDriveAttachment,
+  parseEnvVar,
   parseNonNegativeInt,
   parseOctalMode,
   parsePositiveInt,
@@ -22,6 +25,16 @@ interface GlobalOptions {
 }
 
 const tagOption = () => new Option("--tag <key=value>", "tag to attach (repeatable)").argParser(parseTag).default({});
+const envOption = (help: string) => new Option("--env <key=value>", help).argParser(parseEnvVar).default({});
+
+/** `--egress-mode` is the only required piece for a policy to take
+ * effect at all -- `--allow-cidr`/`--deny-cidr` are meaningless without
+ * it and are silently ignored (not an error) if given alone, same as
+ * omitting an egress policy entirely. */
+function buildEgressOption(opts: { egressMode?: "allow_all" | "deny_all"; allowCidr: string[]; denyCidr: string[] }) {
+  if (opts.egressMode === undefined) return undefined;
+  return { mode: opts.egressMode, allowCidrs: opts.allowCidr.length > 0 ? opts.allowCidr : undefined, denyCidrs: opts.denyCidr.length > 0 ? opts.denyCidr : undefined };
+}
 
 function clientOptions(cmd: Command): GlobalOptions {
   return cmd.optsWithGlobals();
@@ -64,6 +77,10 @@ sandbox
     parseDriveAttachment,
     [] as { id: string; readOnly?: boolean }[],
   )
+  .addOption(envOption("environment variable baked in for this sandbox's whole lifetime (repeatable); a later 'exec --env' with the same key overrides it for that one call"))
+  .addOption(new Option("--egress-mode <allow_all|deny_all>", "outbound network policy default").choices(["allow_all", "deny_all"] as const))
+  .option("--allow-cidr <cidr>", "CIDR to explicitly allow outbound (repeatable); only meaningful with --egress-mode", accumulate, [] as string[])
+  .option("--deny-cidr <cidr>", "CIDR to explicitly deny outbound (repeatable); only meaningful with --egress-mode", accumulate, [] as string[])
   .action(async function (
     this: Command,
     opts: {
@@ -75,6 +92,10 @@ sandbox
       rateBandwidth?: number;
       rateOps?: number;
       drive: { id: string; readOnly?: boolean }[];
+      env: Record<string, string>;
+      egressMode?: "allow_all" | "deny_all";
+      allowCidr: string[];
+      denyCidr: string[];
     },
   ) {
     const { baseUrl, token } = clientOptions(this);
@@ -92,6 +113,8 @@ sandbox
             ? undefined
             : { bandwidthBytesPerSec: opts.rateBandwidth, opsPerSec: opts.rateOps },
         drives: opts.drive.length > 0 ? opts.drive : undefined,
+        env: Object.keys(opts.env).length > 0 ? opts.env : undefined,
+        egress: buildEgressOption(opts),
       });
       process.stdout.write(`${created.id}\n`);
     } catch (error) {
@@ -126,6 +149,15 @@ sandbox
     parseDriveAttachment,
     [] as { id: string; readOnly?: boolean }[],
   )
+  .addOption(envOption("environment variable baked in for the whole sandbox lifetime, used only if a fresh sandbox is created (repeatable)"))
+  .addOption(
+    new Option("--egress-mode <allow_all|deny_all>", "outbound network policy default, used only if a fresh sandbox is created").choices([
+      "allow_all",
+      "deny_all",
+    ] as const),
+  )
+  .option("--allow-cidr <cidr>", "CIDR to explicitly allow outbound (repeatable); only meaningful with --egress-mode", accumulate, [] as string[])
+  .option("--deny-cidr <cidr>", "CIDR to explicitly deny outbound (repeatable); only meaningful with --egress-mode", accumulate, [] as string[])
   .action(async function (
     this: Command,
     opts: {
@@ -136,6 +168,10 @@ sandbox
       rateBandwidth?: number;
       rateOps?: number;
       drive: { id: string; readOnly?: boolean }[];
+      env: Record<string, string>;
+      egressMode?: "allow_all" | "deny_all";
+      allowCidr: string[];
+      denyCidr: string[];
     },
   ) {
     const { baseUrl, token } = clientOptions(this);
@@ -152,6 +188,8 @@ sandbox
             ? undefined
             : { bandwidthBytesPerSec: opts.rateBandwidth, opsPerSec: opts.rateOps },
         drives: opts.drive.length > 0 ? opts.drive : undefined,
+        env: Object.keys(opts.env).length > 0 ? opts.env : undefined,
+        egress: buildEgressOption(opts),
       });
       process.stdout.write(`${resolved.id}  ${created ? "created" : "existing"}\n`);
     } catch (error) {
@@ -210,10 +248,13 @@ sandbox
 sandbox
   .command("exec <id> <command> [args...]")
   .description("Run a command inside a sandbox. Exits with the command's own exit code.")
-  .action(async function (this: Command, id: string, command: string, args: string[]) {
+  .addOption(envOption("environment variable for this one call (repeatable); overrides a same-named one baked in at create time"))
+  .action(async function (this: Command, id: string, command: string, args: string[], opts: { env: Record<string, string> }) {
     const { baseUrl, token } = clientOptions(this);
     try {
-      const result = await attachSandbox(id, baseUrl, token).runCommand(command, args);
+      const result = await attachSandbox(id, baseUrl, token).runCommand(command, args, {
+        env: Object.keys(opts.env).length > 0 ? opts.env : undefined,
+      });
       process.stdout.write(result.stdout);
       process.stderr.write(result.stderr);
       process.exit(result.exitCode);
@@ -427,11 +468,12 @@ sandbox
   .description(
     "Run a long-running command inside a sandbox in the background and follow its output live (replay so far, then a live tail) until it exits. Ctrl+C detaches without stopping the command -- reattach later with 'kiln sandbox logs <id> <session-id>'.",
   )
-  .action(async function (this: Command, id: string, command: string, args: string[]) {
+  .addOption(envOption("environment variable for this one call (repeatable); overrides a same-named one baked in at create time"))
+  .action(async function (this: Command, id: string, command: string, args: string[], opts: { env: Record<string, string> }) {
     const { baseUrl, token } = clientOptions(this);
     try {
       const sbx = attachSandbox(id, baseUrl, token);
-      const sessionId = await sbx.execStream(command, args);
+      const sessionId = await sbx.execStream(command, args, { env: Object.keys(opts.env).length > 0 ? opts.env : undefined });
       process.stderr.write(`session ${sessionId} started\n`);
       const exitCode = await followLogs(sbx, sessionId);
       process.exit(exitCode ?? 0);
@@ -470,6 +512,64 @@ sandbox
     try {
       const url = attachSandbox(id, baseUrl, token).previewUrl(Number(port), { path: opts.path });
       process.stdout.write(`${url}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("mount <id> <bucket> <endpoint> <mount-path>")
+  .description(
+    "Mount an S3-compatible bucket into a sandbox via 'rclone mount'. Needs the optional FUSE-capable rootfs setup described in SELF_HOSTING.md.",
+  )
+  .requiredOption("--access-key <key>", "S3-compatible access key")
+  .requiredOption("--secret-key <key>", "S3-compatible secret key")
+  .option("--read-only", "mount read-only")
+  .action(async function (
+    this: Command,
+    id: string,
+    bucket: string,
+    endpoint: string,
+    mountPath: string,
+    opts: { accessKey: string; secretKey: string; readOnly?: boolean },
+  ) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const mount = await attachSandbox(id, baseUrl, token).mount({
+        bucket,
+        endpoint,
+        accessKey: opts.accessKey,
+        secretKey: opts.secretKey,
+        mountPath,
+        readOnly: opts.readOnly,
+      });
+      process.stdout.write(`${mount.id}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("mounts <id>")
+  .description("List remote-storage mounts currently active in a sandbox.")
+  .action(async function (this: Command, id: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const mounts = await attachSandbox(id, baseUrl, token).listMounts();
+      process.stdout.write(formatMountList(mounts));
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("unmount <id> <mount-id>")
+  .description("Unmount and tear down one remote-storage mount (see 'kiln sandbox mounts' for the mount id).")
+  .action(async function (this: Command, id: string, mountId: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).unmount(mountId);
+      process.stdout.write(`${mountId} unmounted\n`);
     } catch (error) {
       await handleApiError(error);
     }

@@ -116,6 +116,15 @@ pub struct Sandbox {
     /// see `Snapshot::egress` for the copy that actually gets
     /// (re-)applied on resume/fork.
     pub egress: Option<EgressPolicy>,
+    /// Baked in at create time, merged as the base layer under every
+    /// `exec`/`exec-stream` call's own `env` (a per-call key wins on
+    /// conflict) so a caller doesn't have to repeat the same variables on
+    /// every call — see `routes_exec::resolve_env`. Unlike `egress`,
+    /// there's no external resource to (re-)apply, so this carries
+    /// through resume **and** fork identically (both restore the exact
+    /// same value from `Snapshot::env`), with none of `egress`'s
+    /// fork-vs-resume ownership asymmetry.
+    pub env: HashMap<String, String>,
     /// The snapshot this sandbox was resumed or forked from, if any —
     /// purely informational, carried onto `Snapshot::parent_snapshot_id`
     /// if/when this sandbox is itself snapshotted (see

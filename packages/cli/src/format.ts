@@ -1,5 +1,5 @@
 import { InvalidArgumentError } from "commander";
-import type { DirEntry, DriveInfo, ExecStreamSession, ImageInfo, PoolInfo, SandboxInfo, SnapshotInfo } from "sandkiln";
+import type { DirEntry, DriveInfo, ExecStreamSession, ImageInfo, MountInfo, PoolInfo, SandboxInfo, SnapshotInfo } from "sandkiln";
 
 /**
  * A plain `Error` here crashes with a raw stack trace instead of the
@@ -13,6 +13,28 @@ export function parseTag(value: string, previous: Record<string, string>): Recor
     throw new InvalidArgumentError(`--tag expects key=value, got: ${value}`);
   }
   previous[value.slice(0, separatorIndex)] = value.slice(separatorIndex + 1);
+  return previous;
+}
+
+/** Same `key=value` shape as `parseTag`, a separate function (not a
+ * shared factory) purely so the error message names the right flag. */
+export function parseEnvVar(value: string, previous: Record<string, string>): Record<string, string> {
+  const separatorIndex = value.indexOf("=");
+  if (separatorIndex === -1) {
+    throw new InvalidArgumentError(`--env expects key=value, got: ${value}`);
+  }
+  previous[value.slice(0, separatorIndex)] = value.slice(separatorIndex + 1);
+  return previous;
+}
+
+/** Accumulates a repeatable flag's raw values into an array, in order —
+ * used for `--allow-cidr`/`--deny-cidr`. No CIDR-shape validation here:
+ * the daemon already rejects a malformed one with a clean `400` (see
+ * `validate_cidr` in `sandkiln_vmm::egress`), so duplicating that check
+ * client-side would just be two places that can disagree about what a
+ * valid CIDR looks like. */
+export function accumulate(value: string, previous: string[]): string[] {
+  previous.push(value);
   return previous;
 }
 
@@ -139,6 +161,17 @@ export function formatDriveList(drives: DriveInfo[]): string {
     return "no drives\n";
   }
   return drives.map(formatDriveLine).join("\n") + "\n";
+}
+
+function formatMountLine(info: MountInfo): string {
+  return `${info.id}  ${info.bucket}@${info.endpoint} -> ${info.mountPath}${info.readOnly ? " (ro)" : ""}`;
+}
+
+export function formatMountList(mounts: MountInfo[]): string {
+  if (mounts.length === 0) {
+    return "no mounts\n";
+  }
+  return mounts.map(formatMountLine).join("\n") + "\n";
 }
 
 function formatPoolLine(info: PoolInfo): string {

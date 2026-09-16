@@ -21,9 +21,13 @@ as a bug, exactly like a stale doc comment in code.
   isolation argument, feature manifest, SDK example, links out),
   `architecture.astro` (five-crate breakdown, boot lifecycle, links into
   the docs' deeper essays), `performance.astro` (measured numbers plus
-  the startup-latency research), `roadmap.astro`. Also `llms.txt.ts` and
-  `llms-full.txt.ts`, which generate the plain-text site index from the
-  docs collection at build time.
+  the startup-latency research), `roadmap.astro`, `changelog.astro`
+  (parses the repo root's `CHANGELOG.md` at build time via `marked`
+  rather than hand-transcribing it — one `## `-level heading becomes one
+  rendered entry, so this page can't drift from what the file actually
+  says; update `CHANGELOG.md` and this page follows). Also `llms.txt.ts`
+  and `llms-full.txt.ts`, which generate the plain-text site index from
+  the docs collection at build time.
 - `src/content/docs/` — every docs page. Organized Getting Started →
   Core Concepts → Guides (task-oriented) → Reference → Architecture (the
   deep design-rationale essays, which live here rather than on a
