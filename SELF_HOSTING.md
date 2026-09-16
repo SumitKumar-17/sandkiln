@@ -785,6 +785,29 @@ trusting the result — that's exactly what it exists for.
   /snapshots/history` + `DELETE /snapshots/history/:id`, or pass
   `?retain_history=false` on `POST /snapshots/:id/resume` to opt back
   into the original, zero-retention behavior for that call.
+- **Nothing on disk is encrypted at rest by this project itself** — worth
+  stating plainly, not leaving as a silent gap. `SANDKILN_DRIVES_DIR`,
+  `SANDKILN_IMAGES_DIR`, `SANDKILN_ARCHIVE_DIR`, and every snapshot's
+  `mem.bin` (a full dump of the guest's RAM — anything a workload held
+  in memory, including secrets it never wrote to disk) and rootfs clone
+  are plain files, readable by anything with host filesystem access at
+  the same level `sandkilnd` itself runs at. This isn't a gap sandkiln
+  can close by encrypting bytes before writing them: Firecracker itself
+  opens and writes `mem.bin`/`state.snap` directly during
+  pause-and-snapshot (see `core/crates/vmm/src/vm/snapshot.rs`) —
+  sandkiln's own code never holds the plaintext bytes to encrypt, so an
+  application-level scheme would mean decrypting before every Firecracker
+  read and re-encrypting after every Firecracker write, on top of a real
+  key-management story this project doesn't have and didn't want to
+  bolt on half-built. The correct fix, and the one actually recommended
+  here, is **filesystem-level encryption**: put `SANDKILN_DRIVES_DIR`,
+  `SANDKILN_IMAGES_DIR`, `SANDKILN_ARCHIVE_DIR`, and wherever
+  `sandkiln-snapshots`/`sandkiln-snapshot-history` land (see the bullet
+  above) on an encrypted block device or filesystem (LUKS on Linux is the
+  standard choice) rather than trusting an application-level layer that
+  doesn't exist. This is an ordinary host-hardening step with no sandkiln
+  involvement at all, and it covers the actual attack surface (someone
+  with access to the raw disk) that matters here.
 - **Cleanup on crash**: if `sandkilnd` is killed ungracefully, any
   Firecracker child processes it had spawned are orphaned (not part of
   a process group the daemon tears down on its own exit) — check

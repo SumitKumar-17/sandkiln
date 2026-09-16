@@ -635,6 +635,24 @@ outbound HTTP both still work.
   `rate_limit_bandwidth_bytes_per_sec`+`rate_limit_ops_per_sec` on
   `create`/`getOrCreate`) and the CLI (`--rate-bandwidth`/`--rate-ops` on
   `kiln sandbox create`/`get-or-create`).
+- **Encryption at rest: deliberately scoped to filesystem-level, not
+  application-level.** Every snapshot's `mem.bin` (a full guest-RAM
+  dump), persistent drives, registered images, and rootfs clones are
+  plain files on disk. Considered building application-level encryption
+  and decided against it for now: Firecracker itself opens and writes
+  `mem.bin`/`state.snap` directly during pause-and-snapshot (see
+  `sandkiln_vmm::vm::snapshot`), so sandkiln's own code never holds the
+  plaintext bytes to encrypt — a real scheme would mean decrypting
+  before every Firecracker read and re-encrypting after every
+  Firecracker write, on top of a real key-management story (where does
+  the key come from? a passphrase? an external KMS?) this project
+  doesn't have, doesn't want to answer half-built, and that would add
+  real per-snapshot latency for however many hundred MB a guest's RAM
+  is. See `SELF_HOSTING.md`'s "Operational and security considerations"
+  section for the actual recommendation: put snapshot/drive/image/
+  archive storage on an encrypted filesystem (LUKS or equivalent) at the
+  host level, which covers the real threat (raw disk access) without
+  any of the above.
 
 ## Multi-agent isolation
 
