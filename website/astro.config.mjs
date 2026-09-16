@@ -78,6 +78,25 @@ export default defineConfig({
           ],
         },
         {
+          label: "Internals",
+          items: [
+            { label: "SQLite: the history store", slug: docs("internals/sqlite-history-store") },
+            { label: "Snapshot, resume, and fork: the mechanism", slug: docs("internals/snapshot-resume-fork") },
+            { label: "Drives: the mechanism", slug: docs("internals/drives") },
+            { label: "Images: the mechanism", slug: docs("internals/images") },
+            { label: "vsock wire protocol", slug: docs("internals/vsock-wire-protocol") },
+            { label: "Jailer & privilege model", slug: docs("internals/jailer-privilege-model") },
+            { label: "iptables & egress policy", slug: docs("internals/egress-iptables") },
+            { label: "TAP devices & bridge networking", slug: docs("internals/tap-bridge-networking") },
+            { label: "FUSE and rclone", slug: docs("internals/fuse-rclone-mounts") },
+            { label: "Token-bucket rate limiting", slug: docs("internals/rate-limiting") },
+            { label: "MMDS (guest metadata)", slug: docs("internals/mmds") },
+            { label: "PTY and forkpty", slug: docs("internals/pty") },
+            { label: "exec-stream sessions", slug: docs("internals/exec-stream") },
+            { label: "Pre-warmed pools", slug: docs("internals/pre-warmed-pools") },
+          ],
+        },
+        {
           label: "Reference",
           items: [
             { label: "CLI (kiln)", slug: docs("reference/cli") },
@@ -90,9 +109,6 @@ export default defineConfig({
           label: "Architecture",
           items: [
             { label: "Overview", slug: docs("architecture/overview") },
-            { label: "Privilege model", slug: docs("architecture/privilege-model") },
-            { label: "Wire protocol", slug: docs("architecture/wire-protocol") },
-            { label: "Persistence model", slug: docs("architecture/persistence-model") },
             { label: "Startup latency & the pre-warmed pool", slug: docs("architecture/startup-latency") },
             { label: "Bug hunt: the vsock timeout", slug: docs("architecture/bug-hunt-vsock-timeout") },
             { label: "Engineering notebook", slug: docs("architecture/engineering-notebook") },

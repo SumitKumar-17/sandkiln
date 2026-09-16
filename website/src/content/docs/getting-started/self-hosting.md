@@ -17,7 +17,7 @@ There's no hosted sandkiln service — every instance is self-hosted. This page 
   sudo usermod -aG kvm $USER
   # then log out and back in -- group membership doesn't apply to an already-open session
   ```
-- **`sudo`, for one-time host setup only.** The daemon itself never runs as root once it's running — see [Privilege model](../../architecture/privilege-model/) for exactly why.
+- **`sudo`, for one-time host setup only.** The daemon itself never runs as root once it's running — see [TAP devices and bridge networking](../../internals/tap-bridge-networking/) for exactly why.
 - **Rust** (via [rustup](https://rustup.rs)), plus the musl target for the guest agent:
   ```bash
   rustup target add x86_64-unknown-linux-musl

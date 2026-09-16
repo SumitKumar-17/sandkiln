@@ -45,9 +45,9 @@ const steps = [
 ];
 
 const essays = [
-  { kind: "Privilege model", href: `${base}/docs/architecture/privilege-model/`, name: "Ambient CAP_NET_ADMIN, a static tap pool, and a root that stays out of the hot path" },
-  { kind: "Wire protocol", href: `${base}/docs/architecture/wire-protocol/`, name: "vsock, a length-prefixed JSON frame, and a client that doesn't reach for a full HTTP stack" },
-  { kind: "Persistence", href: `${base}/docs/architecture/persistence-model/`, name: "Sandbox versus session — and why a snapshot points at paths instead of carrying values" },
+  { kind: "Jailer & privilege model", href: `${base}/docs/internals/jailer-privilege-model/`, name: "Chroot, cgroups, setuid, and a root that stays out of the hot path" },
+  { kind: "Wire protocol", href: `${base}/docs/internals/vsock-wire-protocol/`, name: "vsock, a length-prefixed JSON frame, and a client that doesn't reach for a full HTTP stack" },
+  { kind: "Snapshot, resume, fork", href: `${base}/docs/internals/snapshot-resume-fork/`, name: "Why a snapshot points at paths instead of carrying values, and the rootfs bug that taught us that" },
   { kind: "Bug hunt", href: `${base}/docs/architecture/bug-hunt-vsock-timeout/`, name: "The vsock timeout that could hang a stop forever" },
 ];
 ---
@@ -132,9 +132,9 @@ const essays = [
             <span class="l">and <span class="flare">what broke before</span>.</span>
           </h2>
           <p class="lede prose">
-            The full essays live in the docs, next to the API they explain — the privilege model
-            behind ambient <code>CAP_NET_ADMIN</code>, the vsock wire protocol, why a snapshot
-            points at paths instead of carrying values, and a real bug hunt.
+            The full essays live in the docs, next to the API they explain — four below, and ten
+            more covering everything from SQLite to token-bucket rate limiting under
+            <strong>Internals</strong> in the sidebar.
           </p>
           <div class="jump">
             {essays.map((e) => (
