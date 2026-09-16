@@ -469,24 +469,30 @@ a.rail:hover {
   margin-top: clamp(40px, 5vw, 72px);
 }
 
-@media (min-width: 900px) and (max-width: 1599px) {
+@media (min-width: 900px) and (max-width: 999px) {
   .hero-console {
     max-width: 75%;
   }
 }
 
 /* Below this, the visual (console + gauges) stacks under the text, full
-   width, exactly as it always has. This only kicks in once there's enough
-   spare width to give the headline's two authored lines (`.hero h1 .l`,
+   width, exactly as it always has. This kicks in as soon as there's
+   enough width for the headline's two authored lines (`.hero h1 .l`,
    ~22ch at --t-display's own large size, not the body font-size a `ch`
-   here would otherwise be measured against) room to stay on one line each
-   AND give the console/gauges a column wide enough that the four gauges
-   don't collide -- below ~1600px there isn't room for both without
-   shrinking one of them, so it stays stacked (same as it's always been)
-   rather than compromise either. Widens .hero's own shell rather than the
-   site-wide --shell, since every other page's content is fine at 1180px --
-   only this row has two things that both want real width side by side. */
-@media (min-width: 1600px) {
+   here would otherwise be measured against) to stay on one line each
+   beside a console/gauges column -- `--t-display` itself is already
+   pinned at its clamp ceiling (3.5rem) for any viewport this wide, so
+   the text column's own width need doesn't change between this
+   breakpoint and a much wider one; only the gauge column does, handled
+   below by reflowing 4-across to 2x2 rather than by pushing the
+   breakpoint out to whatever width keeps 4-across comfortable (that
+   width turned out to be 1600px, well past the ~1440px a large share
+   of real laptop screens actually render at -- caught live by testing
+   at 1440px, not by picking a threshold from the math alone). Widens
+   .hero's own shell rather than the site-wide --shell, since every
+   other page's content is fine at 1180px -- only this row has two
+   things that both want real width side by side. */
+@media (min-width: 1180px) {
   .hero-layout {
     max-width: 1500px;
     display: grid;
@@ -494,10 +500,40 @@ a.rail:hover {
     gap: var(--s-8);
     align-items: start;
   }
+  /* A grid item's default min-width is `auto`, not 0 -- it won't shrink
+     narrower than its content's own intrinsic width. `.tty pre` inside
+     here is deliberately `white-space: pre` (a console line shouldn't
+     wrap mid-token), which gives it a wide intrinsic width, so without
+     this the whole row was overflowing the viewport at wider column
+     widths -- caught live at 1180px, not visible at 1440px+ where the
+     column happens to already be wider than the console's natural
+     width. `.tty pre`'s own `overflow-x: auto` is what actually absorbs
+     the excess, scrolling inside the console instead of blowing out the
+     page -- this just lets the grid track get narrow enough to need it. */
+  .hero-visual {
+    min-width: 0;
+  }
   .hero-console {
     margin-top: 0;
     max-width: 100%;
   }
+}
+
+/* Between the side-by-side breakpoint and 1600px, the gauge column is
+   too narrow for 4 across without the values colliding into their
+   neighbors -- confirmed live, not assumed. 2x2 fits comfortably at
+   every width in this range; 4-across returns once the column is wide
+   enough to earn it back. */
+@media (min-width: 1180px) and (max-width: 1599px) {
+  .hero-visual .gauges {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .hero-visual .gauge-val {
+    font-size: 1.5rem;
+  }
+}
+
+@media (min-width: 1600px) {
   /* --t-stat is a vw-relative clamp, sized for the gauges spanning most of
      a 1180px shell -- correct there, but this column is now a *fixed*
      ~756px regardless of viewport, and vw keeps growing past 1600px
@@ -733,7 +769,7 @@ a.rail:hover {
   }
 }
 
-@media (min-width: 1000px) {
+@media (min-width: 1180px) {
   .tty {
     font-size: 0.9375rem;
   }
@@ -1033,7 +1069,7 @@ a.rail:hover {
    already point at, so it's never invented structure, just this
    information surfaced a second time in a place it's actually useful --
    before scrolling past the content it lists, not only alongside it. */
-@media (min-width: 1000px) {
+@media (min-width: 1180px) {
   .page-hero-layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(200px, 300px);
@@ -1045,7 +1081,7 @@ a.rail:hover {
   display: none;
 }
 
-@media (min-width: 1000px) {
+@media (min-width: 1180px) {
   .page-hero-nav {
     display: flex;
     flex-direction: column;
