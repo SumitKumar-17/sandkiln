@@ -122,6 +122,16 @@ entry below and earlier), this just ships it to PyPI via
 flow. No code change; versioned separately from the JS/TS SDK/CLI table
 below from here on, since the two don't need to move in lockstep.
 
+## [0.11.0] — 2026-09-16
+
+### Added
+- Per-sandbox egress (outbound network) policy, now exposed in both SDKs
+  and the CLI (the daemon HTTP API itself shipped earlier — see the
+  dated daemon/core section above): `Sandbox.create({ egress })`/
+  `.getOrCreate({ egress })` (JS/TS), `egress_mode`/`egress_allow_cidrs`/
+  `egress_deny_cidrs` kwargs (Python), `--egress-mode`/`--allow-cidr`/
+  `--deny-cidr` (CLI). New `examples/egress-policy` reference project.
+
 ## [0.10.0] — 2026-09-16
 
 ### Added

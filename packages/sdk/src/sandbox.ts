@@ -12,6 +12,8 @@ import type {
   DirEntry,
   DriveAttachmentOptions,
   DriveAttachmentRequestBody,
+  EgressPolicyOptions,
+  EgressPolicyRequestBody,
   ExecRequestBody,
   ExecResponseBody,
   ExecResult,
@@ -159,6 +161,8 @@ export class Sandbox {
     const drives = buildDrivesRequestBody(options.drives);
     if (drives !== undefined) requestBody.drives = drives;
     if (options.env !== undefined) requestBody.env = options.env;
+    const egress = buildEgressRequestBody(options.egress);
+    if (egress !== undefined) requestBody.egress = egress;
 
     const body = await request<GetOrCreateSandboxResponseBody>({
       ...client,
@@ -619,6 +623,14 @@ function buildRateLimitRequestBody(rateLimit: RateLimitOptions | undefined): Rat
   return body;
 }
 
+function buildEgressRequestBody(egress: EgressPolicyOptions | undefined): EgressPolicyRequestBody | undefined {
+  if (egress === undefined) return undefined;
+  const body: EgressPolicyRequestBody = { mode: egress.mode };
+  if (egress.allowCidrs !== undefined) body.allow_cidrs = egress.allowCidrs;
+  if (egress.denyCidrs !== undefined) body.deny_cidrs = egress.denyCidrs;
+  return body;
+}
+
 /** `undefined` (rather than `{}`) when the caller didn't set anything,
  * matching the daemon's own "empty body means all defaults" handling and
  * this SDK's existing convention for an all-default `POST /sandboxes`. */
@@ -634,5 +646,7 @@ function buildCreateSandboxRequestBody(options: CreateSandboxOptions): CreateSan
   const drives = buildDrivesRequestBody(options.drives);
   if (drives !== undefined) body.drives = drives;
   if (options.env !== undefined) body.env = options.env;
+  const egress = buildEgressRequestBody(options.egress);
+  if (egress !== undefined) body.egress = egress;
   return Object.keys(body).length > 0 ? body : undefined;
 }

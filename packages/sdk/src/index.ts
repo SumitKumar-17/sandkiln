@@ -10,6 +10,7 @@ export type {
   DriveHolder,
   DriveInfo,
   DriveOptions,
+  EgressPolicyOptions,
   ExecResult,
   ExecStreamSession,
   GetOrCreateSandboxOptions,

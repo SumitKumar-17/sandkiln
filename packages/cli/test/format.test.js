@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InvalidArgumentError } from "commander";
 import {
+  accumulate,
   formatDirEntryList,
   formatDriveList,
   formatExecStreamList,
@@ -191,6 +192,12 @@ test("formatDriveList renders id, size, timestamp, and comma-joined holders per 
       "drv-2  128MiB  2026-01-02T00:00:00.000Z  not attached\n" +
       "drv-3  256MiB  2026-01-03T00:00:00.000Z  sandbox sb-2:ro,sandbox sb-3:ro\n",
   );
+});
+
+test("accumulate appends each value onto the previous array, in order", () => {
+  let acc = accumulate("10.0.0.0/8", []);
+  acc = accumulate("192.168.0.0/16", acc);
+  assert.deepEqual(acc, ["10.0.0.0/8", "192.168.0.0/16"]);
 });
 
 test("formatMountList reports an empty list distinctly", () => {

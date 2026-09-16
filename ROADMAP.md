@@ -525,9 +525,19 @@ outbound HTTP both still work.
   --dport`, a straightforward extension of the same rule shape, just not
   built yet). IPv4 only, matching every other networking type in this
   codebase.
-- **Not yet exposed in the SDKs/CLI** — daemon HTTP API only so far. A
-  deliberate scope cut for this first slice, same as pool `max_count`'s
-  own SDK/CLI follow-up; worth doing in a pass of its own.
+- **Done: exposed in both SDKs and the CLI.** Was daemon-HTTP-API-only
+  for a while, same deliberate first-slice scope cut pool `max_count`
+  also had. `Sandbox.create({ egress })`/`Sandbox.getOrCreate({ egress })`
+  (JS/TS, `EgressPolicyOptions`), `egress_mode`/`egress_allow_cidrs`/
+  `egress_deny_cidrs` kwargs (Python), `--egress-mode <allow_all|
+  deny_all>` + repeatable `--allow-cidr`/`--deny-cidr` (CLI, on both
+  `create` and `get-or-create`). Live-verified end to end in all three —
+  a real LAN address (not a public IP: this dev box's own network turned
+  out to have no outbound internet route at all, discovered live while
+  building this and worth remembering as its own finding) pinged
+  successfully with no policy, blocked under `deny_all`, and reachable
+  again under `deny_all` + a matching `allow_cidrs` entry. New
+  `examples/egress-policy` reference project.
 - **Fixed: `egress::apply`'s hot path.** Flagged by the same audit that
   found the `Vm::call` retry-loop bug (see the Benchmarking section) as
   a real, unmeasured cost: applying a policy spawned one `iptables`
@@ -1369,9 +1379,9 @@ eventually if there's appetite," not "next."
   `/docs` subpath of the main site (GitHub Pages and the merged Vercel
   build) and standalone at its own domain root
   (sandkiln-docs.vercel.app) — see `website/AGENTS.md`.
-- Example projects: **done** — nine real, runnable reference projects
+- Example projects: **done** — ten real, runnable reference projects
   against each SDK's published API, one per major feature surface: code
   playground, AI-agent sandbox runner, dev-server preview, interactive
   terminal, pre-warmed pool, streamed exec/logs, remote storage mount,
-  snapshot/resume/fork lifecycle, and named/persistent sandboxes. See
-  `examples/AGENTS.md` for what each one demonstrates and why.
+  snapshot/resume/fork lifecycle, named/persistent sandboxes, and egress
+  policy. See `examples/AGENTS.md` for what each one demonstrates and why.

@@ -55,11 +55,7 @@ external user of the published packages would write.
   **reattaches to the same session after it has finished** and gets the
   identical log back in milliseconds — the distinctive part of the
   feature, since the daemon buffers a session's output independently of
-  any connection. The one example here that deviates from the
-  published-package rule below: it depends on the in-repo
-  `packages/sdk` because these three methods aren't published yet, and
-  its README says so prominently. Switch it back once a new npm version
-  ships.
+  any connection.
 - `remote-storage-mount/` — JS/TS. Mounts an S3-compatible bucket into a
   sandbox at `/mnt/bucket` via `sandbox.mount()`, writes and reads a file
   through it with ordinary `writeFile()`/`readFile()` calls, then
@@ -67,6 +63,15 @@ external user of the published packages would write.
   gone. Needs the optional FUSE kernel + rclone-injected rootfs setup
   from `SELF_HOSTING.md`, and an S3-compatible endpoint the user supplies
   via `S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`.
+- `egress-policy/` — JS/TS. Pings a caller-supplied real IP address
+  (`EGRESS_EXAMPLE_TARGET_IP`) from three sandboxes in turn: no policy
+  (reaches it), `deny_all` with no `allowCidrs` (blocked), `deny_all` +
+  `allowCidrs: ["<target>/32"]` (reaches it again) — the actual
+  allow/deny behavior, not just that a policy doesn't break normal use.
+  Deliberately doesn't hardcode a target: a public IP would silently
+  "pass" on a machine with no outbound internet route (a real dev-box
+  finding while building this), and a LAN IP wouldn't be portable across
+  networks.
 
 ## Conventions
 

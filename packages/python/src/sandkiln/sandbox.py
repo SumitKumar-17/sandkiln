@@ -119,6 +119,20 @@ def _build_rate_limit(bandwidth_bytes_per_sec: int | None, ops_per_sec: int | No
     return body
 
 
+def _build_egress(mode: str | None, allow_cidrs: list[str] | None, deny_cidrs: list[str] | None) -> dict[str, object] | None:
+    """`None` when `mode` wasn't set — `allow_cidrs`/`deny_cidrs` alone,
+    without a `mode`, are meaningless and silently ignored, same as
+    omitting an egress policy entirely."""
+    if mode is None:
+        return None
+    body: dict[str, object] = {"mode": mode}
+    if allow_cidrs is not None:
+        body["allow_cidrs"] = allow_cidrs
+    if deny_cidrs is not None:
+        body["deny_cidrs"] = deny_cidrs
+    return body
+
+
 class Sandbox:
     """A handle to one sandkiln sandbox. Construct via `Sandbox.create()`
     or `Sandbox.attach()`, not directly."""
@@ -142,6 +156,9 @@ class Sandbox:
         rate_limit_ops_per_sec: int | None = None,
         drives: list[DriveAttachment] | None = None,
         env: dict[str, str] | None = None,
+        egress_mode: str | None = None,
+        egress_allow_cidrs: list[str] | None = None,
+        egress_deny_cidrs: list[str] | None = None,
     ) -> "Sandbox":
         """`name` is a caller-given identity, unique among live sandboxes
         and held snapshots at the moment it's claimed — the daemon rejects
@@ -176,7 +193,17 @@ class Sandbox:
         base layer under any `env` passed to `run_command()` (that wins on
         a key conflict), so a variable doesn't need repeating on every
         call. Persists through `snapshot()`/`resume()`/`fork()`, exactly
-        like `tags`."""
+        like `tags`.
+
+        `egress_mode` (`"allow_all"` or `"deny_all"`) sets the sandbox's
+        outbound network policy — omitted means today's behavior,
+        unchanged: unrestricted outbound through the shared bridge's
+        existing catch-all rule. `egress_allow_cidrs`/`egress_deny_cidrs`
+        are meaningless without `egress_mode` set. Enforced with one
+        dedicated iptables chain per sandbox, deny always winning over
+        allow on overlap. Gateway-bound traffic (DNS to the bridge's own
+        IP) is structurally exempt from either mode. Persists through
+        `snapshot()`/`resume()`/`fork()`."""
         resolved_base_url = resolve_base_url(base_url)
         resolved_token = resolve_auth_token(auth_token)
         body: dict[str, object] = {}
@@ -197,6 +224,9 @@ class Sandbox:
             body["drives"] = [_drive_attachment_to_dict(d) for d in drives]
         if env is not None:
             body["env"] = env
+        egress = _build_egress(egress_mode, egress_allow_cidrs, egress_deny_cidrs)
+        if egress is not None:
+            body["egress"] = egress
         response = request(resolved_base_url, "POST", "/sandboxes", resolved_token, body or None)
         return cls(response["id"], resolved_base_url, resolved_token)
 
@@ -234,15 +264,19 @@ class Sandbox:
         rate_limit_ops_per_sec: int | None = None,
         drives: list[DriveAttachment] | None = None,
         env: dict[str, str] | None = None,
+        egress_mode: str | None = None,
+        egress_allow_cidrs: list[str] | None = None,
+        egress_deny_cidrs: list[str] | None = None,
     ) -> tuple["Sandbox", bool]:
         """Resolves `name` to a sandbox in one call, creating it if it
         doesn't exist yet: a live sandbox with this name is returned
         as-is, a stopped (snapshotted) one is resumed, and otherwise a
         fresh sandbox is created and given this name. `tags`/
-        `vcpu_count`/`mem_size_mib`/rate limit options only apply to the
-        create-fresh case — resuming an existing snapshot uses what was
-        recorded on it when it was taken, same as `Sandbox.resume`. See
-        `Sandbox.create` for what the rate-limit options mean.
+        `vcpu_count`/`mem_size_mib`/rate limit/egress options only apply
+        to the create-fresh case — resuming an existing snapshot uses
+        what was recorded on it when it was taken, same as
+        `Sandbox.resume`. See `Sandbox.create` for what the rate-limit
+        and egress options mean.
 
         Returns `(sandbox, created)` — `created` is `True` only when this
         call actually booted a brand-new sandbox from the base rootfs.
@@ -266,6 +300,9 @@ class Sandbox:
             body["drives"] = [_drive_attachment_to_dict(d) for d in drives]
         if env is not None:
             body["env"] = env
+        egress = _build_egress(egress_mode, egress_allow_cidrs, egress_deny_cidrs)
+        if egress is not None:
+            body["egress"] = egress
         response = request(resolved_base_url, "POST", "/sandboxes/get-or-create", resolved_token, body)
         return cls(response["id"], resolved_base_url, resolved_token), response["created"]
 

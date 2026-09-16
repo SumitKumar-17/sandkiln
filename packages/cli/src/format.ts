@@ -27,6 +27,17 @@ export function parseEnvVar(value: string, previous: Record<string, string>): Re
   return previous;
 }
 
+/** Accumulates a repeatable flag's raw values into an array, in order —
+ * used for `--allow-cidr`/`--deny-cidr`. No CIDR-shape validation here:
+ * the daemon already rejects a malformed one with a clean `400` (see
+ * `validate_cidr` in `sandkiln_vmm::egress`), so duplicating that check
+ * client-side would just be two places that can disagree about what a
+ * valid CIDR looks like. */
+export function accumulate(value: string, previous: string[]): string[] {
+  previous.push(value);
+  return previous;
+}
+
 /**
  * Parses a repeatable `--drive <id>` / `--drive <id>:ro` flag into the
  * `{ id, readOnly }` shape `Sandbox.create`'s `drives` option expects —
