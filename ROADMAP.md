@@ -954,8 +954,27 @@ outbound HTTP both still work.
     situation that produced the wrong conclusion above. Also unexamined:
     the **9.24ms synchronous sqlite write** (`history.record_created`)
     sitting on the critical path, 5.5% of a create, for a write whose own
-    doc comment already calls it best-effort. Moving it off the request
-    path looks easy and worth ~9ms, but wasn't measured as a change here.
+    doc comment already calls it best-effort — **since fixed**, immediately
+    below.
+  - **Done: the sqlite write.** `sandkiln-store` opened its database with
+    sqlite's defaults (`journal_mode=DELETE`, `synchronous=FULL`), which
+    fsyncs twice per write — once for the rollback journal, once for the
+    main database file. Switched to `journal_mode=WAL` +
+    `synchronous=NORMAL` (safe specifically in WAL mode, and reasonable
+    here regardless given this write was already best-effort by design —
+    see `HistoryStore::configure_for_write_latency`'s own doc comment).
+    Measured with a direct, isolated A/B on the same disk (20 sequential
+    `record_created` calls, default settings vs. the fix, nothing else
+    running): **1897.8µs → 37.1µs mean, a real ~51x cut** — a more
+    dramatic win than the original 9.24ms-on-a-live-daemon figure
+    predicted, and not directly comparable to it (different measurement
+    conditions: an isolated fresh database file here vs. a live daemon's
+    real one there), but the relative improvement from removing the
+    double-fsync is the real, reproducible finding either way. 300/300
+    workspace tests, `cargo clippy --workspace --all-targets` clean, plus
+    a new test (`open_sets_wal_and_synchronous_normal_for_write_latency`)
+    asserting the pragmas actually took effect, not just that opening the
+    store doesn't error.
   - **What we fixed: the API-socket wait.** `wait_for_socket` polled for
     Firecracker's API socket with a fixed `sleep(20ms)`. It measured
     **20.11ms on every single boot** (min 20.04, max 20.18 across 20) —

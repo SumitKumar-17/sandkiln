@@ -81,3 +81,10 @@ even after a restart" — and the two aren't in tension or overlapping.
   table only grows (nothing ever deletes a row), so an unbounded default
   query would get slower forever. Page with an explicit `limit` rather
   than raising or removing the default.
+- **`open` sets `journal_mode=WAL` + `synchronous=NORMAL`** (not
+  sqlite's defaults) — see `configure_for_write_latency`'s own doc
+  comment for why: sqlite's defaults fsync twice per write, measured at
+  ~9.24ms on a real create's critical path before this, cut to ~37µs
+  (an isolated A/B on the same disk) after. `open_in_memory` (tests
+  only) doesn't set this — WAL isn't meaningful for `:memory:`, and
+  there's no durability concern for a store that persists nothing.

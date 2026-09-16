@@ -54,6 +54,11 @@ this list stays terse on purpose.
   arrays, and the untracked-checkpoint history sweep moved to run once,
   after every topic finishes, instead of once per topic (racing another
   still-running topic's own checkpoints otherwise).
+- `sandkiln-store`'s sqlite history write used sqlite's default
+  `journal_mode=DELETE`/`synchronous=FULL` (fsyncs twice per write).
+  Switched to `journal_mode=WAL`/`synchronous=NORMAL`: an isolated A/B
+  on the same disk measured 1897.8µs → 37.1µs mean per write, a ~51x
+  cut.
 
 ### Added
 - Per-phase cold-create timings: `/metrics` gains
