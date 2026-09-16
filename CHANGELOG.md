@@ -122,6 +122,30 @@ entry below and earlier), this just ships it to PyPI via
 flow. No code change; versioned separately from the JS/TS SDK/CLI table
 below from here on, since the two don't need to move in lockstep.
 
+## [0.8.0] — 2026-09-16
+
+### Added
+- Streamed background exec sessions: `POST /sandboxes/:id/exec-stream`
+  starts a detached command inside a sandbox and returns a session id
+  immediately; `GET /sandboxes/:id/exec-stream` lists sessions; `GET
+  /sandboxes/:id/exec-stream/:id/logs` (WebSocket) attaches, replaying
+  everything captured so far then live-tailing — any number of callers
+  can attach over time, including after the command has finished, and
+  each gets the identical output. `Sandbox.execStream()`/
+  `.listExecStreams()`/`.attachLogs()` (JS/TS SDK), `kiln sandbox
+  exec-stream <id> -- <command> [args...]` / `kiln sandbox logs <id>
+  [session-id]` (CLI). See `ROADMAP.md`'s "Dev servers and live preview"
+  section for the full design.
+- Pool `max_count`: an optional ceiling on total (warm + claimed)
+  instances for a pool. A claim past it queues instead of cold-creating
+  unbounded, waking the instant a slot frees rather than polling, and
+  returns a real `503` after 30s if nothing frees up in time.
+
+### Changed
+- `sandkiln-cli`'s dependency on `sandkiln` bumped to match this
+  release — both are published together going forward when either one's
+  API surface changes.
+
 ## [0.7.0] — 2026-09-08
 
 ### Added
