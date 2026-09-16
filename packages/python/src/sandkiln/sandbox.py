@@ -64,6 +64,19 @@ class StopResult:
 
 
 @dataclass(frozen=True)
+class MountInfo:
+    """One active remote-storage mount, as returned by `Sandbox.mount()`/
+    `Sandbox.list_mounts()`. Never carries credentials — those exist only
+    as a `0600` file inside the guest, not in any daemon-side record."""
+
+    id: str
+    bucket: str
+    endpoint: str
+    mount_path: str
+    read_only: bool
+
+
+@dataclass(frozen=True)
 class SnapshotInfo:
     id: str
     source_sandbox_id: str
@@ -80,6 +93,16 @@ class SnapshotInfo:
 
 def _drive_attachment_to_dict(attachment: DriveAttachment) -> dict[str, object]:
     return {"id": attachment.id, "read_only": attachment.read_only}
+
+
+def _mount_info_from_response(response: dict[str, object]) -> MountInfo:
+    return MountInfo(
+        id=response["id"],
+        bucket=response["bucket"],
+        endpoint=response["endpoint"],
+        mount_path=response["mount_path"],
+        read_only=response["read_only"],
+    )
 
 
 def _build_rate_limit(bandwidth_bytes_per_sec: int | None, ops_per_sec: int | None) -> dict[str, int] | None:
@@ -343,6 +366,56 @@ class Sandbox:
             )
             for e in response["entries"]
         ]
+
+    def mount(
+        self,
+        bucket: str,
+        endpoint: str,
+        access_key: str,
+        secret_key: str,
+        mount_path: str,
+        read_only: bool = False,
+    ) -> MountInfo:
+        """Mounts an S3-compatible bucket into this sandbox at
+        `mount_path` via `rclone mount` — ordinary `read_file()`/
+        `write_file()` calls against that path read/write through to the
+        bucket. `endpoint` is the full URL of the S3-compatible service
+        (never defaulted to any particular provider, so the target is
+        always explicit); `access_key`/`secret_key` are written into a
+        `0600` rclone config file inside the guest, never passed as a
+        command-line argument. Needs the optional FUSE kernel +
+        rclone-injected rootfs setup described in `SELF_HOSTING.md`;
+        raises `SandkilnApiError` if the guest can't actually mount
+        (missing FUSE support, bad credentials, unreachable endpoint).
+        Not carried across `resume()`/`fork()`/a restored checkpoint —
+        the mount is a live guest-side FUSE process, already captured by
+        Firecracker's own snapshot mechanism along with everything else
+        in guest memory, so nothing needs re-establishing."""
+        body = {
+            "bucket": bucket,
+            "endpoint": endpoint,
+            "access_key": access_key,
+            "secret_key": secret_key,
+            "mount_path": mount_path,
+            "read_only": read_only,
+        }
+        response = self._request("POST", f"/sandboxes/{self.id}/mounts", body)
+        return _mount_info_from_response(response)
+
+    def list_mounts(self) -> list[MountInfo]:
+        """Lists every remote-storage mount currently active in this
+        sandbox."""
+        response = self._request("GET", f"/sandboxes/{self.id}/mounts")
+        return [_mount_info_from_response(m) for m in response["mounts"]]
+
+    def unmount(self, mount_id: str) -> None:
+        """Unmounts and tears down one remote-storage mount (see
+        `mount()`'s returned/listed `id`). Best-effort on the guest side —
+        a failed `umount` inside the guest is a loud warning in the
+        daemon's own logs, not a failed request, since there's no useful
+        way for a caller to retry a cleanup step that already removed
+        this mount from the sandbox's tracked list."""
+        self._request("DELETE", f"/sandboxes/{self.id}/mounts/{mount_id}")
 
     def stop(self, keep: bool | None = None) -> StopResult:
         """Stops this sandbox. By default (`keep` omitted, or `True`) this

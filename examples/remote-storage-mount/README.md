@@ -6,30 +6,21 @@ it and read it back through the mount, then unmount — so code running
 inside the sandbox reads and writes object storage with ordinary
 filesystem calls, no SDK or bucket client of its own.
 
-> **This example calls the daemon's mounts HTTP API directly with
-> `fetch()`, not through an SDK method**, because mounts don't have one
-> yet — `POST/GET/DELETE /sandboxes/:id/mounts` is currently the only
-> surface. Sandbox creation, file I/O and teardown here still use the
-> published `sandkiln` npm package as `examples/AGENTS.md` requires;
-> only the three mount calls are raw HTTP. Adding SDK methods is a
-> separate scope decision, so this example doesn't pre-empt it.
-
 ## What it does
 
 1. Creates a sandbox with `Sandbox.create()`.
-2. `POST /sandboxes/:id/mounts` with your bucket, endpoint and
-   credentials, mounting it at `/mnt/bucket` inside the guest. The
-   daemon writes a `0600` rclone config into the guest and starts
-   `rclone mount` there — credentials never appear on a command line, and
-   the daemon keeps no copy.
-3. `GET /sandboxes/:id/mounts` to list what's mounted.
+2. `sandbox.mount({ bucket, endpoint, accessKey, secretKey, mountPath })`
+   mounts your bucket at `/mnt/bucket` inside the guest. The daemon
+   writes a `0600` rclone config into the guest and starts `rclone
+   mount` there — credentials never appear on a command line, and the
+   daemon keeps no copy.
+3. `sandbox.listMounts()` to list what's mounted.
 4. Writes a file at `/mnt/bucket/sandkiln-example-<timestamp>.txt` with
    `sandbox.writeFile()`, lists the directory with `sandbox.runCommand()`,
    and reads it back with `sandbox.readFile()` — all plain filesystem
    operations, which land in the bucket as a real object.
-5. `DELETE /sandboxes/:id/mounts/:mount_id` to unmount, then confirms
-   with `mountpoint -q` that the FUSE mount is genuinely gone from the
-   guest.
+5. `sandbox.unmount(mount.id)` to unmount, then confirms with
+   `mountpoint -q` that the FUSE mount is genuinely gone from the guest.
 6. Stops the sandbox with `sandbox.stop({ keep: false })` — the object
    written in step 4 stays in the bucket.
 
@@ -101,7 +92,6 @@ node index.js
 
 ## Known limitations
 
-- No SDK or CLI surface yet — see the note at the top.
 - One mount per path: mounting a second bucket at an already-mounted
   `mount_path` is a `409`.
 - Mounts are not re-applied on resume/fork/restore, and don't need to be:

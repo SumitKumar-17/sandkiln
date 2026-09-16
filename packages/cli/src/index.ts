@@ -6,6 +6,7 @@ import {
   formatDriveList,
   formatExecStreamList,
   formatImageList,
+  formatMountList,
   formatPoolList,
   formatSandboxList,
   formatSnapshotList,
@@ -482,6 +483,64 @@ sandbox
     try {
       const url = attachSandbox(id, baseUrl, token).previewUrl(Number(port), { path: opts.path });
       process.stdout.write(`${url}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("mount <id> <bucket> <endpoint> <mount-path>")
+  .description(
+    "Mount an S3-compatible bucket into a sandbox via 'rclone mount'. Needs the optional FUSE-capable rootfs setup described in SELF_HOSTING.md.",
+  )
+  .requiredOption("--access-key <key>", "S3-compatible access key")
+  .requiredOption("--secret-key <key>", "S3-compatible secret key")
+  .option("--read-only", "mount read-only")
+  .action(async function (
+    this: Command,
+    id: string,
+    bucket: string,
+    endpoint: string,
+    mountPath: string,
+    opts: { accessKey: string; secretKey: string; readOnly?: boolean },
+  ) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const mount = await attachSandbox(id, baseUrl, token).mount({
+        bucket,
+        endpoint,
+        accessKey: opts.accessKey,
+        secretKey: opts.secretKey,
+        mountPath,
+        readOnly: opts.readOnly,
+      });
+      process.stdout.write(`${mount.id}\n`);
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("mounts <id>")
+  .description("List remote-storage mounts currently active in a sandbox.")
+  .action(async function (this: Command, id: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      const mounts = await attachSandbox(id, baseUrl, token).listMounts();
+      process.stdout.write(formatMountList(mounts));
+    } catch (error) {
+      await handleApiError(error);
+    }
+  });
+
+sandbox
+  .command("unmount <id> <mount-id>")
+  .description("Unmount and tear down one remote-storage mount (see 'kiln sandbox mounts' for the mount id).")
+  .action(async function (this: Command, id: string, mountId: string) {
+    const { baseUrl, token } = clientOptions(this);
+    try {
+      await attachSandbox(id, baseUrl, token).unmount(mountId);
+      process.stdout.write(`${mountId} unmounted\n`);
     } catch (error) {
       await handleApiError(error);
     }

@@ -5,6 +5,7 @@ import type {
   ChmodRequestBody,
   ChownRequestBody,
   CopyRequestBody,
+  CreateMountRequestBody,
   CreateSandboxOptions,
   CreateSandboxRequestBody,
   CreateSandboxResponseBody,
@@ -24,9 +25,13 @@ import type {
   ListExecStreamsResponseBody,
   ListSandboxesOptions,
   ListSandboxesResponseBody,
+  ListMountsResponseBody,
   ListSnapshotsOptions,
   ListSnapshotsResponseBody,
   MkdirRequestBody,
+  MountInfo,
+  MountOptions,
+  MountResponseBody,
   PreviewUrlOptions,
   PtyOptions,
   RateLimitOptions,
@@ -383,6 +388,60 @@ export class Sandbox {
   }
 
   /**
+   * Mounts an S3-compatible bucket into this sandbox at `options.mountPath`
+   * via `rclone mount` — ordinary `readFile()`/`writeFile()` calls
+   * against that path read/write through to the bucket. Needs the
+   * optional FUSE kernel + rclone-injected rootfs setup described in
+   * `SELF_HOSTING.md`; raises `SandkilnApiError` if the guest can't
+   * actually mount (missing FUSE support, bad credentials, unreachable
+   * endpoint). Not carried across `resume()`/`fork()`/a restored
+   * checkpoint — the mount is a live guest-side FUSE process, already
+   * captured by Firecracker's own snapshot mechanism along with
+   * everything else in guest memory, so nothing needs re-establishing.
+   */
+  async mount(options: MountOptions): Promise<MountInfo> {
+    const requestBody: CreateMountRequestBody = {
+      bucket: options.bucket,
+      endpoint: options.endpoint,
+      access_key: options.accessKey,
+      secret_key: options.secretKey,
+      mount_path: options.mountPath,
+    };
+    if (options.readOnly !== undefined) requestBody.read_only = options.readOnly;
+    const body = await request<MountResponseBody>({
+      ...this.client,
+      method: "POST",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/mounts`,
+      body: requestBody,
+    });
+    return mountInfoFromBody(body);
+  }
+
+  /** Lists every remote-storage mount currently active in this sandbox. */
+  async listMounts(): Promise<MountInfo[]> {
+    const body = await request<ListMountsResponseBody>({
+      ...this.client,
+      method: "GET",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/mounts`,
+    });
+    return body.mounts.map(mountInfoFromBody);
+  }
+
+  /** Unmounts and tears down one remote-storage mount (see `mount()`'s
+   * returned/listed `id`). Best-effort on the guest side — a failed
+   * `umount` inside the guest is a loud warning in the daemon's own
+   * logs, not a failed request, since there's no useful way for a
+   * caller to retry a cleanup step that already removed this mount from
+   * the sandbox's tracked list. */
+  async unmount(mountId: string): Promise<void> {
+    await request<void>({
+      ...this.client,
+      method: "DELETE",
+      path: `/sandboxes/${encodeURIComponent(this.id)}/mounts/${encodeURIComponent(mountId)}`,
+    });
+  }
+
+  /**
    * Stops this sandbox. By default this *preserves* its state: internally
    * the daemon does what `Sandbox.snapshot()` does (pause, snapshot to
    * disk, stop the VM) and returns the resulting snapshot id — "stop and
@@ -543,6 +602,10 @@ export class Sandbox {
 function buildDrivesRequestBody(drives: DriveAttachmentOptions[] | undefined): DriveAttachmentRequestBody[] | undefined {
   if (drives === undefined) return undefined;
   return drives.map((d) => ({ id: d.id, read_only: d.readOnly }));
+}
+
+function mountInfoFromBody(body: MountResponseBody): MountInfo {
+  return { id: body.id, bucket: body.bucket, endpoint: body.endpoint, mountPath: body.mount_path, readOnly: body.read_only };
 }
 
 /** Only includes the sub-fields the caller actually set — mirrors the

@@ -6,6 +6,7 @@ import {
   formatDriveList,
   formatExecStreamList,
   formatImageList,
+  formatMountList,
   formatPoolList,
   formatSandboxList,
   formatSnapshotList,
@@ -189,6 +190,21 @@ test("formatDriveList renders id, size, timestamp, and comma-joined holders per 
     "drv-1  64MiB  2026-01-01T00:00:00.000Z  sandbox sb-1\n" +
       "drv-2  128MiB  2026-01-02T00:00:00.000Z  not attached\n" +
       "drv-3  256MiB  2026-01-03T00:00:00.000Z  sandbox sb-2:ro,sandbox sb-3:ro\n",
+  );
+});
+
+test("formatMountList reports an empty list distinctly", () => {
+  assert.equal(formatMountList([]), "no mounts\n");
+});
+
+test("formatMountList renders id, bucket@endpoint, mount path, and a (ro) suffix when read-only", () => {
+  const mounts = [
+    { id: "mnt-1", bucket: "my-bucket", endpoint: "https://s3.example.com", mountPath: "/mnt/data", readOnly: false },
+    { id: "mnt-2", bucket: "other-bucket", endpoint: "https://s3.example.com", mountPath: "/mnt/ro", readOnly: true },
+  ];
+  assert.equal(
+    formatMountList(mounts),
+    "mnt-1  my-bucket@https://s3.example.com -> /mnt/data\n" + "mnt-2  other-bucket@https://s3.example.com -> /mnt/ro (ro)\n",
   );
 });
 

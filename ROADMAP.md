@@ -95,14 +95,14 @@ outbound HTTP both still work.
   `vcpuCount`/`memSizeMib` overrides), `Sandbox.list()` (tag-filterable),
   `Sandbox.resume()`/`Sandbox.fork()` (static, boot from a snapshot),
   `runCommand()`, `readFile()`/`writeFile()`, `snapshot()`, `previewUrl()`,
-  `stop()`. ESM + CJS + full type definitions via `tsup`. Verified against
-  a live, auth-enabled daemon end to end — not just typechecked, which is
-  how `stop()` returning `200` instead of the documented `204` got caught
-  and fixed. **Published**:
+  `stop()`, `execStream()`/`listExecStreams()`/`attachLogs()`,
+  `mount()`/`listMounts()`/`unmount()`. ESM + CJS + full type definitions
+  via `tsup`. Verified against a live, auth-enabled daemon end to end —
+  not just typechecked, which is how `stop()` returning `200` instead of
+  the documented `204` got caught and fixed. **Published**:
   [npmjs.com/package/sandkiln](https://www.npmjs.com/package/sandkiln)
-  (0.2.0, with signed provenance from the CI build — includes everything
-  in this bullet, though `execStream`/`listExecStreams`/`attachLogs`
-  below haven't been published under a new version yet).
+  (0.10.0, with signed provenance from the CI build — includes
+  everything in this bullet).
 - **Done: full filesystem operations** — `chmod`/`chown`/`mkdir`
   (with `-p`-style `parents`)/`rename`/`copy`/`symlink`/`readlink`/
   `truncate`/directory listing with metadata (name, is-dir, is-symlink,
@@ -458,6 +458,17 @@ outbound HTTP both still work.
   argument. No re-application on resume/fork/restore — a mount is a live
   guest-side FUSE process, captured by Firecracker's own snapshot
   mechanism along with the rest of guest memory.
+- **Done: exposed in both SDKs and the CLI.** Was daemon-HTTP-API-only
+  for a while (see this project's own `examples/remote-storage-mount`,
+  which called the three routes with raw `fetch()` until this landed).
+  `Sandbox.mount()`/`.listMounts()`/`.unmount()` (JS/TS),
+  `mount()`/`list_mounts()`/`unmount()` (Python), `kiln sandbox
+  mount|mounts|unmount` (CLI). Live-verified against a real daemon
+  (`listMounts()` on a mount-free sandbox, and a mount attempt against an
+  unreachable endpoint failing cleanly as a `SandkilnApiError` rather
+  than hanging or crashing) — full success needs a real S3-compatible
+  endpoint this dev box doesn't have configured, same caveat
+  `scripts/integration-tests/22-mounts.sh` already carries.
 
 ## Firewall and egress policy
 

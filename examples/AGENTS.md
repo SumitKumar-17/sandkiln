@@ -61,15 +61,12 @@ external user of the published packages would write.
   its README says so prominently. Switch it back once a new npm version
   ships.
 - `remote-storage-mount/` — JS/TS. Mounts an S3-compatible bucket into a
-  sandbox at `/mnt/bucket`, writes and reads a file through it with
-  ordinary `writeFile()`/`readFile()` calls, then unmounts and confirms
-  the guest-side FUSE mount is really gone. Mounts have no SDK method
-  yet, so the three `/sandboxes/:id/mounts` calls are raw `fetch()`
-  against the daemon while the rest uses the published package — its
-  README says so, and says why inventing SDK methods here would be the
-  wrong call. Needs the optional FUSE kernel + rclone-injected rootfs
-  setup from `SELF_HOSTING.md`, and an S3-compatible endpoint the user
-  supplies via `S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`.
+  sandbox at `/mnt/bucket` via `sandbox.mount()`, writes and reads a file
+  through it with ordinary `writeFile()`/`readFile()` calls, then
+  `sandbox.unmount()`s and confirms the guest-side FUSE mount is really
+  gone. Needs the optional FUSE kernel + rclone-injected rootfs setup
+  from `SELF_HOSTING.md`, and an S3-compatible endpoint the user supplies
+  via `S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`.
 
 ## Conventions
 

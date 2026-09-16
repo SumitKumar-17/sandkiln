@@ -1,5 +1,5 @@
 import { InvalidArgumentError } from "commander";
-import type { DirEntry, DriveInfo, ExecStreamSession, ImageInfo, PoolInfo, SandboxInfo, SnapshotInfo } from "sandkiln";
+import type { DirEntry, DriveInfo, ExecStreamSession, ImageInfo, MountInfo, PoolInfo, SandboxInfo, SnapshotInfo } from "sandkiln";
 
 /**
  * A plain `Error` here crashes with a raw stack trace instead of the
@@ -150,6 +150,17 @@ export function formatDriveList(drives: DriveInfo[]): string {
     return "no drives\n";
   }
   return drives.map(formatDriveLine).join("\n") + "\n";
+}
+
+function formatMountLine(info: MountInfo): string {
+  return `${info.id}  ${info.bucket}@${info.endpoint} -> ${info.mountPath}${info.readOnly ? " (ro)" : ""}`;
+}
+
+export function formatMountList(mounts: MountInfo[]): string {
+  if (mounts.length === 0) {
+    return "no mounts\n";
+  }
+  return mounts.map(formatMountLine).join("\n") + "\n";
 }
 
 function formatPoolLine(info: PoolInfo): string {

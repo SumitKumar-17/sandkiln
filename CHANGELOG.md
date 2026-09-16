@@ -122,6 +122,16 @@ entry below and earlier), this just ships it to PyPI via
 flow. No code change; versioned separately from the JS/TS SDK/CLI table
 below from here on, since the two don't need to move in lockstep.
 
+## [0.10.0] — 2026-09-16
+
+### Added
+- Remote storage mounts, now exposed in both SDKs and the CLI (the
+  daemon HTTP API itself shipped earlier — see the dated daemon/core
+  section above): `Sandbox.mount()`/`.listMounts()`/`.unmount()` (JS/TS),
+  `mount()`/`list_mounts()`/`unmount()` (Python), `kiln sandbox
+  mount|mounts|unmount` (CLI). `examples/remote-storage-mount` updated
+  to use the real methods instead of raw `fetch()` calls.
+
 ## [0.9.0] — 2026-09-16
 
 ### Added

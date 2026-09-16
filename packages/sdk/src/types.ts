@@ -496,3 +496,51 @@ export interface PoolInfo {
    * `maxCount`. */
   claimed: number;
 }
+
+/** Mounts an S3-compatible bucket into a sandbox via `rclone mount` — see
+ * `Sandbox.mount()`. `endpoint` is the full URL of the S3-compatible
+ * service (never defaulted to any particular provider, so the target is
+ * always explicit); `accessKey`/`secretKey` are written into a `0600`
+ * rclone config file inside the guest, never passed as a command-line
+ * argument. `mountPath` is created (`mkdir -p`) inside the guest if it
+ * doesn't already exist. */
+export interface MountOptions {
+  bucket: string;
+  endpoint: string;
+  accessKey: string;
+  secretKey: string;
+  mountPath: string;
+  readOnly?: boolean;
+}
+
+/** One active remote-storage mount, as returned by `Sandbox.mount()`/
+ * `Sandbox.listMounts()`. Never carries credentials — those exist only
+ * as a `0600` file inside the guest, not in any daemon-side record. */
+export interface MountInfo {
+  id: string;
+  bucket: string;
+  endpoint: string;
+  mountPath: string;
+  readOnly: boolean;
+}
+
+export interface CreateMountRequestBody {
+  bucket: string;
+  endpoint: string;
+  access_key: string;
+  secret_key: string;
+  mount_path: string;
+  read_only?: boolean;
+}
+
+export interface MountResponseBody {
+  id: string;
+  bucket: string;
+  endpoint: string;
+  mount_path: string;
+  read_only: boolean;
+}
+
+export interface ListMountsResponseBody {
+  mounts: MountResponseBody[];
+}
