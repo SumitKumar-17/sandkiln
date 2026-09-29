@@ -222,6 +222,23 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+step "DNS proxy for guest name resolution"
+# ---------------------------------------------------------------------------
+# Without this, sandboxes get outbound IP connectivity (via the bridge NAT
+# above) but never a working resolver -- a real, easy-to-miss gap, since a
+# sandbox that only ever calls out to raw IPs still looks fine. Quick
+# start's "two commands" promise isn't actually true without it, so it's
+# part of this script rather than a separate manual step users skip past.
+BRIDGE_GATEWAY="${SANDKILN_BRIDGE_GATEWAY:-172.16.0.1}"
+if ss -lnup 2>/dev/null | grep -q "${BRIDGE_GATEWAY}:53"; then
+  skip "dns proxy already listening on $BRIDGE_GATEWAY:53"
+else
+  sudo bash "$SCRIPT_DIR/host-setup/start-dns-proxy.sh" "$BRIDGE_GATEWAY" \
+    || { bad "start-dns-proxy.sh failed"; exit 1; }
+  ok "dns proxy listening on $BRIDGE_GATEWAY:53 (not a systemd service yet -- re-run this after a host reboot, see SELF_HOSTING.md section 5)"
+fi
+
+# ---------------------------------------------------------------------------
 step "CAP_NET_ADMIN on the daemon binary"
 # ---------------------------------------------------------------------------
 DAEMON_BIN="$CORE_DIR/target/release/sandkilnd"
