@@ -44,10 +44,13 @@ hardware, not just code that compiles.
   service; durable sandbox history; per-sandbox egress (outbound network)
   policy enforced via dedicated iptables chains; snapshot lineage
   (parent-pointer ancestry, queryable in both directions); time-travel
-  restore (retired, non-consumed checkpoints, restorable repeatedly).
+  restore (retired, non-consumed checkpoints, restorable repeatedly);
+  per-exec/per-create environment variables; remote storage mounts
+  (S3-compatible buckets via FUSE + rclone); an async Python client
+  (`AsyncSandbox`/`AsyncDrive`/`AsyncImage`/`AsyncPool`).
   All exposed through both SDKs and the CLI (interactive PTY: JS/TS SDK
-  and CLI only; idle-lifecycle archiving: daemon-operator config only, no
-  client surface; egress policy, snapshot lineage, and time-travel
+  and CLI only, not yet Python; idle-lifecycle archiving: daemon-operator
+  config only, no client surface; snapshot lineage and time-travel
   restore: daemon HTTP API only so far, no SDK/CLI surface yet — see
   their respective sections),
   live-verified via `scripts/integration-test.sh` (294 checks, 0 failing,
@@ -92,16 +95,16 @@ outbound HTTP both still work.
 
 - **JS/TS (`sandkiln` npm package) — working, matches the daemon's full
   surface.** `Sandbox.create()` (tags, an auth token, and optional
-  `vcpuCount`/`memSizeMib` overrides), `Sandbox.list()` (tag-filterable),
-  `Sandbox.resume()`/`Sandbox.fork()` (static, boot from a snapshot),
-  `runCommand()`, `readFile()`/`writeFile()`, `snapshot()`, `previewUrl()`,
-  `stop()`, `execStream()`/`listExecStreams()`/`attachLogs()`,
-  `mount()`/`listMounts()`/`unmount()`. ESM + CJS + full type definitions
-  via `tsup`. Verified against a live, auth-enabled daemon end to end —
-  not just typechecked, which is how `stop()` returning `200` instead of
-  the documented `204` got caught and fixed. **Published**:
-  [npmjs.com/package/sandkiln](https://www.npmjs.com/package/sandkiln)
-  (0.10.0, with signed provenance from the CI build — includes
+  `vcpuCount`/`memSizeMib` overrides, `env`, `egress`), `Sandbox.list()`
+  (tag-filterable), `Sandbox.resume()`/`Sandbox.fork()` (static, boot from
+  a snapshot), `runCommand()`, `readFile()`/`writeFile()`, `snapshot()`,
+  `previewUrl()`, `stop()`, `execStream()`/`listExecStreams()`/
+  `attachLogs()`, `mount()`/`listMounts()`/`unmount()`. ESM + CJS + full
+  type definitions via `tsup`. Verified against a live, auth-enabled
+  daemon end to end — not just typechecked, which is how `stop()`
+  returning `200` instead of the documented `204` got caught and fixed.
+  **Published**: [npmjs.com/package/sandkiln](https://www.npmjs.com/package/sandkiln)
+  (0.11.0, with signed provenance from the CI build — includes
   everything in this bullet).
 - **Done: full filesystem operations** — `chmod`/`chown`/`mkdir`
   (with `-p`-style `parents`)/`rename`/`copy`/`symlink`/`readlink`/
