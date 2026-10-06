@@ -1,134 +1,85 @@
 # AGENTS.md — sandkiln-guest-agent
 
-Read the root `AGENTS.md` first for project-wide conventions. This file
-is scoped to this one crate.
+Read root `AGENTS.md` first.
 
 ## What this crate is
 
-A ~700KB static binary that runs *inside* every microVM as a systemd
-service, listening on three vsock ports: `sandkiln_protocol::AGENT_PORT`,
-answering `Request`s from `sandkiln-protocol` (exec, read/write file,
-directory listing with metadata, chmod/chown/mkdir/rename/copy/symlink/
-readlink/truncate), `sandkiln_protocol::PTY_PORT`, for interactive
-shell sessions (see `pty.rs` below), and `sandkiln_protocol::EXEC_STREAM_PORT`,
-for streamed background exec sessions (see `exec_stream.rs` below) — both
-of the latter two are long-lived, one-connection-per-session shapes,
-fundamentally different from the first port's one-request-one-response
-traffic (though unlike `PTY_PORT`, `EXEC_STREAM_PORT` stays framed the
-whole time rather than dropping to raw bytes — see either file's own doc
-comment). This is the only code that ever runs inside the guest —
-everything else (`vmm`, `daemon`) is host-side.
+A ~700KB static binary running *inside* every microVM as a systemd
+service, listening on three vsock ports: `AGENT_PORT` (request/response —
+exec, file ops, chmod/chown/mkdir/rename/copy/symlink/readlink/truncate),
+`PTY_PORT` (interactive shell, long-lived, drops to raw bytes after one
+handshake — see `pty.rs`), `EXEC_STREAM_PORT` (streamed background exec,
+long-lived but stays framed the whole time — see `exec_stream.rs`). The
+only code that runs inside the guest; everything else is host-side.
 
-Built for `x86_64-unknown-linux-musl` specifically (static linking, no
-libc dependency on the guest's exact glibc version) — see root
-`AGENTS.md`'s note on this. Optimized for size in the workspace root
-`Cargo.toml` (`[profile.release.package.sandkiln-guest-agent]`) since it
-ships inside every rootfs image and directly affects image size and boot
-time.
+Built for `x86_64-unknown-linux-musl` (static, no glibc-version
+dependency). Size-optimized in the workspace root `Cargo.toml` since it
+ships inside every rootfs image.
 
 ## Files
 
-- `main.rs` — three listener loops, one per port, the `PTY_PORT` and
-  `EXEC_STREAM_PORT` ones each on their own thread from startup: the
-  `AGENT_PORT` loop accepts a connection, reads framed messages in a
-  loop, dispatches to `handler::handle`, writes the framed response,
-  repeats until the peer disconnects; the other two each accept a
-  connection and spawn a new thread per session (`pty::handle_connection`/
-  `exec_stream::handle_connection`), since both kinds of session are
-  expected to stay open a long time and must never block the next
-  `accept()`.
-- `handler.rs` — the actual implementation of each `Request` variant.
-  This is genuinely simple (thin wrappers over `std::process::Command`
-  and `std::fs`, plus one raw `libc::chown` call — std has no chown
-  equivalent, and `libc` was chosen over `nix` as the one dependency
-  needed for a single syscall wrapper) by design — don't add business
-  logic here that belongs on the host side instead. The guest agent
-  should stay a dumb executor: no path validation of any kind on any
-  operation (not `..`-rejection, not an absolute-path requirement, not
-  canonicalization) — whatever the guest's own kernel permits, this
-  does. That's deliberate, not a gap to fix here; a path is scoped to
-  whatever it resolves to inside that one microVM's own filesystem
-  regardless.
-- `pty.rs` — one interactive PTY session start to finish: read the
-  `PtyHandshake`, `forkpty(2)` a shell sized to it (via `nix`, gated
-  behind its `term`/`process`/`signal` features), then shovel bytes
-  between the vsock connection and the pty master on two threads until
-  either side ends. See "Non-obvious things" below for the one real
-  gotcha in that last part.
-- `exec_stream.rs` — one streamed background exec session start to
-  finish: read the `ExecStreamHandshake`, spawn that command with
-  stdout/stderr piped (no pty — this is for a background command, not an
-  interactive shell), fan both pipes into one channel so only the
-  connection-handling thread itself ever writes framed `ExecStreamEvent`s
-  back (avoiding any need to synchronize concurrent writers), wait for
-  the child only after both pipes hit EOF (waiting first risks
-  deadlocking on a full pipe buffer), then send one final `Exit` event.
+- **`main.rs`** — three listener loops. `AGENT_PORT`: accept, read framed
+  messages in a loop, dispatch to `handler::handle`, write response,
+  repeat until disconnect. `PTY_PORT`/`EXEC_STREAM_PORT`: accept and spawn
+  a thread per session (`pty::handle_connection`/
+  `exec_stream::handle_connection`) so a long session never blocks the
+  next `accept()`.
+- **`handler.rs`** — each `Request` variant, as thin wrappers over
+  `std::process::Command`/`std::fs` plus one raw `libc::chown` (std has
+  no equivalent; `libc` over `nix` for one syscall). No path validation
+  of any kind, deliberately — the guest agent is a dumb executor, a path
+  is scoped to whatever it resolves to inside that one microVM's own
+  filesystem regardless.
+- **`pty.rs`** — read `PtyHandshake`, `forkpty(2)` a shell sized to it
+  (via `nix`), shovel bytes between the vsock connection and pty master
+  on two threads until either side ends. See the hangup gotcha below.
+- **`exec_stream.rs`** — read `ExecStreamHandshake`, spawn with
+  stdout/stderr piped (no pty), fan both pipes into one channel so only
+  the connection thread writes framed `ExecStreamEvent`s (no writer
+  synchronization needed), wait for the child only after both pipes hit
+  EOF (waiting first risks deadlocking on a full pipe buffer), send one
+  final `Exit`.
 
 ## Building
 
 ```
 cargo build --release -p sandkiln-guest-agent --target x86_64-unknown-linux-musl
 ```
-on the remote dev box (needs the musl target + `musl-tools` installed —
-see `scripts/` on the dev box or just `rustup target add
-x86_64-unknown-linux-musl` + `apt install musl-tools` if starting fresh).
+On the remote dev box (needs the musl target + `musl-tools`).
 
 ## Getting a change into a real microVM
 
-Building the binary isn't enough — it has to be baked into a rootfs
-image before it does anything. `scripts/dev.sh inject-agent
-[rootfs-path]` does the build-then-inject sequence below in one command
-(defaulting `rootfs-path` to the daemon's own configured
-`SANDKILN_BASE_ROOTFS` default) — worth using over the two steps
-separately specifically because it can't inject into the wrong image
-file, a real mistake made at least once during this crate's own
-development:
+Building isn't enough — it has to be baked into a rootfs image.
+`scripts/dev.sh inject-agent [rootfs-path]` does build-then-inject in one
+command (defaults to `SANDKILN_BASE_ROOTFS`) — safer than the two steps
+separately (a wrong-image injection happened once during development):
 ```
 sudo bash images/inject-agent.sh \
   core/target/x86_64-unknown-linux-musl/release/sandkiln-agent \
   <path-to-rootfs.ext4>
 ```
-This mounts the image, copies the binary to `/usr/local/bin/`, and
-enables the systemd service. The daemon's `SANDKILN_BASE_ROOTFS` env var
-needs to point at whatever image you injected into, or it'll keep
-booting sandboxes from the old one.
+Mounts the image, copies the binary to `/usr/local/bin/`, enables the
+systemd service. `SANDKILN_BASE_ROOTFS` must point at whatever you
+injected into, or the daemon keeps booting the old image.
 
 ## Non-obvious things
 
-- **No error recovery inside a connection.** If a request fails to parse
-  or a response fails to serialize, `main.rs` just ends that connection
-  — it does not try to resync the stream. This is deliberate simplicity,
-  not an oversight; a malformed frame means something is wrong enough
-  that resyncing isn't worth the complexity.
-- **This binary is PID-independent of systemd's actual PID 1** — it runs
-  as a regular systemd service (`sandkiln-agent.service`), not as init
-  itself. Don't assume PID 1 semantics.
-- If you add a capability here that needs more system access (mounting,
-  privileged syscalls), remember Firecracker's jailer hardening (planned,
-  see root `ROADMAP.md`) will eventually restrict what this process can
-  do — don't build in an assumption of unrestricted root that a future
-  security pass will have to unwind.
-- **`pty.rs`'s two vsock-stream handles are `try_clone()`d, not two
-  independent connections** — they're dup'd fds sharing the *same*
-  underlying socket. Dropping just one of them on a thread's own exit
-  does **not** close the connection (the kernel keeps a socket open as
-  long as any fd still references it), so a blocked read on the other
-  handle would otherwise wait forever for bytes nobody is left to send.
-  `shovel_bytes` handles both hangup directions explicitly instead of
-  assuming either side notices on its own: the pty-output thread calls
-  `stream.shutdown(Shutdown::Both)` when the shell exits (unblocking the
-  vsock-input thread's read immediately), and the vsock-input side sends
-  the child `SIGHUP` when *it* ends first — the same signal a real
-  terminal sends its foreground process group on hangup — so a
-  disconnected session never leaves an orphaned shell running. This was
-  a real bug (a 10-second hang, only ever noticed via a live CLI test,
-  not a unit test) — see `packages/cli`'s `sandbox pty` command for
-  where it first showed up.
+- No error recovery inside a connection — a bad frame or serialize
+  failure just ends that connection, deliberately, rather than resyncing.
+- Runs as a regular systemd service, not PID 1 — don't assume init
+  semantics.
+- A capability needing more system access here should assume Firecracker
+  jailer hardening (see root `ROADMAP.md`) will eventually restrict it —
+  don't build in an unrestricted-root assumption.
+- **`pty.rs`'s two vsock handles are `try_clone()`d, dup'd fds on one
+  socket, not two connections** — dropping one doesn't close it, so a
+  blocked read on the other would wait forever. `shovel_bytes` handles
+  both hangup directions explicitly: the pty-output thread calls
+  `shutdown(Shutdown::Both)` on shell exit; the vsock-input side sends
+  the child `SIGHUP` (same as a real terminal) if it ends first. This was
+  a real 10-second-hang bug, only ever caught via a live CLI test.
 
 ## Verifying a change
 
-Compiling isn't proof it works — this crate specifically needs the full
-live-boot verification loop (build → inject into a fresh rootfs copy →
-boot via `scripts/dev-tools/boot-test-vm.sh` or the daemon → talk to it over vsock)
-described in the root `AGENTS.md`. A change here that only "compiles" has
-not been verified.
+Compiling isn't proof — needs the full build → inject into a fresh
+rootfs copy → boot → talk over vsock loop (root `AGENTS.md`).

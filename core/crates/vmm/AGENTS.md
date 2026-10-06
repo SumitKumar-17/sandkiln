@@ -1,249 +1,123 @@
 # AGENTS.md — sandkiln-vmm
 
-Read the root `AGENTS.md` first for project-wide conventions and the
-gotchas list (several of them live in this exact crate's history — the
-Tokio capability-ordering bug and the tuntap ioctl privilege issue both
-happened here). This file is scoped to this one crate.
+Read root `AGENTS.md` first — several of its gotchas (Tokio capability
+ordering, the tuntap ioctl privilege issue) happened in this crate.
 
 ## What this crate is
 
-The host-side library that actually drives Firecracker and networking.
-`sandkiln-daemon` is a thin HTTP wrapper around this crate — if you're
-implementing new VM-lifecycle behavior, it almost certainly belongs here,
-not in `daemon`.
+The host-side library that drives Firecracker and networking.
+`sandkiln-daemon` is a thin HTTP wrapper around it — new VM-lifecycle
+behavior belongs here, not in `daemon`.
 
 ## Files
 
-- `firecracker_api.rs` — a minimal hand-rolled HTTP/1.1 client for
-  Firecracker's API Unix socket. Deliberately not a full HTTP client
-  dependency — Firecracker's API surface is a handful of fixed-shape
-  JSON PUT/PATCH requests, not worth pulling in `hyper` or similar for.
-  If you need a new Firecracker API call, add a method here following
-  the existing `put`/`patch` pattern.
-- `vm/mod.rs` — `Vm`/`VmConfig`: the public API surface only —
-  `Vm::boot`/`is_jailed`/`call`/`open_pty`/`open_exec_stream`/
-  `update_metadata`/`stop`/`force_stop`, plus the shared helpers both submodules below depend on
-  (`console_log_path`/`console_log_stdio`/`annotate_with_console_log`/
-  `connect_api_with_retry`/`path_str`/`put_checked`). The spawned process's
-  stdout/stderr (the guest's `console=ttyS0` serial output) is captured
-  to `/tmp/sandkiln-fc-<id>.log` rather than discarded —
-  `annotate_with_console_log` appends that path to a boot failure's error
-  message, since a guest kernel panic or agent crash before vsock comes
-  up would otherwise be invisible from the host. This is exactly what
-  caught a real Firecracker/KVM bug while building `sandkiln-daemon`'s
-  `pool` module: a resumed guest kernel can panic early in boot (a
-  divide-by-zero trap in the console driver, restored CPU/timer state
-  interacting badly with timing-sensitive init code) and Firecracker
-  exits shortly after — confirmed by reading exactly this console log,
-  not guessed at. **Not a rare edge case** — measured directly at roughly
-  1-in-3 to 2-in-3 resumes across repeated clean, isolated test runs on
-  this dev box; see `crate::pool`'s daemon-side doc comment and
-  `ROADMAP.md`'s "Persistence and snapshotting" section for how this is
-  handled (a real post-resume health check, not just documentation of a
-  known gap). `snapshot::resume` uses the same shared helpers for the
-  fresh Firecracker process it spawns.
-  `update_metadata` redoes the full `PUT /mmds/config` + `PUT /mmds`
-  sequence rather than a bare `PATCH /mmds`, for a real reason found
-  live: a resumed VM's MMDS data store comes back **uninitialized** even
-  though the VM had MMDS configured before being snapshotted — `PATCH
-  /mmds` alone fails with "MMDS data store is not initialized" after a
-  resume. This is the mechanism `sandkiln-daemon`'s pool-claim path uses
-  to refresh a resumed sandbox's guest-visible identity away from
-  whatever placeholder it had as a warm instance.
-  `force_stop` is `stop` minus its optimistic "sync before kill" call —
-  for tearing down a VM already known to be dead (e.g. one that just
-  failed the health check above), where that call would otherwise burn
-  its own separate ~5-second retry timeout for nothing. Found live too:
-  without this, `sandkiln-daemon`'s pool-claim fallback paid two
-  independent 5-second timeouts back to back (~10.3s) instead of one
-  (~5.4s) every time a claim's health check failed.
-- `vm/boot.rs` — the actual boot mechanics, as a submodule of `vm` (not a
-  sibling) specifically so it can still see `Vm`'s private fields to
-  construct one. Split out of `vm/mod.rs` (2026-09-08, evidence-based
-  crate audit) once that file mixed ~200 lines of boot-orchestration
-  internals into what should be pure public API surface — same
-  reasoning `vm/snapshot.rs` already gives for itself. `spawn_direct`/
-  `spawn_jailed` resolve the process to spawn and the paths Firecracker's
-  API calls should use (host paths for a direct boot, in-jail paths like
-  `/kernel` for a jailed one — see `jailer.rs`); `configure_and_start`
-  runs the same API PUT sequence either way. That sequence is built as an
-  ordered `(path, body)` list by `configuration_requests` and then issued
-  in a timed loop, rather than built-and-issued inline call by call —
-  that split is what lets each PUT be measured individually (they land in
-  the debug-level `"vm boot phase breakdown"` event, alongside
-  spawn/socket-wait/`InstanceStart`) without threading an `Instant`
-  through the whole sequence. `InstanceStart` is issued and timed
-  separately from the configuration PUTs because it's a different kind of
-  cost: the others only record intent in Firecracker's in-memory config,
-  while that one actually starts the vCPUs. Ordering constraints still
-  live in `configuration_requests` (notably: MMDS must come after
-  `/network-interfaces`). Includes inserting
-  `rate_limit` (see `insert_rate_limiter`) into the drive/network-
-  interface bodies when set. Also configures `VmConfig::metadata` (if
-  set) via Firecracker's own MMDS — `PUT /mmds/config` then `PUT /mmds`,
-  right after `/network-interfaces/eth0` (MMDS needs that interface
-  already configured) and before `/vsock`/`InstanceStart`. This is a
-  completely separate mechanism from everything else in this file — no
-  vsock, no guest agent; Firecracker's device model answers
-  `http://169.254.169.254/` requests from the guest directly. Errors
-  loudly (`io::Error`) if `metadata` is set without `network` also being
-  set, rather than silently doing nothing.
-- `vm/snapshot.rs` — `Vm::pause`/`snapshot`/`resume` and `ResumeConfig`,
-  as a submodule of `vm` (not a sibling) specifically so it can still see
-  `Vm`'s private fields. Split out once `vm.rs` passed ~350 lines.
-  `resume` always spawns directly — jailer support covers `Vm::boot`
-  only; `daemon::routes_snapshot::snapshot_sandbox` refuses to snapshot a
-  jailed sandbox rather than produce a snapshot `resume` can't correctly
-  load (see `jailer.rs`'s module doc comment for why).
-- `jailer.rs` — Firecracker's jailer: chroot, cgroup v2 limits, a
-  dedicated uid/gid per VM. `JailerIdPool` allocates distinct uid/gid
-  pairs (mirrors `network.rs`'s tap/IP pool); `link_resource_into_jail`
-  places one host file inside a VM's chroot (hard link, falling back to a
-  copy across filesystems) and reports the in-jail path Firecracker must
-  use instead; `build_jailer_args`/`cgroup_limits` are pure and unit
-  tested directly. Read its module doc comment before touching
-  `vm/boot.rs`'s `spawn_jailed`/`spawn_jailed_inner` — the chroot
-  path-rewriting is the part most likely to look right and be subtly
-  wrong. **Not yet proven on real hardware**: enabling
-  `SANDKILN_JAILER_ENABLED` breaks every sandbox create unless the
-  `jailer` binary itself has been made setuid-root first (a separate,
-  documented one-time step — see `SELF_HOSTING.md`'s "Optional:
-  jailer-based sandbox boot") — confirmed live 2026-09-08 via the actual
-  failure (`jailer` itself hits `Operation not permitted` trying to
-  chown a hard-linked file into the chroot before that step is done).
-- `network.rs` — `NetworkManager`/`Lease`: the tap-device pool, bridge
-  attachment, IP allocation, and bridge port isolation. Read the module
-  doc comment at the top — it explains *why* a pool of pre-created tap
-  devices exists instead of creating them on demand (ambient
-  `CAP_NET_ADMIN` doesn't cover the `TUNSETIFF` ioctl, only netlink ops).
-  `NetworkManager::uplink()` exposes the uplink interface name so
-  `egress::apply`/`remove` can scope a sandbox's rules to it, mirroring
-  this file's own bridge-wide `FORWARD` rule's `-o <uplink>` scoping.
-  `attach_tap` times each of its three `ip`/`bridge` calls separately
-  into the debug-level `"attached tap device"` event — they're
-  `fork`+`exec` of a real binary, not syscalls, so "how much of a lease
-  is process-spawn overhead" is the question worth being able to answer,
-  and one aggregate number can't. Measured at ~1.4ms each / ~4.3ms total,
-  which is why batching them or moving to direct netlink isn't planned —
-  see `ROADMAP.md`'s Benchmarking section.
-- `egress.rs` — per-sandbox outbound network policy: `EgressPolicy`
-  (`mode: AllowAll|DenyAll`, `allow_cidrs`, `deny_cidrs`) plus
-  `apply()`/`remove()`, which manage one dedicated iptables chain per
-  sandbox (named `SK-EG-<tap_device>`) with a single jump rule inserted
-  ahead of `network.rs`'s existing bridge-wide `FORWARD` `ACCEPT` rule, so
-  only that sandbox's own traffic is affected. Within a chain, every
-  `deny_cidrs` rule is appended before every `allow_cidrs` rule, before
-  the base mode's own default (`ACCEPT` for `AllowAll`, `DROP` for
-  `DenyAll`) — iptables' first-match-wins evaluation order makes deny
-  always beat allow on overlap, no special-casing needed. Rules match
-  only traffic actually leaving via `-o <uplink>` (matching the existing
-  bridge-wide rule's own scoping), which has a load-bearing side effect:
-  gateway-bound traffic (DNS to the bridge's own IP) never transits the
-  uplink at all, so it's structurally exempt from any policy without an
-  allowlist entry — live-verified (see `ROADMAP.md`'s "Firewall and
-  egress policy" entry). `apply()`'s chain population (create-or-flush
-  plus every deny/allow/default rule) is one `iptables-restore --noflush`
-  call rather than one `iptables` spawn per rule — measured on a real
-  box, a 6-CIDR policy cost ~8.3ms average per create under the old
-  one-spawn-per-rule shape, ~3.1ms after batching (see `ROADMAP.md`'s
-  Benchmarking section and `metrics::CreatePhase::EgressApply`, which
-  makes this cost visible per-create going forward). A restore-format
-  chain declaration (`:CHAIN - [0:0]`) resets-or-creates uniformly, so
-  `apply()` stays idempotent the same way it always was: callers (fresh
-  boot, pool claim, resume, fork) call it unconditionally without
-  distinguishing "chain survived a plain daemon restart" (iptables state
-  lives in the kernel, independent of the daemon process) from "chain
-  was wiped by an actual host reboot." Only the two rules that touch the
-  shared `FORWARD` chain stay as individual `iptables` calls (a `-C`
-  check, and an `-I` only when it's missing) — `--noflush` means the
-  restore call can't touch `FORWARD` without risking every other
-  sandbox's own jump rule in it. `remove()` is best-effort and safe to
-  call even if nothing was ever applied. `validate_cidr()` only checks the STRING
-  format (iptables itself understands CIDR notation natively) — plain
-  `std::net::Ipv4Addr::from_str` plus manual prefix-length bounds
-  checking, no new crate dependency. Enforcement is tied to the
-  sandbox's *lease*, not its VM — see `sandkiln-daemon/AGENTS.md`'s
-  `routes_sandbox.rs`/`routes_snapshot.rs` entries for where `apply`/
-  `remove` actually get called across the create/destroy/snapshot/
-  resume/fork lifecycle. IPv4 only, matching every other networking type
-  in this crate.
-- `vsock_client.rs` — the host-side vsock connection, mediated through
-  Firecracker's Unix-socket vsock bridging (`CONNECT <port>\n` handshake,
-  then the connection is a raw byte stream to the guest agent). Also
-  `open_pty` — the same `CONNECT`-handshake dance against
-  `sandkiln_protocol::PTY_PORT` instead of `AGENT_PORT`, followed by one
-  framed `PtyHandshake` instead of a `Request`, after which the returned
-  `UnixStream` is raw passthrough for its whole life (read/write timeouts
-  are explicitly cleared before returning it, unlike every other call on
-  this connection, since a PTY session is meant to sit idle between
-  keystrokes). `Vm::open_pty` (in `vm/mod.rs`) wraps this the same way
-  `Vm::call` wraps the request/response path — retrying for up to 5s
-  while the guest agent's second listener comes up, via the shared
-  `retry_with_backoff` helper (`vm/mod.rs`) both this and
-  `connect_api_with_retry` (Firecracker's own API socket) use — a 1ms→20ms
-  backoff here, since the guest agent's own startup (kernel finishing
-  boot, systemd, the agent binary binding vsock) is a slower, more
-  variable race than Firecracker's bare API socket appearing. This
-  replaced a flat `sleep(100ms)`-per-attempt loop, the same bug class as
-  `wait_for_socket`'s own fixed sleep — see `ROADMAP.md`'s Benchmarking
-  section for why fixing it turned out to matter far less than the
-  bigger thing it led to finding: a cold sandbox's *first* real exec
-  measures ~420-460ms end to end (a resumed one, ~4-18ms), a gap nothing
-  had measured before because it lives entirely inside this retry loop.
-- Also `open_exec_stream` — same shape as `open_pty` (a long-lived
-  `UnixStream` handed back after one handshake, timeouts cleared), but
-  against `sandkiln_protocol::EXEC_STREAM_PORT` with an
-  `ExecStreamHandshake { command, args }`, and the caller keeps reading
-  framed `ExecStreamEvent`s off it rather than raw bytes (see
-  `sandkiln-protocol`'s own `AGENTS.md`). `Vm::open_exec_stream` wraps it
-  with the same retry-for-5s pattern.
+- **`firecracker_api.rs`** — hand-rolled HTTP/1.1 client for Firecracker's
+  API Unix socket. Deliberately not a full HTTP dependency — a handful of
+  fixed-shape JSON PUT/PATCH calls isn't worth `hyper` for. New
+  Firecracker call → new method here, following the `put`/`patch`
+  pattern.
+- **`vm/mod.rs`** — `Vm`/`VmConfig` public surface
+  (`boot`/`is_jailed`/`call`/`open_pty`/`open_exec_stream`/
+  `update_metadata`/`stop`/`force_stop`) plus shared helpers both
+  submodules use. Guest stdout/stderr is captured to
+  `/tmp/sandkiln-fc-<id>.log`, not discarded — `annotate_with_console_log`
+  appends that path to a boot failure, since a kernel panic before vsock
+  comes up is otherwise invisible. This caught a real bug: a resumed
+  guest kernel can panic early (divide-by-zero in the console driver,
+  restored CPU/timer state vs. timing-sensitive init) — measured at
+  roughly 1-in-3 to 2-in-3 resumes on this box, handled by a real
+  post-resume health check (`daemon`'s `pool` module), not just
+  documented. `update_metadata` redoes the full `PUT /mmds/config` + `PUT
+  /mmds` rather than a bare `PATCH` — a resumed VM's MMDS store comes
+  back uninitialized, and `PATCH` alone fails on it. `force_stop` skips
+  `stop`'s "sync before kill" call, for a VM already known dead — without
+  it, a failed health check paid two 5s timeouts back to back (~10.3s)
+  instead of one (~5.4s).
+- **`vm/boot.rs`** — boot mechanics, a submodule (not sibling) of `vm` so
+  it can see `Vm`'s private fields. `spawn_direct`/`spawn_jailed` resolve
+  the process and paths (host paths direct, in-jail paths like `/kernel`
+  jailed — see `jailer.rs`); `configure_and_start` runs the same PUT
+  sequence either way, built by `configuration_requests` as an ordered
+  list so each PUT times individually (debug event `"vm boot phase
+  breakdown"`). `InstanceStart` is timed separately — it's the one call
+  that actually starts vCPUs, the rest only record config. Ordering
+  constraint: MMDS after `/network-interfaces`. `insert_rate_limiter`
+  wires `rate_limit` into drive/network bodies. MMDS setup
+  (`VmConfig::metadata`) is a separate mechanism entirely — no vsock, no
+  guest agent, Firecracker's device model answers
+  `169.254.169.254` directly; errors loudly if `metadata` is set without
+  `network`.
+- **`vm/snapshot.rs`** — `Vm::pause`/`snapshot`/`resume`, `ResumeConfig`.
+  `resume` always spawns directly — jailer covers `Vm::boot` only;
+  `daemon::routes_snapshot::snapshot_sandbox` refuses to snapshot a
+  jailed sandbox for this reason.
+- **`jailer.rs`** — chroot, cgroup v2, a dedicated uid/gid per VM.
+  `JailerIdPool` (mirrors `network.rs`'s tap/IP pool),
+  `link_resource_into_jail` (hard link, falls back to copy across
+  filesystems), `build_jailer_args`/`cgroup_limits` (pure, unit tested).
+  **Not yet proven on real hardware** — `SANDKILN_JAILER_ENABLED` breaks
+  every create unless `jailer` itself is made setuid-root first
+  (`SELF_HOSTING.md`); confirmed live via `Operation not permitted`
+  chown-ing a hard-linked file into the chroot before that step.
+- **`network.rs`** — `NetworkManager`/`Lease`: tap pool, bridge
+  attachment, IP allocation, port isolation. Pool exists (not on-demand
+  creation) because ambient `CAP_NET_ADMIN` covers netlink, not the
+  `TUNSETIFF` ioctl. `uplink()` exposes the uplink interface so
+  `egress.rs` scopes rules to it the same way the bridge-wide `FORWARD`
+  rule does. `attach_tap`'s three `ip`/`bridge` calls are each
+  `fork`+`exec`, individually timed (~1.4ms each / ~4.3ms total) — not
+  batched or moved to netlink, see `ROADMAP.md` Benchmarking.
+- **`egress.rs`** — per-sandbox firewall: `EgressPolicy`
+  (`AllowAll`/`DenyAll` + CIDRs), `apply()`/`remove()` managing one
+  iptables chain per sandbox (`SK-EG-<tap_device>`) with a jump rule
+  ahead of the bridge-wide `FORWARD` rule. Deny rules precede allow rules
+  precede the mode default — first-match-wins makes deny always beat
+  allow on overlap, no special-casing. Rules match only `-o <uplink>`
+  traffic, so gateway-bound DNS never transits it and is structurally
+  exempt. `apply()` uses one `iptables-restore --noflush` call instead of
+  one spawn per rule (~8.3ms → ~3.1ms for a 6-CIDR policy, see
+  `metrics::CreatePhase::EgressApply`); idempotent via a restore-format
+  chain reset. Only the two `FORWARD`-touching rules stay individual
+  `iptables` calls (`--noflush` can't touch `FORWARD` safely).
+  `validate_cidr()` is string-format-only (`Ipv4Addr::from_str` + manual
+  prefix bounds, no new dependency). Tied to the lease, not the VM — see
+  `sandkiln-daemon/AGENTS.md` for call sites. IPv4 only.
+- **`vsock_client.rs`** — host-side vsock via Firecracker's UDS bridging
+  (`CONNECT <port>\n` handshake, then raw bytes). `open_pty` is the same
+  handshake against `PTY_PORT`, then one framed `PtyHandshake`, then raw
+  passthrough with read/write timeouts cleared (a PTY sits idle between
+  keystrokes). `Vm::open_pty` wraps it with `retry_with_backoff` (1ms→20ms,
+  up to 5s — the guest agent's startup race is slower/more variable than
+  Firecracker's own API socket). This retry fix led to finding a cold
+  sandbox's first real exec measures ~420-460ms end to end (resumed:
+  ~4-18ms) — previously unmeasured. `open_exec_stream` is the same shape
+  against `EXEC_STREAM_PORT` with an `ExecStreamHandshake`, reading
+  framed `ExecStreamEvent`s instead of raw bytes.
 
 ## Building and testing
 
-No KVM here means no real verification without the remote dev box — see
-root `AGENTS.md`'s "Where the real work happens" section. `cargo build
--p sandkiln-vmm` / `cargo clippy -p sandkiln-vmm --all-targets` catch
-compile errors, nothing more. The `examples/` directory
-(`exec_test.rs`, `file_test.rs`) are real, runnable end-to-end checks
-against a booted VM — look at them before writing a new one from scratch,
-and prefer extending them over inventing a new ad hoc test harness.
+No KVM locally — `cargo build`/`clippy -p sandkiln-vmm` catch compile
+errors only. `examples/` (`exec_test.rs`, `file_test.rs`) are real
+end-to-end checks against a booted VM; extend them before writing a new
+harness. Benchmarks: `benches/vm_lifecycle.rs` (criterion), env vars in
+`ROADMAP.md`.
 
-Benchmarks live in `benches/vm_lifecycle.rs` (criterion) — see root
-`ROADMAP.md`'s Benchmarking section for the exact env vars needed to run
-them on the dev box.
+## Non-obvious things
 
-## Non-obvious things specific to this crate
-
-- **Ambient capabilities and Tokio don't mix the way you'd expect.** If
-  code here ever needs to run inside a `tokio::task::spawn_blocking`
-  closure AND needs a Linux capability, that capability has to be raised
-  *before* the Tokio runtime starts (see root `AGENTS.md`) — this crate
-  itself doesn't touch Tokio at all (it's synchronous, `daemon` wraps it
-  in `spawn_blocking`), but if that ever changes, re-read that gotcha
-  first.
-- **`network.rs`'s tap pool is finite and shared.** `NetworkManager` has
-  no visibility into which sandbox holds which lease beyond what the
-  caller tracks — if you're adding a feature that needs to look up "which
-  sandbox has this IP," that mapping needs to live in `daemon`'s
-  `Sandbox` tracking, not here.
-- Every privileged operation here (`ip`, `iptables`, `bridge` commands)
-  runs via `std::process::Command`, not a native netlink library — this
-  was a deliberate choice for simplicity and to match the shell scripts'
-  behavior exactly, not an oversight. If you're tempted to switch to a
-  crate like `rtnetlink`, make sure you understand why the current
-  ambient-capability propagation works for spawned processes first (see
-  the gotcha above) before assuming a library call would behave the same.
-- **Jailer itself needs privileges the daemon deliberately doesn't have**
-  (chroot, setuid/setgid, mknod for `/dev/kvm`/`/dev/net/tun` inside the
-  jail, cgroup management) — this is why the `jailer` *binary* is made
-  setuid-root as one-time setup (`SELF_HOSTING.md`), not something granted
-  to the daemon via file capabilities the way `CAP_NET_ADMIN` is. Don't
-  "fix" a jailer permission error by loosening the daemon's own
-  capability set instead — see root `AGENTS.md` section 11.
-- **`jailer.rs`'s tests use real temp directories and real hard
-  links/`chmod`**, no KVM or jailer binary needed for any of them — same
-  convention as `drive.rs`'s `TempStore`. What they can't cover without a
-  real jailer binary and real chroot/cgroup/uid-drop behavior: whether
-  the actual installed jailer version's directory ownership/permissions
-  match what this module assumes. Verify that on the dev box before
-  trusting jailer boot in production.
+- Raise capabilities before the Tokio runtime starts, not inside
+  `spawn_blocking` — this crate itself is sync and doesn't touch Tokio,
+  but re-read root `AGENTS.md` §12 if that changes.
+- `NetworkManager` doesn't track which sandbox holds which lease —
+  that mapping lives in `daemon`'s `Sandbox` tracking.
+- Privileged ops (`ip`/`iptables`/`bridge`) run via
+  `std::process::Command`, not a netlink library — deliberate, matches
+  the shell scripts exactly. Don't switch to `rtnetlink` without
+  understanding why ambient-capability propagation works for spawned
+  processes but may not for a library call.
+- `jailer` itself needs privileges the daemon deliberately doesn't have
+  — that's why the `jailer` binary is setuid-root (one-time setup), not
+  why the daemon's own capability set should be loosened.
+- `jailer.rs`'s tests use real temp dirs/hard links/chmod, no KVM needed
+  — they can't verify the actual installed jailer's directory
+  ownership/permissions match what this module assumes. Verify that on
+  the dev box before trusting jailer boot in production.
