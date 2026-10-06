@@ -13,29 +13,42 @@ straight to the SDK.
 
 ## Files
 
-- `src/index.ts` — the CLI. `sandbox create|get-or-create|by-name|ls|rm|
-  exec|read|write|preview|pty|exec-stream|logs|snapshot|resume|fork|
-  chmod|chown|mkdir|rename|cp|symlink|readlink|truncate|ls-dir` and
-  `image create|ls|rm`,
-  `drive create|ls|rm`, `pool create|ls|rm` subcommands, each a thin call
-  into `Sandbox`/`Sandbox.attach()`/`Image`/`Drive`/`Pool`. `pool create
-  <id>` has no "claim" counterpart at all — claiming a warm instance is
-  entirely transparent, done by a plain `sandbox create` whose
-  `--image`/`--vcpu`/`--mem` match a configured pool (see
-  `packages/sdk/AGENTS.md`'s `pool.ts` entry). `pty <id>` opens
-  `Sandbox.pty()`'s `WebSocket` and pumps bytes between it and the local
-  terminal: raw mode (`process.stdin.setRawMode(true)`) so every
-  keystroke, including Ctrl+C, goes straight to the remote shell instead
-  of Node intercepting it. A real live-tested gotcha here: the process
-  used to hang for a full 10 seconds after the remote shell exited before
-  this was traced to a guest-side bug (see `sandkiln-guest-agent`'s
-  `pty.rs` and its own `AGENTS.md`) rather than anything in this file —
-  the WebSocket's `close` event genuinely never fired until the guest
-  actually tore down its side of the connection, so no amount of
-  client-side cleanup here could have fixed it. Worth remembering if a
-  similar hang ever shows up again: check whether the *server* side is
-  actually closing the connection before assuming it's a local handle
-  leak.
+- `src/index.ts` — thin entry point only: builds the top-level `program`
+  (name, description, the two global `--base-url`/`--token` options),
+  calls each `commands/*.ts` module's `register*Commands(program)`, then
+  `program.parseAsync(...)` with a backstop `.catch()`. No command logic
+  of its own.
+- `src/commands/shared.ts` — the handful of helpers genuinely shared
+  across every resource group: `GlobalOptions`, `clientOptions`
+  (resolves `--base-url`/`--token`, falling through to the SDK's own env
+  var resolution when unset), `fail`/`handleApiError` (every action
+  handler's error path: a clean `error: ...` message on stderr and exit
+  code 1, never a raw stack trace).
+- `src/commands/sandbox.ts` — the one large group:
+  `sandbox create|get-or-create|by-name|ls|rm|exec|read|write|preview|
+  pty|exec-stream|logs|snapshot|snapshots|resume|fork|chmod|chown|mkdir|
+  rename|cp|symlink|readlink|truncate|ls-dir|mount|mounts|unmount`, each
+  a thin call into `Sandbox`/`Sandbox.attach()`. Also owns the
+  sandbox-specific option builders (`tagOption`/`envOption`/
+  `buildEgressOption`) and two local helpers used only here:
+  `attachSandbox` (reconstructs a `Sandbox` handle from just an id, no
+  round-trip) and `followLogs` (the replay-then-live-tail logic shared by
+  `exec-stream` and `logs`).
+
+  `pty <id>` opens `Sandbox.pty()`'s `WebSocket` and pumps bytes between
+  it and the local terminal: raw mode (`process.stdin.setRawMode(true)`)
+  so every keystroke, including Ctrl+C, goes straight to the remote shell
+  instead of Node intercepting it. A real live-tested gotcha here: the
+  process used to hang for a full 10 seconds after the remote shell
+  exited before this was traced to a guest-side bug (see
+  `sandkiln-guest-agent`'s `pty.rs` and its own `AGENTS.md`) rather than
+  anything in this file — the WebSocket's `close` event genuinely never
+  fired until the guest actually tore down its side of the connection, so
+  no amount of client-side cleanup here could have fixed it. Worth
+  remembering if a similar hang ever shows up again: check whether the
+  *server* side is actually closing the connection before assuming it's a
+  local handle leak.
+
   `exec-stream <id> <command> [args...]` starts a background command
   (`Sandbox.execStream`) then immediately attaches and follows it
   (`followLogs`, shared with `logs`); `logs <id> [session-id]` lists
@@ -45,28 +58,40 @@ straight to the SDK.
   `[process exited with code N]` notice (parsed out of the plain-text
   notices `routes_logs.rs` sends alongside real output, not a separate
   structured message), which becomes this CLI invocation's own exit code.
+
   `resume`/`fork`/`get-or-create`/`by-name` call the SDK's static
   `Sandbox.resume`/`Sandbox.fork`/`Sandbox.getOrCreate`/`Sandbox.byName`
   directly (none acts on an already-existing handle — `resume`/`fork`
   take a snapshot id, `by-name`/`get-or-create` a name, not a sandbox id,
-  so there's no existing handle to attach to); `image` subcommands call
-  `Image`'s static methods the same way, since an image has no instance
-  handle at all. `sandbox create --image <id>` boots from a registered
-  image instead of the daemon's default rootfs. `rm` defaults to the
-  SDK's `stop()` persist-by-default behavior and reports whether the
-  sandbox was preserved (with its snapshot id) or destroyed; `--destroy`
-  opts into full destruction (`stop({ keep: false })`).
-  `--base-url`/`--token` are global options that fall through to the
-  SDK's own env var resolution when unset — don't reimplement that
-  resolution here, just pass `undefined` through. Every action handler
-  catches its own errors and reports them on stderr with a non-zero exit
-  (`handleApiError`/`fail`); `program.parseAsync(...)` at the bottom has
-  a `.catch()` backstop so nothing escapes as a raw stack trace. `preview`
-  is the one subcommand that makes no network call at all — it just
-  prints `Sandbox.previewUrl()`'s pure result, same reasoning as why that
-  SDK method itself does no round-trip; port-range validation lives in
-  the SDK (`Sandbox.previewUrl` throws `RangeError`), not duplicated here,
-  matching this package's own "essentially no logic of its own" rule.
+  so there's no existing handle to attach to). `sandbox create --image
+  <id>` boots from a registered image instead of the daemon's default
+  rootfs. `rm` defaults to the SDK's `stop()` persist-by-default behavior
+  and reports whether the sandbox was preserved (with its snapshot id) or
+  destroyed; `--destroy` opts into full destruction (`stop({ keep: false
+  })`). `preview` is the one subcommand that makes no network call at all
+  — it just prints `Sandbox.previewUrl()`'s pure result, same reasoning
+  as why that SDK method itself does no round-trip; port-range validation
+  lives in the SDK (`Sandbox.previewUrl` throws `RangeError`), not
+  duplicated here, matching this package's own "essentially no logic of
+  its own" rule.
+- `src/commands/image.ts` — `image create|ls|rm`, each a thin call into
+  `Image`'s static methods (an image has no instance handle at all, so
+  there's no `Image.attach()` equivalent to `Sandbox.attach()`).
+- `src/commands/drive.ts` — `drive create|ls|rm`, each a thin call into
+  `Drive`'s static methods, same shape as `image.ts`.
+- `src/commands/pool.ts` — `pool create|ls|rm`, each a thin call into
+  `Pool`'s static methods. `pool create <id>` has no "claim" counterpart
+  at all — claiming a warm instance is entirely transparent, done by a
+  plain `sandbox create` whose `--image`/`--vcpu`/`--mem` match a
+  configured pool (see `packages/sdk/AGENTS.md`'s `pool.ts` entry).
+
+  Across all four `commands/*.ts` files: `--base-url`/`--token` are
+  global options read via `clientOptions` (`commands/shared.ts`), which
+  falls through to the SDK's own env var resolution when unset — don't
+  reimplement that resolution in a command file, just pass `undefined`
+  through. Every action handler catches its own errors via
+  `handleApiError`/`fail`; `index.ts`'s `program.parseAsync(...)` has a
+  `.catch()` backstop so nothing escapes as a raw stack trace.
 - `src/format.ts` — the pure logic pulled out of `index.ts` specifically
   so it's unit-testable without importing the CLI's top-level commander
   wiring (which parses `process.argv` as a side effect of module load):
