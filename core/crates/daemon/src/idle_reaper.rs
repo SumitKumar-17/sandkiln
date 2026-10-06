@@ -1,25 +1,17 @@
-//! Background task that reclaims sandboxes that have gone idle: auto-
-//! suspends them (pause + snapshot, keeping state resumable — see
-//! `crate::routes_snapshot::snapshot_sandbox_by_id`) past
-//! `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`, and/or destroys them outright
-//! (VM killed, network lease released, rootfs deleted — see
-//! `crate::routes_sandbox::stop_sandbox_by_id`) past
-//! `SANDKILN_IDLE_TIMEOUT_SECS` (see `config::Config`'s doc comments on
-//! both fields for how the two interact when both are configured).
-//!
-//! Also runs the tiered lifecycle's next step past suspend: archiving a
-//! held *snapshot* (however it arose — auto-suspend or a manual
-//! `POST /sandboxes/:id/snapshot`) past `SANDKILN_ARCHIVE_TIMEOUT_SECS`,
-//! moving its files off `snapshots_root()` onto `Config::archive_dir` (see
-//! `crate::routes_snapshot::archive_snapshot_by_id`). Independent of the
-//! two sandbox-side timeouts above — it's about a snapshot's own age, not
-//! a live sandbox's idle time, so it runs whether or not either of those
-//! is even configured.
-//!
-//! Spawned unconditionally by `main` (not gated on any of the three being
-//! configured) — an idle tick where none apply is a cheap no-op scan, the
-//! same reasoning `pool_replenisher` already uses for its own
-//! unconditional spawn.
+//! Background task that reclaims idle sandboxes and archives old held
+//! snapshots. Full tiered-lifecycle design is written up in
+//! `docs/architecture/02-vm-boot-and-latency.md`; the invariants a reader
+//! editing this file needs: auto-suspend (pause + snapshot, see
+//! `crate::routes_snapshot::snapshot_sandbox_by_id`, past
+//! `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`) must run before destroy (past
+//! `SANDKILN_IDLE_TIMEOUT_SECS`, see `config::Config`'s doc comments for
+//! how the two interact) each tick; archiving (past
+//! `SANDKILN_ARCHIVE_TIMEOUT_SECS`, via
+//! `crate::routes_snapshot::archive_snapshot_by_id`) runs regardless of
+//! whether either sandbox-side timeout is configured, since it's about a
+//! snapshot's own age, not a live sandbox's idle time; and this task
+//! spawns unconditionally from `main` — same no-op-tick-is-cheap
+//! reasoning `pool_replenisher` already uses.
 
 use crate::routes_sandbox::{stop_sandbox_by_id, StopError};
 use crate::routes_snapshot::{archive_snapshot_by_id, snapshot_and_stop, ArchiveError, SnapshotBlocked, SnapshotStopError};

@@ -1,45 +1,19 @@
 //! Pre-warmed snapshot pools: keep a small number of ready-to-resume
 //! snapshots around per (image, resource-config), so a matching
 //! `POST /sandboxes` can resume one instead of paying full cold-create
-//! cost. See `ROADMAP.md`'s "Persistence and snapshotting" section,
-//! "Pre-warmed snapshot pool", for the design this implements.
+//! cost. Full design, the `warm_count`/`max_count` split, and the
+//! producer/consumer queueing this implements are written up in
+//! `docs/architecture/02-vm-boot-and-latency.md` — this comment only
+//! keeps the invariants a reader editing this file needs at hand:
 //!
-//! Two independently optional knobs, since they solve different
-//! problems: `warm_count` (latency — how many ready-to-resume snapshots
-//! to keep sitting around) and `max_count` (concurrency — the total
-//! number of *live* instances this pool's profile may ever have at once,
-//! `None` meaning unbounded, today's original behavior). A request
-//! matching a pool with room claims a warm snapshot if one's ready, or
-//! cold-creates if under `max_count`, or **queues** (via `Pool::notify`)
-//! until either happens — see `routes_sandbox::create_sandbox_core`.
-//! Every live instance counted against `max_count`, warm or cold-boosted
-//! alike, is tracked by `Sandbox::source_pool_id` for exactly as long as
-//! it stays that one live sandbox; stopping it (destroy *or* snapshot)
-//! releases the slot back (`routes_sandbox::destroy_sandbox_by_id`,
-//! `routes_snapshot::snapshot_and_stop`) — a later resume/fork of the
-//! resulting snapshot is a fresh creation event, evaluated against
-//! whatever pool it matches (if any) at that time, not tied back to this
-//! one forever.
-//!
-//! Scoped honestly, not silently incomplete:
-//! - **A request with `drives` or a custom `rate_limit` never matches a
-//!   pool.** Both are baked into a VM's state at boot time, and a warm
-//!   snapshot was booted with neither — satisfying either from a warm
-//!   snapshot isn't possible without teaching the pool to vary on them
-//!   too. Falls through to cold create rather than silently ignoring the
-//!   request's own drives/rate_limit — and a `drives`/`rate_limit`
-//!   request also never queues, even if a `max_count`-bounded pool with
-//!   the same image/resources is at capacity, for the same reason: it
-//!   was never going to match that pool anyway.
-//! - **A queued claim waits a bounded time, not forever** — see
-//!   `pool_claim::POOL_QUEUE_TIMEOUT` — and returns a real error
-//!   (`503`) if nothing frees up in time, rather than hanging the
-//!   caller's request indefinitely.
-//! - **Pool configuration lives only in memory** (`AppState::pools`), not
-//!   durable across a daemon restart the way snapshots themselves are —
-//!   a caller that needs a pool to survive a restart has to re-`POST
-//!   /pools` afterward. See `crate::pool_replenisher` for the background
-//!   task that actually keeps a pool topped up.
+//! - A request with `drives` or a custom `rate_limit` never matches a
+//!   pool (both are baked into a VM at boot time; a warm snapshot was
+//!   booted with neither) and never queues on one either — falls through
+//!   to cold create instead.
+//! - A queued claim waits at most `pool_claim::POOL_QUEUE_TIMEOUT`, then
+//!   returns a real `503` rather than hanging the caller.
+//! - Pool *configuration* lives only in `AppState::pools` — not durable
+//!   across a daemon restart the way snapshots themselves are.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
