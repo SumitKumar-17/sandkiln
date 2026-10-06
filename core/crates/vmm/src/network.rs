@@ -1,18 +1,14 @@
 //! Per-sandbox networking: every VM gets a tap device leased from a
-//! pre-created pool, attached to a shared bridge, with a statically
-//! assigned IP. One bridge means the NAT/DNS setup proven in
-//! `scripts/dev-tools/setup-tap-network.sh` and `scripts/host-setup/start-dns-proxy.sh` needs
-//! no per-VM wildcarding — it already targets one interface and one
-//! gateway IP, which is exactly what the bridge is.
+//! pre-created pool, attached to a shared bridge, with a static IP. One
+//! bridge means the NAT/DNS setup (`scripts/dev-tools/setup-tap-network.sh`,
+//! `scripts/host-setup/start-dns-proxy.sh`) targets one interface and one
+//! gateway IP, no per-VM wildcarding needed.
 //!
-//! The pool exists because creating a *new* tap device is a TUNSETIFF
-//! ioctl on `/dev/net/tun`, and — unlike the netlink operations here
-//! (bridge/link management) — that specific ioctl did not work under this
-//! process's ambient `CAP_NET_ADMIN` in practice, only under full root.
-//! Persistent tap devices sidestep it: `scripts/host-setup/create-tap-pool.sh`
-//! creates them once (needs root), and this module only ever
-//! attaches/detaches existing devices, which is a plain netlink call and
-//! does work under ambient `CAP_NET_ADMIN` (see `scripts/host-setup/grant-net-admin.sh`).
+//! The pool exists because creating a *new* tap device is a `TUNSETIFF`
+//! ioctl that doesn't work under ambient `CAP_NET_ADMIN` in practice, only
+//! full root — unlike the netlink attach/detach calls this module makes.
+//! `scripts/host-setup/create-tap-pool.sh` creates devices once (needs
+//! root); this module only attaches/detaches existing ones.
 
 use std::collections::VecDeque;
 use std::io;
@@ -38,11 +34,9 @@ pub struct Lease {
 }
 
 impl Lease {
-    /// Exposed so a caller that needs to persist a lease's full identity
-    /// (e.g. the daemon writing a `Snapshot`'s held lease to disk so it
-    /// survives a restart) can round-trip it — `host_octet` itself stays
-    /// private since nothing outside this module should construct a
-    /// `Lease` except through `lease()` or `NetworkManager::reserve()`.
+    /// For persisting a lease's full identity (e.g. a `Snapshot` written
+    /// to disk) — stays private otherwise; only `lease()`/`reserve()`
+    /// construct a `Lease`.
     pub fn host_octet(&self) -> u8 {
         self.host_octet
     }
@@ -151,19 +145,13 @@ impl NetworkManager {
         Ok(())
     }
 
-    /// Reconstructs a `Lease` for a tap device/host octet that's already
-    /// held by something outside this `NetworkManager`'s own bookkeeping —
-    /// specifically, a `Snapshot` reconciled from disk at daemon startup,
-    /// which holds a real tap device (frozen into its saved memory image,
-    /// see `sandkiln_vmm::vm::snapshot`'s `Vm::resume` doc comment) that
-    /// this fresh `NetworkManager` instance has no record of ever handing
-    /// out. Without this, the tap/host octet would sit in the free pool
-    /// and a later live `lease()` call could hand the same tap device to
-    /// a second, unrelated sandbox — two VMs fighting over one device.
-    /// Removes both from the free pools (idempotent-ish: logs a warning
-    /// rather than panicking if either was already absent, since that
-    /// indicates pool/config drift worth knowing about but not fatal to
-    /// startup) and returns the equivalent of a normal `lease()`.
+    /// Reconstructs a `Lease` for a tap/host-octet already held by
+    /// something this fresh `NetworkManager` has no record of handing
+    /// out — a `Snapshot` reconciled from disk at startup, holding a tap
+    /// frozen into its saved memory image. Without this, a later live
+    /// `lease()` could hand the same tap to a second sandbox. Removes both
+    /// from the free pools; logs a warning rather than panicking if either
+    /// was already absent (pool/config drift, not fatal to startup).
     pub fn reserve(&self, config: NetworkConfig, host_octet: u8) -> Lease {
         let tap_was_free = remove_first(&self.free_taps, |t| t == &config.tap_device);
         let host_was_free = remove_first(&self.free_hosts, |h| *h == host_octet);
@@ -184,22 +172,17 @@ impl NetworkManager {
         Lease { config, host_octet }
     }
 
-    /// A snapshot of which tap devices are currently free. Useful for
-    /// observability, and lets cross-crate callers (the daemon's own
-    /// tests, verifying that reconciling a snapshot from disk actually
-    /// removed its held tap from the live pool) check pool state without
-    /// reaching into this module's private fields.
+    /// Snapshot of currently-free tap devices — lets cross-crate callers
+    /// (daemon tests verifying a reconciled snapshot removed its tap from
+    /// the live pool) check pool state without reaching into private fields.
     pub fn free_tap_devices(&self) -> Vec<String> {
         self.free_taps.lock().unwrap().iter().cloned().collect()
     }
 
-    /// Each step is timed individually, not just the whole call: all
-    /// three are `fork`+`exec` of a real binary rather than a syscall, so
-    /// the interesting question when profiling a create is how much of a
-    /// lease is process-spawn overhead versus the netlink work itself —
-    /// one aggregate number can't answer that. Debug-level, since this is
-    /// profiling detail rather than something to alert on; the daemon
-    /// records the enclosing lease as a `/metrics` phase.
+    /// Each step timed individually (all three are `fork`+`exec`, not a
+    /// syscall) so profiling can tell process-spawn overhead from netlink
+    /// work. Debug-level only; the daemon records the enclosing lease as a
+    /// `/metrics` phase.
     fn attach_tap(&self, tap_device: &str) -> io::Result<()> {
         let started = Instant::now();
         run("ip", &["link", "set", tap_device, "up"])?;
@@ -209,10 +192,9 @@ impl NetworkManager {
         run("ip", &["link", "set", tap_device, "master", &self.bridge_name])?;
         let set_master = before_master.elapsed();
 
-        // Isolated bridge ports can still reach the bridge itself (so
-        // routing out through the uplink keeps working) but can't forward
-        // frames to each other — this is what actually stops one sandbox
-        // from reaching another's IP on the shared bridge at L2.
+        // Isolated ports can still reach the bridge (routing out through
+        // the uplink keeps working) but can't forward frames to each
+        // other — stops sandbox-to-sandbox traffic at L2.
         let before_isolate = Instant::now();
         run("bridge", &["link", "set", "dev", tap_device, "isolated", "on"])?;
         let isolate = before_isolate.elapsed();
@@ -242,10 +224,8 @@ pub fn detect_default_iface() -> io::Result<String> {
         .ok_or_else(|| io::Error::other("no default route found — pass SANDKILN_UPLINK_IFACE explicitly"))
 }
 
-/// Removes and discards the first element matching `pred` from a pooled
-/// `VecDeque`, reporting whether anything was actually removed. `reserve`
-/// needs that boolean to decide whether the removal was a no-op (pool
-/// drift) worth warning about.
+/// Removes the first element matching `pred`, reporting whether anything
+/// was removed — `reserve` uses that to decide whether to warn.
 fn remove_first<T>(pool: &Mutex<VecDeque<T>>, pred: impl Fn(&T) -> bool) -> bool {
     let mut pool = pool.lock().unwrap();
     match pool.iter().position(pred) {
@@ -310,11 +290,7 @@ mod tests {
         assert_eq!(mgr.free_taps.lock().unwrap().len(), 2);
     }
 
-    /// A tap device that can't actually be attached (this one doesn't
-    /// exist, and we're not asserting anything about root/permissions —
-    /// `ip link set` on a nonexistent device fails cleanly either way)
-    /// must not leak its IP or tap name out of the pool: a failed lease
-    /// should be exactly as if it never happened.
+    /// A failed lease (nonexistent tap) must not leak its IP or tap name.
     #[test]
     fn failed_lease_returns_both_ip_and_tap_to_the_pool() {
         let mgr = NetworkManager::new(
@@ -347,9 +323,7 @@ mod tests {
         }
     }
 
-    /// This is the core of the tap-double-lease fix: a snapshot reconciled
-    /// from disk at startup calls `reserve` for the tap it holds, and a
-    /// live `lease()` call afterward must not be handed that same device.
+    /// Core of the tap-double-lease fix: a reserved tap must leave the pool.
     #[test]
     fn reserve_removes_tap_and_host_octet_from_the_free_pools() {
         let mgr = NetworkManager::new(
@@ -373,25 +347,19 @@ mod tests {
         );
     }
 
-    /// Reserving something already outside the pool (stale config,
-    /// duplicate reservation) must not panic or corrupt the pool — it's a
-    /// startup-time warning, not a fatal error, since the daemon still
-    /// needs to come up.
+    /// Reserving something already outside the pool must warn, not panic.
     #[test]
     fn reserve_of_an_already_absent_tap_does_not_panic_or_touch_unrelated_entries() {
         let mgr = NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", ["tapB".to_string()]);
 
-        // 255 is outside the pool's 2..=254 host-octet range, so it can
-        // never have been present to begin with.
+        // 255 is outside the 2..=254 host-octet range.
         let lease = mgr.reserve(test_config("tap-not-in-pool"), 255);
         assert_eq!(lease.config.tap_device, "tap-not-in-pool");
         assert_eq!(mgr.free_taps.lock().unwrap().len(), 1, "tapB must be untouched");
         assert_eq!(mgr.free_hosts.lock().unwrap().len(), 253, "no host octet should have been removed");
     }
 
-    /// After a reserve, the reserved tap is unavailable to a subsequent
-    /// live lease — the actual resource-ownership property this exists to
-    /// guarantee, not just an isolated pool-bookkeeping detail.
+    /// The actual resource-ownership guarantee: a reserved tap stays unleasable.
     #[test]
     fn a_reserved_tap_cannot_then_be_leased_to_a_different_caller() {
         let mgr = NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", ["only-tap".to_string()]);
