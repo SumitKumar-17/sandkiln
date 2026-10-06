@@ -17,11 +17,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// One drive attached to a sandbox or a held snapshot, and whether it was
-/// attached read-only. `Sandbox::attached_drives` and
-/// `Snapshot::attached_drives` both carry this rather than a bare drive
-/// id, because whether a *new* attach may coexist with the existing ones
-/// depends on both pieces of information — see `can_attach_read_only`.
+/// A drive attachment plus its read-only flag — carried as a pair (not a
+/// bare id) because whether a *new* attach may coexist with existing ones
+/// depends on both. See `can_attach_read_only`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttachedDrive {
     pub drive_id: String,
@@ -29,20 +27,16 @@ pub struct AttachedDrive {
 }
 
 /// One remote object-store mount active inside a sandbox — see
-/// `crate::routes_mounts`'s module doc comment for the full design.
-/// Deliberately carries no credentials: they're written straight into
-/// the guest (a passwd file `s3fs` reads, never a command-line argument
-/// `ps aux` inside the guest could see) and never touch the daemon's own
-/// state beyond that one write, so there's nothing secret left to leak
-/// by carrying this struct around, persisting it into `Snapshot`/
-/// `meta.json`, or logging it.
+/// `crate::routes_mounts`. No credentials here: they're written straight
+/// into the guest (a passwd file, never a command-line arg `ps aux`
+/// could see) and never touch daemon state, so nothing secret is at risk
+/// from persisting or logging this struct.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mount {
     pub id: String,
     pub bucket: String,
-    /// Full URL of the S3-compatible endpoint this mount points at —
-    /// required, not defaulted to any particular provider, so a mount's
-    /// target is always explicit rather than implied.
+    /// Required, not defaulted to a provider — a mount's target is
+    /// always explicit.
     pub endpoint: String,
     pub mount_path: String,
     pub read_only: bool,
@@ -53,79 +47,52 @@ pub struct AppState {
     pub network: NetworkManager,
     pub drives: DriveStore,
     pub images: ImageStore,
-    /// `Some` exactly when `config.jailer` is `Some` — the pool of
-    /// uid/gid pairs `routes_sandbox::create_sandbox` leases from for
-    /// each jailed boot, released back on `stop_sandbox_by_id`. Built
-    /// here rather than passed in separately since its range comes
-    /// straight out of `config.jailer`.
+    /// `Some` iff `config.jailer` is `Some` — uid/gid pairs leased per
+    /// jailed boot (`routes_sandbox::create_sandbox`), released on stop.
     pub jailer_ids: Option<JailerIdPool>,
     pub sandboxes: Mutex<HashMap<String, Sandbox>>,
     pub snapshots: Mutex<HashMap<String, Snapshot>>,
-    /// Retired checkpoints — see `crate::snapshot_history`'s module doc
-    /// comment for the full "time-travel restore" design. Deliberately a
-    /// separate map from `snapshots` above, not a flag on `Snapshot`
-    /// itself: a retired checkpoint holds no live `Lease` at all (nothing
-    /// reserved out of `NetworkManager`'s free pool), a structurally
-    /// different resource-ownership state from every entry in
-    /// `snapshots`, which always holds one for as long as it exists.
+    /// Retired checkpoints ("time-travel restore", see
+    /// `crate::snapshot_history`). A separate map, not a flag on
+    /// `Snapshot`: a retired checkpoint holds no live `Lease` at all,
+    /// structurally unlike every `snapshots` entry.
     pub retired_snapshots: Mutex<HashMap<String, RetiredSnapshot>>,
-    /// One `tokio::sync::Mutex` per name currently being claimed, created
-    /// lazily. Serializes every code path that can claim or resolve a
-    /// name (named `create_sandbox`, `get_or_create_sandbox`) against
-    /// concurrent callers using the *same* name, without serializing
-    /// unrelated names against each other — see `AppState::lock_name`.
+    /// Lazily-created per-name mutex, serializing concurrent claims/
+    /// resolves of the *same* name (`create_sandbox`,
+    /// `get_or_create_sandbox`) without blocking unrelated names. See
+    /// `AppState::lock_name`.
     pub name_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
-    /// Refcounted claims on an image id that's being cloned into a
-    /// not-yet-registered `Sandbox` right now (`routes_sandbox::create_sandbox`
-    /// holds one for the duration of the boot). Closes the race between
-    /// "checked the image exists" and "the new sandbox is actually visible
-    /// in `sandboxes`, so `image_holder` can see it there instead": without
-    /// this, `DELETE /images/:id` could succeed in the gap while a boot
-    /// from that exact image is still in flight, deleting the file out
-    /// from under an in-progress `cp`. Keyed by image id rather than a
-    /// single bool per id because two sandboxes can legitimately boot from
-    /// the same image concurrently.
+    /// Refcounted claims on an image id mid-boot, before its `Sandbox` is
+    /// visible in `sandboxes` — closes the gap where `DELETE /images/:id`
+    /// could delete a file an in-progress clone is still reading. Keyed
+    /// by image id, refcounted, since multiple boots can share one image.
     pending_image_boots: Mutex<HashMap<String, u32>>,
     pub metrics: Metrics,
-    /// Reused across every `/preview` proxy request rather than built
-    /// per-request, so repeated hits on one dev server benefit from
-    /// `hyper-util`'s connection pooling instead of a fresh TCP handshake
-    /// (and, for a WebSocket-using dev server later, from a client
-    /// already wired for keep-alive) every time.
+    /// Reused across every `/preview` request (not built per-request) so
+    /// repeat hits on one dev server reuse `hyper-util`'s connection pool.
     pub preview_client: PreviewClient,
-    /// Durable sandbox-lifecycle history (`sandkiln-store`) — a
-    /// completely separate concern from `sandboxes`/`snapshots` above;
-    /// see that crate's own module doc comment for exactly what it does
-    /// and does not solve.
+    /// Durable sandbox history (`sandkiln-store`) — separate concern from
+    /// `sandboxes`/`snapshots`; see that crate's own doc comment.
     pub history: HistoryStore,
-    /// Configured pre-warmed pools, keyed by their caller-given id — see
-    /// `crate::pool`'s module doc comment. In-memory only, deliberately
-    /// (not durable across a restart, unlike `snapshots` above) — see
-    /// that module for why.
+    /// Configured pre-warmed pools, keyed by caller-given id. In-memory
+    /// only, unlike `snapshots` — see `crate::pool`.
     pub pools: Mutex<HashMap<String, Pool>>,
-    /// Tap devices with a `POST /snapshots/history/:id/restore` currently
-    /// in flight against them — closes a race `tap_device_holder` alone
-    /// can't: two *different* retired checkpoints in the same lineage
-    /// share the same frozen tap device/IP/MAC (see
-    /// `crate::snapshot_history`'s module doc comment), so concurrently
-    /// restoring two different retired ids for that one device would both
-    /// pass a plain "is this live or held right now" check (neither is,
-    /// yet) and then race `NetworkManager::reserve`, which does not
-    /// itself detect a double reservation — it exists for the
-    /// startup-reconcile case, where by construction nothing else could
-    /// be live yet. Same shape as `pending_image_boots` above, but a
-    /// plain set rather than a refcount: unlike booting from a shared
-    /// image, only one restore of a given tap device may ever be in
-    /// flight at a time.
+    /// Tap devices with a restore in flight. Closes a race
+    /// `tap_device_holder` alone can't: two different retired checkpoints
+    /// in one lineage share a frozen tap/IP/MAC (`crate::snapshot_history`),
+    /// so two concurrent restores could both pass a plain liveness check
+    /// and then race `NetworkManager::reserve`, which doesn't itself
+    /// detect double-reservation (it's built for the startup-reconcile
+    /// case, where nothing else can be live yet). A plain set, not a
+    /// refcount like `pending_image_boots` — only one restore per tap
+    /// device can ever be in flight.
     pending_tap_restores: Mutex<std::collections::HashSet<String>>,
 }
 
 impl AppState {
-    /// `snapshots` is the result of `crate::snapshot::reconcile` run
-    /// against the on-disk snapshot store before this is called — passed
-    /// in rather than always starting empty so a daemon restart doesn't
-    /// silently orphan every snapshot that was durable on disk (see
-    /// `main.rs`).
+    /// `snapshots` comes from `crate::snapshot::reconcile` against disk,
+    /// passed in rather than started empty so a restart doesn't orphan
+    /// durable snapshots (see `main.rs`).
     pub fn new(
         config: Config,
         network: NetworkManager,
@@ -155,18 +122,12 @@ impl AppState {
         }
     }
 
-    /// Every current holder of `drive_id` — running sandboxes and held
-    /// snapshots with it frozen into saved state (Firecracker bakes a
-    /// drive's host path into the snapshot the same way it does network
-    /// config, so a snapshotted drive is still "in use" even though no
-    /// `Vm` is running) — each labeled and marked with whether that
-    /// particular attachment is read-only. Empty means nothing holds it.
-    ///
-    /// Checked wherever an operation would conflict with the drive still
-    /// being held: attaching it to another sandbox (via
-    /// `can_attach_read_only`, since many simultaneous read-only holders
-    /// are fine) or deleting it outright (never fine while this is
-    /// non-empty, regardless of read-only status).
+    /// Every current holder of `drive_id` — live sandboxes and held
+    /// snapshots (a snapshot freezes a drive's host path into its saved
+    /// state, so it's still "in use" with no `Vm` running) — labeled,
+    /// with each attachment's read-only flag. Empty means unheld. Checked
+    /// before attaching elsewhere (`can_attach_read_only` allows stacking
+    /// read-only holders) or deleting (never fine while non-empty).
     pub fn drive_holders(&self, drive_id: &str) -> Vec<DriveHold> {
         let mut holders: Vec<DriveHold> = self
             .sandboxes
@@ -186,12 +147,9 @@ impl AppState {
                 .find(|d| d.drive_id == drive_id)
                 .map(|d| DriveHold { holder: format!("snapshot {}", s.id), read_only: d.read_only })
         }));
-        // A retired checkpoint (`crate::snapshot_history`) references its
-        // drives exactly as durably as a held `Snapshot` does — it's just
-        // sitting in history instead of `snapshots` right now, not any
-        // less real a reference. Without this, a drive a retired
-        // checkpoint depends on read-write could be silently re-attached
-        // read-write elsewhere, and restoring that checkpoint later would
+        // A retired checkpoint's drive reference is as durable as a held
+        // snapshot's — otherwise a drive it depends on read-write could
+        // be re-attached read-write elsewhere, and restoring later would
         // hand two live VMs the same mutable backing file.
         holders.extend(self.retired_snapshots.lock().unwrap().values().filter_map(|s| {
             s.attached_drives
@@ -202,14 +160,10 @@ impl AppState {
         holders
     }
 
-    /// Where a name is currently claimed, if anywhere — mirrors
-    /// `drive_holder`'s "sandbox or snapshot, in one place" shape. Checks
-    /// live sandboxes before held snapshots: while a snapshot is forked
-    /// (`Snapshot::forked_into`), both a `Sandbox` and the `Snapshot` it
-    /// came from carry the same name at once (see `Sandbox::name`'s doc
-    /// comment — they're one identity, not a conflict), and the live one
-    /// is the more useful answer for a caller resolving a name to
-    /// something they can act on right now.
+    /// Where a name is claimed, if anywhere. Checks live sandboxes before
+    /// held snapshots: a forked snapshot and its live `Sandbox` carry the
+    /// same name at once (one identity, not a conflict — see
+    /// `Sandbox::name`), and the live one is the more actionable answer.
     pub fn name_holder(&self, name: &str) -> Option<String> {
         let sandboxes = self.sandboxes.lock().unwrap();
         if let Some(id) = find_named(sandboxes.values().map(|s| (s.id.as_str(), s.name.as_deref())), name) {
@@ -223,12 +177,10 @@ impl AppState {
         None
     }
 
-    /// Resolves a name to whichever record currently represents that
-    /// identity, distinguishing "live and actionable right now" from
-    /// "held as a snapshot, needs a resume first" — `name_holder` above
-    /// collapses that distinction into a display string, which is enough
-    /// for a conflict message but not enough for `get_or_create_sandbox`
-    /// or `GET /sandboxes/by-name/:name` to decide what to do next.
+    /// Resolves a name to live-and-actionable vs. held-needs-resume —
+    /// `name_holder` collapses that into a display string, enough for a
+    /// conflict message but not for `get_or_create_sandbox`/
+    /// `GET /sandboxes/by-name/:name` to decide what to do next.
     pub fn resolve_name(&self, name: &str) -> Option<NameResolution> {
         let sandboxes = self.sandboxes.lock().unwrap();
         if let Some(id) = find_named(sandboxes.values().map(|s| (s.id.as_str(), s.name.as_deref())), name) {
@@ -242,23 +194,17 @@ impl AppState {
         None
     }
 
-    /// Where an image id is currently referenced, if anywhere — mirrors
-    /// `drive_holder`, but for `sandkiln_vmm::image::ImageStore` entries.
-    /// Checked before a sandbox boot commits to an image id and before
-    /// `DELETE /images/:id`. Also covers a boot currently in flight from
-    /// this image (`pending_image_boots`) — a sandbox isn't inserted into
-    /// `sandboxes` until its `Vm` has actually booted, but the image is
-    /// already "in use" for deletion purposes from the moment the boot
-    /// starts, not just once the sandbox is visible.
+    /// Where an image id is referenced, if anywhere — `drive_holder` for
+    /// `ImageStore` entries. Checked before a boot commits to an image
+    /// and before `DELETE /images/:id`. Covers an in-flight boot too
+    /// (`pending_image_boots`): the image is "in use" from the moment the
+    /// boot starts, before its `Sandbox` is even visible.
     pub fn image_holder(&self, image_id: &str) -> Option<String> {
         if self.pending_image_boots.lock().unwrap().get(image_id).is_some_and(|count| *count > 0) {
             return Some("a sandbox currently being created".to_string());
         }
-        // A retired checkpoint (`crate::snapshot_history`) references its
-        // image exactly as durably as a held `Snapshot` does — deleting
-        // the image out from under it would only matter if that
-        // checkpoint is ever restored, but the check has to happen now,
-        // not deferred to restore time.
+        // A retired checkpoint's image reference must be checked now,
+        // not deferred to its (maybe never) restore time.
         let sandboxes = self.sandboxes.lock().unwrap();
         let snapshots = self.snapshots.lock().unwrap();
         let retired = self.retired_snapshots.lock().unwrap();
@@ -269,25 +215,17 @@ impl AppState {
             })
     }
 
-    /// Where the tap device backing `tap_device` is currently held, if
-    /// anywhere — a live sandbox's own lease, a held snapshot's (whether
-    /// or not it's currently lent out to a live fork: the `Lease` stays
-    /// inside the `Snapshot` the whole time either way, see
-    /// `Snapshot::forked_into`'s doc comment), or another retired
-    /// checkpoint that's *itself* mid-restore right now. `None` means
-    /// free to reserve.
+    /// Where `tap_device` is held: a live sandbox's lease, a held
+    /// snapshot's (the `Lease` stays in the `Snapshot` whether or not it's
+    /// lent to a live fork — see `Snapshot::forked_into`), or another
+    /// retired checkpoint mid-restore. `None` means free to reserve.
     ///
-    /// This is the check `routes_snapshot_history::restore_snapshot_history`
-    /// needs before it can safely call `NetworkManager::reserve` for a
-    /// retired checkpoint: unlike `snapshot::reconcile`'s call to the same
-    /// method (always at startup, before anything else can possibly be
-    /// live), a restore can race real, already-live users of this exact
-    /// tap device — and `NetworkManager::reserve` itself does not check
-    /// for that; it exists for the startup case, where by construction
-    /// nothing else could be holding it yet, and will silently proceed
-    /// (with only a warning) even if the tap it's given is already
-    /// checked out. This is the guard that makes calling it safe outside
-    /// that one narrow startup circumstance.
+    /// The guard `restore_snapshot_history` needs before calling
+    /// `NetworkManager::reserve`: unlike `snapshot::reconcile`'s startup-
+    /// only call (nothing else can be live yet), a restore can race a
+    /// real live user of the same tap, and `reserve` itself doesn't check
+    /// for that — it's built for the startup case and will proceed with
+    /// only a warning otherwise.
     pub fn tap_device_holder(&self, tap_device: &str) -> Option<String> {
         let sandboxes = self.sandboxes.lock().unwrap();
         let snapshots = self.snapshots.lock().unwrap();
@@ -304,14 +242,11 @@ impl AppState {
         })
     }
 
-    /// Attempts to claim `tap_device` for an in-flight restore —
-    /// `true` if this call won the claim (the caller may proceed),
-    /// `false` if another restore already holds it (the caller must
-    /// refuse, not proceed) — see `pending_tap_restores`'s own doc
-    /// comment for the race this closes. Paired with
-    /// `release_pending_tap_restore`, ideally via an RAII guard (see
-    /// `routes_snapshot_history::PendingTapRestoreGuard`) so every exit
-    /// path — success, failure, or a panic unwind — releases it.
+    /// Claims `tap_device` for an in-flight restore: `true` = won, `false`
+    /// = another restore already holds it, caller must refuse. Pair with
+    /// `release_pending_tap_restore`, ideally via an RAII guard
+    /// (`routes_snapshot_history::PendingTapRestoreGuard`) so every exit
+    /// path releases it.
     pub fn try_reserve_pending_tap_restore(&self, tap_device: &str) -> bool {
         self.pending_tap_restores.lock().unwrap().insert(tap_device.to_string())
     }
@@ -320,26 +255,16 @@ impl AppState {
         self.pending_tap_restores.lock().unwrap().remove(tap_device);
     }
 
-    /// Serializes every operation that claims or resolves one particular
-    /// name against concurrent callers using that *same* name, while
-    /// leaving unrelated names free to proceed in parallel — the race
-    /// this exists to close: two concurrent `POST /sandboxes/get-or-create`
-    /// (or named `POST /sandboxes`) calls for a brand-new name must not
-    /// both observe "not taken" and both create a sandbox. A caller holds
-    /// the returned guard across its entire check-then-act sequence (see
-    /// `routes_sandbox::create_sandbox` and
-    /// `routes_sandbox_name::get_or_create_sandbox`) — a second caller for
-    /// the same name blocks in `.await` here until the first either
-    /// commits its claim (so the second's subsequent `resolve_name` sees
-    /// it) or fails (so the name is free again).
+    /// Serializes claims/resolves of one *same* name, leaving unrelated
+    /// names free — closes the race where two concurrent
+    /// `get_or_create`/named-create calls for a brand-new name both see
+    /// "not taken". A caller holds the guard across its whole
+    /// check-then-act sequence (`create_sandbox`, `get_or_create_sandbox`);
+    /// a second caller for the same name blocks until the first commits
+    /// or fails.
     ///
-    /// Entries are removed best-effort once nothing else references them
-    /// (`Arc::strong_count` back down to the one held by the map itself)
-    /// so this doesn't grow forever across a long-running daemon's full
-    /// history of distinct names — see `NameLockGuard::drop`. A cleanup
-    /// that loses a benign race with a new concurrent `lock_name` call for
-    /// the same name just leaves one harmless extra map entry to be swept
-    /// next time that name's guard drops.
+    /// Entries are swept best-effort once nothing references them anymore
+    /// (see `NameLockGuard::drop`) so this doesn't grow forever.
     pub async fn lock_name(self: &Arc<Self>, name: &str) -> NameLockGuard {
         let lock = {
             let mut locks = self.name_locks.lock().unwrap();
@@ -349,11 +274,10 @@ impl AppState {
         NameLockGuard { state: self.clone(), name: name.to_string(), lock, _guard: guard }
     }
 
-    /// Claims a pending reference on `image_id` for the duration of a
-    /// sandbox boot from it — see `pending_image_boots`'s doc comment.
-    /// Paired with `release_pending_image_boot`, ideally via an RAII guard
-    /// at the call site so it's released on every exit path, not just the
-    /// success one (see `routes_sandbox::ImagePendingBootGuard`).
+    /// Claims a pending reference on `image_id` for a boot's duration —
+    /// see `pending_image_boots`. Pair with `release_pending_image_boot`,
+    /// ideally via an RAII guard (`routes_sandbox::ImagePendingBootGuard`)
+    /// so every exit path releases it.
     pub fn reserve_pending_image_boot(&self, image_id: &str) {
         *self.pending_image_boots.lock().unwrap().entry(image_id.to_string()).or_insert(0) += 1;
     }
@@ -369,22 +293,16 @@ impl AppState {
     }
 }
 
-/// Pure decision behind `name_holder`/`resolve_name`: the first entry (in
-/// iteration order) whose name matches. Pulled out of both so it's
-/// directly unit-testable without a real `Sandbox`/`Snapshot` — both need
-/// a live `Vm`/`Lease` to construct, unavailable without KVM — mirroring
-/// this project's `auth::token_matches`/`idle_reaper::is_idle` pattern of
-/// separating a pure decision from the framework plumbing around it.
+/// Pure decision behind `name_holder`/`resolve_name`, pulled out for
+/// unit-testing without a real `Sandbox`/`Snapshot` (both need KVM to
+/// construct) — same pattern as `auth::token_matches`.
 fn find_named<'a>(mut entries: impl Iterator<Item = (&'a str, Option<&'a str>)>, name: &str) -> Option<&'a str> {
     entries.find_map(|(id, entry_name)| (entry_name == Some(name)).then_some(id))
 }
 
-/// The "first match, labeled" shape `image_holder`/`tap_device_holder`
-/// both walk three times over (live sandboxes, held snapshots, retired
-/// checkpoints) with only the label and predicate differing — pulled out
-/// once so a third resource type never has to re-derive this by hand.
-/// Returns e.g. `"sandbox sbx-1"` for the first `item` where `matches`
-/// holds, `None` if nothing does.
+/// Shared "first match, labeled" walk `image_holder`/`tap_device_holder`
+/// both need over sandboxes/snapshots/retired checkpoints. Returns e.g.
+/// `"sandbox sbx-1"`, or `None`.
 fn first_match<'a, T: 'a>(
     mut items: impl Iterator<Item = &'a T>,
     label: &str,
@@ -403,14 +321,12 @@ pub enum NameResolution {
     Snapshot(String),
 }
 
-/// RAII handle for one name's lock, held by a caller for the duration of a
-/// check-then-act sequence — see `AppState::lock_name`. Not constructed
-/// directly.
+/// RAII handle for one name's lock, held across a check-then-act
+/// sequence — see `AppState::lock_name`.
 pub struct NameLockGuard {
     state: Arc<AppState>,
     name: String,
-    // Kept alongside `_guard` purely so `Drop` can check `Arc::strong_count`
-    // — the guard alone doesn't expose the `Arc` it locked.
+    // Kept alongside `_guard` so `Drop` can check `Arc::strong_count`.
     lock: Arc<tokio::sync::Mutex<()>>,
     _guard: tokio::sync::OwnedMutexGuard<()>,
 }
@@ -418,47 +334,36 @@ pub struct NameLockGuard {
 impl Drop for NameLockGuard {
     fn drop(&mut self) {
         let mut locks = self.state.name_locks.lock().unwrap();
-        // While this `drop` body runs, `self.lock` and `self._guard`'s own
-        // internal clone are both still alive (Rust drops struct fields
-        // only *after* a custom `Drop::drop` returns) — so 3 references is
-        // "just us": the map's copy, `self.lock`, and the one
-        // `OwnedMutexGuard` holds internally. Anything higher means
-        // another `lock_name` call for this same name already grabbed a
-        // clone (waiting to acquire, or holding it after us) before we got
-        // here, in which case removing the map entry now would let a
-        // third caller create a *different* lock object for the same
-        // name — defeating the whole point. Safe to skip: that other
-        // holder (or a later drop of it) gets another chance to clean up
-        // once it's done.
+        // 3 references = just us (map's copy + self.lock + the
+        // OwnedMutexGuard's own internal clone, all still alive here since
+        // fields drop only after this body returns). Higher means another
+        // `lock_name` call for this name is already waiting/holding —
+        // removing the map entry now would let a third caller create a
+        // second, different lock object for the same name. Safe to skip:
+        // that other holder cleans up once it's done.
         if Arc::strong_count(&self.lock) == 3 {
             locks.remove(&self.name);
         }
     }
 }
 
-/// One thing currently holding a drive (a running sandbox or a held
-/// snapshot), and whether it holds it read-only. See `AppState::drive_holders`.
+/// One drive holder (sandbox or snapshot) and its read-only flag. See
+/// `AppState::drive_holders`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DriveHold {
     pub holder: String,
     pub read_only: bool,
 }
 
-/// The multi-holder rule at the heart of this feature: a drive may be
-/// attached to arbitrarily many holders at once, but only if every
-/// existing holder *and* the new attach being requested are all
-/// read-only. A single read-write attachment — existing or requested —
-/// needs exclusive, single-holder access, exactly like every attachment
-/// did before read-only sharing existed. Pulled out of
-/// `AppState::drive_holders`'s callers so it's directly testable without
-/// `AppState`, a mutex, or axum.
+/// A drive may have arbitrarily many holders at once only if every
+/// existing holder *and* the new attach are all read-only — any
+/// read-write attachment needs exclusive access. Pulled out for direct
+/// testing without `AppState`/a mutex/axum.
 pub fn can_attach_read_only(existing: &[bool], requesting_read_only: bool) -> bool {
     existing.is_empty() || (requesting_read_only && existing.iter().all(|ro| *ro))
 }
 
-/// Renders a list of `DriveHold`s into the human-readable form used in
-/// `AppError::Conflict` messages and nowhere else — kept next to
-/// `DriveHold` rather than duplicated at each call site.
+/// Human-readable `DriveHold` list for `AppError::Conflict` messages.
 pub fn describe_drive_holders(holders: &[DriveHold]) -> String {
     holders
         .iter()
@@ -467,12 +372,9 @@ pub fn describe_drive_holders(holders: &[DriveHold]) -> String {
         .join(", ")
 }
 
-/// A short connect timeout is what actually turns "guest port isn't
-/// listening" into a fast, clear error — a refused connection fails
-/// immediately either way, but a black-holed one (SYN silently dropped,
-/// e.g. a guest firewall rule) would otherwise hang until the request-level
-/// timeout in `Config::preview_timeout`, which is tuned for slow dev-server
-/// compiles, not connection setup.
+/// A short connect timeout turns a black-holed SYN (e.g. a guest firewall
+/// rule) into a fast error instead of hanging until `Config::preview_timeout`,
+/// which is tuned for slow dev-server compiles, not connection setup.
 fn build_preview_client() -> PreviewClient {
     let mut connector = HttpConnector::new();
     connector.set_connect_timeout(Some(Duration::from_secs(5)));
@@ -537,11 +439,8 @@ mod tests {
 
     static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    /// Real temp-directory-backed `AppState`, matching this project's
-    /// "use real filesystem state rather than mocking wherever the
-    /// operation doesn't need KVM" testing convention — `DriveStore`
-    /// creates its directory on `new`, and `NetworkManager` here is given
-    /// no tap devices at all since nothing under test leases one.
+    /// Real temp-directory-backed `AppState` (no mocking) —
+    /// `NetworkManager` gets no tap devices since nothing here leases one.
     fn test_state() -> Arc<AppState> {
         let n = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("sandkiln-state-test-{}-{n}", std::process::id()));
@@ -599,20 +498,13 @@ mod tests {
 
     #[test]
     fn resolve_name_prefers_the_live_sandbox_over_a_same_named_snapshot() {
-        // A live fork's `Sandbox::name` and its source `Snapshot::name` are
-        // deliberately the same string at once — not a conflict, one
-        // identity with both a live session and a persisted record (see
-        // `Sandbox::name`'s doc comment). The live one must win: it's the
-        // more actionable answer for a caller resolving a name right now.
-        // Exercised here as the pure `find_named` priority order that
-        // `resolve_name`/`name_holder` are thin wrappers around, since a
-        // real `Sandbox`/`Snapshot` needs a live `Vm`/`Lease` this test
-        // environment (no KVM) can't construct.
+        // A live fork and its source snapshot share one name deliberately
+        // (not a conflict — see `Sandbox::name`); live must win. Exercised
+        // via the pure `find_named` priority order `resolve_name`/
+        // `name_holder` wrap, since a real `Sandbox`/`Snapshot` needs KVM.
         let live = [("sbx-fork", Some("shared-name"))];
         let held = [("snap-parent", Some("shared-name"))];
         assert_eq!(find_named(live.into_iter(), "shared-name"), Some("sbx-fork"));
-        // Only reached if the live map has no match — `resolve_name`'s own
-        // control flow, not re-derivable from `find_named` alone.
         assert_eq!(find_named(held.into_iter(), "shared-name"), Some("snap-parent"));
     }
 
@@ -687,11 +579,10 @@ mod tests {
             .expect("re-locking a name after its guard was dropped must not hang");
     }
 
-    /// Builds a real `AppState` against real, isolated temp directories —
-    /// no KVM/root needed for anything exercised here: `NetworkManager` is
-    /// only ever constructed, never `ensure_ready()`'d or `lease()`'d (both
-    /// need real netlink access), so a fake bridge/uplink name is fine, the
-    /// same convention `snapshot.rs`'s tests already use.
+    /// Real `AppState` over isolated temp dirs — no KVM/root needed:
+    /// `NetworkManager` here is only ever constructed, never
+    /// `ensure_ready()`'d/`lease()`'d, so a fake bridge/uplink is fine
+    /// (same convention `snapshot.rs`'s tests use).
     struct TestState {
         state: AppState,
         dir: PathBuf,
@@ -793,15 +684,11 @@ mod tests {
         assert_eq!(t.state.image_holder("never-reserved"), None);
     }
 
-    // `image_holder`'s sandbox-map branch isn't exercised here: a real
-    // `Sandbox` needs a real `sandkiln_vmm::vm::Vm` (a running Firecracker
-    // process/vsock connection), which needs KVM. Its snapshot-map branch
-    // -- and `tap_device_holder`'s below -- *are* covered further down:
-    // unlike `Sandbox`, `Snapshot` needs only a `Lease`, and
-    // `NetworkManager::reserve()` builds one without any real netlink
-    // call at all (see `test_network`/`test_lease` below) -- the same
-    // reason `snapshot.rs`'s own tests can construct a real `Snapshot`
-    // without KVM either.
+    // `image_holder`'s sandbox-map branch isn't exercised here (a real
+    // `Sandbox` needs a running `Vm`, which needs KVM); its snapshot-map
+    // branch and `tap_device_holder`'s are, below, since `Snapshot` needs
+    // only a `Lease` and `NetworkManager::reserve()` builds one without
+    // real netlink.
 
     fn test_network() -> NetworkManager {
         NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", ["tapA".to_string()])
