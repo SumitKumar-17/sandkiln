@@ -1,146 +1,79 @@
 # AGENTS.md — sandkiln (JS/TS SDK)
 
-Read the root `AGENTS.md` first for project-wide conventions. This file
-is scoped to this one package.
+Read root `AGENTS.md` first.
 
 ## What this package is
 
-The published JS/TS client: [`sandkiln` on
-npm](https://www.npmjs.com/package/sandkiln). A thin, fully-typed
-wrapper over `sandkiln-daemon`'s HTTP API — it should never contain logic
-the daemon doesn't already implement. If a method here would need new
-server-side behavior, that behavior goes in `core/crates/daemon` first;
-this package only ever catches up to what the daemon actually does.
+Published JS/TS client: [`sandkiln` on npm](https://www.npmjs.com/package/sandkiln).
+A thin, fully-typed wrapper over `sandkiln-daemon`'s HTTP API — never
+implements logic the daemon doesn't already have; new behavior goes in
+`core/crates/daemon` first.
 
 ## Files
 
-- `sandbox.ts` — the `Sandbox` class: `create`/`attach`/`list`/`resume`/
-  `fork`/`byName`/`getOrCreate` (static), `runCommand`/`readFile`/
+- **`sandbox.ts`** — `Sandbox`: static `create`/`attach`/`list`/`resume`/
+  `fork`/`byName`/`getOrCreate`; instance `runCommand`/`readFile`/
   `writeFile`/`chmod`/`chown`/`mkdir`/`rename`/`copy`/`symlink`/
   `readlink`/`truncate`/`listDir`/`stop`/`snapshot`/`previewUrl`/`pty`/
-  `execStream`/`listExecStreams`/`attachLogs` (instance). `pty(options)`
-  and `attachLogs(sessionId)` are the odd ones out — every other instance
-  method is `fetch`-based request/response through `http.ts`; these two
-  return a native `WebSocket` directly (constructed against
-  `core/crates/daemon/src/routes_pty.rs`/`routes_logs.rs`'s routes)
-  instead of awaiting anything, since both are live streams, not a single
-  call — `execStream(command, args)` itself *is* a plain `fetch` call
-  (it just starts the background command and returns its session id;
-  `attachLogs` is the separate step that actually watches it, any number
-  of times, replay-then-live-tail). Both throw a clear error instead of
-  returning a broken object if `typeof WebSocket === "undefined"` (older
-  Node without a polyfill) — deliberately no `ws` npm dependency added
-  just for this, to keep this package's "zero runtime dependencies"
-  property intact; see `ROADMAP.md`'s "Dev servers and live preview"
-  section for the auth (`?token=`, same reasoning as `previewUrl` below)
-  and the no-live-resize caveat. `chmod`/`chown`/.../`listDir` all follow the exact same
-  shape as `readFile`/`writeFile` — build a request body, `request<T>()`,
-  map any snake_case response fields back to camelCase — and forward
-  `path`/`from`/`to`/etc. completely unvalidated, same as `readFile`/
-  `writeFile` already do (validation, if ever added, belongs on the
-  daemon or guest-agent side, not duplicated here). Every instance
-  method reuses the `baseUrl`/`authToken` the sandbox was created/attached
-  with — see the `ClientContext` pattern. `resume`/`fork`/`byName` are
-  static (not instance methods) because none acts on an already-existing
-  `Sandbox` — they resolve to one from a snapshot id or a name, the same
-  shape as `create`. `fork` doesn't consume the snapshot, `resume` does;
-  see the daemon's `routes_snapshot.rs` module doc comment for why at
-  most one live fork of a given snapshot can run at a time. `getOrCreate`
-  returns `{ sandbox, created }` rather than a bare `Sandbox` — it's the
-  one static factory whose caller genuinely needs to know whether they
-  got a fresh environment or an existing one back. `stop()` returns
-  `{ kept, snapshotId }`: the daemon preserves state by default on stop
-  (internally snapshotting rather than destroying), so there's something
-  worth reporting now — pass `{ keep: false }` for the old "just destroy
-  it" behavior. `previewUrl` is pure and network-free like `attach` — it
-  just builds the URL for the daemon's `/sandboxes/:id/preview/:port`
-  reverse proxy (see `core/crates/daemon/src/routes_preview.rs`),
-  appending the auth token as a `?token=` query parameter rather than a
-  header when one is configured, since the caller is typically a browser
-  tab or `<iframe>`. `CreateSandboxOptions.imageId` boots from a
-  registered image (see `image.ts`) instead of the daemon's configured
-  default rootfs.
-- `image.ts` — the `Image` class: `register`/`list`/`delete`, all static —
-  unlike `Sandbox`, an image has no instance behavior (delete only ever
-  needs an id), so this is a namespace of operations, not a stateful
-  handle. Mirrors `core/crates/daemon/src/routes_images.rs`'s response
-  shape, including `guestAgentVerified`/`verificationHint` on every
-  result (always `false` — the daemon can never verify this itself, see
-  that file's module doc comment).
-- `drive.ts` — the `Drive` class: `create`/`list`/`delete`, all static —
-  same static-namespace shape as `image.ts` (a drive has no instance
-  behavior besides delete). Attach one at create time via
-  `CreateSandboxOptions.drives`, not through this class — `Drive` only
-  covers the drive resource itself (create/list/delete), not attachment.
-- `pool.ts` — the `Pool` class: `create`/`list`/`delete`, all static —
-  same static-namespace shape as `image.ts`/`drive.ts`. `Pool.create`
-  takes a caller-given `id` (like `Image.register`, not
-  `Drive.create`'s server-generated one) since a pool's id is purely a
-  configuration handle, never guest- or sandbox-visible. There is no
-  "claim from pool" method here at all — claiming is entirely
-  transparent, done server-side by a plain `Sandbox.create()` whose
-  image/resources match a configured pool (see
-  `core/crates/daemon/src/pool.rs`'s module doc comment) — this class
-  only ever manages pool *configuration*.
-- `client.ts` — `ClientContext`/`resolveClient`, pulled out of
-  `sandbox.ts` once `image.ts` needed the exact same
-  `baseUrl`/`authToken` resolution.
-- `http.ts` — the one place `fetch` gets called. Non-2xx responses throw
-  `SandkilnApiError`; a 204 (or any empty body) resolves to `undefined`.
-  If the daemon's status-code contract ever doesn't match what's handled
-  here, that's a real bug worth fixing on whichever side is wrong — see
-  the `DELETE` 200-vs-204 story in root `AGENTS.md`.
-- `config.ts` — env var fallback resolution (`SANDKILN_DAEMON_URL`,
-  `SANDKILN_AUTH_TOKEN`). Guards `process` existing at all, since this
-  package could theoretically load somewhere without it.
-- `base64.ts` — `Buffer`-or-`atob`/`btoa` fallback, same portability
+  `execStream`/`listExecStreams`/`attachLogs`. `pty`/`attachLogs` return a
+  native `WebSocket` directly instead of awaiting (live streams, not a
+  single call); both throw a clear error if `WebSocket` is undefined
+  rather than adding a `ws` dependency (keeps zero-runtime-deps intact).
+  `chmod`/.../`listDir` all forward paths unvalidated, same as
+  `readFile`/`writeFile` (validation belongs daemon/guest-agent side).
+  `resume`/`fork`/`byName` are static since none acts on an existing
+  `Sandbox`; `fork` doesn't consume the snapshot, `resume` does (at most
+  one live fork per snapshot — see daemon's `routes_snapshot.rs`).
+  `getOrCreate` returns `{ sandbox, created }`. `stop()` returns
+  `{ kept, snapshotId }` (daemon preserves by default; `{ keep: false }`
+  for the old destroy behavior). `previewUrl` is pure/network-free,
+  appends the auth token as `?token=` (browser tab/`<iframe>` caller).
+  `CreateSandboxOptions.imageId` boots from a registered image.
+- **`image.ts` / `drive.ts` / `pool.ts`** — static namespaces
+  (`register|create`/`list`/`delete`), no instance behavior. `image.ts`
+  mirrors the daemon's response shape including
+  `guestAgentVerified`/`verificationHint` (always `false`, the daemon
+  can't self-verify). Drive attachment happens via
+  `CreateSandboxOptions.drives`, not through `Drive`. `Pool.create` takes
+  a caller-given id (config handle, never guest-visible); no "claim"
+  method exists — claiming is transparent, done by a plain
+  `Sandbox.create()` matching a configured pool (`daemon/src/pool.rs`).
+- **`client.ts`** — `ClientContext`/`resolveClient`, shared `baseUrl`/
+  `authToken` resolution (pulled out once `image.ts` needed it too).
+- **`http.ts`** — the one `fetch` call site. Non-2xx throws
+  `SandkilnApiError`; empty body (incl. 204) resolves `undefined`.
+- **`config.ts`** — env fallback (`SANDKILN_DAEMON_URL`/
+  `SANDKILN_AUTH_TOKEN`), guards `process` existing at all.
+- **`base64.ts`** — `Buffer`-or-`atob`/`btoa` fallback, same portability
   reasoning as `config.ts`.
-- `types.ts` — every request/response shape, matching the daemon's JSON
-  exactly (including its `snake_case` fields like `content_base64`,
-  `exit_code`) — the public-facing types (`ExecResult`, `SandboxInfo`,
-  `ImageInfo`) translate those into idiomatic `camelCase`.
+- **`types.ts`** — wire shapes matching the daemon's JSON exactly
+  (`snake_case` fields); public types (`ExecResult`, `SandboxInfo`,
+  `ImageInfo`) translate to `camelCase`.
 
 ## Testing
 
-`test/previewUrl.test.js` covers `Sandbox.previewUrl`'s pure URL-building
-logic with `node:test` (no added dependency — same convention as `kiln`'s
-`test/format.test.js`). It imports the built `../dist/index.js`, not TS
-source directly, so `npm test` runs `pretest` (`npm run build`) first.
-Every other instance method needs a live daemon to test meaningfully (see
-"Building and verifying" below), which is why this is the only file here
-today — it's specifically the one piece of genuinely pure logic in this
-package. Run: `npm run test -w sandkiln`.
+`test/previewUrl.test.js` (`node:test`, no added dep) covers the one
+genuinely pure piece of logic here — everything else needs a live
+daemon. Imports built `../dist/index.js`, so `npm test` runs `pretest`
+(build) first. Run: `npm run test -w sandkiln`.
 
 ## Building and verifying
 
-```
-npm run typecheck -w sandkiln
-npm run build -w sandkiln
-```
-Typechecking and building are necessary but not sufficient — this SDK's
-own bugs have specifically been the kind that typecheck cleanly (wrong
-assumption about a status code) and only show up against a live daemon.
-**Verify against a real `sandkilnd`** before calling a change done: sync
-to the dev box, start the daemon, port-forward its port
-(`ssh -f -N -L 7777:127.0.0.1:7777 <dev-box>`), then run a small script
-against `dist/index.js` locally. See `git log` for prior examples of
-exactly this pattern.
+`npm run typecheck -w sandkiln && npm run build -w sandkiln` — necessary,
+not sufficient: this SDK's real bugs have typechecked cleanly and only
+shown up against a live daemon (wrong status-code assumption). Verify
+against a real `sandkilnd`: sync to the dev box, start it, port-forward
+(`ssh -f -N -L 7777:127.0.0.1:7777 <dev-box>`), run a script against
+`dist/index.js` locally.
 
-## Non-obvious things specific to this package
+## Non-obvious things
 
-- **`kiln` (the CLI) depends on this package as a real workspace
-  dependency resolved through its built `dist/`, not its source.** CI
-  builds this package before typechecking/building `kiln` for exactly
-  this reason — see the CI-ordering bug in root `AGENTS.md`. If you
-  change this package's public API, `kiln`'s build will fail until it's
-  rebuilt too; that's expected, not a bug in `kiln`.
-- **`Sandbox.attach(id, options)` exists specifically for `kiln`'s use
-  case** (a fresh CLI process that only has an id from a previous
-  invocation, no live `Sandbox` object to hold onto) — it does zero
-  network calls, it just constructs a handle. Don't add validation here
-  that would require a round-trip; that defeats the point.
-- Published with `npm publish --provenance` from CI
-  (`.github/workflows/publish-sdk.yml`), not manually — see that
-  workflow's comments for what's needed to re-publish (an npm token
-  specifically marked to bypass 2FA; a plain token, even a valid one,
-  gets rejected — this cost real back-and-forth to figure out).
+- `kiln` depends on this package's built `dist/`, not source — CI builds
+  this first. A public-API change breaks `kiln`'s build until rebuilt;
+  expected, not a `kiln` bug.
+- `Sandbox.attach(id, options)` does zero network calls by design (built
+  for `kiln`'s case: a fresh process with only an id) — don't add
+  validation that would require a round-trip.
+- Published via `npm publish --provenance` in CI
+  (`publish-sdk.yml`) — needs an npm token specifically marked to bypass
+  2FA; a plain valid token gets rejected.
