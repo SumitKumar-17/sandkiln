@@ -1,565 +1,202 @@
 # AGENTS.md — sandkiln-daemon
 
-Read the root `AGENTS.md` first for project-wide conventions and the
-gotchas list. This file is scoped to this one crate (`sandkilnd`, the
-HTTP API).
+Read root `AGENTS.md` first. This file covers `sandkilnd`, the HTTP API.
 
 ## What this crate is
 
 An axum + tokio HTTP server wrapping `sandkiln-vmm`'s VM lifecycle into a
-REST-ish API. This is the thing SDKs and the CLI actually talk to. Keep
-business logic (VM lifecycle, networking) in `sandkiln-vmm` — this crate
-should mostly be: parse a request, call into `vmm`, shape a response.
+REST-ish API — what SDKs/CLI actually talk to. Keep business logic (VM
+lifecycle, networking) in `sandkiln-vmm`; this crate parses requests,
+calls `vmm`, shapes responses.
 
 ## Files
 
-- `main.rs` — **not** `#[tokio::main]`, deliberately (see the capability-
-  ordering gotcha in root `AGENTS.md` — read it before touching this
-  file's structure). Builds the router, wires auth middleware onto the
-  `/sandboxes*` routes only (`/healthz` stays open), raises
-  `CAP_NET_ADMIN` before the Tokio runtime starts.
-- `config.rs` — `Config::from_env()`, every daemon env var
-  (`SANDKILN_*`) in one place. Adding a new configurable thing means a
-  new field here plus an `env_or`/parse call, following the existing
-  pattern. Also defines `LogFormat` (`SANDKILN_LOG_FORMAT=json` vs. the
-  default pretty output), read by `main.rs` before the tracing
-  subscriber is initialized. `JailerHostConfig`/`Config::jailer`
-  (`SANDKILN_JAILER_ENABLED` and friends) is the daemon-operator switch
-  for jailer-based sandbox boot — see `sandkiln_vmm::jailer` and
-  `SELF_HOSTING.md`'s jailer section. Deliberately not something a
-  `POST /sandboxes` request body can override. `archive_timeout`/
-  `archive_dir` (`SANDKILN_ARCHIVE_TIMEOUT_SECS`/`SANDKILN_ARCHIVE_DIR`)
-  configure `idle_reaper`'s archive pass — see that module's own doc
-  comment and `archive_timeout`'s field doc comment for the real
-  Firecracker constraint (the rootfs backing file can never move) that
-  shapes what archiving actually does.
-- `metrics.rs` — `Metrics`: the `/metrics` endpoint's counters/gauge/
-  histograms and a hand-rolled Prometheus text-exposition-format writer.
-  Lives on `AppState` (`state.metrics`); route handlers record into it at
-  the same call sites `sandkiln-vmm`'s `tracing` events fire from
-  (`routes_sandbox::create_sandbox` for boot duration and the created
-  counter, `routes_exec::call_agent` for exec latency). No metrics crate
-  dependency — see the module doc comment for why.
-  `CreatePhase` + `record_create_phase_ms` expose a cold create's own
-  sub-phases as one labelled family,
-  `create_phase_duration_ms{phase="rootfs_clone"|"network_lease"|"setup"|"egress_apply"|"total"}`,
-  rather than one metric name each, so adding a phase is a variant rather
-  than a new field plus a new render block. `phase="setup"` is the
-  concurrent *join* of the clone and the lease, not their sum — only the
-  join lands on the critical path. `phase="egress_apply"` is only
-  recorded when a create actually requests an egress policy (most
-  don't), so its count is expected to sit far lower than the other
-  phases' — see `sandkiln_vmm::egress::apply`'s own doc comment for what
-  it measures. `boot_duration_ms` deliberately stays
-  a separate metric (it predates this family and is what anything
-  external would already be scraping), which is why there's no
-  `phase="boot"`. The dividing line against `tracing`: a phase total an
-  operator might watch or alert on goes here; per-subprocess and
-  per-Firecracker-PUT detail stays a debug-level `tracing` event, both
-  because nobody alerts at that granularity and because `sandkiln-vmm`,
-  where most of it is emitted, has no access to `Metrics` at all. See
-  `ROADMAP.md`'s Benchmarking section for the measurements this exists to
-  make repeatable.
-- `auth.rs` — bearer-token middleware. No-ops entirely if
+- **`main.rs`** — not `#[tokio::main]` (see root `AGENTS.md` §12): raises
+  `CAP_NET_ADMIN` before the Tokio runtime starts, then builds the
+  router. Auth middleware wired onto `/sandboxes*` only; `/healthz` stays
+  open.
+- **`config.rs`** — `Config::from_env()`, every `SANDKILN_*` env var in
+  one place. `LogFormat` (`SANDKILN_LOG_FORMAT`), `JailerHostConfig`
+  (`SANDKILN_JAILER_ENABLED` — daemon-operator switch, not a per-request
+  override), `archive_timeout`/`archive_dir` for `idle_reaper`'s archive
+  pass.
+- **`metrics.rs`** — hand-rolled Prometheus text format (no `prometheus`
+  crate — four metrics behind atomics/a histogram isn't enough surface to
+  justify the dependency). `sandboxes_created_total`, `boot_duration_ms`,
+  `exec_latency_ms`, and `create_phase_duration_ms{phase=...}` (rootfs
+  clone / network lease / setup / egress_apply / total — `setup` is the
+  concurrent *join* of clone+lease, only the join is on the critical
+  path; `egress_apply` only records when a create actually requests a
+  policy). `boot_duration_ms` stays separate since it predates this
+  family and is what external scrapers already expect. Phase totals an
+  operator might alert on go here; per-PUT Firecracker detail stays a
+  debug `tracing` event (also because `sandkiln-vmm` has no `Metrics`
+  access).
+- **`auth.rs`** — bearer-token middleware, no-op if
   `SANDKILN_AUTH_TOKEN` is unset.
-- `state.rs` — `AppState`: the daemon's config, `NetworkManager`, an
-  optional `JailerIdPool` (`Some` only when `config.jailer` is set), and
-  in-memory sandbox map (`Mutex<HashMap<String, Sandbox>>`). This map
-  *is* the daemon's entire notion of *live* sandbox state — it doesn't
-  survive a restart, and per `sandkiln-store`'s own module doc comment
-  there's no way it realistically ever could (a live `Sandbox` owns a
-  real OS process with no re-adoption mechanism). `AppState::history`
-  (a `sandkiln_store::HistoryStore`) is the separate, durable answer to
-  a related but different question — not "is this sandbox still
-  running" but "did this sandbox exist, and how did it end" — see
-  `ROADMAP.md`'s "Tags and sandbox metadata" section. Also owns naming:
-  `name_holder`/`resolve_name` find whichever of a live sandbox or a held
-  snapshot currently carries a given name (live wins if both do — see
-  `Sandbox::name`'s doc comment on why that's not a conflict), and
-  `lock_name` hands out a per-name `tokio::sync::Mutex` (with best-effort
-  cleanup once nothing references it) that every code path claiming or
-  resolving a name serializes on, so two concurrent callers can't both
-  win a race for the same brand-new name. Also owns `drives`/`images`
-  (the `DriveStore`/`ImageStore` from `sandkiln-vmm`) and the
-  ownership-tracking helpers that answer "who currently holds this
-  resource" across live sandboxes and held snapshots in one place —
-  `drive_holder()`/`image_holder()` — plus `reserve_pending_image_boot`/
-  `release_pending_image_boot`, which extend that tracking to cover an
-  image referenced by a boot that's still in flight (not yet a `Sandbox`
-  in the map), closing the race where `DELETE /images/:id` could
-  otherwise remove a file an in-progress rootfs copy is still reading.
-  Also owns `pools` (`Mutex<HashMap<String, crate::pool::Pool>>`) —
-  configured pre-warmed pools, in-memory only (unlike `snapshots`, not
-  reconciled from disk at startup — see `crate::pool`'s module doc
-  comment for why). Also owns `retired_snapshots` (`crate::snapshot_history`
-  — time-travel restore's checkpoints) and the ownership-tracking helpers
-  extended for it: `drive_holders()`/`image_holder()` now also check
-  `retired_snapshots` (a retired checkpoint references its drives/image
-  as durably as a held `Snapshot` does), and `tap_device_holder()` is the
-  analogous "who currently holds this tap device" check across live
-  sandboxes, held snapshots, *and* an in-flight restore
-  (`pending_tap_restores`/`try_reserve_pending_tap_restore`/
-  `release_pending_tap_restore`) — needed because a retired checkpoint
-  holds no live lease at all (see `snapshot_history`'s own module doc
-  comment), so nothing else already prevents two different retired
-  checkpoints in the same lineage (sharing one frozen tap device) from
-  both being restored at once the way `Snapshot::forked_into` alone
-  prevents two live forks of one snapshot. `image_holder()`/
-  `tap_device_holder()` both share the same "first match, labeled" walk
-  across sandboxes/snapshots/retired checkpoints via the private
-  `first_match()` helper — pulled out once `tap_device_holder` made it a
-  third near-identical copy of `image_holder`'s own shape, so a fourth
-  resource type never has to re-derive it by hand. `drive_holders()`
-  stays its own hand-written three-collection walk rather than reusing
-  `first_match`: it returns *every* matching holder (`Vec<DriveHold>`,
-  since multiple simultaneous read-only holders are legitimate), not the
-  first one, a genuinely different shape from the single-holder
-  "who owns this" question `first_match` answers.
-- `sandbox.rs` — the `Sandbox` struct the daemon tracks per running VM
-  (id, `Vm` handle, network `Lease`, rootfs path, tags, created-at,
-  `last_activity`, `image_id` — the registered image this sandbox's
-  rootfs was cloned from, if any, `None` meaning the daemon-wide
-  `SANDKILN_BASE_ROOTFS` default — `jail_id`, the leased uid/gid if this
-  sandbox booted jailed, released back to `state.jailer_ids` on stop —
-  `name`, the caller-given identity carried across the sandbox<->snapshot
-  boundary — and `pty_session_count`, an `Arc<AtomicU32>` so a
-  `PtySessionGuard` (see `routes_pty.rs`) can outlive the `state.sandboxes`
-  lock it was incremented under and still decrement the right counter on
-  drop, and `egress`, `None` for a forked sandbox — mirroring `network`'s
-  own `None`-for-fork convention, since the underlying iptables chain is
-  tied to the *lease*, which the snapshot, not the forked `Sandbox`
-  record, owns, and `parent_snapshot_id` — see its own doc comment for
-  why this is a **separate** field from `source_snapshot_id` just above,
-  not a reuse of it: `source_snapshot_id` being `Some` is what
-  `routes_snapshot::check_snapshottable` reads to *refuse* re-snapshotting
-  a forked sandbox, and stays `None` on resume specifically so a resumed
-  sandbox remains snapshottable — lineage tracking needs the opposite
-  shape (`Some` on both resume and fork), and conflating the two was a
-  real bug caught live, not on paper, while building snapshot lineage —
-  see `ROADMAP.md`'s "Persistence and snapshotting" section), and `env` —
-  unlike `egress`, carried identically onto **both** a resumed and a
-  forked sandbox (no `None`-for-fork special case), since it's plain
-  data with no external resource an ownership convention needs to
-  protect.
-- `routes_sandbox.rs` — sandbox lifecycle handlers: create/list/stop/
-  history (`GET /sandboxes/history`, reading `AppState::history` — the
-  only read path for it; every write happens as a side effect of
-  create/destroy/snapshot, not a caller action of its own).
-  `create_sandbox_cold` times its own sub-phases and records them into
-  `metrics::CreatePhase` (plus debug events `"cold create setup phases"`
-  and `"cold create complete"`). The rootfs clone and the network lease
-  each time themselves *on their own thread*, via the `timed` helper — a
-  timer around the `thread::scope` join can only see when both finished,
-  which is the one thing needed to tell them apart. Filter these with
-  `RUST_LOG=sandkilnd=debug`: the tracing target is the **binary** name,
-  so the package name `sandkiln_daemon` silently matches nothing.
-  `create_sandbox_core` calls `state.history.record_created` right
-  after a boot actually succeeds, and `destroy_sandbox_by_id` calls
-  `state.history.record_ended` (`routes_snapshot::snapshot_and_stop`
-  calls the equivalent for the snapshotted case) — both best-effort
-  (a warning log, not a failed request, if the history write itself
-  fails; the sandbox operation already succeeded by that point).
-  `stop_sandbox_by_id()` is the shared stop entry point used by both the
-  `DELETE` route and `idle_reaper`; it defaults to preserving state
-  (snapshot-then-stop, via `routes_snapshot::snapshot_and_stop`) rather
-  than destroying it, with `destroy_sandbox_by_id()` — the original
-  teardown (VM stop, network release, rootfs cleanup — unconditional now
-  for every sandbox including a fork, see `Sandbox::rootfs_path`'s own
-  doc comment for why that wasn't always safe to assume) — reached via
-  the `?keep=false` opt-out or as the correct silent fallback for a
-  forked sandbox (nothing new to preserve) or a jailed one (can't be
-  snapshotted, surfaces as an error instead of silently discarding
-  state). Both `destroy_sandbox_by_id` and `routes_snapshot::snapshot_and_stop`
-  also release a stopped sandbox's `source_pool_id` slot back to its pool
-  (`Pool::record_release`) right after removing it from `state.sandboxes`
-  — whichever way it stops, warm or claimed slots are the same
-  `max_count` currency (see `crate::pool`). `create_sandbox_core()` is the actual boot logic, shared with
-  `routes_sandbox_name::get_or_create_sandbox`'s create-fresh path — the
-  `create_sandbox` handler itself adds the name-uniqueness check under
-  `AppState::lock_name` and resolves which rootfs to clone from
-  (`state.config.base_rootfs_path` by default, or a registered image's
-  path when the request gives an `image_id`, via `AppState::images`,
-  reserving/releasing a pending-boot claim on that image id around the
-  whole boot with `PendingImageBootGuard` so a concurrent image deletion
-  can't race an in-flight clone) before calling it.
-  `create_sandbox_core` also tries a pre-warmed pool claim first (see
-  `crate::pool`) whenever the request has no `drives`/`rate_limit` and a
-  configured pool's key matches, via `crate::pool_claim` — see that
-  file's own AGENTS.md entry for the claim/retry/health-check mechanics
-  living there now. `ColdSlot` threads its reserved `pool_id` through
-  `create_sandbox_cold` (the factored-out boot mechanics, shared by both
-  the `ColdSlot` and unattributed paths) into `Sandbox::source_pool_id`,
-  committing the `PoolClaimGuard` (from `pool_claim`) on success.
-  `resolve_egress_policy` validates every CIDR in a request's optional
-  `egress` field up front (one clear `400` naming the exact bad entry,
-  via `sandkiln_vmm::egress::validate_cidr`) and converts it to a
-  `sandkiln_vmm::egress::EgressPolicy`. Unlike `drives`/`rate_limit`, an
-  egress policy does NOT disqualify a request from a pool claim — it's
-  enforced entirely via host-side iptables applied after boot/resume, not
-  baked into Firecracker's own snapshotted state, so `claim_from_pool`
-  applies it fresh after a successful claim rather than treating it as
-  pool-incompatible. Failure to apply is fatal (tear down) in both
-  `create_sandbox_cold` and `claim_from_pool` — safe to be strict since
-  both have a fallback or just fail the one request — but only a loud
-  warning in `routes_snapshot::resume_snapshot_by_id`/`fork_snapshot`,
-  since both are one-way operations where destroying a freshly
-  resumed/forked sandbox over a rare iptables hiccup would be worse than
-  the (best-effort, not a hard guarantee) security regression of leaving
-  it unenforced. See `sandkiln_vmm::egress`'s own module doc comment for
-  the actual chain/rule design.
-- `routes_sandbox_name.rs` — name-based lookup and get-or-create:
-  `GET /sandboxes/by-name/:name` (live sandboxes only — a name currently
-  held by a snapshot is a `409` pointing at get-or-create, not a silent
-  resume) and `POST /sandboxes/get-or-create` (return-if-live /
-  resume-if-snapshotted / create-if-neither, race-safe under
-  `AppState::lock_name`). Split out from `routes_sandbox.rs` since it
-  crosses into snapshot territory (`routes_snapshot::resume_snapshot_by_id`).
-- `routes_images.rs` — registered-image handlers: `POST /images`
-  (register an already-built ext4 rootfs from a host path, copying it
-  into `SANDKILN_IMAGES_DIR` via `sandkiln_vmm::image::ImageStore`),
-  `GET /images`, `DELETE /images/:id` (refuses via `AppState::image_holder`
-  while any live sandbox, in-flight boot, or held snapshot references
-  it — same pattern as `routes_drives::delete_drive`). Every response
-  says `guest_agent_verified: false` — the daemon runs unprivileged and
-  cannot loop-mount a candidate image to check the agent is baked in;
-  `scripts/preflight-check.sh --root-checks --rootfs-image <path>` is
-  the only way to get that confirmation, out of band, before registering.
-- `routes_exec.rs` — exec/read-file/write-file handlers. `pub(crate) async fn
-  call_agent()` is the shared helper every route in both this file and
-  `routes_fs.rs` uses — extend it, don't duplicate its pattern. It's
-  also what bumps a sandbox's `last_activity`. `resolve_env()` is the
-  other shared helper worth knowing about: a sandbox's create-time `env`
-  merged with a per-call override (the call wins on a key conflict) into
-  the one map that actually reaches the guest agent — `routes_logs.rs`'s
-  `start_exec_stream` inlines the identical merge rather than importing
-  this function, since it already holds `state.sandboxes`'s lock for an
-  unrelated reason at that point and a second lock acquisition would be
-  redundant, not because the logic is meant to diverge.
-- `routes_fs.rs` — filesystem metadata/structure handlers: chmod, chown,
-  mkdir, rename, copy, symlink, readlink, truncate, directory listing.
-  Split out of `routes_exec.rs` (2026-09-08) once adding all of these
-  there would have pushed it well past this crate's usual size range —
-  data transfer (`routes_exec`) vs. filesystem structure (`routes_fs`)
-  is the seam. No path validation on any handler here, same as
-  `routes_exec::read_file`/`write_file` already have none — see this
-  file's own module doc comment for why that's a deliberate consistency
-  choice, not an oversight.
-- `routes_mounts.rs` — `POST/GET /sandboxes/:id/mounts`,
-  `DELETE /sandboxes/:id/mounts/:mount_id`: mounts an S3-compatible
-  bucket into a sandbox via `rclone mount`, built entirely on top of
-  `call_agent`/`Mkdir`/`WriteFile`/`Chmod`/`Exec` — no new wire protocol.
-  Credentials go in as a `0600` rclone config file, never a command-line
-  argument (see this file's module doc comment). No holder-tracking like
-  `AppState::drive_holders` (concurrent mounts of the same bucket aren't
-  a corruption risk the way a shared drive is) and no re-application on
-  resume/fork/restore (`Sandbox::mounts` exists purely for listing — a
-  mount is a live guest-side FUSE process, captured by Firecracker's own
-  snapshot mechanism along with the rest of guest memory). Needs a guest
-  kernel built with `CONFIG_FUSE_FS` (`images/build-guest-kernel.sh`) and
-  `rclone`/`fusermount3` baked into the rootfs (`images/inject-rclone.sh`)
-  — see `SELF_HOSTING.md`'s "Remote storage mounts (optional)" section.
-- `pool.rs` — `Pool`/`PoolConfig`/`PoolKey`: the pure state a configured
-  pre-warmed pool tracks (its resolved image/resource key, a FIFO queue
-  of warm snapshot ids, and `claimed` — how many live instances of this
-  pool's profile currently exist) and the pure matching logic
-  (`PoolConfig::key`) a `POST /sandboxes` request is checked against.
-  `PoolConfig.max_count` bounds `claimed` (plus what's warm);
-  `has_room_for_new_claim`/`record_claim`/`record_release` are the
-  three operations that keep it honest, and `effective_warm_target`
-  makes replenishment itself respect the same ceiling (never over-warms
-  past the remaining headroom). `Pool::notify` (a `tokio::sync::Notify`,
-  woken by `push_warm` and `record_release`) is what
-  `pool_claim::resolve_pool_claim` waits on when a `max_count`-bounded
-  pool is at capacity — condvar-style: every waiter re-checks the real
-  condition on wake rather than trusting the wakeup itself. No
-  networking, no `AppState` beyond that `Notify` — see this file's own
-  module doc comment for the feature's full shape.
-- `pool_replenisher.rs` — the background task (spawned unconditionally
-  from `main.rs`, unlike `idle_reaper` below, since an idle tick with no
-  pools configured is cheap) that keeps every pool topped up: boots a
-  warm instance via `routes_sandbox::create_sandbox_core` (tagged
-  `sandkiln.pool` for identifiability, nothing more), immediately
-  `snapshot_and_stop`s it, and pushes the resulting snapshot id onto that
-  pool's warm queue. One slot per pool per 2-second tick, not all at
-  once, so a large `warm_count` fills in gradually rather than spiking
-  boot load.
-- `pool_claim.rs` — resolving and executing a `POST /sandboxes` request
-  against a configured pool: `resolve_pool_claim`/`PoolClaim`
-  (`Warm`/`ColdSlot`/`NoPool`, queueing up to `POOL_QUEUE_TIMEOUT` on a
-  `max_count`-bounded pool at capacity), `PoolClaimGuard` (RAII
-  commit-or-release for a reserved slot, used by both this file's own
-  `claim_from_pool` and `routes_sandbox::create_sandbox_cold`'s
-  `ColdSlot`/unattributed paths), and `claim_from_pool` itself (resume the
-  warm snapshot, a real post-resume health check before trusting it, a
-  bounded retry around `Vm::update_metadata`'s MMDS refresh — see that
-  call site's own doc comment for the settling-window race it covers).
-  Split out of `routes_sandbox.rs` once claiming pushed that file well
-  past a defensible size for what's nominally "sandbox lifecycle
-  handlers" — no HTTP route of its own, same as `pool_replenisher.rs`;
-  `routes_sandbox::create_sandbox_core` is still the only caller.
-- `routes_pool.rs` — `POST/GET /pools`, `DELETE /pools/:id`: pool
-  *configuration* only — replenishment lives in `pool_replenisher`,
-  claiming lives in `pool_claim` (invoked from
-  `routes_sandbox::create_sandbox_core`). `POST /pools`
-  accepts `max_count` (rejects an explicit `0` — omit it for unbounded
-  instead); `GET /pools` reports it alongside the live `claimed` count.
-  `DELETE` destroys whatever the pool still has warm (via
-  `routes_snapshot::delete_snapshot_by_id`) and calls
-  `pool.notify.notify_waiters()` first, so anything queued on a
-  `max_count`-bounded pool that just got deleted fails clearly instead of
-  waiting out its own timeout for a pool that no longer exists.
-- `idle_reaper.rs` — background task, spawned unconditionally from
-  `main.rs` (a tick with nothing configured is a cheap no-op scan, same
-  reasoning `pool_replenisher` already uses). Reclaims idle sandboxes two
-  ways: auto-suspend (pause + snapshot, via
-  `routes_snapshot::snapshot_and_stop`) past
-  `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`, and destroy (via
-  `routes_sandbox::stop_sandbox_by_id`, same preserve-by-default behavior
-  as an explicit stop — see above — with a fallback to a real destroy only
-  when preservation is structurally impossible, so an unpreservable idle
-  sandbox doesn't leak forever) past `SANDKILN_IDLE_TIMEOUT_SECS`. Each
-  tick runs auto-suspend first, then destroy against whatever's still
-  running — see `config::Config::auto_suspend_timeout`'s doc comment for
-  why `auto_suspend_timeout` is required to be strictly shorter than
-  `idle_timeout` when both are set (destroy is a backstop for a
-  persistently-failing auto-suspend, not a competing timer). Also runs a
-  third, independent pass — `archive_idle_snapshots`, past
-  `SANDKILN_ARCHIVE_TIMEOUT_SECS` — that moves a *held snapshot's* (any
-  origin, not just auto-suspended ones) `state.snap`/`mem.bin` onto
-  `Config::archive_dir` via `routes_snapshot::archive_snapshot_by_id`;
-  see that function's own doc comment for why `rootfs_path` is
-  deliberately never touched.
-- `snapshot.rs` — the `Snapshot` type (`state.snapshots`'s value type)
-  plus everything that makes it durable across a daemon restart: on-disk
-  metadata (`meta.json`, alongside `state.snap`/`mem.bin` under
-  `snapshot_dir(id)`) written atomically via write-then-rename, and
-  `reconcile()`, which scans both `snapshots_root()` (hot) and
-  `Config::archive_dir` (archived — always scanned, regardless of whether
-  `SANDKILN_ARCHIVE_TIMEOUT_SECS` is currently set, so turning archiving
-  off doesn't orphan snapshots already archived under it) and rebuilds
-  `AppState::snapshots` from what's actually on disk across both — the
-  same "filesystem is the source of truth" pattern `sandkiln_vmm::drive`'s
-  `DriveStore::list()` uses for drives. A snapshot directory missing any
-  of its three files is treated as a crash-mid-write (or crash mid-
-  archive) and skipped with a warning rather than guessed at.
-  `Snapshot.egress`/`SnapshotMeta.egress` (`#[serde(default)]`, so
-  metadata written before this field existed still loads) is the actual
-  source of truth `routes_snapshot::resume_snapshot_by_id`/`fork_snapshot`
-  read to decide what egress policy (if any) to re-apply — carried
-  through persistence deliberately, unlike some other purely-convenience
-  fields, since silently losing a security policy across a snapshot cycle
-  would be a real regression, not just a lost convenience.
-  `Snapshot.parent_snapshot_id`/`SnapshotMeta.parent_snapshot_id` (also
-  `#[serde(default)]`) is the snapshot lineage parent pointer — set at
-  snapshot-creation time in `routes_snapshot::snapshot_and_stop` from the
-  source sandbox's own `Sandbox::parent_snapshot_id` (**not**
-  `source_snapshot_id` — see that field's doc comment in `sandbox.rs` for
-  why conflating them was a real live-caught bug). `None` marks a
-  lineage root.
-  `reconcile()` also calls `NetworkManager::reserve()` for each
-  reconciled snapshot's held tap device/host octet so a live `lease()`
-  call afterward can't hand the same tap to a second sandbox — see
-  `main.rs`, which runs this before the HTTP listener starts accepting
-  connections. `move_snapshot_files`/`move_file` are the archiving
-  primitives (rename, falling back to copy-then-remove-original across
-  filesystems) — **`move_snapshot_files` never touches `rootfs_path`**,
-  see its own doc comment for the real Firecracker resume failure that
-  proved moving it breaks every future resume/fork (the backing file's
-  absolute host path is baked into `state.snap` itself, with no override
-  at `/snapshot/load` time). `meta_path`/`state_path`/`mem_path`/
-  `move_file`/`write_atomically` are `pub(crate)` specifically so
-  `snapshot_history.rs` can reuse them — same directory-layout convention,
-  same file-safety primitives, no reason to duplicate either.
-- `snapshot_history.rs` — `RetiredSnapshot`: "time-travel restore"'s
-  checkpoint type, `state.retired_snapshots`'s value. See its own module
-  doc comment for the full design; the one-line version: resuming a
-  snapshot retires it here instead of deleting it, so it stays
-  restorable (`routes_snapshot_history::restore_snapshot_history_by_id`)
-  as many times as wanted rather than being a one-shot. Deliberately
-  holds a bare `NetworkConfig`/`host_octet`, **not** a live
-  `sandkiln_vmm::network::Lease` — nothing is reserved out of
-  `NetworkManager`'s free pool just because a checkpoint sits in history;
-  a lease is only ever reserved at actual restore time, gated by
-  `AppState::tap_device_holder`. `reconcile()` mirrors `snapshot::reconcile`'s
-  shape closely but **never touches `NetworkManager`** — no lease to
-  reclaim — called from `main.rs` alongside (order-independent from)
-  `snapshot::reconcile`.
-- `routes_snapshot_history.rs` — `GET /snapshots/history` (same
-  `?source_sandbox_id=`/`?parent_snapshot_id=` filter shape as
-  `routes_snapshot::list_snapshots`), `POST /snapshots/history/:id/restore`,
-  and `DELETE /snapshots/history/:id`. `restore_snapshot_history_by_id`
-  is the real mechanics: refuses (409) if `AppState::tap_device_holder`
-  finds this checkpoint's frozen network identity already live/held/
-  mid-restore, otherwise clones its rootfs fresh, resumes the VM from
-  its retained `state.snap`/`mem.bin`, and reserves a fresh `Lease` for
-  the new sandbox (`NetworkManager::reserve`, same call
-  `snapshot::reconcile` uses at startup — safe here specifically because
-  of the guard above, which that startup call doesn't need since nothing
-  else can be live yet at that point). The resulting sandbox has
-  `source_snapshot_id: None` (owns its lease/rootfs outright, unlike a
-  fork) and `parent_snapshot_id: Some(checkpoint id)` — restoring doesn't
-  consume the checkpoint, so a caller can restore the same one again
-  later. `DELETE /snapshots/history/:id` was added specifically because
-  retention has a real, unbounded disk cost with no cleanup otherwise —
-  see `ROADMAP.md`'s "Persistence and snapshotting" section for the live
-  finding that made this non-optional.
-- `routes_drives.rs` / `routes_snapshot.rs` — drives and snapshot/resume
-  handlers, each in their own file for the same reason as above. The
-  actual pause/snapshot/stop mechanics live in `snapshot_and_stop()`, the
-  actual resume mechanics in `resume_snapshot_by_id()`, the actual delete
-  mechanics in `delete_snapshot_by_id()`, and the actual archive mechanics
-  in `archive_snapshot_by_id()` — all four `pub(crate)`, all reused
-  elsewhere in this crate (`snapshot_and_stop`/`resume_snapshot_by_id` by
-  `routes_sandbox`'s persistent-by-default
-  stop, `routes_sandbox_name`'s get-or-create, `idle_reaper`'s
-  auto-suspend, and now `pool`/`pool_replenisher`/`routes_sandbox`'s
-  claim path; `delete_snapshot_by_id` by `routes_pool::delete_pool`'s
-  warm-snapshot cleanup) so there's exactly one place that knows what
-  "snapshot this sandbox" / "resume this snapshot" / "delete this
-  snapshot" / "archive this snapshot" means. `archive_snapshot_by_id` is
-  only ever called by `idle_reaper` today — no `POST /snapshots/:id/archive`
-  route exists yet to trigger it on demand, a deliberately deferred
-  follow-up. `check_snapshottable`/
-  `SnapshotBlocked` refuses to snapshot a jailed sandbox (`Vm::is_jailed`)
-  — `Vm::resume` only ever spawns directly, so a jailed sandbox's snapshot
-  could never be resumed correctly; see `sandkiln_vmm::jailer`'s module doc
-  comment before changing this — or a sandbox that doesn't own its network
-  lease outright (`source_snapshot_id.is_some()` — a fork; see
-  `Sandbox::source_snapshot_id`'s doc comment for why sharing the *lease*,
-  not the rootfs, is what actually makes this unsafe now). `list_snapshots`
-  takes an optional `?source_sandbox_id=` filter (a sandbox id that became
-  a snapshot) and `?parent_snapshot_id=` (see `crate::snapshot::Snapshot::
-  parent_snapshot_id` — snapshot lineage).
-  `resume_snapshot_by_id()` takes a `retain_history: bool` — see
-  `crate::snapshot_history`'s module doc comment for "time-travel
-  restore," the feature that made this parameter necessary: by default
-  (`true`) it retires the checkpoint it consumes instead of deleting it
-  (`retire_snapshot_files`, run on a blocking thread since it shells out
-  to `cp` for the new sandbox's private rootfs clone), falling back to
-  the original delete-and-reuse-directly behavior as a loud warning, not
-  a fatal error, if retiring fails partway (the VM has already resumed
-  successfully by that point — a history-retention hiccup must never
-  turn a real resume success into a failure response).
-  `fork_snapshot()` gives every fork its own private rootfs clone now
-  too (`routes_sandbox::clone_rootfs`), fatal on failure unlike resume's
-  retention — see that function's own doc comment for the real,
-  pre-existing sequential-corruption bug this fixes (found live while
-  building time-travel restore, not part of that feature's original
-  scope).
-- `routes_metrics.rs` — the `/metrics` handler. Unauthenticated like
-  `/healthz` (wired directly on `app` in `main.rs`, not through either
-  auth-gated router) since it's operational data about the daemon, not
-  sandbox data.
-- `routes_preview.rs` — the `GET/POST/... /sandboxes/:id/preview/:port[/*path]`
-  reverse proxy: forwards a full HTTP request to
-  `http://<sandbox guest ip>:<port>/<path>` on the bridge network
-  (`sandkiln_vmm::network::Lease::config.guest_ip`) via `AppState::preview_client`
-  (a `hyper_util::client::legacy::Client`, built once in `state::build_preview_client`
-  so requests reuse pooled connections), and streams the response straight
-  back. Its own router in `main.rs`, guarded by `auth::require_preview_token`
-  instead of `auth::require_bearer_token` — see that middleware's doc
-  comment and this module's doc comment for the auth reasoning (short
-  version: a browser navigating directly to a preview URL can't attach an
-  `Authorization` header, so this route also accepts the token as a
-  `?token=` query parameter, which is then stripped, along with the
-  `Authorization` header itself, before anything is forwarded to the
-  guest — the guest runs untrusted/AI-generated code and must never see
-  this API's credential). Connection-refused/unreachable maps to
-  `AppError::BadGateway` (502); no response within `Config::preview_timeout`
-  maps to `AppError::GatewayTimeout` (504) — see `error.rs`.
-- `routes_pty.rs` — `GET /sandboxes/:id/pty[?cols=&rows=]`: upgrades to a
-  WebSocket and proxies raw bytes to a shell running inside the sandbox,
-  via `sandkiln_vmm::vm::Vm::open_pty` — a fundamentally different shape
-  from every other route in this crate (all one-request-one-response;
-  this is a live, long-lived, bidirectional session). Its own router in
-  `main.rs`, guarded by `auth::require_preview_token` for exactly the
-  same reason as `routes_preview.rs` above: neither a browser's nor
-  Node.js's native `WebSocket` constructor can set custom headers, so
-  header-only `require_bearer_token` auth can't work here. Enforces
-  `MAX_PTY_SESSIONS_PER_SANDBOX` (64) via `Sandbox::pty_session_count`
-  and a `PtySessionGuard` whose `Drop` decrements it on every exit path
-  (clean close, error, or the task simply being dropped). See
-  `sandkiln-guest-agent`'s `pty.rs` for the other end of the connection
-  and the real hangup-handling bug found and fixed there — this route's
-  own `proxy_pty` just needs both `tokio::select!` arms to end the
-  session as soon as either side does, which was already correct; the
-  bug was entirely guest-side.
-- `log_session.rs` / `routes_logs.rs` — streamed background exec
-  sessions (`kiln logs`/`kiln sandbox exec-stream`): `POST
-  /sandboxes/:id/exec-stream` starts a command detached inside the guest
-  via `Vm::open_exec_stream` and returns immediately; a `spawn_blocking`
-  "pump" task (`routes_logs::pump_exec_stream`) reads framed
-  `ExecStreamEvent`s off that connection for as long as it stays open,
-  appending merged stdout/stderr into a `LogSession` (a bounded 1MiB ring
-  buffer plus a `tokio::sync::broadcast` channel) — independent of
-  whether anyone is attached. `GET .../exec-stream/:id/logs` (a
-  WebSocket, in the same `require_preview_token`-guarded router as
-  `routes_pty.rs` above, for the same reason) replays that buffer then
-  live-tails it; can be called any number of times, including after the
-  process has already finished. `LogSession` lives in its own file
-  (`log_session.rs`) rather than `routes_logs.rs` itself, same
-  pure-state/HTTP-surface seam `pool.rs`/`routes_pool.rs` already draw.
-  Not carried across resume/fork/restore and doesn't survive a daemon
-  restart — same in-memory-only scope as `Sandbox::pty_session_count`,
-  not a limitation unique to this feature. See either file's own module
-  doc comment for the full design and why a background process needed a
-  third vsock port (`EXEC_STREAM_PORT`) rather than reusing `PTY_PORT` or
-  a new `Request` variant.
-- `error.rs` — `AppError`, the one error type every handler returns.
-  Add a variant here rather than inventing a new ad hoc error shape.
+- **`state.rs`** — `AppState`: config, `NetworkManager`, optional
+  `JailerIdPool`, in-memory `Mutex<HashMap<String, Sandbox>>` (the
+  daemon's entire live-state notion — doesn't survive a restart, and per
+  `sandkiln-store`'s own doc comment can't realistically be re-adopted).
+  `AppState::history` is the separate durable "did this exist and how
+  did it end" answer. Also owns: naming (`name_holder`/`resolve_name`,
+  live wins over snapshot; `lock_name` serializes concurrent claims of
+  one name); `drives`/`images` plus `drive_holder()`/`image_holder()`
+  ("who holds this" across live sandboxes + held snapshots, the
+  mechanism that prevents double-attaching a drive); `pools` (in-memory
+  only, not reconciled from disk — see `pool.rs`); `retired_snapshots`
+  (time-travel restore) plus `tap_device_holder()`, the same ownership
+  check extended to cover a lease-less retired checkpoint and an
+  in-flight restore. `image_holder`/`tap_device_holder` share a
+  `first_match()` walk; `drive_holders()` stays separate since it
+  returns *every* matching holder (multiple read-only holders are
+  legitimate), not just the first.
+- **`sandbox.rs`** — `Sandbox`: id, `Vm` handle, `Lease`, rootfs path,
+  tags, timestamps, `image_id` (`None` = daemon default rootfs),
+  `jail_id`, `name`, `pty_session_count` (`Arc<AtomicU32>`, survives past
+  the lock it was incremented under), `egress` (`None` for a fork — tied
+  to the lease, which the snapshot owns, not the forked record),
+  `parent_snapshot_id` (lineage; a **separate** field from
+  `source_snapshot_id` — conflating them was a real bug: `source_snapshot_id.is_some()`
+  is what refuses re-snapshotting a fork, and must stay `None` on resume
+  so a resumed sandbox stays snapshottable, while lineage needs `Some`
+  on both), and `env` (unlike `egress`, identical on resume *and* fork —
+  plain data, no external resource to protect).
+- **`routes_sandbox.rs`** — create/list/stop/history.
+  `create_sandbox_cold` times the rootfs clone and network lease each on
+  their own thread (`timed` + `thread::scope`) and records sub-phases via
+  `metrics::CreatePhase` — filter with `RUST_LOG=sandkilnd=debug` (the
+  **binary** name; `sandkiln_daemon` matches nothing).
+  `stop_sandbox_by_id()` is the shared stop path (used by `DELETE` and
+  `idle_reaper`): defaults to snapshot-then-stop,
+  `destroy_sandbox_by_id()` reached via `?keep=false` or as the correct
+  fallback for a fork (nothing to preserve) or a jailed sandbox (can't
+  snapshot). Both release a stopped sandbox's `source_pool_id` slot back
+  to its pool. `create_sandbox_core()` is the shared boot logic (also
+  used by `get_or_create_sandbox`): resolves name-uniqueness, which
+  rootfs to clone, reserves a pending-image-boot claim around the clone
+  so a concurrent `DELETE /images/:id` can't race it, and tries a
+  pre-warmed pool claim first when the request has no `drives`/
+  `rate_limit`. `resolve_egress_policy` validates every CIDR up front
+  (`400` naming the bad one); unlike `drives`/`rate_limit`, egress
+  doesn't disqualify a pool claim (it's host-side iptables applied after
+  boot, not baked into Firecracker state) — fatal-on-failure for a fresh
+  create/claim, loud-warning-only for resume/fork (destroying a
+  one-way-operation success over an iptables hiccup would be worse).
+- **`routes_sandbox_name.rs`** — `GET /sandboxes/by-name/:name` (live
+  only; a name held by a snapshot is `409`, not a silent resume) and
+  `POST /sandboxes/get-or-create` (race-safe under `lock_name`).
+- **`routes_images.rs`** — register/list/delete a managed rootfs.
+  `guest_agent_verified: false` always — the daemon can't loop-mount to
+  check; `scripts/preflight-check.sh --root-checks` is the out-of-band
+  way. `DELETE` refuses while any live/in-flight/held reference exists.
+- **`routes_exec.rs`** — exec/read-file/write-file. `call_agent()` is the
+  shared helper (also used by `routes_fs.rs`) — extend it, don't
+  duplicate. `resolve_env()` merges create-time + per-call `env` (call
+  wins); `routes_logs.rs` inlines the same merge rather than importing
+  it since it already holds the sandbox-map lock at that point.
+- **`routes_fs.rs`** — chmod/chown/mkdir/rename/copy/symlink/readlink/
+  truncate/list-dir. No path validation here, matching
+  `read_file`/`write_file` — deliberate consistency, not an oversight.
+- **`routes_mounts.rs`** — `rclone mount` of an S3-compatible bucket,
+  built entirely on `call_agent`/`Mkdir`/`WriteFile`/`Chmod`/`Exec` — no
+  new wire protocol. Credentials go in as a `0600` config file, never a
+  CLI arg. No holder-tracking (concurrent mounts of one bucket aren't a
+  corruption risk) and no re-application on resume/fork (a mount is a
+  live guest FUSE process, captured by Firecracker's own snapshot).
+- **`pool.rs`** — pure pool state/matching logic; see
+  `docs/architecture/02-vm-boot-and-latency.md` for the full design.
+  `Pool::notify` wakes `pool_claim::resolve_pool_claim` on a
+  `max_count`-bounded pool — condvar-style, every waiter re-checks on
+  wake.
+- **`pool_replenisher.rs`** — unconditional background task, tops up
+  every pool one warm slot per 2s tick (gradual, not a load spike).
+- **`pool_claim.rs`** — `resolve_pool_claim`/`PoolClaim`
+  (`Warm`/`ColdSlot`/`NoPool`), `PoolClaimGuard` (RAII commit-or-release),
+  `claim_from_pool` (resume + health check + bounded `Vm::update_metadata`
+  retry for the MMDS settling-window race). Split out of
+  `routes_sandbox.rs` once claiming pushed it past a defensible size.
+- **`routes_pool.rs`** — pool *configuration* only (`max_count`, rejects
+  explicit `0` — omit for unbounded). `DELETE` wakes queued waiters first
+  so they fail clearly instead of timing out on a pool that's gone.
+- **`idle_reaper.rs`** — unconditional background task; see
+  `docs/architecture/02-vm-boot-and-latency.md`. Runs auto-suspend, then
+  destroy, then an independent archive pass each tick.
+- **`snapshot.rs`** — `Snapshot` + durability: atomic `meta.json`
+  write-then-rename, `reconcile()` rebuilds `AppState::snapshots` from
+  disk (hot dir + archive dir, filesystem is the source of truth, same
+  pattern as `DriveStore::list()`) — a snapshot missing any of its three
+  files is treated as a crash-mid-write and skipped with a warning.
+  `Snapshot.egress`/`parent_snapshot_id` are `#[serde(default)]` for
+  forward compat. `move_snapshot_files` **never touches `rootfs_path`** —
+  its absolute host path is baked into `state.snap` itself, moving it
+  breaks every future resume/fork (proved live).
+- **`snapshot_history.rs`** — `RetiredSnapshot` (time-travel restore):
+  resuming retires a snapshot here instead of deleting it, restorable
+  repeatedly. Holds a bare `NetworkConfig`, not a live `Lease` — nothing
+  is reserved from the free pool just by sitting in history, only at
+  actual restore time, gated by `tap_device_holder`.
+- **`routes_snapshot_history.rs`** — history list/restore/delete.
+  `restore_snapshot_history_by_id` refuses (`409`) if the checkpoint's
+  network identity is already live/held/mid-restore, else clones rootfs
+  fresh and reserves a new lease. Resulting sandbox:
+  `source_snapshot_id: None`, `parent_snapshot_id: Some(checkpoint)` —
+  restoring doesn't consume it.
+- **`routes_drives.rs` / `routes_snapshot.rs`** — the real mechanics
+  (`snapshot_and_stop`, `resume_snapshot_by_id`, `delete_snapshot_by_id`,
+  `archive_snapshot_by_id`, all `pub(crate)`) live here, reused
+  everywhere else in the crate so there's exactly one definition of each
+  operation. `check_snapshottable` refuses a jailed sandbox (can never be
+  resumed correctly) or a fork (doesn't own its lease outright).
+  `resume_snapshot_by_id`'s `retain_history: bool` defaults to retiring
+  (not deleting) the checkpoint — falls back to delete-and-reuse as a
+  loud warning, not a fatal error, if retiring fails after the VM already
+  resumed. `fork_snapshot()` gives every fork its own private rootfs
+  clone (fixes a real sequential-corruption bug, found live).
+- **`routes_metrics.rs`** — unauthenticated like `/healthz` (operational
+  data, not sandbox data).
+- **`routes_preview.rs`** — reverse-proxies to
+  `http://<guest ip>:<port>/<path>` on the bridge network via a pooled
+  `hyper_util` client. Own router, `require_preview_token` (a browser
+  can't set `Authorization` on a plain navigation — token stripped,
+  along with any real `Authorization` header, before forwarding to the
+  untrusted guest). `BadGateway`/`GatewayTimeout` on
+  unreachable/timeout.
+- **`routes_pty.rs`** — WebSocket → `Vm::open_pty` raw byte proxy, a
+  fundamentally different (long-lived, bidirectional) shape from every
+  other route. `require_preview_token` for the same header-limitation
+  reason. `MAX_PTY_SESSIONS_PER_SANDBOX` (64) via a `PtySessionGuard`
+  whose `Drop` always decrements.
+- **`log_session.rs` / `routes_logs.rs`** — `POST .../exec-stream` starts
+  a detached command and returns immediately; a `spawn_blocking` pump
+  reads framed events into a `LogSession` (1MiB ring buffer +
+  `broadcast` channel) independent of whether anyone's attached.
+  `GET .../logs` replays then live-tails, callable any number of times.
+  Not carried across resume/fork/restart.
+- **`error.rs`** — `AppError`, the one error type every handler returns.
 
-## Building, running, and verifying
+## Building and verifying
 
-See root `AGENTS.md`'s full checklist (sync → build → clippy → grant
-`CAP_NET_ADMIN` if rebuilt → run with real env vars → drive it with curl
-or a real client → clean up). The short version specific to this crate:
-`cargo build -p sandkiln-daemon` catches compile errors; nothing short of
-actually starting `sandkilnd` and hitting its HTTP API proves a route
-works. **Every route in this file was live-tested against a real running
-daemon before being called done — do not skip that step because "it
-typechecks."** The `DELETE` status-code bug (200 instead of documented
-204) is the canonical example of a bug that compiled and clippy-passed
-cleanly but was still wrong.
+`cargo build -p sandkiln-daemon` catches compile errors only — every
+route needs live verification against a real running daemon (the
+DELETE-status-code bug compiled and clippy-passed cleanly but was still
+wrong).
 
-## Non-obvious things specific to this crate
+## Non-obvious things
 
-- **New route handlers that touch the sandbox map or `vmm` should go in
-  their own `routes_*.rs` file** — when multiple people (or parallel
-  agents) are adding features concurrently, a shared file is a
-  guaranteed merge-conflict point, and this is also why `routes.rs` got
-  split into `routes_sandbox.rs`/`routes_exec.rs` once it grew past
-  ~300 lines. Wire new routers into `main.rs`'s route composition the
-  same way the existing ones are.
-- **The sandbox map lock is a plain `std::sync::Mutex`, held across
-  blocking calls inside `spawn_blocking`.** This is fine because those
-  calls happen off the async runtime's threads, but don't assume you can
-  `.await` while holding it — you can't, it's a sync mutex, not
-  `tokio::sync::Mutex`, and that's deliberate (the lock only ever
-  protects synchronous, fast-ish operations).
-- Every route that boots or modifies a VM does real, possibly slow I/O
-  (rootfs copy, network lease, Firecracker API calls) — that's why it
-  runs inside `tokio::task::spawn_blocking`, not directly in an async
-  handler. Follow that pattern for new VM-touching routes; don't block
-  the async runtime's worker threads directly.
-- **`/sandboxes/:id/preview/:port` is deliberately not behind the same
-  bearer-token middleware as the rest of `/sandboxes*`.** It has its own
-  (`auth::require_preview_token`) that accepts the token via a `?token=`
-  query parameter as well as the `Authorization` header, because the
-  thing hitting this URL is normally a browser tab or an `<iframe>`
-  embedding a sandbox's dev server — neither can set a custom header on a
-  plain navigation. This is still gated behind `SANDKILN_AUTH_TOKEN` when
-  one is configured (no-op when it isn't, same as the rest of the API);
-  the tradeoff accepted here is that a preview link, once handed out, is a
-  bearer credential in URL form (referrer leakage, shell history, browser
-  history) — reasonable for a short-lived dev-preview link, not something
-  to reuse as a general auth pattern elsewhere in this API.
-- **WebSocket proxying (for a dev server's HMR/live-reload) is explicitly
-  out of scope for the initial `/preview` implementation.** The route
-  proxies plain request/response HTTP; an `Upgrade: websocket` request
-  currently just gets `Connection`/`Upgrade` stripped as hop-by-hop
-  headers like any other, which will not upgrade correctly. Real support
-  needs the daemon to detect the upgrade request, hijack both the
-  client-facing and guest-facing connections, and pump bytes between them
-  — a distinct enough problem (and untested without a live dev server
-  actually using HMR) that it's a deliberate follow-up, not folded into
-  this change.
+- New route handlers touching the sandbox map or `vmm` get their own
+  `routes_*.rs` — a shared file is a guaranteed merge-conflict point for
+  parallel agents.
+- The sandbox map lock is `std::sync::Mutex`, held across blocking calls
+  inside `spawn_blocking` — never `.await` while holding it.
+- VM-touching routes do real, possibly slow I/O — run them in
+  `spawn_blocking`, don't block the async runtime directly.
+- `/preview` isn't behind the normal bearer middleware — it accepts
+  `?token=` because a browser tab/`<iframe>` can't set a header. Still
+  gated behind `SANDKILN_AUTH_TOKEN` when one's configured. Accepted
+  tradeoff: a handed-out preview link is a bearer credential in URL form.
+- WebSocket proxying (dev-server HMR) is out of scope for `/preview` —
+  an `Upgrade` request just gets its headers stripped like any other
+  hop-by-hop header, won't upgrade correctly. Real support needs the
+  daemon to hijack both connections and pump bytes — a distinct,
+  deliberate follow-up.
