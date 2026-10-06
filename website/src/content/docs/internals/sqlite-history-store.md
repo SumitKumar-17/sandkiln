@@ -70,6 +70,13 @@ $ curl -s 'http://127.0.0.1:7777/sandboxes/history?limit=1'
 
 The row survives even though the sandbox itself is gone from `GET /sandboxes`. That's the entire point of a separate durable store.
 
+:::tip[Two pragmas, ~51x]
+`journal_mode=WAL` + `synchronous=NORMAL` instead of SQLite's defaults cut a
+history write from a measured mean of 1897.8µs to 37.1µs on the same disk —
+safe here specifically because this store's writes were already best-effort
+by design (below).
+:::
+
 ### The pragma change, measured
 
 Before this session, `HistoryStore::open` used SQLite's own defaults (`journal_mode=DELETE`, `synchronous=FULL`): fsync twice per write, once for the journal and once for the database file. That measured at **~9.24ms on a real cold create's critical path** (5.5% of the total create time). An isolated A/B on the same disk, 20 sequential `record_created` calls, default settings against the fix, nothing else running, measured:

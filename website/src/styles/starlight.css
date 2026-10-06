@@ -152,3 +152,156 @@
 a.site-title {
   text-decoration: none;
 }
+
+/* Starlight's stock aside component ships four tinted hues (blue/purple/
+   orange/red backgrounds) that were never mapped onto this system's tokens
+   -- unthemed, a ":::tip" would render as a jarring stock-purple box on an
+   otherwise one-hue page. Re-themed onto the existing achromatic/solid-vs-
+   dashed vocabulary the status squares and finding rules already use
+   elsewhere on the site, rather than inventing new colour for "caution": a
+   note/tip gets the one accent hue and a solid rule (settled, worth
+   reading); a caution/danger gets no colour at all and a dashed rule
+   (unresolved, a flag rather than a fact) -- the same solid/dashed meaning
+   tokens.css already assigns to findings. */
+.starlight-aside {
+  background: var(--well);
+  padding: var(--s-4) var(--s-5);
+  border-inline-start-width: 2px;
+  border-inline-start-color: var(--flare);
+}
+
+.starlight-aside--caution,
+.starlight-aside--danger {
+  border-inline-start-style: dashed;
+  border-inline-start-color: var(--rule-strong);
+}
+
+.starlight-aside--note .starlight-aside__title,
+.starlight-aside--tip .starlight-aside__title {
+  color: var(--flare);
+}
+
+.starlight-aside--caution .starlight-aside__title,
+.starlight-aside--danger .starlight-aside__title {
+  color: var(--ink-2);
+}
+
+.starlight-aside__title {
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.starlight-aside__content {
+  font-size: var(--t-sm);
+}
+
+.starlight-aside__content > :last-child {
+  margin-bottom: 0;
+}
+
+.starlight-aside__icon {
+  display: none;
+}
+
+/* ---------------------------------------------------------- markdown tables
+
+   The marketing pages' own data tables (the crate stack, the benchmark
+   breakdowns) are plain hairline rows with no fill, no border box, and a
+   right-aligned numeric column -- the same "plate, not card" vocabulary as
+   everything else. Markdown tables default to a boxed grid instead, which
+   is the one place a docs page visibly uses a different visual language
+   than the marketing page sitting right next to it in the nav. */
+.sl-markdown-content table {
+  width: 100%;
+  margin-block: var(--s-5);
+}
+
+.sl-markdown-content thead tr {
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.sl-markdown-content tbody tr {
+  border-bottom: 1px solid var(--rule);
+}
+
+.sl-markdown-content :is(th, td) {
+  padding: var(--s-3) var(--s-4) var(--s-3) 0;
+  text-align: left;
+  vertical-align: baseline;
+}
+
+.sl-markdown-content :is(th, td):last-child {
+  padding-right: 0;
+}
+
+/* A column of right-aligned figures reads as data rather than prose --
+   applied via a markdown-table alignment colon (":--" / "--:"), which
+   GFM already renders as a `text-align` inline style per cell; this just
+   keeps the numerals tabular once that alignment is in play. */
+.sl-markdown-content td[style*="text-align: right"],
+.sl-markdown-content td[style*="text-align:right"] {
+  font-variant-numeric: tabular-nums;
+  color: var(--flare);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------- key-term lists
+
+   Every "Key terms" section across the Internals pages is the same
+   markdown shape: "- **Term.** definition." As a plain bullet it reads as
+   one more list in a page full of lists. Styled as a term-over-definition
+   pair instead -- the term lifted into the accent colour as its own line,
+   the bullet mark dropped since the term itself now carries that role --
+   it reads the way a glossary actually should, with no change to the
+   source markdown. */
+.sl-markdown-content li > strong:first-child {
+  display: block;
+  color: var(--flare);
+  font-weight: 600;
+}
+
+.sl-markdown-content :is(ul, ol) li:has(> strong:first-child) {
+  list-style: none;
+  margin-inline-start: calc(-1 * var(--s-5));
+  padding-block: var(--s-1);
+}
+
+/* --------------------------------------------------------- docs landing page
+
+   Five rows, same shape as the marketing architecture page's crate stack:
+   a fixed-width label, a hairline rule, generous vertical padding -- the
+   docs index's first impression matching the rest of the site instead of
+   being the one page that's still a plain paragraph of links. */
+.docs-start {
+  margin-top: var(--s-6);
+  border-top: 1px solid var(--rule-strong);
+}
+
+.docs-row {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: var(--s-2) var(--s-5);
+  padding: var(--s-5) 0;
+  border-bottom: 1px solid var(--rule);
+  align-items: baseline;
+}
+
+.docs-row-label {
+  font-size: var(--t-xs);
+  font-weight: 600;
+  color: var(--flare);
+}
+
+.docs-row-body {
+  font-size: var(--t-body);
+  color: var(--ink-2);
+  max-width: var(--measure);
+}
+
+@media (max-width: 700px) {
+  .docs-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

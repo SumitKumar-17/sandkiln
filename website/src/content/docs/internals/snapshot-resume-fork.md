@@ -40,6 +40,13 @@ This is the standard technique for closing the gap between "a cold boot is fast"
 
 **Time-travel restore.** Resume's "the snapshot is gone once you move forward from it" used to be unconditional. By default now, `POST /snapshots/:id/resume` still consumes the snapshot *record* the same way, but retires the underlying checkpoint into `GET /snapshots/history` instead of deleting its files, restorable again later via `POST /snapshots/history/:id/restore`, as many times as wanted, since restoring doesn't consume it either (`?retain_history=false` opts back into the fully-destructive original behavior). A restored sandbox owns a fresh rootfs clone and lease outright, exactly like a resume, which is also why it stays snapshottable afterward, unlike a fork. The same one-live-descendant lock generalizes across a whole lineage's history: restoring is refused with `409` while anything else sharing that checkpoint's frozen network identity is currently live.
 
+:::note[Why only one live fork]
+Firecracker has no mechanism to give two live descendants of one snapshot
+independent network identities. Rather than risk a silent IP/MAC collision,
+`Snapshot::forked_into` locks a snapshot to at most one live fork at a time —
+a second attempt gets a real `409`, not corruption.
+:::
+
 ## See it in action
 
 Fork the same snapshot twice in a row. This is the daemon's own concurrency lock, captured live:

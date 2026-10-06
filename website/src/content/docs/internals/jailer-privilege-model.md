@@ -33,6 +33,13 @@ There's a real, structural reason the daemon can't do any of this itself without
 
 **Where this stands today, stated plainly.** jailer support is opt-in (`SANDKILN_JAILER_ENABLED`) and off by default, so every sandbox still boots via a direct Firecracker spawn unless explicitly turned on. It's built, and its own logic (chroot path-rewriting, cgroup limit calculation, uid/gid pooling) has unit tests, but it is **not yet proven working end to end on real hardware**. The one real-hardware attempt so far (2026-09-08) failed every `POST /sandboxes`: jailer itself hit `Operation not permitted` trying to `chown` a hard-linked file into the chroot, because the `jailer` binary needs to be made setuid-root as a separate, one-time manual step (`SELF_HOSTING.md`'s "Optional: jailer-based sandbox boot") that simply hadn't been done yet on that box. That's not a code bug in sandkiln's jailer integration. It's an unmet setup precondition, caught live rather than assumed, but it does mean jailer-based booting should be verified on your own hardware before relying on it for a genuinely adversarial workload, not treated as already proven. Snapshotting a jailed sandbox also isn't supported (`400`): jailer support covers the initial boot only, and `Vm::resume` always spawns directly regardless of whether the original sandbox was jailed.
 
+:::caution[Not yet proven on real hardware]
+Direct Firecracker spawn (today's default) is the verified path. jailer mode
+is opt-in, unit-tested, and the one real-hardware attempt so far failed on an
+unmet setup precondition (see below) — verify it yourself before relying on
+it for a genuinely adversarial workload.
+:::
+
 ## See it in action
 
 Checking whether jailer mode is on for the currently running daemon, and what a plain (non-jailed) sandbox create looks like today, the default, verified-working path:
