@@ -3,27 +3,21 @@ export interface SandboxOptions {
   authToken?: string;
 }
 
-/** Caps host I/O for a sandbox via Firecracker's own token-bucket rate
- * limiter, applied to the rootfs drive, every attached drive, and both
- * directions of the network interface. At least one of the two fields
- * must be set (and non-zero) if this is present at all — the daemon
- * rejects an empty or all-zero `rateLimit` with a 400, the same
- * "reject, don't silently no-op" convention as `vcpuCount`/`memSizeMib`. */
+/** Caps host I/O via Firecracker's token-bucket rate limiter, applied to
+ * the rootfs, every attached drive, and the network interface. At least
+ * one field must be set and non-zero if present at all — the daemon
+ * rejects an empty/all-zero `rateLimit` with 400. */
 export interface RateLimitOptions {
   bandwidthBytesPerSec?: number;
   opsPerSec?: number;
 }
 
-/** Outbound (egress) network policy for a sandbox — enforced with one
- * dedicated iptables chain per sandbox, `denyCidrs` always winning over
- * `allowCidrs` on overlap (deny rules are appended first, and iptables
- * evaluates a chain top-to-bottom, first match wins). `"deny_all"` blocks
- * everything except what `allowCidrs` explicitly opens back up;
- * `"allow_all"` (today's default when `egress` is omitted entirely)
- * allows everything except what `denyCidrs` explicitly blocks.
- * Gateway-bound traffic (DNS to the bridge's own IP) is structurally
- * exempt from either mode — it never transits the uplink this policy
- * scopes to. Survives `snapshot()`/`resume()`/`fork()`. */
+/** Outbound network policy — one iptables chain per sandbox, `denyCidrs`
+ * always winning on overlap (deny rules precede allow, first match
+ * wins). `"deny_all"` blocks everything except `allowCidrs`; `"allow_all"`
+ * (default) allows everything except `denyCidrs`. DNS to the bridge's
+ * own gateway IP is structurally exempt either way. Survives
+ * `snapshot()`/`resume()`/`fork()`. */
 export interface EgressPolicyOptions {
   mode: "allow_all" | "deny_all";
   allowCidrs?: string[];
@@ -31,45 +25,33 @@ export interface EgressPolicyOptions {
 }
 
 export interface CreateSandboxOptions extends SandboxOptions {
-  /** Caller-given identity, unique among live sandboxes and held
-   * snapshots at the moment it's claimed — the daemon rejects a taken
-   * name with a 409. Optional; omit for an anonymous sandbox, same as
-   * before this existed. See `Sandbox.byName`/`Sandbox.getOrCreate` for
-   * finding a named sandbox again later. */
+  /** Unique among live sandboxes and held snapshots when claimed — 409
+   * if taken. Optional. See `Sandbox.byName`/`getOrCreate`. */
   name?: string;
   tags?: Record<string, string>;
-  /** Overrides the daemon's configured default vCPU count for this one
-   * sandbox. Rejected by the daemon if it's `0` or exceeds the daemon's
-   * configured ceiling (`SANDKILN_MAX_VCPU_COUNT`). */
+  /** Overrides the daemon default vCPU count. Rejected if `0` or past
+   * `SANDKILN_MAX_VCPU_COUNT`. */
   vcpuCount?: number;
-  /** Overrides the daemon's configured default memory size (MiB) for
-   * this one sandbox. Same ceiling semantics as `vcpuCount`, checked
-   * against `SANDKILN_MAX_MEM_SIZE_MIB`. */
+  /** Overrides the daemon default memory (MiB). Same ceiling semantics
+   * as `vcpuCount`, checked against `SANDKILN_MAX_MEM_SIZE_MIB`. */
   memSizeMib?: number;
-  /** Boots from a registered image (see `Image.register`) instead of the
-   * daemon's configured default rootfs. Omitted means today's behavior,
-   * unchanged. Rejected if no image with this id is currently
-   * registered. */
+  /** Boots from a registered image (`Image.register`) instead of the
+   * default rootfs. Rejected if the id isn't registered. */
   imageId?: string;
-  /** Unlimited host I/O (the default) when omitted. See `RateLimitOptions`. */
+  /** Unlimited host I/O when omitted. See `RateLimitOptions`. */
   rateLimit?: RateLimitOptions;
-  /** Existing persistent drives (see `Drive.create`) to attach at boot,
-   * each becoming its own block device inside the guest. A read-write
-   * attachment (the default, `readOnly` omitted or `false`) needs
-   * exclusive access — rejected with a 409 if the drive is already
-   * attached anywhere; a `readOnly: true` attachment may coexist with
-   * any number of other read-only attachments of the same drive, but
-   * still conflicts with an existing read-write one. Omitted means no
-   * drives, unchanged from before this existed. */
+  /** Persistent drives (`Drive.create`) to attach at boot. Read-write
+   * (default) needs exclusive access — 409 if already attached anywhere;
+   * `readOnly: true` may coexist with other read-only attachments, but
+   * still conflicts with an existing read-write one. */
   drives?: DriveAttachmentOptions[];
-  /** Baked in for this sandbox's whole lifetime: merged as the base layer
-   * under any `env` passed to `runCommand()`/`execStream()` (those win on
-   * a key conflict), so a variable doesn't need repeating on every call.
-   * Persists through `snapshot()`/`resume()`/`fork()`, exactly like `tags`. */
+  /** Baked in for this sandbox's whole lifetime — the base layer under
+   * any `env` passed to `runCommand()`/`execStream()` (those win on
+   * conflict). Persists through `snapshot()`/`resume()`/`fork()` like
+   * `tags`. */
   env?: Record<string, string>;
-  /** Omitted means today's behavior, unchanged: unrestricted outbound
-   * through the shared bridge's existing catch-all rule. See
-   * `EgressPolicyOptions`. */
+  /** Omitted = unrestricted outbound via the shared bridge's catch-all
+   * rule. See `EgressPolicyOptions`. */
   egress?: EgressPolicyOptions;
 }
 
@@ -78,10 +60,9 @@ export interface DriveAttachmentOptions {
   readOnly?: boolean;
 }
 
-/** `tags`/`vcpuCount`/`memSizeMib`/`rateLimit`/`egress` are used only
- * when `Sandbox.getOrCreate` actually creates a fresh sandbox — resuming
- * an existing snapshot under this name ignores them, using what was
- * recorded on it when it was taken, same as `Sandbox.resume`. */
+/** `tags`/`vcpuCount`/`memSizeMib`/`rateLimit`/`egress` apply only when
+ * `getOrCreate` creates fresh — resuming an existing snapshot ignores
+ * them, using what was recorded at snapshot time, like `resume`. */
 export interface GetOrCreateSandboxOptions extends SandboxOptions {
   name: string;
   tags?: Record<string, string>;
@@ -160,9 +141,8 @@ export interface ExecRequestBody {
   env?: Record<string, string>;
 }
 
-/** Options for `Sandbox.runCommand()`/`Sandbox.execStream()` — merged on
- * top of the sandbox's own create-time `env` (this wins on a key
- * conflict), not a replacement for it. */
+/** Merged on top of the sandbox's create-time `env` (wins on conflict),
+ * not a replacement for it. */
 export interface RunCommandOptions {
   env?: Record<string, string>;
 }
@@ -234,9 +214,8 @@ export interface ListDirRequestBody {
   path: string;
 }
 
-/** Sizes the terminal once, at session start — see `Sandbox.pty()`'s own
- * doc comment for why there's no live resize yet. Both default to a
- * conventional 80x24 terminal if omitted. */
+/** Sizes the terminal once at session start — no live resize yet (see
+ * `Sandbox.pty()`). Defaults to 80x24. */
 export interface PtyOptions {
   cols?: number;
   rows?: number;
@@ -255,9 +234,8 @@ export interface ListDirResponseBody {
   entries: DirEntryBody[];
 }
 
-/** One entry from `Sandbox.listDir()` — `mode` is permission bits only
- * (e.g. `0o644`), the same shape `Sandbox.chmod()` takes, so an entry's
- * `mode` can be handed straight back to `chmod()`. */
+/** One `Sandbox.listDir()` entry — `mode` is permission bits
+ * (`Sandbox.chmod()`'s shape), so it round-trips directly. */
 export interface DirEntry {
   name: string;
   isDir: boolean;
@@ -289,10 +267,8 @@ export interface ListExecStreamsResponseBody {
   sessions: ExecStreamSummaryBody[];
 }
 
-/** One streamed background exec session, as returned by
- * `Sandbox.listExecStreams()` — see `Sandbox.execStream()`'s own doc
- * comment for the feature this belongs to. `exitCode` is `null` while
- * still running. */
+/** One background exec session (`Sandbox.listExecStreams()`/`execStream()`).
+ * `exitCode` is `null` while still running. */
 export interface ExecStreamSession {
   id: string;
   command: string;
@@ -324,10 +300,7 @@ export interface ForkSnapshotResponseBody {
 }
 
 export interface ListSnapshotsOptions extends SandboxOptions {
-  /** Only snapshots taken from this original sandbox id — the mechanism
-   * for finding out whether a sandbox id you had turned into a snapshot
-   * (via `Sandbox.snapshot()` or the daemon's auto-suspend), and what its
-   * new snapshot id is. At most one snapshot can ever match, since a
+  /** Only the (at most one) snapshot taken from this sandbox id — a
    * sandbox id is retired the moment it's snapshotted. */
   sourceSandboxId?: string;
 }
@@ -350,19 +323,15 @@ export interface SnapshotInfo {
   sourceSandboxId: string;
   createdAt: Date;
   tags: Record<string, string>;
-  /** Id of the live sandbox currently forked from this snapshot, if any —
-   * see `Sandbox.fork()`. While set, `Sandbox.fork()`/`Sandbox.resume()`
-   * on this snapshot id both reject with a 409. */
+  /** Live sandbox currently forked from this snapshot, if any — while
+   * set, `fork()`/`resume()` on this id both reject with 409. */
   forkedInto: string | null;
-  /** Carried over from the sandbox this was taken from, if any — see
-   * `CreateSandboxOptions.name`. */
+  /** Carried over from the sandbox this was taken from, if any. */
   name?: string | null;
 }
 
-/** Present on the response body only when the stop actually reported
- * something (`keep=true`, the default) — `DELETE /sandboxes/:id
- * ?keep=false` returns 204 with no body, decoded as `undefined` by
- * `request()`. See `Sandbox.stop`. */
+/** Present only when the stop reported something (`keep=true`, default)
+ * — `?keep=false` returns 204/no body, decoded as `undefined`. */
 export interface StopSandboxResponseBody {
   kept: boolean;
   snapshot_id: string | null;
@@ -393,25 +362,20 @@ export interface ImageOptions {
   authToken?: string;
 }
 
-/** A registered rootfs image a sandbox can boot from — see
- * `Image.register`. Not a class/handle like `Sandbox`: an image has no
- * instance operations besides delete, which only ever needs an id, so
- * this is plain data, matching `SandboxInfo`'s shape for `Sandbox.list`. */
+/** A registered rootfs image (`Image.register`). Plain data, not a
+ * handle like `Sandbox` — an image's only operation is delete, which
+ * just needs an id. */
 export interface ImageInfo {
   id: string;
   sizeMib: number;
   createdAt: Date;
-  /** What currently holds this image, if anything (a sandbox id, a
-   * snapshot id, or a sandbox still being created from it) — `null` if
-   * nothing does. An image can't be deleted while this is set. */
+  /** What holds this image (sandbox id, snapshot id, in-flight boot), or
+   * `null`. Can't be deleted while set. */
   inUseBy: string | null;
-  /** Always `false` — the daemon cannot verify the guest agent is baked
-   * into a registered image (that needs loop-mounting it as root, which
-   * the daemon deliberately doesn't have). See `verificationHint`. */
+  /** Always `false` — the daemon can't loop-mount to verify the guest
+   * agent is baked in. See `verificationHint`. */
   guestAgentVerified: boolean;
-  /** Guidance for verifying the guest agent out of band before relying on
-   * this image — the daemon can never fill in `guestAgentVerified: true`
-   * itself. */
+  /** Guidance for verifying the guest agent out of band. */
   verificationHint: string;
 }
 
@@ -458,9 +422,8 @@ export interface ListDrivesResponseBody {
   drives: DriveSummaryBody[];
 }
 
-/** Who currently holds a drive — `"sandbox <id>"` or `"snapshot <id>"`.
- * More than one holder means it's attached read-only to several at
- * once; a drive can't be deleted while this is non-empty. */
+/** `"sandbox <id>"` or `"snapshot <id>"`. More than one means read-only
+ * sharing; a drive can't be deleted while this is non-empty. */
 export interface DriveHolder {
   holder: string;
   readOnly: boolean;
@@ -502,37 +465,30 @@ export interface ListPoolsResponseBody {
   pools: PoolSummaryBody[];
 }
 
-/** A configured pre-warmed pool — see `Pool`. `vcpuCount`/`memSizeMib`
- * are already resolved to concrete values (whatever the daemon's own
- * defaults were at the moment this pool was created), not the
- * `undefined`-means-"use the default" shape `CreatePoolOptions` takes. */
+/** A configured pre-warmed pool (`Pool`). `vcpuCount`/`memSizeMib` are
+ * already resolved to concrete values, unlike `CreatePoolOptions`'s
+ * `undefined`-means-default shape. */
 export interface PoolInfo {
   id: string;
   imageId: string | null;
   vcpuCount: number;
   memSizeMib: number;
   warmCount: number;
-  /** Maximum live instances (warm + claimed, combined) this pool's
-   * profile may ever have at once — `null` means unbounded. */
+  /** Max combined warm+claimed instances — `null` means unbounded. */
   maxCount: number | null;
-  /** How many resumable snapshots are actually sitting warm right now —
-   * can be less than `warmCount` right after the pool is created or a
-   * claim just drained it; replenishment happens in the background, not
-   * instantly. */
+  /** Resumable snapshots actually sitting warm right now — can lag
+   * `warmCount` right after creation or a claim; replenishment is
+   * background, not instant. */
   warmReady: number;
-  /** How many live instances of this pool's profile exist right now
-   * (warm or cold-created, either way) — only meaningful relative to
-   * `maxCount`. */
+  /** Live instances of this pool's profile right now (warm or
+   * cold-created) — meaningful relative to `maxCount`. */
   claimed: number;
 }
 
-/** Mounts an S3-compatible bucket into a sandbox via `rclone mount` — see
- * `Sandbox.mount()`. `endpoint` is the full URL of the S3-compatible
- * service (never defaulted to any particular provider, so the target is
- * always explicit); `accessKey`/`secretKey` are written into a `0600`
- * rclone config file inside the guest, never passed as a command-line
- * argument. `mountPath` is created (`mkdir -p`) inside the guest if it
- * doesn't already exist. */
+/** Mounts an S3-compatible bucket via `rclone mount` (`Sandbox.mount()`).
+ * `endpoint` is always explicit, never defaulted to a provider.
+ * `accessKey`/`secretKey` go into a `0600` rclone config file in the
+ * guest, never a command-line arg. `mountPath` is created if missing. */
 export interface MountOptions {
   bucket: string;
   endpoint: string;
