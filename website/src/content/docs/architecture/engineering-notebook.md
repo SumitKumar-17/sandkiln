@@ -13,7 +13,9 @@ The first hypothesis was wrong: it looked like a client-side cleanup problem, so
 
 The real cause was on the guest side. A PTY session shovels bytes in both directions using two handles to the same vsock connection: one thread reads the shell's output and writes it to the host, the other reads host input and writes it to the shell. Both handles were `try_clone()`d from the same underlying socket. When the shell exited, the output thread noticed (its read returned EOF) and ended, dropping its handle. But a `try_clone()`d handle is a duplicate file descriptor pointing at the *same* kernel socket, and the kernel doesn't tear a socket down until every descriptor referencing it is closed. The other thread, still blocked reading host input that would never arrive, kept the connection open indefinitely.
 
-**The fix**: when the output side detects the shell has exited, it explicitly calls `shutdown(Shutdown::Both)` on the connection, a real socket-level shutdown rather than just dropping a handle, which unblocks any other thread sharing that socket immediately. The symmetric case matters just as much. If the *host* disconnects first (a lost connection, a closed browser tab) while the shell is still running, the guest now sends that shell's process group a `SIGHUP`, the same signal a real terminal sends on hangup, so a dropped connection doesn't leave an orphaned shell running forever. Verified with a real stress test that opens a session, disconnects without exiting the shell, and confirms zero orphaned processes survive.
+:::tip[The fix]
+When the output side detects the shell has exited, it explicitly calls `shutdown(Shutdown::Both)` on the connection — a real socket-level shutdown, not just dropping a handle, which unblocks any other thread sharing that socket immediately. The symmetric case matters just as much: if the *host* disconnects first while the shell is still running, the guest now sends that shell's process group a `SIGHUP`, the same signal a real terminal sends on hangup, so a dropped connection doesn't leave an orphaned shell running forever. Verified with a stress test that disconnects without exiting the shell and confirms zero orphaned processes survive.
+:::
 
 ## MMDS forgets who you are after a resume
 
@@ -21,7 +23,9 @@ Building pre-warmed pools meant a sandbox's real identity (its id, name, tags) i
 
 It failed immediately, with a genuinely surprising error, `"MMDS data store is not initialized"`, on a VM that had MMDS fully configured before it was ever snapshotted. Firecracker's snapshot/restore mechanism, it turns out, does not consider MMDS's data store part of what gets restored, even though the VM was networked and MMDS was live at snapshot time.
 
-**The fix**: redo the full initialization sequence post-resume (`PUT /mmds/config` followed by `PUT /mmds` with the real content) instead of assuming a bare `PATCH` would work against already-initialized state. Both calls are cheap and idempotent, so doing the full sequence every time a pool claim succeeds costs nothing extra and is correct whether the VM's MMDS was ever really initialized after restore or not.
+:::tip[The fix]
+Redo the full initialization sequence post-resume (`PUT /mmds/config` followed by `PUT /mmds` with the real content) instead of assuming a bare `PATCH` would work against already-initialized state. Both calls are cheap and idempotent, so doing the full sequence every time a pool claim succeeds costs nothing extra and is correct whether the VM's MMDS was ever really initialized after restore or not.
+:::
 
 ## The failure rate that wasn't rare
 
@@ -33,13 +37,17 @@ The first few times this happened during testing, it looked like a fluke. It was
 
 The root cause is still an open question. The working hypothesis is TSC (timestamp counter) or clock-source drift between the moment a snapshot is taken and the moment it's restored, since early kernel boot code does timing-sensitive arithmetic that a corrupted or zero-valued frequency value could plausibly divide by zero in. That's an informed guess based on where the panic happens, not a confirmed diagnosis, and it's stated that way deliberately rather than dressed up as solved.
 
-**What actually shipped** doesn't require solving the root cause first: every pool claim runs a real health check (a trivial `exec true`) against the resumed sandbox before it's ever handed back to a caller. A sandbox that fails the check is torn down immediately, and the request transparently falls back to a normal cold create. The caller gets a working sandbox either way, just slower on the unlucky path. A repeated stress test confirmed zero caller-visible failures across every run, with the daemon's own logs showing the fallback path firing at exactly the rate the direct measurements predicted.
+:::tip[What actually shipped]
+Doesn't require solving the root cause first: every pool claim runs a real health check (a trivial `exec true`) against the resumed sandbox before it's ever handed back to a caller. A sandbox that fails the check is torn down immediately, and the request transparently falls back to a normal cold create. The caller gets a working sandbox either way, just slower on the unlucky path. A repeated stress test confirmed zero caller-visible failures across every run.
+:::
 
 ## Paying for the same timeout twice
 
 Once the health check above existed, its failure path was slow: about 10.3 seconds to recover from a bad resume, roughly double what the design intended. The health check itself times out (retrying briefly, then giving up) after about 5 seconds when a VM isn't responding. The investigation was straightforward once looked at directly. Tearing down the broken sandbox afterward called the normal VM-stop path, which itself opens with an optimistic "sync the filesystem before killing the process" call, a real and previously-justified precaution against losing unflushed writes on a normal stop. Against a VM that had already failed its health check, that call was never going to succeed, and it paid its *own* independent 5-second timeout before giving up.
 
-**The fix**: a `force_stop` path that skips the sync call entirely, used specifically when a VM is already known to be dead, since there's nothing to flush on a sandbox that never got the chance to do any real work. This alone roughly halved the fallback's cost, from ~10.3 seconds to ~5.4 seconds.
+:::tip[The fix]
+A `force_stop` path that skips the sync call entirely, used specifically when a VM is already known to be dead, since there's nothing to flush on a sandbox that never got the chance to do any real work. This alone roughly halved the fallback's cost, from ~10.3 seconds to ~5.4 seconds.
+:::
 
 ## The lineage field that pointed at the wrong thing
 
@@ -47,7 +55,9 @@ Building snapshot lineage (`parent_snapshot_id`, see [Snapshots, resume, and for
 
 It compiled, passed every test written against it, and was wrong for the single most common case. `source_snapshot_id` isn't a lineage pointer at all. It's deliberately `None` on resume (so a resumed sandbox stays eligible to be snapshotted again) and only ever `Some` on a fork, specifically so an existing check could refuse to re-snapshot a fork (it shares a live resource with its source). Reusing it for lineage meant every *resumed* sandbox, the ordinary and common path, silently reported no lineage at all, while the one case where the field *was* set (fork) is exactly the case that can never produce a new snapshot to attach a lineage pointer to in the first place. The bug was invisible on paper: right types, right names, clean compile.
 
-**Caught live**, not by re-reading the code: a resume-then-snapshot-then-query-by-parent-id check against the real running daemon came back empty. **The fix**: a second, dedicated `Sandbox::parent_snapshot_id` field, `Some` on both resume and fork and `None` only for a genuine cold boot, decoupled entirely from `source_snapshot_id`'s unrelated job of guarding re-snapshotting.
+:::tip[Caught live, not on paper]
+A resume-then-snapshot-then-query-by-parent-id check against the real running daemon came back empty. **The fix**: a second, dedicated `Sandbox::parent_snapshot_id` field, `Some` on both resume and fork and `None` only for a genuine cold boot, decoupled entirely from `source_snapshot_id`'s unrelated job of guarding re-snapshotting.
+:::
 
 ## Fork's shared rootfs file
 
@@ -57,13 +67,17 @@ It compiled, passed every test written against it, and was wrong for the single 
 
 Building on the earlier MMDS story above: even with the full re-initialization sequence in place, `Vm::update_metadata`'s first call right after a pool claim's resume can still fail outright with Firecracker's `"operation not supported after starting the microVM"` on `/mmds/config`. That isn't the "not initialized" error from before; it's a different rejection. Confirmed to be pre-existing and load-related, not caused by any one feature: the identical failure reproduces against a completely unmodified daemon, roughly 1 run in 3 under this dev box's own test-suite load, 0 in 3 when nothing else is competing for CPU/scheduling at the same time.
 
-**The fix so far**: a bounded retry (up to ~3 seconds, roughly matching how long the equivalent guest-visible check already waits) around the `update_metadata` call, rather than treating one failed attempt as final. This closes the practical impact but not the actual question; see "Currently open" below.
+:::tip[The fix, so far]
+A bounded retry (up to ~3 seconds, roughly matching how long the equivalent guest-visible check already waits) around the `update_metadata` call, rather than treating one failed attempt as final. This closes the practical impact but not the actual question; see "Currently open" below.
+:::
 
 ## Injecting into the wrong file
 
 Not a code bug, but a tooling gap that caused a real mistake during this project's own development. Getting a guest-agent change into a running sandbox is a two-step process: build the agent binary for the guest's target, then inject it into a rootfs image file. The second step needs an exact path, and there was more than one plausibly-named `.ext4` file on the dev box for unrelated reasons. The wrong one got injected once. The daemon kept silently booting from the old, un-updated image, and the mismatch wasn't obvious until sandboxes didn't behave like the just-built code should have.
 
-**The fix** was at the tooling level, not just "be more careful": a single `scripts/dev.sh inject-agent` command that resolves the daemon's own actual configured default rootfs path automatically, so this specific class of mistake (updating the wrong file because a path had to be remembered by hand) can't recur.
+:::tip[The fix]
+At the tooling level, not just "be more careful": a single `scripts/dev.sh inject-agent` command that resolves the daemon's own actual configured default rootfs path automatically, so this specific class of mistake can't recur.
+:::
 
 ## The guest kernel that had never heard of FUSE
 
@@ -71,19 +85,33 @@ Building remote storage mounts (an S3-compatible bucket mounted into a sandbox v
 
 The cause wasn't a missing package. It was the guest kernel itself. Firecracker guest kernels have no loadable-module support at all (everything has to be compiled in statically), and this project's kernel, fetched pre-built from Firecracker's own public CI artifacts with no local build pipeline behind it, had never been compiled with `CONFIG_FUSE_FS` in the first place. No installable fix existed; the kernel had to be rebuilt.
 
-**The fix**: fetch Firecracker's own actual, currently-published recommended kernel config (which does set `CONFIG_FUSE_FS=y`), apply it against matching vanilla kernel source, reconcile with `make olddefconfig`, and build. The whole rebuild took about 35 seconds on the dev box's 32 cores. Verified by booting a real sandbox against the new kernel and confirming `/dev/fuse` existed with `fuse`/`fuseblk`/`fusectl` registered in `/proc/filesystems`, not just that the build succeeded.
+:::tip[The fix]
+Fetch Firecracker's own actual, currently-published recommended kernel config (which does set `CONFIG_FUSE_FS=y`), apply it against matching vanilla kernel source, reconcile with `make olddefconfig`, and build. The whole rebuild took about 35 seconds on the dev box's 32 cores. Verified by booting a real sandbox and confirming `/dev/fuse` existed with `fuse`/`fuseblk`/`fusectl` registered in `/proc/filesystems`, not just that the build succeeded.
+:::
 
-Then a second, unrelated surprise showed up right behind it: with a real FUSE-capable kernel and `rclone` injected into the guest, the mount still failed with `fusermount: exec: "fusermount3": executable file not found in $PATH`. The assumption going in was that running as root (which the guest agent does) would let `rclone` call `mount(2)` directly, bypassing the userspace helper `fusermount3` normally exists to let *non-root* users mount FUSE filesystems. That assumption was wrong: rclone's Linux FUSE backend always execs `fusermount3` to do the actual mount, root or not, and there's no direct-`mount(2)` code path in that library at all. **The fix**: inject `fusermount3` into the rootfs the same way `rclone` itself is (a near-static binary whose `ldd` output shows it depends on nothing but libc), rather than assume privilege alone would be enough.
+Then a second, unrelated surprise showed up right behind it: with a real FUSE-capable kernel and `rclone` injected into the guest, the mount still failed with `fusermount: exec: "fusermount3": executable file not found in $PATH`. The assumption going in was that running as root (which the guest agent does) would let `rclone` call `mount(2)` directly, bypassing the userspace helper `fusermount3` normally exists to let *non-root* users mount FUSE filesystems. That assumption was wrong: rclone's Linux FUSE backend always execs `fusermount3` to do the actual mount, root or not, and there's no direct-`mount(2)` code path in that library at all.
+
+:::tip[The fix]
+Inject `fusermount3` into the rootfs the same way `rclone` itself is (a near-static binary whose `ldd` output shows it depends on nothing but libc), rather than assume privilege alone would be enough.
+:::
 
 ## A response that looked right and wasn't
 
-The first version of the mounts feature's `create_mount` handler called the guest's `Mkdir` request and checked its result the same way an `Exec` result gets checked, matching on `Response::Exec { stdout, stderr, exit_code }`. It compiled, the types lined up, and it was still wrong: `Mkdir`/`WriteFile`/`Chmod` all report success as a bare `Response::Ok`, not `Response::Exec`, a different variant of the same enum, since they aren't shell commands with output to capture. Every real mount attempt failed instantly with `"unexpected agent response: Ok"`, caught the moment this was actually run against a live sandbox rather than assumed correct because it type-checked. **The fix**: a small `expect_ok` helper matching the exact pattern `routes_fs.rs` already used for the same three request types. This project had already solved this once, in a different file, and the fix was just reusing that pattern rather than inventing a new one.
+The first version of the mounts feature's `create_mount` handler called the guest's `Mkdir` request and checked its result the same way an `Exec` result gets checked, matching on `Response::Exec { stdout, stderr, exit_code }`. It compiled, the types lined up, and it was still wrong: `Mkdir`/`WriteFile`/`Chmod` all report success as a bare `Response::Ok`, not `Response::Exec`, a different variant of the same enum, since they aren't shell commands with output to capture. Every real mount attempt failed instantly with `"unexpected agent response: Ok"`, caught the moment this was actually run against a live sandbox rather than assumed correct because it type-checked.
+
+:::tip[The fix]
+A small `expect_ok` helper matching the exact pattern `routes_fs.rs` already used for the same three request types — this project had already solved this once, in a different file, and the fix was just reusing that pattern.
+:::
 
 ## The optimization that didn't optimize anything
 
 The Benchmarking work had flagged a specific, plausible-sounding next step: sandbox creation clones the base rootfs with `cp --reflink=auto`, which is an instant copy-on-write clone on a filesystem that supports it (XFS, Btrfs). But this project's dev box runs ext4, which has no CoW at all, so the theory was that switching rootfs storage to a CoW-capable filesystem would close a real, measured ~180ms gap in sandbox-create latency.
 
-Rather than assume the theory was right, it got tested: a real 10GiB XFS filesystem, built as a loopback image on the same dev box, with the daemon's base rootfs pointed at it. The CoW clone itself was confirmed genuine: cloning the same 300MiB rootfs four times used a measured ~4MiB of real disk space total, not ~1.2GiB, and the raw `cp --reflink=auto` call dropped from ~110ms to close to 0ms. And then the actual thing that mattered came back **unchanged**: five real, timed `POST /sandboxes` calls measured ~160-170ms either way, XFS or ext4.
+Rather than assume the theory was right, it got tested: a real 10GiB XFS filesystem, built as a loopback image on the same dev box, with the daemon's base rootfs pointed at it. The CoW clone itself was confirmed genuine: cloning the same 300MiB rootfs four times used a measured ~4MiB of real disk space total, not ~1.2GiB, and the raw `cp --reflink=auto` call dropped from ~110ms to close to 0ms.
+
+:::caution[The thing that mattered came back unchanged]
+Five real, timed `POST /sandboxes` calls measured ~160-170ms either way, XFS or ext4 — the CoW win was real, the latency win it was supposed to buy wasn't.
+:::
 
 The reason was sitting in a comment in the same function, half-right: the rootfs copy already runs *concurrently* with the network lease, specifically so neither one pays for the other serially. That concurrency is exactly what made the fix inert. Collapsing the copy side to ~0ms doesn't shorten a `thread::scope` join that's still waiting on whichever side is slower, and the lease side was apparently never the copy's inferior. A device-mapper/thin-provisioning layer, the harder alternative the same section had proposed as a fallback, would have hit the identical wall for the identical reason. Building it would have optimized an operation that was never actually on the critical path once measured, not assumed. It's still a real, worthwhile disk-space win on its own (four rootfs clones costing ~4MiB instead of ~1.2GiB is not nothing), which is why `scripts/preflight-check.sh` reports it now, just not the latency fix it looked like on paper.
 
@@ -93,9 +121,17 @@ The entry above ("The optimization that didn't optimize anything") drew a specif
 
 A full per-phase profiling pass instrumented every step of a cold create and ran 20 isolated, controlled creates. The result accounted for 167.33 of 167.65ms measured, leaving 0.32ms unexplained. The network lease, the thing the earlier entry blamed, measured **~4.36ms**. The rootfs clone measured **124.09ms, 74% of the whole create.** The earlier conclusion had the two swapped: the clone was never hidden behind the lease, because the lease was never big enough to hide anything behind.
 
-That real accounting also surfaced something nobody had gone looking for: `Vm::boot`'s wait for Firecracker's freshly-spawned API socket used a fixed `sleep(20ms)` before ever trying to connect. It measured **20.11ms on every single one of the 20 boots** (min 20.04, max 20.18): not "usually fast, occasionally slow," but a flat, quantized cost, the unmistakable signature of a sleep nobody ever needed to wait that long for. **The fix**: retry the actual connect, on a 200µs→5ms backoff, instead of polling for the socket file to exist and then connecting once. That also happened to close a genuine race, since the file appears at `bind()`, a moment before `listen()`, so a fast existence-check could win that race and get `ECONNREFUSED`. Re-measured: the socket wait dropped to under a millisecond, boot time dropped by more than half, and every cold create got **~14% faster**, a real, verified win, unlike the CoW filesystem work that inspired going looking in the first place.
+That real accounting also surfaced something nobody had gone looking for: `Vm::boot`'s wait for Firecracker's freshly-spawned API socket used a fixed `sleep(20ms)` before ever trying to connect. It measured **20.11ms on every single one of the 20 boots** (min 20.04, max 20.18): not "usually fast, occasionally slow," but a flat, quantized cost, the unmistakable signature of a sleep nobody ever needed to wait that long for.
 
-The leading explanation now for why the CoW experiment produced a null result: `clone_rootfs` always copies into `std::env::temp_dir()`, completely independent of where the base rootfs image itself lives. The earlier XFS test moved only the base image onto the CoW-capable filesystem, leaving the destination on `/tmp`, still ext4, so `cp --reflink=auto` could never have actually reflinked anything, even though a standalone `cp` run directly inside the XFS mount clearly did. This fits every number from both investigations. It has **not** been re-verified, because the XFS loopback used the first time no longer exists and rebuilding one needs root. It's stated here as the leading hypothesis, not as a second, equally-confident conclusion. Getting this wrong once was enough of a lesson to be explicit about the difference the second time.
+:::tip[The fix — a real, verified ~14% win]
+Retry the actual connect, on a 200µs→5ms backoff, instead of polling for the socket file to exist and then connecting once. That also closed a genuine race (the socket file appears at `bind()`, a moment before `listen()`, so a fast existence-check could win that race and get `ECONNREFUSED`). Re-measured: the socket wait dropped to under a millisecond, boot time dropped by more than half, every cold create got ~14% faster — unlike the CoW filesystem work that inspired going looking in the first place.
+:::
+
+The leading explanation now for why the CoW experiment produced a null result: `clone_rootfs` always copies into `std::env::temp_dir()`, completely independent of where the base rootfs image itself lives. The earlier XFS test moved only the base image onto the CoW-capable filesystem, leaving the destination on `/tmp`, still ext4, so `cp --reflink=auto` could never have actually reflinked anything, even though a standalone `cp` run directly inside the XFS mount clearly did. This fits every number from both investigations.
+
+:::caution[Not re-verified]
+Stated here as the leading hypothesis, not a second, equally-confident conclusion — the XFS loopback used the first time no longer exists and rebuilding one needs root. Getting this wrong once was enough of a lesson to be explicit about the difference the second time.
+:::
 
 ## The number that was never actually being measured
 
@@ -105,7 +141,11 @@ Fixing it should have been the whole story. It wasn't. A/B testing old code agai
 
 The next test found it. Every `exec` *after* the first, on the same sandbox, measured **~3-5ms**. Only the first one paid the ~420-460ms tax. That is the signature of exactly one thing: `POST /sandboxes` returning `200` means Firecracker's `InstanceStart` succeeded, not that the guest kernel has finished booting, systemd has started, and the guest agent binary has actually bound its vsock port. Every number this project had published (cold boot, exec round-trip, the full create's own 137-577ms range) was measured either before that gap existed at all, or already past it. Nothing had ever timed a sandbox's actual first useful moment, because nothing had ever noticed there was a gap there to time.
 
-**Then the comparison that mattered**: the same test against a snapshot resumed from an already-warm sandbox (its guest agent confirmed live before the snapshot was taken) measured **~4-18ms** to first exec. That was repeated, not a one-off. A cold create pays ~420-460ms it doesn't have to; a resume pays almost none of it, because the agent is already running inside the snapshotted memory image the moment the VM un-pauses. This project's own pre-warmed-pool feature had already been measured and shipped by this point, with an honest but modest "70-200ms vs. 160-200ms, a real but small win" framing. That framing, it turns out, only ever compared how fast `create()` itself returns. Counted through to "the sandbox can actually run something," which is the number that was actually supposed to matter, the real win a pre-warmed pool buys is closer to **25-100x**, not 2x. The feature was always this good; nothing had been able to see it.
+The comparison that mattered: the same test against a snapshot resumed from an already-warm sandbox (its guest agent confirmed live before the snapshot was taken) measured **~4-18ms** to first exec — repeated, not a one-off. A cold create pays ~420-460ms it doesn't have to; a resume pays almost none of it, because the agent is already running inside the snapshotted memory image the moment the VM un-pauses.
+
+:::tip[The pre-warmed pool was always this good — nothing had been able to see it]
+Already shipped by this point, with an honest but modest "70-200ms vs. 160-200ms" framing that only ever compared how fast `create()` itself returns. Counted through to "the sandbox can actually run something" — the number that was actually supposed to matter — the real win is closer to **25-100x**, not 2x.
+:::
 
 `scripts/bench-report.sh` now tracks this permanently, as `first_exec_client`, timed exactly the way a real caller experiences it, so this specific gap, having taken this long to even become visible once, doesn't get to quietly reopen unnoticed.
 
