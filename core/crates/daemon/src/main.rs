@@ -22,6 +22,7 @@ mod routes_sandbox;
 mod routes_sandbox_name;
 mod routes_snapshot;
 mod routes_snapshot_history;
+mod routes_tunnel;
 mod sandbox;
 mod snapshot;
 mod snapshot_history;
@@ -175,6 +176,7 @@ async fn async_main() {
         .route("/sandboxes/:id/list-dir", post(routes_fs::list_dir))
         .route("/sandboxes/:id/exec-stream", post(routes_logs::start_exec_stream).get(routes_logs::list_exec_streams))
         .merge(routes_mounts::router())
+        .merge(routes_tunnel::router())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
 
     // Its own router, guarded by `auth::require_preview_token` rather than
@@ -187,6 +189,7 @@ async fn async_main() {
     let websocket_routes = Router::new()
         .route("/sandboxes/:id/pty", get(routes_pty::pty_session))
         .route("/sandboxes/:id/exec-stream/:session_id/logs", get(routes_logs::attach_logs))
+        .merge(routes_tunnel::ws_router())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_preview_token));
 
     let drive_routes = Router::new()

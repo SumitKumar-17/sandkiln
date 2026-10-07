@@ -29,6 +29,7 @@ images/*.img
 .env
 .env.*
 *.pem
+pass.txt
 
 # OS / editor
 .DS_Store

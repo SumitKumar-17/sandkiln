@@ -1,33 +1,24 @@
-//! Firecracker's jailer: re-execs the `firecracker` binary inside a
-//! chroot'd, cgroup-limited environment running as a dedicated
-//! unprivileged uid/gid, instead of the direct `Command::new(firecracker_bin)`
-//! spawn `vm::boot` otherwise uses. See `ROADMAP.md`'s "Security
-//! hardening" section and `SELF_HOSTING.md`'s jailer setup steps.
+//! Firecracker's jailer: re-execs `firecracker` inside a chroot'd,
+//! cgroup-limited environment under a dedicated unprivileged uid/gid,
+//! instead of `vm::boot`'s default direct spawn. See `ROADMAP.md`'s
+//! "Security hardening" and `SELF_HOSTING.md`'s jailer setup.
 //!
-//! ## Why the daemon can't just do this itself
+//! **Why the daemon can't do this itself**: chroot(2), setuid/setgid,
+//! `/dev/kvm`/`/dev/net/tun` device nodes, and cgroup management all need
+//! privileges the daemon deliberately doesn't have (ambient
+//! `CAP_NET_ADMIN` only — see root `AGENTS.md`). Jailer holds those
+//! privileges only for the brief setup window, then drops them and execs
+//! `firecracker` as the target uid/gid — the standard fix is making
+//! `jailer` itself setuid-root, a small purpose-built binary, not the
+//! whole daemon.
 //!
-//! Everything jailer does — chroot(2), setuid/setgid, creating device
-//! nodes for `/dev/kvm`/`/dev/net/tun` inside the jail, cgroup
-//! management — needs privileges the daemon deliberately doesn't have
-//! (it runs unprivileged with only ambient `CAP_NET_ADMIN`, see root
-//! `AGENTS.md` and `SELF_HOSTING.md`'s "Why not just run as root"). Jailer
-//! itself has to run with those privileges for the brief setup window
-//! before it drops all of them and execs `firecracker` as the target
-//! uid/gid — the standard way to give an unprivileged daemon access to
-//! that is to make the `jailer` binary itself setuid-root (a small,
-//! purpose-built binary, not the whole daemon). See `SELF_HOSTING.md`.
-//!
-//! ## What crosses the chroot boundary
-//!
-//! Once jailer calls `chroot()`, the firecracker process it execs can no
-//! longer see any host path outside its jail root — every file the VM
-//! config references (kernel image, rootfs, extra drives) has to already
-//! exist inside the jail *before* jailer starts, and every path handed to
-//! Firecracker's own API afterward (`/boot-source`'s `kernel_image_path`,
-//! `/drives/*`'s `path_on_host`, `/vsock`'s `uds_path`) has to be the
-//! in-jail path, not the real host path. `link_resource_into_jail` is
-//! what makes a host file appear inside the jail; `vm::boot_inner` is what
-//! rewrites the API bodies to use the resulting in-jail paths.
+//! **What crosses the chroot boundary**: once jailer calls `chroot()`,
+//! firecracker can't see any host path outside its jail root. Every
+//! referenced file (kernel, rootfs, drives) must exist inside the jail
+//! *before* jailer starts, and every path in Firecracker's own API
+//! afterward must be the in-jail path. `link_resource_into_jail` puts a
+//! host file in the jail; `vm::boot_inner` rewrites API bodies to the
+//! resulting in-jail paths.
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
@@ -57,21 +48,18 @@ pub struct JailLaunch {
 }
 
 /// Hands out distinct uid/gid pairs to concurrent jailed VMs from a fixed
-/// range, and takes them back on release. Mirrors
-/// `crate::network::NetworkManager`'s tap/IP pool: a bounded, pre-declared
-/// id space rather than computing one on the fly (e.g. hashing a sandbox
-/// id into a uid), because a collision here isn't just a logic bug — two
-/// jailed VMs sharing a uid means one guest's escaped process can
-/// `kill`/`ptrace`/read files left world-readable-to-owner by the other,
-/// defeating the entire point of per-VM uid separation.
+/// range, takes them back on release. Mirrors
+/// `crate::network::NetworkManager`'s tap/IP pool — a bounded,
+/// pre-declared id space rather than hashing a sandbox id into one,
+/// because a collision here is a real security bug: two jailed VMs
+/// sharing a uid means one guest's escaped process can
+/// `kill`/`ptrace`/read the other's files.
 ///
-/// The configured range should sit outside normal system/user uids —
-/// recommend 600000 and above, mirroring the subordinate-uid ranges
-/// `/etc/subuid` conventionally uses — so a jailed VM's uid can never
-/// collide with a real host account. The same numeric id is used for both
-/// uid and gid; jailer accepts them independently, but a shared pool
-/// keyed by one number is simpler to reason about and there's no reason
-/// here for a VM's group to be shared with anything else.
+/// Configure the range outside normal system/user uids (600000+,
+/// mirroring `/etc/subuid` convention) so a jailed uid never collides
+/// with a real host account. One number serves as both uid and gid —
+/// simpler to reason about, no reason for a VM's group to be shared with
+/// anything else.
 pub struct JailerIdPool {
     free: Mutex<VecDeque<u32>>,
 }
@@ -96,40 +84,34 @@ impl JailerIdPool {
     }
 }
 
-/// A stable, jailer-`--id`-safe identifier for one VM, derived from the
-/// same monotonic counter `vm::Vm` already uses for its socket paths —
-/// keeps every id jailer/chroot/socket path this module touches traceable
-/// back to one number in the logs.
+/// A stable, jailer-`--id`-safe identifier for one VM, from the same
+/// monotonic counter `vm::Vm` uses for socket paths — keeps every
+/// jailer/chroot/socket path traceable to one number in the logs.
 pub fn jail_instance_id(vm_id: u64) -> String {
     format!("sandkiln-{vm_id}")
 }
 
-/// Firecracker's own directory-naming convention: `<chroot_base>/<exec
-/// file's basename>/<id>/root`. Jailer creates and chowns this tree
-/// itself for the exec file it hard-links in, but any additional
-/// resource (kernel image, rootfs, extra drives, or — for a resumed
-/// snapshot — the memory/state files) must already exist inside it before
-/// jailer is invoked, since firecracker cannot see anything outside its
-/// new root after jailer calls `chroot()`.
+/// Firecracker's own directory convention: `<chroot_base>/<exec file's
+/// basename>/<id>/root`. Jailer creates and chowns this tree for the exec
+/// file it hard-links in, but any other resource (kernel, rootfs, drives,
+/// a resumed snapshot's memory/state files) must exist inside it *before*
+/// jailer runs.
 pub fn chroot_root(chroot_base_dir: &Path, firecracker_bin: &Path, jail_instance_id: &str) -> PathBuf {
     let exec_name = firecracker_bin.file_name().expect("firecracker_bin must have a file name");
     chroot_base_dir.join(exec_name).join(jail_instance_id).join("root")
 }
 
 /// The instance directory jailer owns for one VM — `chroot_root`'s
-/// parent. Removing this on VM stop tears down everything jailer created
-/// for that VM (the `root/` chroot and anything else jailer keeps
-/// alongside it), not just the chroot itself.
+/// parent. Removing it on VM stop tears down everything jailer created
+/// for that VM, not just the chroot itself.
 pub fn instance_dir(chroot_root: &Path) -> PathBuf {
     chroot_root.parent().expect("chroot_root is always <base>/<exec>/<id>/root, so it always has a parent").to_path_buf()
 }
 
-/// Creates `chroot_root` if it doesn't exist and makes it traversable by
-/// any uid (`o+x` — lookup by exact filename, not directory listing,
-/// which is all firecracker itself ever needs). Jailer applies its own
-/// ownership/permissions to this tree when it starts, but resources are
-/// linked in *before* jailer runs, so this has to be usable pre-emptively
-/// regardless of exactly what jailer does to it afterward.
+/// Creates `chroot_root` if missing and makes it traversable by any uid
+/// (`o+x` — lookup by exact filename, all firecracker needs). Jailer
+/// applies its own ownership/permissions later, but resources link in
+/// *before* jailer runs, so this must be usable pre-emptively.
 pub fn prepare_chroot_dir(chroot_root: &Path) -> io::Result<()> {
     fs::create_dir_all(chroot_root)?;
     let mut perms = fs::metadata(chroot_root)?.permissions();
@@ -140,32 +122,28 @@ pub fn prepare_chroot_dir(chroot_root: &Path) -> io::Result<()> {
 /// One resource (kernel image, rootfs, a drive, or a snapshot's
 /// memory/state file) placed inside a VM's chroot.
 pub struct JailedPath {
-    /// Where the linked/copied file actually lives on the host — inside
-    /// the chroot, so also removed automatically when the instance
-    /// directory is torn down on VM stop.
+    /// Where the linked/copied file lives on the host, inside the
+    /// chroot — removed automatically when the instance directory is
+    /// torn down.
     pub host_path: PathBuf,
-    /// The path firecracker itself (running chrooted) must use to reach
-    /// the same file — always rooted at `/`, since that's the chroot's
-    /// own root from firecracker's point of view.
+    /// The path firecracker (running chrooted) must use — always rooted
+    /// at `/`, the chroot's own root from firecracker's point of view.
     pub in_jail_path: PathBuf,
 }
 
 /// Makes `host_source` reachable inside `chroot_root` at
-/// `chroot_root/<jail_relative_name>`, and returns both the resulting
-/// host path and the path firecracker itself must use to open it.
+/// `chroot_root/<jail_relative_name>`, returning both the host path and
+/// the path firecracker must use to open it.
 ///
-/// Hard-links when possible (instant, no extra disk space — matters for
-/// the rootfs specifically, see root `AGENTS.md`'s rootfs-copy-latency
-/// history) and falls back to a real copy across filesystem boundaries
-/// (`EXDEV`), the same way jailer's own handling of the exec file does.
+/// Hard-links when possible (instant, no extra disk — matters for the
+/// rootfs specifically), falls back to a copy across filesystem
+/// boundaries (`EXDEV`), same as jailer's own exec-file handling.
 ///
-/// The link/copy is made world-readable (and world-writable for
-/// `writable` resources, i.e. the rootfs) rather than `chown`ed to the
-/// jail's uid/gid: a hard link shares one inode with the source file, so
-/// `chown`ing it would silently change the *source* file's ownership too
-/// (a shared kernel image, or another sandbox's still-held drive) —
-/// permission bits scoped to "other" give the jailed uid (whatever it
-/// turns out to be) access without touching ownership of anything shared.
+/// Made world-readable (world-writable too for `writable` resources —
+/// the rootfs) rather than `chown`ed to the jail's uid/gid: a hard link
+/// shares one inode with the source, so `chown` would silently change the
+/// *source* file's ownership too (a shared kernel image, another
+/// sandbox's drive). Permission bits scoped to "other" avoid that.
 pub fn link_resource_into_jail(
     host_source: &Path,
     chroot_root: &Path,
@@ -192,25 +170,20 @@ pub fn link_resource_into_jail(
     Ok(JailedPath { host_path: host_dest, in_jail_path: PathBuf::from("/").join(jail_relative_name) })
 }
 
-/// A conservative cgroup v2 memory ceiling for a VM configured with
-/// `mem_size_mib` of guest RAM: the guest's own configured memory plus
-/// headroom for Firecracker's own VMM process overhead (page tables,
-/// virtio queue buffers, the vsock/balloon backends). Without this
-/// margin, a VM sized right at its cgroup ceiling gets OOM-killed by the
-/// kernel before the guest even finishes booting — the ceiling has to
-/// bound the whole jailed process, not just what the guest thinks its RAM
-/// is.
+/// cgroup v2 memory ceiling: guest RAM plus headroom for Firecracker's
+/// own VMM overhead (page tables, virtio buffers, vsock/balloon
+/// backends). Without this margin a VM sized right at its cgroup ceiling
+/// gets OOM-killed before the guest finishes booting — the ceiling bounds
+/// the whole jailed process, not just guest-visible RAM.
 pub fn cgroup_memory_max_bytes(mem_size_mib: u32) -> u64 {
     const VMM_OVERHEAD_MIB: u64 = 128;
     (mem_size_mib as u64 + VMM_OVERHEAD_MIB) * 1024 * 1024
 }
 
-/// cgroup v2's `cpu.max` value is `"<quota> <period>"` in microseconds —
-/// this pins one jailed VM to no more than `vcpu_count` fully-utilized
-/// host cores' worth of CPU time. Without it a runaway guest workload in
-/// one sandbox can starve every other sandbox's vCPU threads on a shared
-/// host, since vCPU threads are ordinary host threads with no scheduling
-/// isolation of their own beyond this.
+/// cgroup v2's `cpu.max` (`"<quota> <period>"` in microseconds), pinning
+/// one jailed VM to at most `vcpu_count` fully-utilized cores — without it
+/// a runaway guest can starve other sandboxes' vCPU threads, which are
+/// ordinary host threads with no isolation of their own beyond this.
 pub fn cgroup_cpu_max(vcpu_count: u8) -> String {
     const PERIOD_US: u64 = 100_000;
     format!("{} {PERIOD_US}", vcpu_count as u64 * PERIOD_US)
@@ -223,25 +196,20 @@ pub fn cgroup_limits(mem_size_mib: u32, vcpu_count: u8) -> Vec<String> {
     vec![format!("memory.max={}", cgroup_memory_max_bytes(mem_size_mib)), format!("cpu.max={}", cgroup_cpu_max(vcpu_count))]
 }
 
-/// Builds the full jailer argv (excluding argv[0], which is
-/// `launch.jailer_bin` itself) for launching one VM. Pure and
-/// independently testable — `vm::boot_inner`/`vm::resume` just pass this
-/// straight to `Command::args`.
+/// Builds the full jailer argv (excluding argv[0]) for one VM. Pure and
+/// testable — `vm::boot_inner`/`vm::resume` pass this straight to
+/// `Command::args`.
 ///
-/// Deliberately omits `--daemonize`: without it, jailer stays attached to
-/// its parent and directly `exec`s firecracker in place once it's done
-/// setting up (rather than forking, detaching, and exiting) — the `Child`
-/// handle `Command::spawn` returns for the jailer invocation therefore
-/// *becomes* the firecracker process after exec, under the same pid, so
-/// the existing `child.kill()`/`child.wait()` lifecycle in `Vm::stop`
-/// keeps working unchanged.
+/// Omits `--daemonize`: jailer stays attached to its parent and `exec`s
+/// firecracker in place rather than forking/detaching, so the `Child`
+/// handle `Command::spawn` returns *becomes* the firecracker process
+/// after exec (same pid) — `Vm::stop`'s existing `kill()`/`wait()`
+/// lifecycle keeps working unchanged.
 ///
-/// Deliberately omits `--netns`: the current network model attaches tap
-/// devices from a shared pool directly in the daemon's own network
-/// namespace (see `network.rs`), with no per-VM network namespace to join
-/// — chroot/cgroup/uid isolation and network-namespace isolation are
-/// independent axes, and adding the latter is real, separate follow-up
-/// work, not something to fold in here.
+/// Omits `--netns`: tap devices attach from a shared pool directly in the
+/// daemon's own network namespace (`network.rs`), no per-VM namespace to
+/// join. Network-namespace isolation is a separate, not-yet-built axis
+/// from chroot/cgroup/uid isolation.
 pub fn build_jailer_args(
     launch: &JailLaunch,
     jail_instance_id: &str,
@@ -400,14 +368,9 @@ mod tests {
 
     #[test]
     fn link_resource_into_jail_does_not_change_the_sources_own_permissions_destructively() {
-        // Regression guard for the exact bug this design avoids: chowning
-        // (rather than chmod-adding a permission bit) a hard link would
-        // silently mutate the *source* file's ownership too, since a hard
-        // link is the same inode. This test only asserts the source stays
-        // readable/writable by its own owner afterward — a chown to an
-        // unrelated uid would typically break that for the original owner
-        // on a real multi-user system, even though a same-uid test process
-        // wouldn't itself observe an ownership change directly.
+        // Regression guard: chowning a hard link (instead of chmod-adding
+        // a bit) would silently mutate the *source* file's ownership too,
+        // since they share one inode.
         let tmp = TempDir::new("link-source-untouched");
         let source = tmp.path.join("shared-kernel");
         fs::write(&source, b"shared").unwrap();
@@ -416,9 +379,7 @@ mod tests {
         let chroot_root = tmp.path.join("firecracker").join("sandkiln-5").join("root");
         link_resource_into_jail(&source, &chroot_root, "kernel", false).unwrap();
 
-        // The source's own mode bits are only ever widened (adding
-        // other-read), never replaced — the owner/group bits it had
-        // before linking are untouched.
+        // Mode bits are only ever widened (adding other-read), never replaced.
         let after_mode = fs::metadata(&source).unwrap().permissions().mode();
         assert_eq!(after_mode & 0o700, original_mode & 0o700, "owner permission bits must be unchanged");
     }

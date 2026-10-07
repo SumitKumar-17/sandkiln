@@ -23,6 +23,8 @@ from urllib.parse import urlencode
 
 from ._config import resolve_auth_token, resolve_base_url
 from ._http_async import request
+from .atunnel import AsyncTunnelHandle
+from .atunnel import open_tunnel as open_async_tunnel
 from .sandbox import (
     DirEntry,
     DriveAttachment,
@@ -267,6 +269,12 @@ class AsyncSandbox:
         normalized_path = path if path.startswith("/") else f"/{path}"
         suffix = f"?{urlencode({'token': self._auth_token})}" if self._auth_token else ""
         return f"{self._base_url}/sandboxes/{self.id}/preview/{port}{normalized_path}{suffix}"
+
+    async def tunnel(self, guest_port: int, local_port: int, local_host: str = "127.0.0.1") -> AsyncTunnelHandle:
+        """Async counterpart to `Sandbox.tunnel` — see its doc comment for
+        the full picture. The relay runs as a background `asyncio.Task`
+        instead of a thread."""
+        return await open_async_tunnel(self._base_url, self._auth_token, self.id, guest_port, local_port, local_host)
 
     async def snapshot(self) -> str:
         response = await self._request("POST", f"/sandboxes/{self.id}/snapshot")

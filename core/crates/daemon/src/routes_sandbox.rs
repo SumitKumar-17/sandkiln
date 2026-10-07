@@ -1,10 +1,7 @@
-//! Sandbox lifecycle: create, list, stop. Exec and file operations live in
-//! `routes_exec` — split out because they share a `call_agent` helper that
-//! has nothing to do with lifecycle management. Name-based lookup/
-//! get-or-create lives in `routes_sandbox_name` — a distinct enough
-//! concern (crosses into snapshot territory, needs the per-name lock)
-//! that folding it in here would blow well past this file's existing
-//! ~300-line-ish shape for no structural reason.
+//! Sandbox lifecycle: create, list, stop. Exec/file ops live in
+//! `routes_exec` (shares `call_agent`, unrelated to lifecycle). Name
+//! lookup/get-or-create lives in `routes_sandbox_name` (crosses into
+//! snapshot territory, needs the per-name lock).
 
 use crate::error::AppError;
 use crate::metrics::CreatePhase;
@@ -30,63 +27,43 @@ use uuid::Uuid;
 
 #[derive(Deserialize, Default)]
 pub struct CreateSandboxRequest {
-    /// Caller-given identity, unique among live sandboxes and held
-    /// snapshots at the moment it's claimed (`409` if already taken).
-    /// Optional — naming is opt-in. See `Sandbox::name`'s doc comment and
-    /// `routes_sandbox_name` for looking a sandbox up by name later.
+    /// Unique among live sandboxes + held snapshots when claimed (`409`
+    /// otherwise). Optional. See `Sandbox::name`, `routes_sandbox_name`.
     #[serde(default)]
     pub(crate) name: Option<String>,
     #[serde(default)]
     pub(crate) tags: HashMap<String, String>,
-    /// Existing persistent drives (see `POST /drives`) to attach at boot,
-    /// each becoming its own block device inside the guest.
+    /// Existing persistent drives (`POST /drives`) to attach at boot.
     #[serde(default)]
     pub(crate) drives: Vec<DriveAttachment>,
-    /// Overrides the daemon's configured default vCPU count
-    /// (`SANDKILN_VCPU_COUNT`) for this one sandbox. Omitted means "use
-    /// the default" — today's behavior, unchanged. Rejected outright
-    /// (`400`) rather than clamped if it's `0` or exceeds the configured
-    /// ceiling (`SANDKILN_MAX_VCPU_COUNT`) — see `resolve_resource_override`.
+    /// Overrides `SANDKILN_VCPU_COUNT` for this sandbox. `400` (not
+    /// clamped) if `0` or above `SANDKILN_MAX_VCPU_COUNT` — see
+    /// `resolve_resource_override`.
     #[serde(default)]
     pub(crate) vcpu_count: Option<u8>,
-    /// Overrides the daemon's configured default memory size in MiB
-    /// (`SANDKILN_MEM_SIZE_MIB`) for this one sandbox. Same semantics as
-    /// `vcpu_count` above, checked against `SANDKILN_MAX_MEM_SIZE_MIB`.
+    /// Overrides `SANDKILN_MEM_SIZE_MIB`; same rules as `vcpu_count`.
     #[serde(default)]
     pub(crate) mem_size_mib: Option<u32>,
-    /// Boots from a registered image (see `POST /images`,
-    /// `sandkiln_vmm::image::ImageStore`) instead of the daemon's
-    /// `SANDKILN_BASE_ROOTFS` default. Omitted means "use the default" —
-    /// today's behavior, unchanged. Rejected with `404` if no image with
-    /// this id is currently registered.
+    /// Boots from a registered image (`POST /images`) instead of
+    /// `SANDKILN_BASE_ROOTFS`. `404` if the id isn't registered.
     #[serde(default)]
     pub(crate) image_id: Option<String>,
-    /// Caps host I/O for this sandbox — Firecracker's own token-bucket
-    /// rate limiter, applied to the rootfs drive, every attached drive,
-    /// and the network interface (both directions). Omitted means
-    /// unlimited host I/O — today's behavior, unchanged. At least one of
-    /// `bandwidth_bytes_per_sec`/`ops_per_sec` must be set and non-zero if
-    /// this is present at all — `400` otherwise, same "reject, don't
-    /// silently no-op" convention as `vcpu_count`/`mem_size_mib`.
+    /// Firecracker's own token-bucket I/O rate limiter, applied to the
+    /// rootfs drive, every attached drive, and the network interface.
+    /// Omitted = unlimited. At least one sub-field must be set and
+    /// non-zero, or `400`.
     #[serde(default)]
     pub(crate) rate_limit: Option<RateLimitRequest>,
-    /// Outbound network policy for this sandbox — see
-    /// `sandkiln_vmm::egress`'s module doc comment for the full design.
-    /// Omitted means today's behavior, unchanged: unrestricted outbound
-    /// through the shared bridge's existing catch-all rule. Unlike
-    /// `drives`/`rate_limit`, this can still match a pre-warmed pool (see
-    /// `crate::pool`) — egress is enforced via host-side iptables rules
-    /// applied *after* boot/resume, never baked into Firecracker's own
-    /// VM/snapshot state, so it's compatible with any warm snapshot
-    /// regardless of what policy (if any) the pool's own replenishment
-    /// boot used.
+    /// Outbound network policy — see `sandkiln_vmm::egress`. Omitted =
+    /// unrestricted (today's default). Unlike `drives`/`rate_limit`, can
+    /// still match a pre-warmed pool: enforced via iptables applied
+    /// *after* boot/resume, never baked into Firecracker's VM state.
     #[serde(default)]
     pub(crate) egress: Option<EgressPolicyRequest>,
-    /// Baked in for this sandbox's whole lifetime: merged as the base
-    /// layer under every `exec`/`exec-stream` call's own `env` (a
-    /// per-call key wins on conflict) rather than needing to be repeated
-    /// on every call. See `routes_exec::resolve_env`. Persists through
-    /// snapshot/resume/fork exactly like `tags`.
+    /// Baked in for the sandbox's lifetime; base layer under every
+    /// `exec`/`exec-stream` call's own `env` (call wins on conflict —
+    /// see `routes_exec::resolve_env`). Persists through
+    /// snapshot/resume/fork like `tags`.
     #[serde(default)]
     pub(crate) env: HashMap<String, String>,
 }
@@ -102,10 +79,8 @@ pub struct RateLimitRequest {
 #[derive(Deserialize, Clone)]
 pub struct EgressPolicyRequest {
     pub(crate) mode: EgressModeRequest,
-    /// IPv4 CIDRs (`"10.0.0.0/8"`) — validated in `resolve_egress_policy`,
-    /// not here, so a malformed one gets one clear `400` covering every
-    /// entry in both lists rather than whichever `serde` error format a
-    /// custom `Deserialize` impl would produce.
+    /// IPv4 CIDRs. Validated in `resolve_egress_policy`, not here, so a
+    /// bad one gets one clear `400` naming it.
     #[serde(default)]
     pub(crate) allow_cidrs: Vec<String>,
     #[serde(default)]
@@ -124,13 +99,10 @@ pub struct CreateSandboxResponse {
     id: String,
 }
 
-/// RAII pairing for `AppState::reserve_pending_image_boot`/
-/// `release_pending_image_boot` — releases the claim on drop, covering
-/// every exit path out of `create_sandbox` (the happy path, an early `?`
-/// return, or a panic unwind out of the boot task) rather than requiring
-/// every one of those to remember to release it manually. A no-op `Drop`
-/// when `image_id` is `None` (the common case — most boots don't reference
-/// a registered image at all).
+/// RAII for `AppState::reserve_pending_image_boot`/
+/// `release_pending_image_boot` — releases on drop, covering every exit
+/// path (happy path, early `?`, panic unwind). No-op when `image_id` is
+/// `None`.
 struct PendingImageBootGuard {
     state: Arc<AppState>,
     image_id: Option<String>,
@@ -156,12 +128,9 @@ pub async fn create_sandbox(
             .map_err(|e| AppError::BadRequest(format!("invalid request body: {e}")))?
     };
 
-    // Held for the rest of this function whenever a name was given —
-    // serializes this call against any other concurrent claim of the
-    // same name (another named `create_sandbox`, or
-    // `routes_sandbox_name::get_or_create_sandbox`) so two callers racing
-    // on a brand-new name can't both pass the uniqueness check below and
-    // both create a sandbox. See `AppState::lock_name`.
+    // Serializes this call against any other concurrent claim of the
+    // same name so two racing callers can't both pass the uniqueness
+    // check below. See `AppState::lock_name`.
     let _name_guard = match &request.name {
         Some(name) => {
             crate::routes_sandbox_name::validate_name(name).map_err(AppError::BadRequest)?;
@@ -178,12 +147,10 @@ pub async fn create_sandbox(
     Ok(Json(CreateSandboxResponse { id }))
 }
 
-/// The actual "boot a sandbox" mechanics, shared by `create_sandbox`
-/// (`POST /sandboxes`) and `routes_sandbox_name::get_or_create_sandbox`'s
-/// create-fresh path. Does **not** check name uniqueness itself — both
-/// callers already did that under `AppState::lock_name` before reaching
-/// here, and re-checking would just be redundant work under the same
-/// lock they're still holding.
+/// Shared boot mechanics for `create_sandbox` and
+/// `routes_sandbox_name::get_or_create_sandbox`'s create-fresh path.
+/// Doesn't check name uniqueness — both callers already did, under the
+/// same `lock_name` guard still held here.
 pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSandboxRequest) -> Result<String, AppError> {
     if let Some(dup) = first_duplicate(request.drives.iter().map(|d| d.id.as_str())) {
         return Err(AppError::BadRequest(format!("drive listed more than once: {dup}")));
@@ -214,31 +181,19 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
     let rate_limit = resolve_rate_limit(&request.rate_limit).map_err(AppError::BadRequest)?;
     let egress = resolve_egress_policy(&request.egress).map_err(AppError::BadRequest)?;
 
-    // A matching, ready pre-warmed pool (see `crate::pool`) lets this
-    // resume a warm snapshot instead of paying full cold-create cost —
-    // only when the request doesn't need anything a warm snapshot can't
-    // already provide. Drives and a custom rate limit are both baked into
-    // a VM's state at boot time and a warm snapshot was booted with
-    // neither, so either one present here means this request can never
-    // match a pool, regardless of image/resources — falls through to the
-    // normal cold-create path below instead of silently ignoring them (and
-    // never queues on a `max_count`-bounded pool either, for the same
-    // reason: it was never going to match that pool anyway).
+    // `drives`/`rate_limit` are baked into a VM at boot time; a warm
+    // snapshot was booted with neither, so either present here means
+    // this can never match a pool (see `crate::pool`) — falls through
+    // to cold-create and never queues either, for the same reason.
     if request.drives.is_empty() && request.rate_limit.is_none() {
         let key = crate::pool::PoolKey { image_id: request.image_id.clone(), vcpu_count, mem_size_mib };
-        // Bounded retry, not a single attempt: a warm claim failing its
-        // post-resume health check (see `claim_from_pool`'s doc comment —
-        // measured at up to ~2-in-3 resumes, not a rare corner case)
-        // releases its reserved slot right back to the pool via
-        // `PoolClaimGuard`'s drop — re-resolving immediately afterward is
-        // what lets the resulting fallback cold-create still count
-        // against `max_count` instead of silently bypassing it. Without
-        // this loop, a `max_count`-bounded pool with a high resume
-        // failure rate could end up running noticeably more live
-        // instances than its own configured ceiling. Bounded (not
-        // unbounded) purely as a safety margin against a pathological
-        // run of consecutive bad warm snapshots — see
-        // `MAX_POOL_CLAIM_ATTEMPTS`.
+        // Bounded retry: a warm claim failing its post-resume health
+        // check (measured up to ~2-in-3 resumes — not rare) releases its
+        // slot via `PoolClaimGuard`'s drop, and re-resolving immediately
+        // is what keeps the fallback cold-create still counted against
+        // `max_count` instead of silently exceeding it. Bounded only as
+        // a safety margin against a pathological run of bad warm
+        // snapshots — see `MAX_POOL_CLAIM_ATTEMPTS`.
         for _ in 0..MAX_POOL_CLAIM_ATTEMPTS {
             match resolve_pool_claim(state, &key).await? {
                 PoolClaim::Warm { pool_id, snapshot_id } => {
@@ -249,25 +204,18 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
                             return Ok(id);
                         }
                         Err(e) => {
-                            // `guard` drops at the end of this arm (not
-                            // committed), releasing the slot this claim
-                            // reserved back to the pool — the next loop
-                            // iteration's `resolve_pool_claim` sees that
-                            // freed room immediately.
+                            // `guard` drops uncommitted here, freeing the
+                            // slot for the next loop iteration.
                             tracing::warn!(error = %e, "pool claim failed — retrying against the pool once more before falling back unattributed");
                         }
                     }
                 }
                 PoolClaim::ColdSlot { pool_id } => {
-                    // Room under `max_count`, nothing warm ready right
-                    // now — proceed into the cold-create path below,
-                    // attributed to this pool so the reserved slot is
-                    // either committed to the resulting live `Sandbox` or
-                    // released on any failure (`PoolClaimGuard`,
-                    // constructed inside).
+                    // Room under max_count, nothing warm ready — cold-create
+                    // below, attributed to this pool.
                     return create_sandbox_cold(state, request, Some(pool_id), vcpu_count, mem_size_mib, rate_limit, egress).await;
                 }
-                PoolClaim::NoPool => break, // no pool configured for this profile at all — today's original, totally unattributed behavior.
+                PoolClaim::NoPool => break, // no pool configured for this profile.
             }
         }
     }
@@ -275,12 +223,10 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
     create_sandbox_cold(state, request, None, vcpu_count, mem_size_mib, rate_limit, egress).await
 }
 
-/// The actual cold-boot mechanics — unchanged from before pools existed,
-/// except for `pool_id`: `Some` when `create_sandbox_core` reserved a
-/// slot for this create against a `max_count`-bounded pool (see
-/// `PoolClaim::ColdSlot`), threaded through to `PoolClaimGuard` (released
-/// on any failure below) and `Sandbox::source_pool_id` (committed,
-/// permanently owning the slot, on success).
+/// Cold-boot mechanics. `pool_id` is `Some` when `create_sandbox_core`
+/// reserved a `max_count` slot (`PoolClaim::ColdSlot`) — released on
+/// failure via `PoolClaimGuard`, committed to `Sandbox::source_pool_id`
+/// on success.
 async fn create_sandbox_cold(
     state: &Arc<AppState>,
     request: CreateSandboxRequest,
@@ -293,13 +239,10 @@ async fn create_sandbox_cold(
     let create_started = Instant::now();
     let pool_guard = PoolClaimGuard::new(state.clone(), pool_id.clone());
 
-    // Checked and reserved before the (slow) boot starts, not just relied
-    // on implicitly once the sandbox is inserted into `state.sandboxes` at
-    // the end — closes the window where a concurrent `DELETE /images/:id`
-    // could otherwise remove the very file this boot's rootfs copy is
-    // reading from. `_image_boot_guard` releases the reservation on every
-    // exit path below (success, an early `?` return, or a panicking
-    // `spawn_blocking` task), see `PendingImageBootGuard`.
+    // Reserved before the (slow) boot starts, closing the window where a
+    // concurrent `DELETE /images/:id` could remove the file this boot's
+    // rootfs copy is reading. `_image_boot_guard` releases it on every
+    // exit path.
     if let Some(image_id) = &request.image_id {
         if !state.images.exists(image_id) {
             return Err(AppError::ImageNotFound(image_id.clone()));
@@ -313,20 +256,14 @@ async fn create_sandbox_cold(
     };
 
     let id = Uuid::new_v4().to_string();
-    // Guest-reachable via Firecracker's own MMDS (see VmConfig::metadata's
-    // doc comment) -- built from what the caller already gave us, not new
-    // input; borrowed rather than cloned since `request.tags`/`request.name`
-    // are still needed below for the `Sandbox` this call ultimately builds.
+    // Guest-reachable via Firecracker's own MMDS (see VmConfig::metadata).
     let metadata = serde_json::json!({ "id": id, "name": &request.name, "tags": &request.tags });
     let rootfs_path = std::env::temp_dir().join(format!("sandkiln-rootfs-{id}.ext4"));
     let attached_drives: Vec<AttachedDrive> =
         request.drives.iter().map(|d| AttachedDrive { drive_id: d.id.clone(), read_only: d.read_only }).collect();
-    // Firecracker's own drive_id namespace is per-VM, but prefix these
-    // anyway to keep them unambiguously distinct from the reserved
-    // "rootfs" id regardless of what a drive's storage id looks like.
-    // Firecracker only allows alphanumerics and underscores in a
-    // drive_id (drive ids here are UUIDs, which contain hyphens) — '-'
-    // has to become '_', not just the prefix's own separator.
+    // Prefixed to stay distinct from the reserved "rootfs" id. Firecracker
+    // only allows alphanumerics/underscores in a drive_id, so '-' (these
+    // are UUIDs) becomes '_'.
     let extra_drives: Vec<DriveConfig> = request
         .drives
         .iter()
@@ -344,22 +281,15 @@ async fn create_sandbox_cold(
         let egress = egress.clone();
         move || -> std::io::Result<(Vm, Lease, Option<u32>)> {
             let span = tracing::Span::current();
-            // Copying the rootfs and leasing a network are independent —
-            // running them concurrently overlaps whichever one is slower
-            // with the other instead of paying for both serially. The
-            // clone dominates this join overwhelmingly: profiled on this
-            // dev box's ext4 at ~124ms for the copy against ~4ms for the
-            // lease, so the lease adds ~0.2ms to the critical path and
-            // the concurrency is, in practice, hiding nothing. It stays
-            // because it costs nothing and stops being a no-op the moment
-            // `cp --reflink=auto` can actually reflink (see
-            // `clone_rootfs`) — but note the *destination* here is
-            // `std::env::temp_dir()`, and reflink silently degrades to a
-            // full byte copy when source and destination are on different
-            // filesystems. See ROADMAP.md's Benchmarking section: that
-            // detail is the leading (still unverified) explanation for
-            // why an earlier XFS experiment measured no end-to-end
-            // improvement at all.
+            // Rootfs copy and network lease run concurrently. The clone
+            // dominates (~124ms vs ~4ms on this dev box's ext4), so the
+            // concurrency mostly hides nothing today — it stays because
+            // it's free and pays off once `cp --reflink=auto` can
+            // actually reflink (see `clone_rootfs`). Note the
+            // destination is `std::env::temp_dir()`: reflink silently
+            // degrades to a full copy across filesystems, the leading
+            // (unverified) explanation for why an XFS experiment showed
+            // no end-to-end win — see ROADMAP.md's Benchmarking section.
             let setup_started = Instant::now();
             let ((copy_result, copy_elapsed), (lease_result, lease_elapsed)) = std::thread::scope(|scope| {
                 let copy_handle = scope.spawn(|| span.in_scope(|| timed(|| clone_rootfs(&base_rootfs_source, &rootfs_path))));
@@ -367,10 +297,8 @@ async fn create_sandbox_cold(
                 (copy_handle.join().expect("rootfs copy thread panicked"), lease_handle.join().expect("lease thread panicked"))
             });
             let setup_elapsed = setup_started.elapsed();
-            // Recorded before the `?`s below so a create that fails *in*
-            // one of these two phases still contributes the timings it
-            // did produce — a lease that takes a second and then fails is
-            // exactly the case worth seeing in the histogram.
+            // Recorded before the `?`s so a create that fails mid-phase
+            // still contributes the timing it produced.
             state.metrics.record_create_phase_ms(CreatePhase::RootfsClone, ms(copy_elapsed));
             state.metrics.record_create_phase_ms(CreatePhase::NetworkLease, ms(lease_elapsed));
             state.metrics.record_create_phase_ms(CreatePhase::Setup, ms(setup_elapsed));
@@ -383,13 +311,10 @@ async fn create_sandbox_cold(
             copy_result?;
             let lease = lease_result?;
 
-            // A jail id (uid == gid, leased from `AppState::jailer_ids`)
-            // is the third resource a sandbox needs, alongside the rootfs
-            // copy and the network lease — leased after both since it's
-            // an in-memory pool pop (no I/O to overlap with), and
-            // released immediately if leasing it is the thing that fails,
-            // exactly like a failed `Vm::boot` releases the network lease
-            // below.
+            // Third resource besides rootfs/lease: an in-memory pool pop,
+            // leased last (nothing to overlap it with), released
+            // immediately on failure just like a failed `Vm::boot`
+            // releases the network lease below.
             let jail_id = match &state.jailer_ids {
                 Some(pool) => match pool.lease() {
                     Ok(id) => Some(id),
@@ -425,13 +350,9 @@ async fn create_sandbox_cold(
             match vm {
                 Ok(vm) => {
                     state.metrics.record_boot_duration_ms(ms(boot_started.elapsed()));
-                    // Applied after boot succeeds, before this sandbox is
-                    // ever visible to a caller -- a requested policy that
-                    // fails to apply must not silently leave the sandbox
-                    // unrestricted, so this is treated exactly like a
-                    // failed `Vm::boot`: tear everything down and return
-                    // the error rather than let a broken-but-unenforced
-                    // policy through.
+                    // Treated like a failed `Vm::boot`: a policy that
+                    // fails to apply must not leave the sandbox silently
+                    // unrestricted, so tear down and return the error.
                     if let Some(policy) = &egress {
                         let egress_started = Instant::now();
                         let egress_result =
@@ -462,9 +383,8 @@ async fn create_sandbox_cold(
     let boot_task_elapsed = create_started.elapsed();
 
     let created_at = SystemTime::now();
-    // Best-effort: the sandbox has already actually booted by this point
-    // (a real, running VM) — failing the whole request over a history-DB
-    // write error would waste it for no benefit, so this only warns.
+    // Best-effort: the VM already booted, so a history-write failure
+    // shouldn't fail the whole request — only warn.
     let before_history = Instant::now();
     if let Err(e) = state.history.record_created(&id, request.name.as_deref(), &request.tags, request.image_id.as_deref(), created_at) {
         tracing::warn!(error = %e, sandbox_id = %id, "failed to record sandbox creation in history store");
@@ -488,29 +408,24 @@ async fn create_sandbox_cold(
         source_pool_id: pool_id,
         egress,
         env: request.env,
-        // A cold create -- fresh boot or a pool's own warm-replenishment
-        // boot -- is always a root of its own lineage.
+        // A cold create (fresh or a pool's own warm boot) is always a
+        // lineage root.
         parent_snapshot_id: None,
-        // A fresh boot never has any remote storage mounted yet -- see
-        // `crate::routes_mounts`.
         mounts: Vec::new(),
         log_sessions: Default::default(),
     };
     state.sandboxes.lock().unwrap().insert(id.clone(), sandbox);
     state.metrics.record_sandbox_created();
-    // The slot `resolve_pool_claim` reserved (if any) is now durably
-    // owned by the live `Sandbox` above via `source_pool_id` — released
-    // later by `destroy_sandbox_by_id`/`snapshot_and_stop`, not this
-    // guard, which would otherwise release it right back on drop here.
+    // The reserved slot is now durably owned by the live `Sandbox` via
+    // `source_pool_id` — released later by destroy/snapshot-and-stop,
+    // not this guard.
     pool_guard.commit();
 
     let total = create_started.elapsed();
     state.metrics.record_create_phase_ms(CreatePhase::Total, ms(total));
-    // `boot_task_us` covers the whole `spawn_blocking` closure — setup
-    // join, jail-id lease, `Vm::boot`, egress apply — so the difference
-    // between it and `total` is the daemon-side tail (history write,
-    // taking the sandbox map lock) plus whatever the blocking pool made
-    // this task wait before it started.
+    // `boot_task_us` covers the whole spawn_blocking closure; the gap to
+    // `total` is the daemon-side tail (history write, map lock) plus
+    // blocking-pool wait time.
     tracing::debug!(
         sandbox_id = %id,
         boot_task_us = boot_task_elapsed.as_micros(),
@@ -522,10 +437,9 @@ async fn create_sandbox_cold(
     Ok(id)
 }
 
-/// Runs `f`, returning its value alongside how long it took. Exists so
-/// the two concurrently-spawned setup phases can each time themselves on
-/// their own thread — the joining thread only sees when *both* finished,
-/// which is the one thing a timer around the join can't tell you.
+/// Runs `f`, returning its value plus elapsed time — lets each
+/// concurrently-spawned setup phase time itself, since a timer around
+/// the join alone can't tell the two apart.
 fn timed<T>(f: impl FnOnce() -> T) -> (T, Duration) {
     let started = Instant::now();
     let value = f();
@@ -549,8 +463,7 @@ pub struct ListSandboxesResponse {
     sandboxes: Vec<SandboxSummary>,
 }
 
-/// Filters by tag by passing `?tag.<key>=<value>` query params — a
-/// sandbox must match every one given, if any are given.
+/// `?tag.<key>=<value>` query params filter; a sandbox must match all given.
 pub async fn list_sandboxes(
     State(state): State<Arc<AppState>>,
     Query(query): Query<HashMap<String, String>>,
@@ -608,13 +521,10 @@ pub struct SandboxHistoryResponse {
     history: Vec<HistoryRecordBody>,
 }
 
-/// Durable sandbox lifecycle history, independent of the live
-/// `sandboxes` map — survives a daemon restart, unlike `GET /sandboxes`.
-/// See `sandkiln-store`'s module doc comment for exactly what this does
-/// and doesn't mean (it cannot bring a stopped sandbox back to life).
-/// `?live_only=true`/`?live_only=false` filters; `?limit=<n>` caps the
-/// row count (defaults to `sandkiln_store::DEFAULT_LIST_LIMIT`). Always
-/// newest-created first.
+/// Durable history, independent of the live `sandboxes` map — survives a
+/// restart, unlike `GET /sandboxes` (see `sandkiln-store`'s doc comment:
+/// it cannot revive a stopped sandbox). `?live_only=`/`?limit=` (default
+/// `sandkiln_store::DEFAULT_LIST_LIMIT`). Newest-created first.
 pub async fn sandbox_history(
     State(state): State<Arc<AppState>>,
     Query(query): Query<HashMap<String, String>>,
@@ -633,10 +543,8 @@ pub async fn sandbox_history(
     Ok(Json(SandboxHistoryResponse { history: records.into_iter().map(HistoryRecordBody::from).collect() }))
 }
 
-/// Whether stopping preserves this sandbox's state (the default) or
-/// destroys it outright — the query-string form of `DELETE
-/// /sandboxes/:id?keep=false`. Pulled out as a pure parser for direct
-/// unit testing, mirroring `resolve_resource_override` above.
+/// `DELETE /sandboxes/:id?keep=false` query-string parse. Pure, for unit
+/// testing (mirrors `resolve_resource_override`).
 fn parse_keep(params: &HashMap<String, String>) -> Result<bool, String> {
     match params.get("keep").map(String::as_str) {
         None | Some("true") => Ok(true),
@@ -647,23 +555,17 @@ fn parse_keep(params: &HashMap<String, String>) -> Result<bool, String> {
 
 #[derive(Serialize)]
 pub struct StopSandboxResponse {
-    /// Whether this stop actually produced a new `Snapshot` this sandbox
-    /// can be resumed from. `false` either because the caller explicitly
-    /// asked for full destruction (`?keep=false`) or because this
-    /// particular sandbox had nothing new to preserve (a fork — see
-    /// `stop_sandbox_by_id`'s doc comment).
+    /// Whether this stop produced a new resumable `Snapshot`. `false`
+    /// either from `?keep=false` or because this sandbox had nothing new
+    /// to preserve (a fork — see `stop_sandbox_by_id`).
     kept: bool,
     snapshot_id: Option<String>,
 }
 
-/// `DELETE /sandboxes/:id` — stops a sandbox. As of the "persistent by
-/// default" behavior (see `stop_sandbox_by_id`'s doc comment), the
-/// default response is `200` with a JSON body reporting what happened,
-/// not the old bare `204`: there is now new information worth returning
-/// (a snapshot id) that wasn't there when this only ever destroyed. The
-/// explicit-destroy path (`?keep=false`) keeps the original `204`
-/// contract exactly — nothing new to report, unchanged from before this
-/// feature existed.
+/// `DELETE /sandboxes/:id`. Default response is `200` with a JSON body
+/// (there's now a snapshot id worth returning, per "persistent by
+/// default" — see `stop_sandbox_by_id`); `?keep=false` keeps the
+/// original bare `204` contract.
 #[tracing::instrument(skip(state))]
 pub async fn stop_sandbox(
     State(state): State<Arc<AppState>>,
@@ -688,27 +590,22 @@ pub async fn stop_sandbox(
     Ok(Json(StopSandboxResponse { kept, snapshot_id }).into_response())
 }
 
-/// What `stop_sandbox_by_id` actually did — used to shape `DELETE`'s
-/// response body; the idle reaper (`idle_reaper::run`) only cares whether
-/// it succeeded at all.
+/// What `stop_sandbox_by_id` did — shapes `DELETE`'s response;
+/// `idle_reaper::run` only cares whether it succeeded.
 pub(crate) enum StopOutcome {
     Snapshotted(String),
     Destroyed,
 }
 
-/// Every way `stop_sandbox_by_id` can fail. Distinct from `AppError` so
-/// callers other than the HTTP route (namely `idle_reaper`) can react to
-/// `CannotPreserve` without going through an HTTP-status-shaped type —
-/// see `idle_reaper::reap_once`, which falls back to a full destroy on
-/// exactly this variant instead of leaking the sandbox forever.
+/// Every way `stop_sandbox_by_id` can fail. Separate from `AppError` so
+/// `idle_reaper` can react to `CannotPreserve` (fall back to a full
+/// destroy) without an HTTP-shaped type.
 pub(crate) enum StopError {
     NotFound,
-    /// `keep=true` was requested (explicitly or by default) but this
-    /// particular sandbox structurally can't be snapshotted right now —
-    /// see `SnapshotBlocked`. Note a *forked* sandbox never produces this:
-    /// `stop_sandbox_by_id` treats that case as a silent, correct destroy
-    /// rather than an error (see its doc comment), since a fork has
-    /// nothing new to preserve. Only a jailed sandbox reaches here.
+    /// `keep=true` requested but this sandbox structurally can't be
+    /// snapshotted right now (see `SnapshotBlocked`). A forked sandbox
+    /// never reaches here — that's a silent, correct destroy instead
+    /// (nothing new to preserve); only a jailed sandbox does.
     CannotPreserve(SnapshotBlocked),
     Io(std::io::Error),
 }
@@ -720,11 +617,9 @@ fn cannot_preserve_error(reason: SnapshotBlocked) -> AppError {
              stopped-and-preserved by default; retry with ?keep=false to destroy it instead"
                 .to_string(),
         ),
-        // Unreachable via `stop_sandbox_by_id` today (forks are handled
-        // as a silent destroy, not this error) — kept exhaustive rather
-        // than `unreachable!()` so a future change to that logic fails to
-        // compile loudly instead of panicking at runtime if it ever does
-        // start reaching here.
+        // Unreachable via `stop_sandbox_by_id` today (forks are a silent
+        // destroy, not this error) — kept exhaustive so a future change
+        // fails to compile instead of panicking if it ever does reach here.
         SnapshotBlocked::ForkedFrom(source) => AppError::Conflict(format!(
             "this sandbox was forked from snapshot {source} and can't be independently snapshotted — retry with \
              ?keep=false to destroy it instead"
@@ -732,38 +627,25 @@ fn cannot_preserve_error(reason: SnapshotBlocked) -> AppError {
     }
 }
 
-/// Stops a sandbox. `keep=true` (the default — both `DELETE
-/// /sandboxes/:id` with no query param and `idle_reaper`'s automatic
-/// stop) is the ROADMAP's "persistent by default" behavior: this
-/// internally does what `POST /sandboxes/:id/snapshot` does (pause,
-/// snapshot to disk, stop the VM), landing the sandbox as a `Snapshot`
-/// record — including its `name`, if it had one — instead of deleting
-/// its rootfs and releasing its network lease for good. `keep=false` is
-/// the explicit opt-out, for a caller who genuinely wants full
-/// destruction with nothing left behind (e.g. a short-lived CI sandbox
-/// that will never come back) — it does exactly what stopping a sandbox
-/// always used to do.
+/// `keep=true` (the default, for both `DELETE` and `idle_reaper`) is
+/// "persistent by default": pause, snapshot to disk, stop — landing a
+/// `Snapshot` record (with `name`, if any) instead of deleting rootfs
+/// and releasing the lease. `keep=false` is the full-destruction opt-out
+/// (e.g. a short-lived CI sandbox that won't come back).
 ///
-/// A forked sandbox (`source_snapshot_id.is_some()`) is a special case
-/// under `keep=true`: it shares its rootfs file with the snapshot it came
-/// from rather than owning a private copy, so it structurally can't be
-/// snapshotted again on its own (see `SnapshotBlocked::ForkedFrom`) — but
-/// that's fine, not an error, because that shared snapshot *already is*
-/// this identity's durable state, untouched by the fork's ephemeral VM.
-/// There's nothing new to preserve, so `keep=true`'s intent is already
-/// satisfied by destroying just the fork (which, per
-/// `destroy_sandbox_by_id`'s own doc comment, never touches a fork's
-/// shared rootfs/network anyway). A jailed sandbox has no such fallback —
-/// Firecracker's jailed snapshot/resume path genuinely isn't supported —
-/// so that case surfaces as `StopError::CannotPreserve` instead of
-/// silently destroying state a caller's default expectation says should
-/// have survived.
+/// A forked sandbox under `keep=true` is a special case: it shares its
+/// source snapshot's rootfs rather than owning a copy, so it can't be
+/// snapshotted again (`SnapshotBlocked::ForkedFrom`) — but that's fine,
+/// not an error, since that shared snapshot already *is* this identity's
+/// durable state. Destroying just the fork (which never touches the
+/// shared rootfs/network — see `destroy_sandbox_by_id`) already
+/// satisfies `keep=true`'s intent. A jailed sandbox has no such
+/// fallback (jailed snapshot/resume genuinely isn't supported), so that
+/// surfaces as `StopError::CannotPreserve` instead of silently
+/// destroying state the caller expected to survive.
 ///
-/// Shared by the `DELETE` route above and the idle reaper
-/// (`idle_reaper::run`) — both go through this one path rather than a
-/// second, drifted copy of stop logic, and both get the same
-/// preserve-by-default behavior for the same reason: consistency between
-/// an explicit stop and an automatic idle-timeout stop.
+/// Shared by the `DELETE` route and `idle_reaper::run` so an explicit
+/// stop and an automatic idle-timeout stop behave identically.
 pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String, keep: bool) -> Result<StopOutcome, StopError> {
     if keep {
         match snapshot_and_stop(state.clone(), id.clone()).await {
@@ -771,9 +653,8 @@ pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String, keep: b
             Err(SnapshotStopError::NotFound) => return Err(StopError::NotFound),
             Err(SnapshotStopError::Io(e)) => return Err(StopError::Io(e)),
             Err(SnapshotStopError::Blocked(SnapshotBlocked::ForkedFrom(_))) => {
-                // Falls through to the destroy below — see this
-                // function's doc comment for why that's correct, not a
-                // silent downgrade.
+                // Falls through to destroy below — correct, not a silent
+                // downgrade (see doc comment above).
             }
             Err(SnapshotStopError::Blocked(reason @ SnapshotBlocked::Jailed)) => {
                 return Err(StopError::CannotPreserve(reason));
@@ -783,28 +664,24 @@ pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String, keep: b
     destroy_sandbox_by_id(state, id).await
 }
 
-/// Removes a sandbox from the map and tears it down outright: VM stop,
-/// network release, rootfs cleanup. The original (pre-naming-feature)
-/// "stop a sandbox" behavior — now reached via `keep=false`, or
-/// internally when `keep=true` has nothing new to preserve for a forked
-/// sandbox (see `stop_sandbox_by_id`'s doc comment).
+/// Full teardown: VM stop, network release, rootfs cleanup. Reached via
+/// `keep=false`, or internally when `keep=true` has nothing new to
+/// preserve for a fork.
 ///
-/// A sandbox forked from a snapshot (`source_snapshot_id.is_some()`,
-/// see `routes_snapshot::fork_snapshot`) doesn't own its rootfs file or
-/// network lease — both still belong to the snapshot, so they're neither
-/// deleted nor released here. What it *does* release is the snapshot's
-/// fork lock (`Snapshot::forked_into`), letting a later `/fork` or
-/// `/resume` proceed — but only after `vm.stop()` returns, which kills
-/// and waits on the Firecracker process: clearing the lock any earlier
-/// would let a new fork start writing the shared rootfs file before the
-/// old one has actually stopped touching it.
+/// A forked sandbox (`source_snapshot_id.is_some()`) doesn't own its
+/// rootfs or lease — both still belong to the snapshot, so neither is
+/// touched here. What it does release is the snapshot's fork lock
+/// (`Snapshot::forked_into`), unblocking a later `/fork`/`/resume` — but
+/// only after `vm.stop()` returns (kills and waits on the process), so a
+/// new fork can't start writing the shared rootfs before the old one has
+/// actually stopped touching it.
 async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopOutcome, StopError> {
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or(StopError::NotFound)?;
     let source_snapshot_id = sandbox.source_snapshot_id.clone();
 
-    // This live instance's pool membership (if any) ends here — see the
-    // identical release in `routes_snapshot::snapshot_and_stop` for why
-    // this doesn't carry forward onto anything resumed/forked later.
+    // Pool membership ends here — see the identical release in
+    // `snapshot_and_stop` for why it doesn't carry onto anything
+    // resumed/forked later.
     if let Some(pool_id) = &sandbox.source_pool_id {
         if let Some(pool) = state.pools.lock().unwrap().get_mut(pool_id) {
             pool.record_release();
@@ -816,24 +693,20 @@ async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopO
         move || {
             let _ = sandbox.vm.stop();
             if let Some(network) = sandbox.network {
-                // Lease is about to be released back to the free pool --
-                // this sandbox's dedicated chain (if any) has to go first,
-                // matching the "removed only when the lease is finally
-                // released" lifecycle. Safe to call even if no policy was
-                // ever applied -- see `egress::remove`'s own doc comment.
+                // This sandbox's egress chain (if any) goes before the
+                // lease is released, matching "removed only when the
+                // lease is released." Safe even if no policy was ever
+                // applied — see `egress::remove`.
                 sandkiln_vmm::egress::remove(network.config.guest_ip, &network.config.tap_device, state.network.uplink());
                 let _ = state.network.release(network);
             }
-            // Every `Sandbox`, forked or not, owns a private rootfs file
-            // outright — a fork gets its own clone at fork time (see
-            // `routes_snapshot::fork_snapshot`'s own doc comment on the
-            // sequential-corruption bug that fixed), so there's no case
-            // left where this file is actually shared with anything else
-            // still alive and left dangling by removing it here.
+            // Every `Sandbox` owns a private rootfs outright (a fork
+            // gets its own clone at fork time — see
+            // `fork_snapshot`), so nothing else is left dangling by
+            // removing this file.
             let _ = std::fs::remove_file(&sandbox.rootfs_path);
-            // `Vm::stop` already removed this sandbox's chroot directory if
-            // it was jailed — this releases the daemon-level uid/gid
-            // allocation, a separate resource `Vm` has no visibility into.
+            // `Vm::stop` already removed the chroot dir if jailed; this
+            // releases the separate daemon-level uid/gid allocation.
             if let (Some(id), Some(pool)) = (sandbox.jail_id, &state.jailer_ids) {
                 pool.release(id);
             }
@@ -854,17 +727,11 @@ async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopO
     Ok(StopOutcome::Destroyed)
 }
 
-/// Resolves a per-request resource override (`vcpu_count`/`mem_size_mib`
-/// on `CreateSandboxRequest`) against the daemon's configured default and
-/// ceiling. `None` (the field omitted) returns `default` unchanged —
-/// today's behavior for a caller that doesn't ask for anything special. A
-/// caller-supplied `0` (meaningless — a VM can't run with zero vCPUs or
-/// zero memory) or anything above `max` is rejected outright rather than
-/// silently clamped, so an unreasonable request fails loudly instead of
-/// quietly running with less than the caller thought they'd get. A
-/// negative value can't reach here at all: `vcpu_count`/`mem_size_mib`
-/// deserialize as unsigned integers, so `serde_json` already rejects a
-/// negative number in the request body before this is ever called.
+/// Resolves a per-request override against the configured default/
+/// ceiling. `None` → `default`. `0` or above `max` is rejected (`400`),
+/// not clamped — a bad request fails loudly instead of silently running
+/// with less than expected. A negative value can't reach here at all:
+/// these fields deserialize as unsigned, so `serde_json` rejects it first.
 pub(crate) fn resolve_resource_override<T>(requested: Option<T>, default: T, max: T, field: &str) -> Result<T, String>
 where
     T: PartialOrd + Copy + Default + std::fmt::Display,
@@ -877,17 +744,12 @@ where
     }
 }
 
-/// Resolves a per-request `rate_limit` into the vmm-level `RateLimiter`
-/// Firecracker actually understands. `None` (the field omitted) means
-/// unlimited I/O, unchanged from before this existed — returns `Ok(None)`.
-/// A caller-supplied `rate_limit` with neither sub-field set, or either
-/// set to `0`, is rejected outright (`0` bytes/s or ops/s is meaningless —
-/// no drive could ever make progress) rather than silently treated as
-/// unlimited, mirroring `resolve_resource_override`'s convention. Each
-/// token bucket refills to its full `size` once per second
-/// (`refill_time: 1000`ms) with no initial burst — the simplest possible
-/// mapping from "bytes/ops per second" to Firecracker's bucket model;
-/// burst tuning isn't exposed at this level yet.
+/// Resolves a requested `rate_limit` into the `RateLimiter` Firecracker
+/// understands. `None` → unlimited. Neither sub-field set, or either
+/// `0`, is rejected (meaningless, not treated as unlimited) — same
+/// convention as `resolve_resource_override`. Each bucket refills to
+/// `size` once per second (`refill_time: 1000`), no initial burst — the
+/// simplest bytes/ops-per-second mapping; burst tuning isn't exposed yet.
 fn resolve_rate_limit(requested: &Option<RateLimitRequest>) -> Result<Option<RateLimiter>, String> {
     let Some(req) = requested else { return Ok(None) };
     if req.bandwidth_bytes_per_sec.is_none() && req.ops_per_sec.is_none() {
@@ -906,9 +768,8 @@ fn resolve_rate_limit(requested: &Option<RateLimitRequest>) -> Result<Option<Rat
     }))
 }
 
-/// Validates every CIDR in a requested egress policy up front — one clear
-/// `400` naming the exact bad entry, rather than a cryptic iptables
-/// failure surfacing later from deep inside a boot task.
+/// Validates every CIDR up front — one clear `400` naming the bad entry,
+/// rather than a cryptic iptables failure later inside a boot task.
 fn resolve_egress_policy(requested: &Option<EgressPolicyRequest>) -> Result<Option<sandkiln_vmm::egress::EgressPolicy>, String> {
     let Some(req) = requested else { return Ok(None) };
     for cidr in req.allow_cidrs.iter().chain(&req.deny_cidrs) {
@@ -921,22 +782,19 @@ fn resolve_egress_policy(requested: &Option<EgressPolicyRequest>) -> Result<Opti
     Ok(Some(sandkiln_vmm::egress::EgressPolicy { mode, allow_cidrs: req.allow_cidrs.clone(), deny_cidrs: req.deny_cidrs.clone() }))
 }
 
-/// Returns the first item that's already been seen, if any.
+/// First item already seen, if any.
 fn first_duplicate<'a>(mut items: impl Iterator<Item = &'a str>) -> Option<&'a str> {
     let mut seen = HashSet::new();
     items.find(|item| !seen.insert(*item))
 }
 
-/// Clones the base rootfs for one sandbox. Uses `cp --reflink=auto`
-/// rather than `std::fs::copy` so this becomes an instant copy-on-write
-/// clone for free on a filesystem that supports it (XFS, Btrfs) — on
-/// ext4 (what the dev box runs) `--reflink=auto` just falls back to an
-/// ordinary copy, so this has no effect there, but costs nothing either.
-/// `pub(crate)`: also reused by `routes_snapshot`'s history-retaining
-/// resume and by `routes_snapshot_history`'s restore path, for the exact
-/// same reason it exists here — handing a *shared* rootfs file to a new
-/// live, mutating sandbox would corrupt whatever else still depends on
-/// that file staying exactly as it was.
+/// `cp --reflink=auto` instead of `std::fs::copy`: an instant CoW clone
+/// on a filesystem that supports it (XFS, Btrfs); on ext4 (this dev box)
+/// it's just an ordinary copy. `pub(crate)`: also used by
+/// `routes_snapshot`'s history-retaining resume and
+/// `routes_snapshot_history`'s restore, for the same reason — handing a
+/// *shared* rootfs to a new mutating sandbox would corrupt whatever else
+/// depends on that file staying unchanged.
 pub(crate) fn clone_rootfs(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     let status = std::process::Command::new("cp").arg("--reflink=auto").arg(src).arg(dst).status()?;
     if !status.success() {

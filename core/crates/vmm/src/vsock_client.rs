@@ -15,11 +15,10 @@ use std::path::Path;
 use std::time::Duration;
 
 /// Bounds every blocking read/write on the vsock stream. Without this, a
-/// guest that connects but never answers — a paused VM (vCPUs halted, so
-/// the agent inside literally cannot respond) is the case that surfaced
-/// this — hangs the call forever: the retry/deadline logic in
-/// `crate::vm::Vm::call` only bounds *between* attempts, not a single
-/// attempt that never returns at all.
+/// guest that connects but never answers (a paused VM, vCPUs halted, is
+/// the case that surfaced this) hangs forever — `Vm::call`'s retry/
+/// deadline logic only bounds *between* attempts, not one that never
+/// returns.
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Sends one request to the guest agent and returns its response. Opens a
@@ -38,18 +37,14 @@ pub fn call(uds_path: &Path, guest_port: u32, request: &Request) -> io::Result<R
     decode_response(&raw).map_err(to_io_err)
 }
 
-/// Opens a new, long-lived vsock connection for an interactive PTY
-/// session — a fundamentally different shape from `call` above: this
-/// returns the raw, still-open stream for the caller to shovel bytes
-/// through indefinitely, rather than reading exactly one response and
-/// closing. Deliberately does *not* leave `IO_TIMEOUT` set on the
-/// returned stream (unlike `call`, where every operation is a bounded
-/// one-shot) — a real interactive session can go quiet for a long time
-/// with nothing typed, and that's not a hung connection.
+/// Opens a long-lived vsock connection for an interactive PTY session —
+/// unlike `call`, returns the raw, still-open stream for the caller to
+/// shovel bytes through indefinitely. Deliberately clears `IO_TIMEOUT` on
+/// the returned stream: a real session can go quiet a long time with
+/// nothing typed, and that's not a hung connection.
 pub fn open_pty(uds_path: &Path, pty_port: u32, cols: u16, rows: u16) -> io::Result<UnixStream> {
     let mut stream = UnixStream::connect(uds_path)?;
-    // Timeouts apply only to the handshake below, not to the stream
-    // this function hands back — see the doc comment above.
+    // Timeout applies only to the handshake below, not the returned stream.
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
     connect_handshake(&mut stream, pty_port)?;
@@ -62,13 +57,10 @@ pub fn open_pty(uds_path: &Path, pty_port: u32, cols: u16, rows: u16) -> io::Res
     Ok(stream)
 }
 
-/// Opens a new, long-lived vsock connection for a streamed background
-/// exec session — same "open once, keep reading" shape as `open_pty`
-/// above, but the caller reads a sequence of framed `ExecStreamEvent`s
-/// off the returned stream (via `sandkiln_protocol::read_message` +
-/// `decode_exec_stream_event`) rather than raw bytes, until an `Exit`
-/// event arrives and the guest closes the connection. See
-/// `sandkiln_protocol::EXEC_STREAM_PORT`'s own doc comment.
+/// Opens a long-lived vsock connection for a streamed background exec
+/// session — same open-once shape as `open_pty`, but the caller reads
+/// framed `ExecStreamEvent`s (`read_message` + `decode_exec_stream_event`)
+/// instead of raw bytes, until `Exit` arrives and the guest closes it.
 pub fn open_exec_stream(
     uds_path: &Path,
     exec_stream_port: u32,
@@ -77,10 +69,7 @@ pub fn open_exec_stream(
     env: &HashMap<String, String>,
 ) -> io::Result<UnixStream> {
     let mut stream = UnixStream::connect(uds_path)?;
-    // Timeouts apply only to the handshake below, not to the stream this
-    // function hands back — same reasoning as `open_pty`: a background
-    // command can run quietly (no output) for a long time without that
-    // meaning anything is stuck.
+    // Timeout applies only to the handshake below, same as `open_pty`.
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
     connect_handshake(&mut stream, exec_stream_port)?;

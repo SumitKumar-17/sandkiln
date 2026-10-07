@@ -1,47 +1,27 @@
-//! Streamed background exec sessions: `POST /sandboxes/:id/exec-stream`
-//! starts a command running detached inside the guest, `GET
-//! /sandboxes/:id/exec-stream` lists sessions, and `GET
-//! /sandboxes/:id/exec-stream/:session_id/logs` (a WebSocket upgrade)
-//! attaches to one — this is `kiln logs -f`'s underlying mechanism (see
-//! `ROADMAP.md`'s CLI section).
+//! Streamed background exec sessions: `POST .../exec-stream` starts a
+//! command detached in the guest, `GET .../exec-stream` lists sessions,
+//! `GET .../exec-stream/:session_id/logs` (WebSocket) attaches to one —
+//! `kiln logs -f`'s mechanism.
 //!
-//! **A background process, not a streaming variant of `routes_exec::exec`.**
-//! Today's `exec` blocks for exactly one HTTP request's lifetime and
-//! returns one stdout/stderr blob at the end — fine for a quick command,
-//! useless for a long-running build/server process a caller wants to
-//! watch without holding one connection open the whole time. Starting a
-//! session here returns immediately with a session id; the command keeps
-//! running (and its output keeps being captured into a
-//! [`crate::log_session::LogSession`]) independent of whether anyone is
-//! currently attached, and any number of `logs` WebSocket clients can
-//! attach and detach over that session's lifetime, each getting a full
-//! **replay of everything captured so far, then a live tail** — not just
-//! whatever's emitted after they happen to connect.
+//! Not a streaming variant of `routes_exec::exec` (which blocks for one
+//! request's lifetime, one final blob) — this returns immediately with a
+//! session id; the command keeps running and its output keeps being
+//! captured into a [`crate::log_session::LogSession`] regardless of
+//! whether anyone's attached, and any number of `logs` clients can
+//! attach/detach over the session's life, each getting a full **replay,
+//! then live tail**.
 //!
-//! **The daemon does the buffering, not the guest.** `start_exec_stream`
-//! opens one long-lived vsock connection to
-//! `sandkiln_vmm::EXEC_STREAM_PORT` (via `Vm::open_exec_stream`) and
-//! spawns `pump_exec_stream` to read framed `ExecStreamEvent`s off it for
-//! as long as the connection stays open — this "pump" is the session's
-//! only consumer of the guest connection, running detached from the HTTP
-//! request that started it. Guest agent process management stays simple
-//! (see `sandkiln-guest-agent`'s `exec_stream` module): it never needs to
-//! track a session past its own one connection, since the daemon-side
-//! pump is what survives across multiple client attach/detach cycles,
-//! not anything in the guest.
+//! The daemon does the buffering, not the guest: `start_exec_stream`
+//! opens one long-lived vsock connection (`Vm::open_exec_stream`) and
+//! spawns `pump_exec_stream` to read it for as long as it stays open —
+//! the guest agent itself never tracks a session past its own one
+//! connection.
 //!
-//! **What doesn't survive**: a daemon restart, or the sandbox stopping —
-//! see `crate::log_session`'s own module doc comment. This is
-//! deliberately the same scope `Sandbox::pty_session_count` already has
-//! (in-memory, tied to one `Sandbox` value, nothing carried across
-//! resume/fork/restore) — a real limitation worth knowing, not a
-//! trade-off unique to this feature.
-//!
-//! No holder-tracking, no concurrency cap — unlike `routes_pty`, there's
-//! no shared resource here two sessions could contend over (each session
-//! gets its own independent vsock connection and its own child process),
-//! so nothing here needs `routes_pty::MAX_PTY_SESSIONS_PER_SANDBOX`'s
-//! kind of guard.
+//! Doesn't survive a daemon restart or the sandbox stopping (in-memory,
+//! tied to one `Sandbox` value, same scope as
+//! `Sandbox::pty_session_count`). No holder-tracking or concurrency cap
+//! like `routes_pty` needs — each session owns its own independent vsock
+//! connection and child process, nothing to contend over.
 
 use crate::error::AppError;
 use crate::log_session::{LogEvent, LogSession};
@@ -184,15 +164,12 @@ pub async fn attach_logs(
     Ok(ws.on_upgrade(move |socket| async move { stream_logs(socket, session).await }))
 }
 
-/// Reads framed `ExecStreamEvent`s off `stream` (one long-lived vsock
-/// connection opened by `start_exec_stream`, not tied to any client)
-/// until an `Exit` event or the connection drops, appending each
-/// stdout/stderr chunk into `session` in arrival order — this is what
-/// makes the process's output available for replay/live-tail regardless
-/// of whether anyone is currently attached via `attach_logs`. Runs on a
-/// blocking task (`std::os::unix::net::UnixStream`, not tokio's) for the
-/// entire lifetime of the connection, same reasoning as
-/// `routes_exec::call_agent`'s own use of `spawn_blocking`.
+/// Reads framed `ExecStreamEvent`s off `stream` (opened by
+/// `start_exec_stream`, not tied to any client) until `Exit` or the
+/// connection drops, appending each chunk into `session` — what makes
+/// output available for replay/live-tail regardless of whether anyone's
+/// attached. Blocking task (`std::os::unix::net::UnixStream`, not
+/// tokio's), same reasoning as `routes_exec::call_agent`.
 fn pump_exec_stream(mut stream: std::os::unix::net::UnixStream, session: Arc<LogSession>) {
     use base64::Engine;
     loop {

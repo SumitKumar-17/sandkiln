@@ -4,22 +4,17 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 /// Firecracker jailer support: chroot, cgroup v2 limits, a dedicated
-/// unprivileged uid/gid per VM. Presence of a `Config::jailer` (vs.
-/// `None`) is what turns this on for the whole daemon — see
-/// `Config::from_env`'s `SANDKILN_JAILER_ENABLED` handling.
-///
-/// Deliberately a daemon-operator setting, not a per-`POST /sandboxes`
-/// request field: letting an API caller opt out of a security boundary
-/// the operator turned on would defeat the point of turning it on. See
-/// `sandkiln_vmm::jailer`'s module doc comment for what jailer actually
-/// does and why it needs the `jailer` binary itself made setuid-root
-/// (`SELF_HOSTING.md` documents the one-time setup).
+/// unprivileged uid/gid per VM. `Config::jailer: Some(_)` turns this on
+/// for the whole daemon (`SANDKILN_JAILER_ENABLED`). Daemon-operator
+/// setting, not a per-request field — letting a caller opt out would
+/// defeat a boundary the operator turned on. See `sandkiln_vmm::jailer`
+/// for the mechanism and why `jailer` itself needs setuid-root
+/// (`SELF_HOSTING.md`).
 pub struct JailerHostConfig {
     pub jailer_bin: PathBuf,
     pub chroot_base_dir: PathBuf,
-    /// The uid/gid range dedicated to jailed VMs — see
-    /// `sandkiln_vmm::jailer::JailerIdPool`'s doc comment for why this
-    /// needs to be a range the host doesn't use for anything else.
+    /// Uid/gid range dedicated to jailed VMs — must not overlap anything
+    /// else on the host (`sandkiln_vmm::jailer::JailerIdPool`).
     pub uid_gid_range: RangeInclusive<u32>,
 }
 
@@ -30,131 +25,86 @@ pub struct Config {
     pub base_rootfs_path: PathBuf,
     pub vcpu_count: u8,
     pub mem_size_mib: u32,
-    /// Upper bound on a per-sandbox `vcpu_count` override accepted via
-    /// `POST /sandboxes` (see `routes_sandbox::CreateSandboxRequest`) —
-    /// without a ceiling, a caller could ask for a VM sized to exhaust the
-    /// host. Doesn't affect `vcpu_count` above, which is still what's used
-    /// when a request doesn't override it, and is expected to be `<=`
-    /// this (checked at startup, below).
+    /// Ceiling on a per-sandbox `vcpu_count` override (`POST /sandboxes`)
+    /// — without it a caller could size a VM to exhaust the host.
+    /// `vcpu_count` above must be `<=` this (checked at startup).
     pub max_vcpu_count: u8,
     /// Same ceiling, for `mem_size_mib`.
     pub max_mem_size_mib: u32,
     pub bridge_name: String,
     pub bridge_gateway: Ipv4Addr,
-    /// The host interface sandbox traffic gets NATed out through. `None`
-    /// means "detect the default route interface at startup" — see
-    /// `network::detect_uplink_iface`.
+    /// Host interface sandbox traffic NATs out through. `None` = detect
+    /// the default route at startup (`network::detect_uplink_iface`).
     pub uplink_iface: Option<String>,
-    /// Must match what `scripts/host-setup/create-tap-pool.sh` was run with — this
-    /// is the daemon's max concurrent-sandbox-with-networking ceiling.
+    /// Must match `scripts/host-setup/create-tap-pool.sh`'s own run — the
+    /// daemon's max concurrent-sandbox-with-networking ceiling.
     pub tap_pool_prefix: String,
     pub tap_pool_size: u32,
-    /// Bearer token required on every `/sandboxes*` request. `None` (the
-    /// env var unset) disables auth entirely — fine for local dev, not
-    /// for anything reachable beyond localhost.
+    /// Bearer token for `/sandboxes*`. `None` (unset) disables auth
+    /// entirely — fine for local dev, not beyond localhost.
     pub auth_token: Option<String>,
-    /// Where persistent drives live. Deliberately not
-    /// `std::env::temp_dir()` — that's where `create_sandbox` puts
-    /// per-sandbox rootfs copies, which get deleted on sandbox stop.
-    /// Drives are meant to outlive that, so they get their own directory.
+    /// Persistent drives' home. Not `std::env::temp_dir()` — that's
+    /// per-sandbox rootfs copies, deleted on stop; drives outlive that.
     pub drives_dir: PathBuf,
-    /// Where registered images live (see `sandkiln_vmm::image::ImageStore`
-    /// and `routes_images`) — a caller-named, daemon-tracked rootfs a
-    /// `POST /sandboxes` request can boot from instead of
-    /// `base_rootfs_path`. Deliberately its own directory rather than
-    /// reusing `drives_dir`: images and drives are different resource
-    /// kinds (bootable rootfs vs. attachable block device) that happen to
-    /// share a storage shape, and keeping them apart avoids an `<id>.ext4`
-    /// collision between the two id namespaces.
+    /// Registered images' home (`sandkiln_vmm::image::ImageStore`,
+    /// `routes_images`) — a named rootfs `POST /sandboxes` can boot from
+    /// instead of `base_rootfs_path`. Own directory, not `drives_dir`:
+    /// different resource kinds sharing a storage shape would otherwise
+    /// collide on `<id>.ext4` across the two id namespaces.
     pub images_dir: PathBuf,
-    /// Where the durable sandbox-lifecycle history database lives (see
-    /// `sandkiln_store::HistoryStore`) — its own file rather than living
-    /// under `drives_dir`/`images_dir`, since it's neither a drive nor
-    /// an image but a third, unrelated resource kind that happens to
-    /// also want a default path under `~/sandkiln-tools`.
+    /// Durable sandbox-history database (`sandkiln_store::HistoryStore`)
+    /// — its own file, a third unrelated resource kind.
     pub history_db_path: PathBuf,
-    /// How long a sandbox can go without any exec/read-file/write-file
-    /// activity before the daemon stops it automatically — VM killed,
-    /// network lease released, rootfs deleted, state gone for good (see
-    /// `idle_reaper`). `None` — the env var unset, or set to `0` — disables
-    /// this entirely: sandboxes run until explicitly stopped, today's
-    /// behavior, unchanged unless a self-hosted instance opts in.
-    ///
-    /// See `auto_suspend_timeout`'s doc comment for how the two interact
-    /// when both are configured.
+    /// Idle time before the daemon destroys a sandbox outright (VM
+    /// killed, lease released, rootfs deleted — see `idle_reaper`).
+    /// `None`/`0` disables it; sandboxes then run until explicitly
+    /// stopped. See `auto_suspend_timeout` for how the two interact.
     pub idle_timeout: Option<Duration>,
-    /// How long a sandbox can go without activity before the daemon
-    /// auto-suspends it instead of destroying it: pauses the microVM,
-    /// snapshots it to disk (the same pause+snapshot path
-    /// `POST /sandboxes/:id/snapshot` uses), and releases the VM process
-    /// and its vcpu/memory — cheaper than staying booted, and resumable
-    /// without a cold boot. The sandbox disappears from `GET /sandboxes`
-    /// and reappears as a `Snapshot` (`Snapshot::source_sandbox_id` still
-    /// points at the original sandbox id — see
-    /// `routes_snapshot::list_snapshots`'s `?source_sandbox_id=` filter for
-    /// how a caller finds the resulting snapshot). `None` — the env var
-    /// unset, or set to `0` — disables this entirely, matching
-    /// `idle_timeout`'s opt-in, no-silent-behavior-change pattern.
+    /// Idle time before the daemon auto-suspends instead of destroying:
+    /// pause + snapshot (same path as `POST /sandboxes/:id/snapshot`),
+    /// releasing the VM process/vcpu/memory while staying resumable
+    /// without a cold boot. The sandbox becomes a `Snapshot`
+    /// (`source_sandbox_id` still points at the original id). `None`/`0`
+    /// disables it, same opt-in pattern as `idle_timeout`.
     ///
-    /// When both this and `idle_timeout` are configured, this must be
-    /// strictly less than `idle_timeout` (enforced in `from_env`, below).
-    /// The policy: auto-suspend always gets first crack at an idle
-    /// sandbox, and `idle_timeout` becomes a backstop rather than a
-    /// competing timer — a sandbox that suspends successfully leaves
-    /// `AppState::sandboxes` entirely (it's a `Snapshot` now), so
-    /// `idle_timeout` never runs against it again; a sandbox whose
-    /// auto-suspend keeps failing (e.g. a full disk, see
-    /// `idle_reaper::reap_once`) keeps accruing idle time as an ordinary
-    /// running sandbox and is eventually reclaimed by `idle_timeout`
-    /// instead of running forever because its cheaper suspend path is
-    /// broken. Requiring the strict ordering at startup, rather than
-    /// letting an operator configure them the other way around, rules out
-    /// a configuration where destroy would race ahead of suspend and make
-    /// this setting silently pointless.
+    /// Must be strictly less than `idle_timeout` when both are set
+    /// (enforced in `from_env`): auto-suspend gets first crack at an idle
+    /// sandbox, `idle_timeout` is the backstop for when suspend keeps
+    /// failing (e.g. a full disk), not a competing timer. A successful
+    /// suspend removes the sandbox from `AppState::sandboxes` entirely,
+    /// so `idle_timeout` never runs against it again. Enforcing the order
+    /// at startup rules out a config where destroy could race ahead and
+    /// make this setting silently pointless.
     pub auto_suspend_timeout: Option<Duration>,
-    /// How long a *held snapshot* (however it was created — auto-suspend,
-    /// a manual `POST /sandboxes/:id/snapshot`, doesn't matter) can sit
-    /// unresumed before the daemon moves its `state.snap`/`mem.bin` from
-    /// `snapshots_root()` to `archive_dir` — the "archive" tier of a
-    /// tiered idle lifecycle (running → suspended → archived), extending
-    /// today's binary auto-suspend rather than replacing it. `None` — the
-    /// env var unset, or set to `0` — disables this entirely, matching
-    /// `idle_timeout`'s opt-in pattern; independent of
-    /// `auto_suspend_timeout`/`idle_timeout` (no ordering requirement
-    /// between them — archiving is about a snapshot's own age, not a live
-    /// sandbox's idle time, so it applies equally whether auto-suspend is
-    /// even configured or not). A snapshot with a live fork
-    /// (`Snapshot::forked_into`) is never archived, same exclusion
-    /// `resume`/`delete` already apply. See `idle_reaper`'s archive pass
-    /// and `crate::snapshot`'s module doc comment.
+    /// Idle time before a *held snapshot* (any origin) gets its
+    /// `state.snap`/`mem.bin` moved from `snapshots_root()` to
+    /// `archive_dir` — the archive tier of running → suspended →
+    /// archived. `None`/`0` disables it; independent of
+    /// `auto_suspend_timeout`/`idle_timeout` (a snapshot's own age, not a
+    /// live sandbox's idle time — applies whether auto-suspend is
+    /// configured or not). A snapshot with a live fork is never archived,
+    /// same exclusion resume/delete already apply.
     ///
-    /// **Only `state.snap`/`mem.bin` move — the rootfs backing file never
-    /// does** (see `crate::snapshot::move_snapshot_files`'s own doc
-    /// comment for why). A genuine, if partial, win rather than the
-    /// complete one originally hoped for — `mem.bin` alone is often
-    /// comparable to or larger than the rootfs copy, so archiving still
-    /// meaningfully reduces hot-storage usage, just not all of it. Also
-    /// deliberately **not** the "remote storage" archive tier
-    /// `ROADMAP.md` originally sketched (an S3-compatible store, needing
-    /// the not-yet-built remote-storage-mounts feature) — `archive_dir`
-    /// is still a local filesystem path, just a separately configured one.
+    /// **Only `state.snap`/`mem.bin` move — never the rootfs file** (see
+    /// `crate::snapshot::move_snapshot_files`). Partial, not complete:
+    /// `mem.bin` alone is often comparable to or larger than the rootfs
+    /// copy, so this still meaningfully cuts hot-storage usage. Also not
+    /// `ROADMAP.md`'s originally-sketched remote-storage tier — still a
+    /// local path, just a separately configured one.
     pub archive_timeout: Option<Duration>,
-    /// Where archived snapshots live — see `archive_timeout`. Only
-    /// meaningful when `archive_timeout` is set, but always has a value
-    /// (same convention as `drives_dir`/`images_dir`) rather than being
-    /// `Option<PathBuf>` for one field to track alongside another.
+    /// Archived snapshots' home — meaningful only with `archive_timeout`
+    /// set, but always has a value (same convention as
+    /// `drives_dir`/`images_dir`) rather than a nested `Option`.
     pub archive_dir: PathBuf,
-    /// `SANDKILN_LOG_FORMAT=json` switches structured logging to one
-    /// JSON object per line, for production log pipelines that expect to
-    /// parse fields rather than a human-readable terminal format.
+    /// `SANDKILN_LOG_FORMAT=json` switches to one JSON object per line,
+    /// for pipelines parsing fields rather than reading a terminal.
     pub log_format: LogFormat,
-    /// How long `GET/POST/... /sandboxes/:id/preview/:port/*path` waits
-    /// for the guest's dev server to respond before giving up with a 504.
-    /// Deliberately generous compared to `exec`'s latency: a dev server
-    /// can be slow to first-compile a page (webpack/vite cold start).
+    /// How long `.../preview/:port/*path` waits before a `504`.
+    /// Generous relative to `exec` — a dev server can be slow to
+    /// first-compile (webpack/vite cold start).
     pub preview_timeout: Duration,
-    /// `None` (the default) — `SANDKILN_JAILER_ENABLED` unset or falsy —
-    /// keeps today's direct Firecracker spawn. See `JailerHostConfig`.
+    /// `None` (default, `SANDKILN_JAILER_ENABLED` unset/falsy) keeps
+    /// direct Firecracker spawn. See `JailerHostConfig`.
     pub jailer: Option<JailerHostConfig>,
 }
 
@@ -182,12 +132,9 @@ impl Config {
         let vcpu_count: u8 = env_or("SANDKILN_VCPU_COUNT", "2").parse().expect("SANDKILN_VCPU_COUNT must be a number");
         let mem_size_mib: u32 =
             env_or("SANDKILN_MEM_SIZE_MIB", "512").parse().expect("SANDKILN_MEM_SIZE_MIB must be a number");
-        // Defaults chosen generously enough not to surprise a self-hoster
-        // who never touches these — 16 vCPUs / 16 GiB is well above
-        // anything a single sandbox plausibly needs — while still being an
-        // actual ceiling rather than "unbounded unless you opt in", since
-        // the whole point is closing a resource-exhaustion gap by default,
-        // not just when an operator remembers to configure one.
+        // Default ceiling (16 vCPU/16GiB) is generous but real — closes
+        // the resource-exhaustion gap by default, not only when an
+        // operator remembers to configure one.
         let max_vcpu_count: u8 =
             env_or("SANDKILN_MAX_VCPU_COUNT", "16").parse().expect("SANDKILN_MAX_VCPU_COUNT must be a number");
         let max_mem_size_mib: u32 = env_or("SANDKILN_MAX_MEM_SIZE_MIB", "16384")
@@ -246,11 +193,9 @@ fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
-/// Shared parsing for `SANDKILN_IDLE_TIMEOUT_SECS` and
-/// `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`: unset or `0` both mean "disabled"
-/// rather than the env var needing to be entirely absent to opt out, so a
-/// self-hoster can flip one off in a shared `.env` file by setting it to
-/// `0` instead of deleting the line.
+/// Shared by the three `*_TIMEOUT_SECS` vars: unset or `0` both mean
+/// "disabled," so a self-hoster can flip one off in a shared `.env` by
+/// setting `0` instead of deleting the line.
 fn parse_timeout_secs_env(key: &str) -> Option<Duration> {
     std::env::var(key)
         .ok()
@@ -263,10 +208,8 @@ fn parse_bool_env(value: Option<&str>) -> bool {
     matches!(value, Some(v) if v.eq_ignore_ascii_case("true") || v == "1")
 }
 
-/// The uid/gid range dedicated to jailed VMs: `base..=(base + size - 1)`.
-/// A `size` of `0` would produce an empty (and thus useless) range —
-/// callers should treat that as a configuration error rather than a
-/// silently-disabled pool, so this doesn't special-case it away.
+/// `base..=(base + size - 1)`. `size: 0` produces an empty range on
+/// purpose — a config error to surface, not a silently-disabled pool.
 fn jailer_uid_gid_range(base: u32, size: u32) -> RangeInclusive<u32> {
     base..=(base + size.saturating_sub(1))
 }
@@ -287,15 +230,10 @@ fn jailer_config_from_env() -> Option<JailerHostConfig> {
     })
 }
 
-/// Pure validation behind the `auto_suspend_timeout`/`idle_timeout`
-/// interaction documented on `Config::auto_suspend_timeout` — pulled out
-/// of `from_env` so the policy is directly testable without going through
-/// process-global env vars, same as `jailer_uid_gid_range` above. Passing
-/// (both unset, only one set, or `auto_suspend_timeout < idle_timeout`)
-/// returns `Ok`; the one invalid combination — auto-suspend configured at
-/// or past the destroy threshold, which would make it a race `idle_timeout`
-/// can win instead of a guaranteed-first backstop relationship — returns an
-/// `Err` describing why.
+/// The `auto_suspend_timeout`/`idle_timeout` ordering check, pulled out
+/// of `from_env` so it's testable without process-global env vars. `Err`
+/// only when auto-suspend is at or past the destroy threshold — the one
+/// combination that breaks the guaranteed-first-backstop relationship.
 fn check_suspend_precedes_destroy(auto_suspend_timeout: Option<Duration>, idle_timeout: Option<Duration>) -> Result<(), String> {
     match (auto_suspend_timeout, idle_timeout) {
         (Some(suspend), Some(destroy)) if suspend >= destroy => Err(format!(

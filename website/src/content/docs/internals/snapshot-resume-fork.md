@@ -16,7 +16,7 @@ Two consequences fall directly out of that shape, and both matter in this codeba
 
 ## Why sandkiln uses it here
 
-This is the standard technique for closing the gap between "a cold boot is fast" and "a workload is actually ready to do something": see [Startup latency & the pre-warmed pool](../startup-latency/) for the measured ~25-100x difference between a cold sandbox's first real command and a resumed one's. sandkiln builds three distinct operations on top of the same underlying mechanism, because "boot from a snapshot" turns out to have two genuinely different use cases that need different consumption rules.
+This is the standard technique for closing the gap between "a cold boot is fast" and "a workload is actually ready to do something": see [Startup latency & the pre-warmed pool](../../architecture/startup-latency/) for the measured ~25-100x difference between a cold sandbox's first real command and a resumed one's. sandkiln builds three distinct operations on top of the same underlying mechanism, because "boot from a snapshot" turns out to have two genuinely different use cases that need different consumption rules.
 
 ## Key terms
 
@@ -39,6 +39,13 @@ This is the standard technique for closing the gap between "a cold boot is fast"
 **A real bug, and what it teaches about the rootfs-path rule above.** For a while, a forked sandbox shared its source snapshot's rootfs *file* directly, not a copy, the literal same path. `forked_into`'s lock made that look safe as long as nothing was ever *concurrently* live twice. But the rule above ("resume reopens whatever's at the recorded path right now") doesn't care whether the violation is concurrent or sequential. Fork a snapshot, let the fork mutate the shared file, stop the fork, then resume the *original* snapshot directly: its device state still describes the rootfs from before the fork ever ran, but the file on disk now carries the fork's changes. This was reproduced live, not found by re-reading code. Write a marker, fork, overwrite the marker in the fork, stop the fork, resume the original, and the marker comes back with the fork's value. The fix follows directly from the file-path rule stated above: a fork now gets its own private rootfs clone (`cp --reflink=auto`, the same call a fresh `POST /sandboxes` already uses), so nothing a fork does can ever reach back into what the snapshot's next resume sees.
 
 **Time-travel restore.** Resume's "the snapshot is gone once you move forward from it" used to be unconditional. By default now, `POST /snapshots/:id/resume` still consumes the snapshot *record* the same way, but retires the underlying checkpoint into `GET /snapshots/history` instead of deleting its files, restorable again later via `POST /snapshots/history/:id/restore`, as many times as wanted, since restoring doesn't consume it either (`?retain_history=false` opts back into the fully-destructive original behavior). A restored sandbox owns a fresh rootfs clone and lease outright, exactly like a resume, which is also why it stays snapshottable afterward, unlike a fork. The same one-live-descendant lock generalizes across a whole lineage's history: restoring is refused with `409` while anything else sharing that checkpoint's frozen network identity is currently live.
+
+:::note[Why only one live fork]
+Firecracker has no mechanism to give two live descendants of one snapshot
+independent network identities. Rather than risk a silent IP/MAC collision,
+`Snapshot::forked_into` locks a snapshot to at most one live fork at a time —
+a second attempt gets a real `409`, not corruption.
+:::
 
 ## See it in action
 

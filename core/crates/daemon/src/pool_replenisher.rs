@@ -1,10 +1,6 @@
-//! Background task that keeps every configured pool topped up toward its
-//! `warm_count` — the other half of `crate::pool`; see that module's doc
-//! comment for the feature's overall shape and scope. Mirrors
-//! `crate::idle_reaper`'s own tick-loop shape (a fixed-interval
-//! `tokio::time::sleep`, reusing existing shared mechanics rather than
-//! inventing new VM-lifecycle plumbing) since both are background tasks
-//! that scan `AppState` and act on what they find.
+//! Background task keeping every configured pool topped up toward its
+//! `warm_count` — the other half of `crate::pool`. Same fixed-interval
+//! tick-loop shape as `crate::idle_reaper`.
 
 use crate::pool::PoolConfig;
 use crate::routes_sandbox::{create_sandbox_core, CreateSandboxRequest};
@@ -14,21 +10,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// How often the replenisher wakes to check every configured pool. Not
-/// currently configurable — see `crate::pool`'s "scoped honestly" list;
-/// a fixed default is enough for a first cut, and easy to turn into an
-/// env var later if a real need to tune it shows up. Spawned
-/// unconditionally from `main` (unlike `idle_reaper`, which only spawns
-/// when a timeout is configured) since an idle tick with no pools
-/// configured is a single empty lock-and-check, cheap enough not to
-/// bother wiring conditional spawn logic for.
+/// Not configurable yet — a fixed default is enough for a first cut.
+/// Spawned unconditionally from `main`: an idle tick with no pools
+/// configured is one cheap empty lock-and-check.
 const CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Tag applied to every warm-boot sandbox this creates, purely so it's
-/// identifiable in `GET /sandboxes`/`ps` output mid-replenish — not read
-/// back by any code here, and overwritten by the caller's own tags the
-/// moment a claim actually resumes this snapshot (see
-/// `routes_sandbox::create_sandbox_core`).
+/// Tags a warm-boot sandbox for identifiability in `GET /sandboxes`
+/// mid-replenish — not read back here, overwritten by the claimer's own
+/// tags once a claim resumes this snapshot.
 const POOL_TAG_KEY: &str = "sandkiln.pool";
 
 pub async fn run(state: Arc<AppState>) {
@@ -38,13 +27,10 @@ pub async fn run(state: Arc<AppState>) {
     }
 }
 
-/// One tick: for every pool under its target, replenish exactly one slot
-/// — not all of them at once, so a newly (re)configured pool with a large
-/// `warm_count` fills in gradually rather than spiking boot load across
-/// every tap device/CPU core at the same instant. The next tick picks up
-/// where this one left off. Pool configs are cloned out under the lock
-/// and acted on afterward, rather than holding `AppState::pools` locked
-/// across the slow boot+snapshot work below.
+/// One slot per due pool per tick (not all at once), so a large
+/// `warm_count` fills in gradually rather than spiking boot load; the
+/// next tick continues. Configs are cloned out from under the lock before
+/// the slow boot+snapshot work below, rather than holding it locked.
 async fn replenish_once(state: &Arc<AppState>) {
     let due: Vec<PoolConfig> = {
         let pools = state.pools.lock().unwrap();
@@ -64,13 +50,10 @@ async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) {
         mem_size_mib: Some(config.mem_size_mib),
         image_id: config.image_id.clone(),
         rate_limit: None,
-        // A warm-boot instance never has an egress policy baked in ahead
-        // of time -- the actual claimer's own policy (if any) is applied
-        // fresh at claim time instead, see `routes_sandbox::claim_from_pool`.
+        // Neither egress nor env is baked into a warm-boot instance -- the
+        // claimer's own values (if any) are applied fresh at claim time
+        // instead, see `routes_sandbox::claim_from_pool`.
         egress: None,
-        // Same reasoning as `egress` above -- the actual claimer's own
-        // env (if any) is written onto the claimed `Sandbox` directly in
-        // `claim_from_pool`, not baked into this placeholder boot.
         env: HashMap::new(),
     };
     let sandbox_id = match create_sandbox_core(state, request).await {
@@ -84,18 +67,15 @@ async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) {
     let snapshot_id = match snapshot_and_stop(state.clone(), sandbox_id.clone()).await {
         Ok(id) => id,
         Err(SnapshotStopError::NotFound) => {
-            // Only realistic cause: something else (an operator hitting
-            // the HTTP API directly, a concurrent idle-reaper tick — this
-            // sandbox is indistinguishable from any other by anything
-            // outside this pool) stopped or snapshotted it first.
+            // Something else (direct API call, a concurrent idle-reaper
+            // tick) stopped or snapshotted it first.
             tracing::warn!(pool_id = %config.id, sandbox_id = %sandbox_id, "warm instance was already gone by the time replenishment tried to snapshot it");
             return;
         }
         Err(SnapshotStopError::Blocked(_)) => {
-            // Can't actually happen: `create_sandbox_core` above never
-            // jails or forks a warm-boot sandbox. Handled anyway so this
-            // match stays exhaustive against `SnapshotStopError`'s real
-            // shape rather than a `_ =>` catch-all.
+            // Can't actually happen -- create_sandbox_core above never
+            // jails/forks a warm-boot sandbox. Handled anyway to keep this
+            // match exhaustive rather than a `_ =>` catch-all.
             tracing::warn!(pool_id = %config.id, sandbox_id = %sandbox_id, "warm instance was unexpectedly ineligible for snapshotting");
             return;
         }
@@ -105,10 +85,8 @@ async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) {
         }
     };
 
-    // The pool may have been deleted (the only way to reconfigure one —
-    // see `routes_pool`) while the boot+snapshot above was in flight; if
-    // so, this snapshot has nowhere to go and is cleaned up rather than
-    // left orphaned on disk with no pool ever able to claim it.
+    // Pool may have been deleted while the boot+snapshot above was in
+    // flight; if so, clean up rather than leave the snapshot orphaned.
     let still_configured = {
         let mut pools = state.pools.lock().unwrap();
         match pools.get_mut(&config.id) {

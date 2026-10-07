@@ -22,8 +22,8 @@ has Rust and Firecracker's own prerequisites (KVM, sudo) available:
 ```
 scripts/setup.sh          # builds everything, fetches a test image,
                            # injects the guest agent, creates the tap
-                           # pool, grants CAP_NET_ADMIN — idempotent,
-                           # safe to re-run
+                           # pool, starts the guest DNS proxy, grants
+                           # CAP_NET_ADMIN — idempotent, safe to re-run
 scripts/sandkilnd-ctl.sh start
 ```
 
@@ -300,7 +300,8 @@ pool once as root sidesteps this entirely: the daemon only ever
 attaches/detaches *existing* devices from then on.
 
 Guest DNS needs a forwarder, since guests can't necessarily reach public
-resolvers directly but can reach the host's own resolver:
+resolvers directly but can reach the host's own resolver. `scripts/setup.sh`
+starts this for you (as of this writing) — manually, it's:
 
 ```
 sudo scripts/host-setup/start-dns-proxy.sh 172.16.0.1   # match SANDKILN_BRIDGE_GATEWAY
@@ -310,7 +311,9 @@ This isn't a systemd service yet — if you're running the daemon as a
 persistent service (section 11), run this once per host boot too (a cron
 `@reboot` entry or a small systemd unit of your own both work; not
 shipped here yet, tracked as an open item in `ROADMAP.md`'s
-Observability section).
+Observability section). `setup.sh` only starts it if nothing is already
+listening on the gateway's port 53, so re-running it after a reboot is
+exactly the right way to bring it back.
 
 `scripts/dev-tools/setup-tap-network.sh` is a **different, older tool** — a
 point-to-point (single tap, no bridge) model used only by

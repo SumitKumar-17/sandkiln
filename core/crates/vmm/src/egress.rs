@@ -1,55 +1,31 @@
-//! Per-sandbox egress (outbound) network policy: IP/CIDR allow and deny
-//! lists layered on top of `network.rs`'s shared bridge-wide NAT/forward
-//! setup, which stays completely untouched for any sandbox that doesn't
-//! opt in — this only ever adds rules ahead of that existing catch-all
-//! `ACCEPT`, never modifies it.
+//! Per-sandbox egress (outbound) firewall, layered on `network.rs`'s
+//! shared bridge-wide NAT/forward setup without modifying it.
 //!
-//! One dedicated iptables chain per sandbox (named from its tap device,
-//! already a short, unique-per-lease identifier — `sandkiln_vmm::network`
-//! never reuses one while it's leased) rather than juggling rule numbers
-//! in the shared `FORWARD` chain: every rule this policy needs lives in
-//! that one chain, in a fixed, always-correct order (deny rules, then
-//! allow rules, then the base-mode default), and the *only* thing
-//! touching `FORWARD` itself is one `-I FORWARD 1` jump rule routing this
-//! sandbox's own outbound traffic (matched by its unique `guest_ip`, not
-//! its tap — the existing bridge-wide rules already show traffic is
-//! evaluated post-bridging, where interface matching means the bridge
-//! itself, not the originating tap) into that chain before the general
-//! `ACCEPT` ever gets a chance to short-circuit it.
+//! One iptables chain per sandbox (`SK-EG-<tap_device>`, tap names are
+//! unique while leased) instead of juggling rule numbers in `FORWARD`:
+//! every rule lives in that chain (deny, then allow, then the mode
+//! default — first-match-wins makes deny always beat allow on overlap,
+//! no special-casing needed), and the only thing touching `FORWARD`
+//! itself is one `-I FORWARD 1` jump rule matched by `guest_ip` (not the
+//! tap — traffic is evaluated post-bridging, where interface matching
+//! means the bridge, not the tap).
 //!
-//! **Deny always wins on overlap** — not because of any special-casing,
-//! just rule order: deny rules are always appended to the chain before
-//! allow rules, and iptables evaluates a chain top-to-bottom, first
-//! match wins.
+//! **Scoped to `-o <uplink>` only**, same as the bridge-wide rule — DNS
+//! to the bridge's own gateway IP never transits the uplink, so it's
+//! structurally exempt without an explicit allowlist entry; `DenyAll`
+//! can still resolve names, just can't reach past the gateway.
 //!
-//! **Scoped to `-o <uplink>` only, matching the existing bridge-wide
-//! rule's own scoping** — gateway-bound traffic (DNS to the bridge's own
-//! IP) never transits the uplink at all, so it's structurally unaffected
-//! by any egress policy here without needing an explicit exemption; a
-//! `DenyAll` sandbox can still resolve names, it just can't reach
-//! anything past the gateway that isn't explicitly allowed.
+//! **Not built**: domain-level rules (needs the DNS proxy to become
+//! source-IP-aware — see `ROADMAP.md`'s "Firewall and egress policy")
+//! and port matching (`-p tcp --dport`, a straightforward future
+//! extension). IPv4 only.
 //!
-//! **Deliberately not built in this first slice**: domain-level rules
-//! (would need the shared DNS proxy to become source-IP-aware, a
-//! separate, larger change — see `ROADMAP.md`'s "Firewall and egress
-//! policy" section) and port-level matching (`-p tcp --dport`, a
-//! straightforward future extension of the same rule shape, just not
-//! part of this pass). IPv4 only, matching every other networking type
-//! in this crate.
-//!
-//! **Lifecycle**: applied once a lease is actually in active use for a
-//! live VM (a fresh boot, or a resume/fork reusing a snapshot's retained
-//! lease) and removed only when that lease is finally released back to
-//! `NetworkManager`'s free pool — not on a mere snapshot-and-stop, which
-//! leaves the lease (and so the tap device and this chain) dormant but
-//! intact, exactly like the tap device itself stays attached-but-unused
-//! through that window. `apply` is idempotent (flushes and repopulates an
-//! already-existing chain rather than erroring) specifically so a resume
-//! can call it unconditionally without needing to know whether the chain
-//! already survived from before — true after a plain daemon restart
-//! (iptables state lives in the kernel, not the daemon process) and
-//! harmless to repeat after a real host reboot (nothing survived to
-//! flush).
+//! **Lifecycle**: tied to the lease, not the VM — applied when a lease
+//! goes live (boot, resume, fork), removed only when the lease is
+//! released. A snapshot-and-stop leaves it dormant but intact, like the
+//! tap device. `apply` is idempotent (flush-and-repopulate) so a resume
+//! can call it unconditionally — needed after a daemon restart (iptables
+//! state lives in the kernel) and harmless after a real reboot.
 
 use crate::network::run;
 use serde::{Deserialize, Serialize};
@@ -58,12 +34,10 @@ use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 
-/// `Serialize`/`Deserialize` here (and on `EgressPolicy` below) are for
-/// `crate::snapshot::SnapshotMeta` in the daemon crate — a sandbox's
-/// egress policy is carried through snapshot/resume/fork exactly like
-/// its tags/name/drives are, so it doesn't silently disappear (a real
-/// security regression, not just a convenience gap) the moment a
-/// protected sandbox is ever snapshotted and resumed.
+/// `Serialize`/`Deserialize` (here and on `EgressPolicy`) are for
+/// `crate::snapshot::SnapshotMeta` — an egress policy is carried through
+/// snapshot/resume/fork like tags/name/drives, so it can't silently
+/// disappear (a security regression) when a protected sandbox resumes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EgressMode {
@@ -76,11 +50,9 @@ pub enum EgressMode {
     DenyAll,
 }
 
-/// One sandbox's egress policy — see this module's own doc comment for
-/// the full design. `allow_cidrs`/`deny_cidrs` are already-validated
-/// (`validate_cidr`) IPv4 CIDR strings, checked at the API boundary
-/// (`routes_sandbox::CreateSandboxRequest`) so this module never has to
-/// reject one itself.
+/// One sandbox's egress policy. `allow_cidrs`/`deny_cidrs` are already
+/// validated (`validate_cidr`) at the API boundary
+/// (`routes_sandbox::CreateSandboxRequest`), not here.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EgressPolicy {
     pub mode: EgressMode,
@@ -88,11 +60,10 @@ pub struct EgressPolicy {
     pub deny_cidrs: Vec<String>,
 }
 
-/// Validates an IPv4 CIDR string (`"10.0.0.0/8"`) without needing a new
-/// crate dependency — iptables itself already understands CIDR notation
-/// natively, so this only ever exists to reject a malformed policy with
-/// a clear error at request time instead of a cryptic iptables failure
-/// bubbling up from deep inside a boot task.
+/// Validates an IPv4 CIDR string (`"10.0.0.0/8"`) — no new dependency,
+/// iptables already understands CIDR; this just turns a malformed policy
+/// into a clear error at request time instead of a cryptic iptables
+/// failure deep inside a boot task.
 pub fn validate_cidr(s: &str) -> Result<(), String> {
     let (addr, prefix) = s.split_once('/').ok_or_else(|| format!("'{s}' is not a CIDR (expected e.g. '10.0.0.0/8')"))?;
     Ipv4Addr::from_str(addr).map_err(|_| format!("'{s}' has an invalid IPv4 address"))?;
@@ -107,23 +78,16 @@ fn chain_name(tap_device: &str) -> String {
     format!("SK-EG-{tap_device}")
 }
 
-/// Installs (or, if this sandbox's chain already exists from a prior
-/// call — see this module's own doc comment on why that's expected, not
-/// an error — re-installs) `policy` for the sandbox holding `guest_ip`
-/// on `tap_device`, egressing via `uplink`. Idempotent: safe to call
-/// unconditionally on every resume/fork, not just a fresh boot.
+/// Installs (or re-installs — idempotent, expected on resume/fork)
+/// `policy` for the sandbox holding `guest_ip` on `tap_device`, egressing
+/// via `uplink`.
 ///
-/// The chain's own rules (create-or-flush, then every deny/allow/default
-/// line) are loaded as one `iptables-restore --noflush` call instead of
-/// one `iptables` spawn per rule: measured on a real box, a 6-CIDR policy
-/// (9 spawns under the old one-call-per-rule shape) cost ~8.3ms average
-/// per create, real but easy to cut since each spawn pays the same
-/// fork+exec tax regardless of how little work it does. `--noflush`
-/// leaves every other chain in the table (including `FORWARD` and any
-/// other sandbox's own `SK-EG-*` chain) untouched; only the two rules that
-/// actually touch the shared `FORWARD` chain stay as individual
-/// `iptables` calls, both cheap and already minimal (a `-C` check, and an
-/// `-I` only when it's missing).
+/// Rules load as one `iptables-restore --noflush` call instead of one
+/// `iptables` spawn per rule — cut a 6-CIDR policy from ~8.3ms to ~3.1ms
+/// per create, since each spawn pays the same fork+exec cost regardless
+/// of work done. `--noflush` leaves every other chain untouched; only the
+/// two rules touching `FORWARD` itself stay individual `iptables` calls
+/// (a `-C` check, an `-I` only when missing).
 pub fn apply(guest_ip: Ipv4Addr, tap_device: &str, uplink: &str, policy: &EgressPolicy) -> io::Result<()> {
     let chain = chain_name(tap_device);
 
@@ -154,11 +118,8 @@ pub fn apply(guest_ip: Ipv4Addr, tap_device: &str, uplink: &str, policy: &Egress
     Ok(())
 }
 
-/// Feeds `input` (iptables-restore's line-oriented rule format) to
-/// `iptables-restore` over stdin, the same way `crate::network::run`
-/// shells out to `iptables` itself: on a non-zero exit, the error message
-/// carries stderr so a malformed policy fails with the same clarity a
-/// single bad `iptables -A` call would.
+/// Feeds `input` to `iptables-restore` over stdin. On failure, the error
+/// carries stderr, same clarity as a single bad `iptables -A` call.
 fn run_restore(input: &str) -> io::Result<()> {
     let mut child = Command::new("iptables-restore").arg("--noflush").stdin(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     child.stdin.take().expect("stdin was piped").write_all(input.as_bytes())?;
@@ -172,11 +133,9 @@ fn run_restore(input: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// Tears down everything `apply` set up for this sandbox — the jump rule
-/// in `FORWARD` and the chain itself. Best-effort: called from a
-/// sandbox's final teardown (lease release), where a missing rule/chain
-/// (e.g. this sandbox never actually had a policy applied) isn't an
-/// error worth failing the whole teardown over.
+/// Tears down the `FORWARD` jump rule and the chain itself. Best-effort —
+/// called at lease release, where a missing rule/chain (no policy was
+/// ever applied) isn't worth failing the teardown over.
 pub fn remove(guest_ip: Ipv4Addr, tap_device: &str, uplink: &str) {
     let chain = chain_name(tap_device);
     let guest_ip_str = guest_ip.to_string();

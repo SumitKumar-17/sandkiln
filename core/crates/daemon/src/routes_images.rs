@@ -1,33 +1,21 @@
 //! HTTP handlers for registered images: named, daemon-tracked ext4 rootfs
 //! files a `POST /sandboxes` request can boot from instead of the
-//! daemon-wide `SANDKILN_BASE_ROOTFS` default (see that route's `image_id`
-//! field in `routes_sandbox`). Kept separate from `routes_sandbox.rs` for
-//! the same reason `routes_drives.rs` is its own file — a shared file is a
-//! guaranteed merge-conflict point once more than one feature touches it.
+//! `SANDKILN_BASE_ROOTFS` default. Own file for the same reason
+//! `routes_drives.rs` is.
 //!
-//! Registration (`POST /images`) does not accept a file upload. The
-//! caller/operator gives a path to an already-built ext4 rootfs already
-//! staged on the host filesystem the daemon itself runs on — accepting an
-//! arbitrary, potentially multi-gigabyte file over HTTP is a distinct,
-//! larger problem than registering one that already exists on disk (see
-//! `sandkiln_vmm::image`'s module doc comment and `images/README.md`).
-//! Converting an OCI/Docker image into a bootable rootfs is out of scope
-//! entirely — this only ever manages already-built ext4 images.
+//! `POST /images` takes a host filesystem path, not a file upload —
+//! accepting an arbitrary multi-gigabyte upload over HTTP is a distinct,
+//! larger problem than registering a file that already exists. Converting
+//! an OCI/Docker image into a bootable rootfs is out of scope entirely.
 //!
-//! **The daemon cannot verify a registered image actually has the guest
-//! agent baked in.** That check (`scripts/preflight-check.sh
-//! --root-checks`) needs to loop-mount the image read-only and inspect its
-//! contents — real root, which this daemon deliberately does not have (see
-//! root `AGENTS.md`'s Security section: it runs unprivileged with only
-//! ambient `CAP_NET_ADMIN`, and there is no way for an already-running
-//! unprivileged process to acquire root on demand). Every response that
-//! describes a registered image says so explicitly via
+//! **The daemon can never verify a registered image has the guest agent
+//! baked in** — that needs loop-mounting as root
+//! (`scripts/preflight-check.sh --root-checks`), and this daemon
+//! deliberately has no root. Every response says so via
 //! `ImageSummary::guest_agent_verified`/`verification_hint` rather than
-//! silently claiming an image is boot-ready — the single most common way a
-//! custom image otherwise fails is booting fine but never responding to
-//! `exec` because the agent was never injected, and a caller should see
-//! that risk every time they look at the image, not just once at
-//! registration.
+//! implying boot-readiness — the common failure mode is an image that
+//! boots fine but never answers `exec` because the agent was never
+//! injected.
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -50,14 +38,11 @@ const VERIFICATION_HINT: &str = "the daemon cannot verify the guest agent is bak
 
 #[derive(Deserialize)]
 pub struct CreateImageRequest {
-    /// Caller-chosen, daemon-unique name for this image, e.g.
-    /// `"python-3.12-custom"`. Required (unlike a drive's server-generated
-    /// id): an image is meant to be a stable, memorable identity reused
-    /// across many `POST /sandboxes` calls, not a one-off handle a caller
-    /// only ever gets back from a create response. Validated by
-    /// `sandkiln_vmm::image::ImageStore` — path separators, leading dots,
-    /// and anything else unsafe as a filename component are rejected with
-    /// `400`.
+    /// Caller-chosen, daemon-unique name, e.g. `"python-3.12-custom"`.
+    /// Required (unlike a drive's server-generated id) — an image is a
+    /// stable, memorable identity reused across many creates, not a
+    /// one-off handle. Validated by `ImageStore`: no path separators,
+    /// leading dots, or other unsafe filename characters (`400`).
     id: String,
     /// Absolute path, on the host filesystem the daemon process itself
     /// runs on, to an already-built ext4 rootfs image. Copied (not

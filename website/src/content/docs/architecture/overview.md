@@ -25,7 +25,7 @@ Measured end to end: 10.5–10.9ms (was 32.3–33.1ms before a fixed 20ms socket
 
 Each of the following came from hitting a real constraint on real hardware, not a whiteboard preference:
 
-- [Privilege model](../privilege-model/): ambient `CAP_NET_ADMIN`, a static tap pool, and a root that stays out of the hot path.
-- [Wire protocol](../wire-protocol/): vsock, a length-prefixed JSON frame, and a client that doesn't reach for a full HTTP stack.
-- [Persistence model](../persistence-model/): sandbox vs. session, and why a snapshot points at paths instead of carrying values.
+- [Jailer & privilege model](../../internals/jailer-privilege-model/): ambient `CAP_NET_ADMIN`, a static tap pool, and a root that stays out of the hot path.
+- [vsock wire protocol](../../internals/vsock-wire-protocol/): vsock, a length-prefixed JSON frame, and a client that doesn't reach for a full HTTP stack.
+- [Snapshot, resume, and fork](../../internals/snapshot-resume-fork/): sandbox vs. session, and why a snapshot points at paths instead of carrying values.
 - [Bug hunt: the vsock timeout](../bug-hunt-vsock-timeout/), a case study of a real bug that could hang a stop forever.

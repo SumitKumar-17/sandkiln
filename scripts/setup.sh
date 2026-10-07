@@ -174,15 +174,30 @@ fi
 # ---------------------------------------------------------------------------
 step "inject the guest agent into the image"
 # ---------------------------------------------------------------------------
-# Cheap idempotency check: mount read-only and look for the binary we'd
-# install, rather than unconditionally re-mounting+writing every run.
+# Cheap idempotency check via debugfs -R stat, which reads an ext4 image's
+# metadata directly without mounting it — no root needed, unlike the loop
+# mount this used before. That matters specifically for a re-run against an
+# image an *earlier* checkout on this host already provisioned: with no
+# passwordless sudo configured for this checkout's own paths (the common
+# case — see SELF_HOSTING.md section 13), a mount-based check would itself
+# hang on a password prompt (or fail outright over a non-interactive shell)
+# on every single re-run, even when there's nothing left to do.
 AGENT_ALREADY_BAKED=0
-mnt="$(mktemp -d)"
-if sudo mount -o loop,ro "$ROOTFS_PATH" "$mnt" 2>/dev/null; then
-  [ -f "$mnt/usr/local/bin/sandkiln-agent" ] && AGENT_ALREADY_BAKED=1
-  sudo umount "$mnt" 2>/dev/null || sudo umount -l "$mnt" 2>/dev/null || true
+if command -v debugfs >/dev/null 2>&1; then
+  if debugfs -R "stat /usr/local/bin/sandkiln-agent" "$ROOTFS_PATH" 2>&1 | grep -q '^Inode:'; then
+    AGENT_ALREADY_BAKED=1
+  fi
+else
+  # Fall back to the old mount-based check on a host without e2fsprogs
+  # (uncommon — it ships on virtually every Linux distro since it's also
+  # what provides mkfs.ext4/fsck.ext4).
+  mnt="$(mktemp -d)"
+  if sudo mount -o loop,ro "$ROOTFS_PATH" "$mnt" 2>/dev/null; then
+    [ -f "$mnt/usr/local/bin/sandkiln-agent" ] && AGENT_ALREADY_BAKED=1
+    sudo umount "$mnt" 2>/dev/null || sudo umount -l "$mnt" 2>/dev/null || true
+  fi
+  rmdir "$mnt" 2>/dev/null || true
 fi
-rmdir "$mnt" 2>/dev/null || true
 
 if [ "$AGENT_ALREADY_BAKED" -eq 1 ]; then
   skip "guest agent already baked into $ROOTFS_PATH"
@@ -204,6 +219,23 @@ else
   sudo bash "$SCRIPT_DIR/host-setup/create-tap-pool.sh" "$TAP_POOL_SIZE" "$(whoami)" sktap \
     || { bad "create-tap-pool.sh failed"; exit 1; }
   ok "tap pool ready: sktap0..sktap$((TAP_POOL_SIZE - 1))"
+fi
+
+# ---------------------------------------------------------------------------
+step "DNS proxy for guest name resolution"
+# ---------------------------------------------------------------------------
+# Without this, sandboxes get outbound IP connectivity (via the bridge NAT
+# above) but never a working resolver -- a real, easy-to-miss gap, since a
+# sandbox that only ever calls out to raw IPs still looks fine. Quick
+# start's "two commands" promise isn't actually true without it, so it's
+# part of this script rather than a separate manual step users skip past.
+BRIDGE_GATEWAY="${SANDKILN_BRIDGE_GATEWAY:-172.16.0.1}"
+if ss -lnup 2>/dev/null | grep -q "${BRIDGE_GATEWAY}:53"; then
+  skip "dns proxy already listening on $BRIDGE_GATEWAY:53"
+else
+  sudo bash "$SCRIPT_DIR/host-setup/start-dns-proxy.sh" "$BRIDGE_GATEWAY" \
+    || { bad "start-dns-proxy.sh failed"; exit 1; }
+  ok "dns proxy listening on $BRIDGE_GATEWAY:53 (not a systemd service yet -- re-run this after a host reboot, see SELF_HOSTING.md section 5)"
 fi
 
 # ---------------------------------------------------------------------------

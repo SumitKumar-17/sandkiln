@@ -11,124 +11,92 @@ use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// A saved, stopped microVM: memory and device state on disk, ready to be
-/// resumed into a new live sandbox. This is what a sandbox becomes
-/// instead of being fully torn down — no `Vm`, no running process, but
-/// not gone either.
+/// A saved, stopped microVM: memory and device state on disk, resumable
+/// into a new live sandbox. What a sandbox becomes instead of being fully
+/// torn down.
 pub struct Snapshot {
     pub id: String,
-    /// The id of the sandbox this was taken from. Purely informational —
-    /// that sandbox no longer exists by the time a `Snapshot` exists.
+    /// Purely informational — that sandbox no longer exists once a
+    /// `Snapshot` does.
     pub source_sandbox_id: String,
-    /// The state file written by `Vm::snapshot`.
+    /// State file written by `Vm::snapshot`.
     pub snapshot_path: PathBuf,
-    /// The guest-memory file written by `Vm::snapshot`.
+    /// Guest-memory file written by `Vm::snapshot`.
     pub mem_file_path: PathBuf,
-    /// The rootfs image carried over unmodified from the sandbox that
-    /// made this snapshot. Firecracker's snapshot only records this
-    /// file's host path, not its contents, so it has to stay right where
-    /// it was when the snapshot was taken — ownership passes to the new
-    /// sandbox on resume, or the file is removed if this snapshot is
-    /// deleted outright instead.
+    /// Carried over unmodified. Firecracker's snapshot records only this
+    /// file's host path, not its contents, so it must stay put until
+    /// resume (ownership passes to the new sandbox) or deletion (file
+    /// removed).
     pub rootfs_path: PathBuf,
-    /// Held rather than released back to `NetworkManager`'s pool: the
-    /// guest's network config (IP, MAC) was finalized via kernel boot
-    /// args at the sandbox's original boot and is frozen into the
-    /// snapshotted memory image, so whatever resumes this snapshot must
-    /// reattach the exact same tap device rather than get a fresh lease.
-    /// See `sandkiln_vmm::vm::Vm::resume`'s doc comment for why.
+    /// Held, not released to `NetworkManager`'s pool: guest IP/MAC are
+    /// frozen into the snapshotted memory image via boot-time kernel args,
+    /// so a resume must reattach this exact tap device, never a fresh
+    /// lease. See `Vm::resume`.
     pub network: Lease,
-    /// Carried over from the source sandbox's `attached_drives`, read-only
-    /// flag included — a drive's data lives inside the snapshotted
-    /// memory/rootfs state the same way the network config does, so it
-    /// must stay marked attached while this snapshot exists, with the
-    /// same read-only flag it was attached with, or a caller could attach
-    /// a read-write copy of a drive this snapshot still holds read-write
-    /// and corrupt it via two VMs writing to one file.
+    /// Carried over from the source sandbox, read-only flag included — a
+    /// drive's data lives inside the snapshotted state the same way
+    /// network config does, so attaching a read-write copy elsewhere
+    /// while this snapshot still holds it read-write would let two VMs
+    /// write one file.
     pub attached_drives: Vec<AttachedDrive>,
-    /// Carried over from the source sandbox's `image_id` — see
-    /// `crate::sandbox::Sandbox::image_id`. `None` means the source
-    /// sandbox booted from the daemon-wide default rootfs, same meaning
-    /// as on `Sandbox`.
+    /// Carried over from `Sandbox::image_id`; `None` = daemon default
+    /// rootfs, same meaning as there.
     pub image_id: Option<String>,
     pub tags: HashMap<String, String>,
     pub created_at: SystemTime,
-    /// Carried over from the source sandbox's `Sandbox::name`, if it had
-    /// one — see that field's doc comment. Lets a caller find this
-    /// snapshot again by the same name it created the sandbox with,
-    /// whether via `GET /sandboxes/by-name/:name` (once resumed) or
-    /// `POST /sandboxes/get-or-create`.
+    /// Carried over from `Sandbox::name`, if set — lets a caller find
+    /// this snapshot again by name via `GET /sandboxes/by-name/:name`
+    /// (once resumed) or `get-or-create`.
     pub name: Option<String>,
-    /// Id of the live sandbox currently forked from this snapshot without
-    /// consuming it (`POST /snapshots/:id/fork`), if any. `Vm::resume`'s
-    /// `/snapshot/load` reopens the exact rootfs file this snapshot
-    /// records, and — if the source sandbox was networked — the exact tap
-    /// device, since the guest's IP/MAC were finalized at the source
-    /// sandbox's *original* boot and are frozen into the snapshotted
-    /// memory image (see `sandkiln_vmm::vm::Vm::resume`'s doc comment).
-    /// A second live descendant sharing either at once means two
-    /// Firecracker processes writing one rootfs file, or two guests
-    /// presenting the same boot-time IP/MAC on the bridge simultaneously —
-    /// real corruption and a real network collision, not hypothetical
-    /// ones. This field is the lock that rules both out: set while a fork
-    /// is being resumed and cleared only once that descendant's `Vm` has
-    /// actually been killed (`routes_sandbox::stop_sandbox_by_id`), and
-    /// checked by `fork_snapshot`, `resume_snapshot`, `delete_snapshot`,
-    /// and `snapshot_sandbox` alike before any of them touch this
-    /// snapshot's shared resources.
+    /// Live sandbox currently forked from this snapshot without consuming
+    /// it, if any. A resume reopens the exact rootfs file and (if
+    /// networked) the exact tap device this snapshot records, both frozen
+    /// at the source's original boot — a second live descendant sharing
+    /// either means two Firecracker processes writing one rootfs file, or
+    /// two guests presenting the same IP/MAC on the bridge at once. This
+    /// field is the lock ruling both out: set while a fork is resumed,
+    /// cleared only once that descendant's `Vm` is killed
+    /// (`stop_sandbox_by_id`), checked by `fork_snapshot`/
+    /// `resume_snapshot`/`delete_snapshot`/`snapshot_sandbox` alike.
     pub forked_into: Option<String>,
-    /// When this snapshot's files were moved from `snapshots_root()` to
-    /// the daemon's configured `archive_dir` — `None` means it's still
-    /// "hot" (the original, only location before archiving existed).
-    /// Set once, by `archive_snapshot_by_id`, and never cleared — there's
-    /// no "un-archive" operation; resuming/forking reads straight from
-    /// wherever `snapshot_path`/`mem_file_path`/`rootfs_path` currently
-    /// point, hot or archived, with no code-path difference either way.
-    /// See `crate::idle_reaper`'s archive pass and `Config::archive_timeout`.
+    /// When moved from `snapshots_root()` to `archive_dir`; `None` = still
+    /// hot. Set once by `archive_snapshot_by_id`, never cleared — no
+    /// un-archive op; resume/fork read from wherever the path fields
+    /// currently point, hot or archived, with no code-path difference.
+    /// See `idle_reaper`'s archive pass.
     pub archived_at: Option<SystemTime>,
-    /// The egress policy the sandbox this came from had, if any — carried
-    /// through so `routes_snapshot::resume_snapshot_by_id`/`fork_snapshot`
-    /// can (re-)apply it via `sandkiln_vmm::egress::apply`. Without this,
-    /// a protected sandbox's firewall would silently disappear the moment
-    /// it's ever snapshotted and resumed — a real security regression,
-    /// not just a lost convenience.
+    /// Carried through so resume/fork can re-apply it
+    /// (`sandkiln_vmm::egress::apply`) — without this, a protected
+    /// sandbox's firewall would silently vanish on snapshot+resume, a
+    /// real security regression.
     pub egress: Option<EgressPolicy>,
-    /// The snapshot the sandbox that produced this one was itself
-    /// resumed or forked from, if any — carried straight over from
-    /// `Sandbox::source_snapshot_id` at the moment this snapshot was
-    /// taken. `None` means this snapshot's source sandbox was cold-booted
-    /// (from the base rootfs or a registered image), making this snapshot
-    /// a root of its own lineage rather than a link in a longer chain.
-    /// This is a *parent* pointer, not a live reference — the parent
-    /// snapshot named here may since have been deleted, in which case the
-    /// chain simply ends at this snapshot as far as `GET /snapshots`
-    /// (`?parent_snapshot_id=`) can still see. See `ROADMAP.md`'s
-    /// "Snapshot lineage" entry for why a pointer (walkable in both
-    /// directions via that filter) rather than a fuller durable ancestry
-    /// tree is the deliberately narrow first slice here.
+    /// The snapshot this one's source sandbox was itself resumed/forked
+    /// from, if any (`None` = cold-booted, a lineage root). A *parent*
+    /// pointer, not a live reference — may point at a since-deleted
+    /// snapshot, in which case `GET /snapshots?parent_snapshot_id=` just
+    /// ends the chain there. See `ROADMAP.md`'s "Snapshot lineage" entry
+    /// for why a walkable pointer, not a fuller ancestry tree, is the
+    /// deliberately narrow first slice.
     pub parent_snapshot_id: Option<String>,
-    /// Carried over from the source sandbox's `Sandbox::mounts` — see
-    /// `crate::routes_mounts`'s module doc comment. No credentials here
-    /// (never were, on the `Sandbox` side either), and nothing to
-    /// re-apply on resume/fork: the mount is a live guest-side FUSE
-    /// process, already captured in the snapshotted memory image along
-    /// with everything else.
+    /// Carried over from `Sandbox::mounts` — see `routes_mounts`. No
+    /// credentials here, and nothing to re-apply on resume/fork: a mount
+    /// is a live guest FUSE process, already captured in the snapshotted
+    /// memory image.
     pub mounts: Vec<Mount>,
-    /// Carried over from the source sandbox's `Sandbox::env` — see that
-    /// field's doc comment. Restored onto a resumed **or** forked
-    /// sandbox identically (no `egress`-style ownership asymmetry: this
-    /// is plain data, not a live external resource).
+    /// Carried over from `Sandbox::env`, restored identically on resume
+    /// **and** fork — no `egress`-style ownership asymmetry, this is
+    /// plain data.
     pub env: HashMap<String, String>,
 }
 
-/// On-disk mirror of everything about a `Snapshot` that isn't already
-/// implied by its directory's contents (`state.snap`/`mem.bin` live at
-/// fixed names under `snapshot_dir(id)`, so they aren't duplicated here).
-/// Written by `Snapshot::persist`, read back by `reconcile` at daemon
-/// startup — this file existing alongside `state.snap`/`mem.bin` is what
-/// makes a `Snapshot` durable across a restart, matching the same
-/// "filesystem is the source of truth" convention `sandkiln_vmm::drive`
-/// already uses for drives.
+/// On-disk mirror of a `Snapshot` (excluding `state.snap`/`mem.bin`, which
+/// live at fixed names under `snapshot_dir(id)`). Written by
+/// `Snapshot::persist`, read back by `reconcile` at startup — this file's
+/// existence is what makes a `Snapshot` durable across a restart, the
+/// same "filesystem is the source of truth" convention
+/// `sandkiln_vmm::drive` uses. Every `#[serde(default)]` field below was
+/// added after this struct shipped — defaulting lets a `meta.json` from
+/// before that field existed still reconcile cleanly instead of failing.
 #[derive(Serialize, Deserialize)]
 struct SnapshotMeta {
     id: String,
@@ -140,57 +108,30 @@ struct SnapshotMeta {
     guest_mac: String,
     host_octet: u8,
     attached_drives: Vec<AttachedDrive>,
-    /// Absent (defaulted to `None`) in metadata written before this field
-    /// existed — same "still reconcilable after an upgrade" reasoning as
-    /// `name` below.
     #[serde(default)]
     image_id: Option<String>,
     tags: HashMap<String, String>,
     created_at_unix: u64,
-    /// `#[serde(default)]` so a snapshot written to disk before naming
-    /// existed still reconciles cleanly on a daemon upgrade — its
-    /// `meta.json` simply has no `name` key, and that must deserialize as
-    /// `None`, not fail `reconcile()` outright.
     #[serde(default)]
     name: Option<String>,
-    /// Same "defaults cleanly on upgrade" reasoning as `name` — absent in
-    /// metadata written before archiving existed, or for anything that
-    /// was never archived.
     #[serde(default)]
     archived_at_unix: Option<u64>,
-    /// Same "defaults cleanly on upgrade" reasoning as `name` — absent in
-    /// metadata written before egress policies existed, or for a
-    /// snapshot whose sandbox never had one.
     #[serde(default)]
     egress: Option<EgressPolicy>,
-    /// Same "defaults cleanly on upgrade" reasoning as `name` — absent in
-    /// metadata written before lineage tracking existed, or for a root
-    /// snapshot with no parent.
     #[serde(default)]
     parent_snapshot_id: Option<String>,
-    /// Same "defaults cleanly on upgrade" reasoning as `name` — absent in
-    /// metadata written before remote storage mounts existed, or for a
-    /// snapshot whose sandbox never had any.
     #[serde(default)]
     mounts: Vec<Mount>,
-    /// Same "defaults cleanly on upgrade" reasoning as `name` — absent in
-    /// metadata written before per-sandbox environment variables existed,
-    /// or for a snapshot whose sandbox never had any.
     #[serde(default)]
     env: HashMap<String, String>,
 }
 
 impl Snapshot {
-    /// Writes this snapshot's metadata into `dir`, atomically
-    /// (write-then-rename, see `write_atomically`) so a crash mid-write
-    /// can never leave a torn, half-written metadata file behind for
-    /// `reconcile` to trip over. Assumes `dir` already exists.
-    ///
-    /// Takes the target directory explicitly rather than always deriving
-    /// it from `snapshot_dir(&self.id)` (the hot root) specifically so
-    /// `archive_snapshot_by_id` can reuse this to write metadata into the
-    /// *archive* directory instead — the two are the only call sites, and
-    /// each already knows which root it's writing into.
+    /// Writes metadata into `dir` atomically (write-then-rename, see
+    /// `write_atomically`) so a crash mid-write can't leave `reconcile` a
+    /// torn file. `dir` is explicit, not always `snapshot_dir(&self.id)`,
+    /// so `archive_snapshot_by_id` can reuse this for the archive root —
+    /// the only two call sites, each already knowing which root to use.
     pub fn persist(&self, dir: &Path) -> io::Result<()> {
         let meta = SnapshotMeta {
             id: self.id.clone(),
@@ -217,11 +158,10 @@ impl Snapshot {
     }
 }
 
-/// Where every snapshot's per-snapshot directory lives — a dedicated
-/// directory per snapshot under the daemon's temp dir, alongside the
-/// loose `sandkiln-rootfs-*.ext4` files `create_sandbox` writes there —
-/// mirrors that same "OS temp dir, daemon-prefixed" convention rather
-/// than inventing a new storage location.
+/// Per-snapshot directories live under the daemon's temp dir, alongside
+/// the loose `sandkiln-rootfs-*.ext4` files `create_sandbox` writes there
+/// — same "OS temp dir, daemon-prefixed" convention, no new storage
+/// location invented.
 pub fn snapshots_root() -> PathBuf {
     std::env::temp_dir().join("sandkiln-snapshots")
 }
@@ -232,10 +172,8 @@ pub fn snapshot_dir(snapshot_id: &str) -> PathBuf {
 }
 
 // Shared with `snapshot_history.rs` (`pub(crate)`) -- a retired checkpoint
-// lives in its own per-id directory with these exact same three filenames,
-// same reasoning as sharing `move_file`/`write_atomically` below: the
-// naming scheme itself isn't snapshot-specific, just a directory-layout
-// convention both modules use identically.
+// uses this same three-filename directory-layout convention, not a
+// snapshot-specific one.
 pub(crate) fn meta_path(dir: &Path) -> PathBuf {
     dir.join("meta.json")
 }
@@ -248,10 +186,8 @@ pub(crate) fn mem_path(dir: &Path) -> PathBuf {
     dir.join("mem.bin")
 }
 
-/// Where one archived snapshot's files live, under the daemon's
-/// configured `Config::archive_dir` — same per-snapshot-directory shape
-/// as `snapshot_dir`, just under a separately configured root. See
-/// `archive_snapshot_by_id`.
+/// Same per-snapshot-directory shape as `snapshot_dir`, under
+/// `Config::archive_dir` instead. See `archive_snapshot_by_id`.
 pub fn archive_snapshot_dir(archive_root: &Path, snapshot_id: &str) -> PathBuf {
     archive_root.join(snapshot_id)
 }
@@ -308,22 +244,16 @@ pub(crate) fn move_file(src: &Path, dst: &Path) -> io::Result<()> {
     if fs::rename(src, dst).is_ok() {
         return Ok(());
     }
-    // Cross-filesystem rename fails (EXDEV) -- fall back to a real copy
-    // followed by removing the source, rather than treating the initial
-    // `rename` failure as final.
+    // Cross-filesystem rename fails (EXDEV) -- fall back to copy+remove.
     fs::copy(src, dst)?;
     fs::remove_file(src)
 }
 
-/// Writes `contents` to `path` without ever leaving a torn (partially
-/// written) file at `path` if the process crashes mid-write: write to a
-/// sibling temp file, `fsync` it, then `rename` over the real path.
-/// `rename` within one directory is atomic on every filesystem this
-/// project targets (ext4, xfs, btrfs), so a reader of `path` always sees
-/// either the previous complete contents or the new complete contents,
-/// never a mix. The temp file lives next to `path` (not in a shared temp
-/// dir) specifically so the rename is guaranteed to stay on one
-/// filesystem — a cross-filesystem rename is not atomic.
+/// Never leaves a torn file at `path` on a mid-write crash: write to a
+/// sibling temp file, `fsync`, then `rename` over the real path — atomic
+/// within one directory on ext4/xfs/btrfs, so a reader always sees either
+/// the old or new complete contents. The temp file lives next to `path`
+/// (not a shared temp dir) so the rename can't cross filesystems.
 pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
     let mut tmp_name = path.as_os_str().to_owned();
     tmp_name.push(".tmp");
@@ -340,12 +270,9 @@ pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
     }
     rename_result?;
 
-    // Best-effort: durability of the rename itself surviving a real power
-    // loss needs the directory entry fsynced too, but not every
-    // filesystem/platform this runs on supports opening a directory for
-    // that, and the write-then-rename already delivers the property this
-    // is actually used for — no reader ever observes a torn file, even if
-    // the very last fsync below is skipped.
+    // Best-effort directory fsync for power-loss durability of the rename
+    // itself — not every platform supports it, and the no-torn-file
+    // property above holds either way.
     if let Some(dir) = path.parent() {
         if let Ok(dir_file) = fs::File::open(dir) {
             let _ = dir_file.sync_all();
@@ -354,29 +281,19 @@ pub(crate) fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-/// Scans `snapshots_root()` (hot) and `archive_root` (see
-/// `Config::archive_dir`) and reconstructs every valid `Snapshot` found
-/// on disk across both — the reconciliation step that makes snapshots
-/// durable across a daemon restart, mirroring `DriveStore::list()`'s "the
-/// filesystem is the source of truth" pattern. Call once at startup,
-/// before the HTTP listener starts accepting connections and before any
-/// live `NetworkManager::lease()` call can race a reconciled snapshot's
-/// held tap device (see `NetworkManager::reserve`). `archive_root` is
-/// always scanned, regardless of whether `Config::archive_timeout` is
-/// currently set — that only controls whether *new* snapshots get
-/// archived going forward, and turning it off must not silently orphan
-/// snapshots already archived under it (harmless if the directory has
-/// never existed at all: `scan_root` treats "not found" as "nothing
-/// here", same as it already does for a hot root that's never been used).
+/// Scans `snapshots_root()` (hot) and `archive_root` and reconstructs
+/// every valid `Snapshot` on disk — the reconciliation that makes
+/// snapshots durable across a restart, mirroring `DriveStore::list()`'s
+/// "filesystem is the source of truth" pattern. Call once at startup,
+/// before the HTTP listener binds and before any `NetworkManager::lease()`
+/// can race a reconciled snapshot's tap device. `archive_root` is always
+/// scanned regardless of whether `Config::archive_timeout` is currently
+/// set — turning it off must not orphan snapshots already archived.
 ///
-/// A snapshot directory missing any of its three files (`meta.json`,
-/// `state.snap`, `mem.bin`) — the signature of a crash mid-snapshot-
-/// creation, since all three are only ever produced together by
-/// `snapshot_sandbox`, or mid-archive (see `move_snapshot_files`'s own
-/// doc comment) — is treated as invalid and skipped with a warning log
-/// rather than reconciled or silently deleted; the files are left in
-/// place for manual inspection rather than the daemon guessing at
-/// recovery. Likewise a `meta.json` that fails to parse.
+/// A directory missing any of its three files (crash mid-create or
+/// mid-archive — see `move_snapshot_files`) is skipped with a warning,
+/// left on disk for manual inspection rather than guessed-at recovery.
+/// Same for a `meta.json` that fails to parse.
 pub fn reconcile(network: &NetworkManager, archive_root: &Path) -> HashMap<String, Snapshot> {
     let mut snapshots = HashMap::new();
     scan_root(&snapshots_root(), network, &mut snapshots);
@@ -384,9 +301,7 @@ pub fn reconcile(network: &NetworkManager, archive_root: &Path) -> HashMap<Strin
     snapshots
 }
 
-/// One root's worth of `reconcile`'s work — pulled out so `reconcile`
-/// can call it once per root (hot, then archive) without duplicating the
-/// scan-and-validate loop.
+/// One root's worth of `reconcile`'s work, called once per root.
 fn scan_root(root: &Path, network: &NetworkManager, snapshots: &mut HashMap<String, Snapshot>) {
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
@@ -441,9 +356,8 @@ fn load_one(dir: &Path, id: &str, network: &NetworkManager) -> Option<Snapshot> 
     let mem_exists = mem_file.is_file();
 
     if !meta_exists && !state_exists && !mem_exists {
-        // Not a snapshot directory at all (e.g. leftover empty dir from a
-        // resume that already cleaned up everything but the directory
-        // itself) — nothing to warn about.
+        // Not a snapshot directory at all (e.g. a leftover empty dir) --
+        // nothing to warn about.
         return None;
     }
     if !(meta_exists && state_exists && mem_exists) {
@@ -501,11 +415,8 @@ fn load_one(dir: &Path, id: &str, network: &NetworkManager) -> Option<Snapshot> 
         tags: meta.tags,
         created_at: UNIX_EPOCH + Duration::from_secs(meta.created_at_unix),
         name: meta.name,
-        // Any fork that was live before a restart died with the daemon
-        // along with every other live sandbox — there's no on-disk record
-        // of a fork to resurrect (see `routes_snapshot`'s module doc
-        // comment: only the original snapshot's files persist), so a
-        // reconciled snapshot always starts with no live fork.
+        // Any fork live before a restart died with the daemon -- no
+        // on-disk record of it to resurrect, so always starts `None`.
         forked_into: None,
         archived_at: meta.archived_at_unix.map(|secs| UNIX_EPOCH + Duration::from_secs(secs)),
         egress: meta.egress,
@@ -520,13 +431,8 @@ mod tests {
     use super::*;
     use std::net::Ipv4Addr as Addr;
 
-    /// A fresh, self-cleaning temp directory standing in for
-    /// `snapshots_root()` — real filesystem I/O, no mocking, matching
-    /// `sandkiln_vmm::drive`'s `TempStore` test convention. `reconcile`
-    /// itself always reads `snapshots_root()`, so these tests exercise
-    /// the same directory-scan/load logic directly via `load_one`
-    /// (unit-level) and via a temporarily-redirected root for the
-    /// integration-shaped tests (`with_root`).
+    /// Fresh, self-cleaning temp dir — real filesystem I/O, no mocking
+    /// (matches `sandkiln_vmm::drive`'s `TempStore` convention).
     struct TempDir {
         path: PathBuf,
     }
@@ -604,11 +510,9 @@ mod tests {
         assert_eq!(fs::read(&target).unwrap(), b"v2", "no trailing bytes from the longer first write may remain");
     }
 
-    /// `persist`/`load_one` address `snapshot_dir(&self.id)` directly
-    /// (there's no injectable root, mirroring `snapshot_dir`'s existing
-    /// hardcoded-location convention), so this guard cleans up the real
-    /// `snapshots_root()` entry even if an assertion panics partway
-    /// through.
+    /// `persist`/`load_one` address `snapshot_dir(&self.id)` directly (no
+    /// injectable root) -- this guard cleans up the real entry even if an
+    /// assertion panics.
     struct RealSnapshotDir {
         id: &'static str,
         dir: PathBuf,

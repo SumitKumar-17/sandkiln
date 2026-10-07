@@ -1,32 +1,19 @@
-//! Name-based sandbox lookup and get-or-create — split out from
-//! `routes_sandbox.rs` since this crosses into snapshot territory
-//! (resuming a name that currently resolves to a held snapshot) and needs
-//! `AppState::lock_name`, a distinct enough concern from plain create/
-//! list/stop lifecycle management to earn its own file (see
-//! `routes_sandbox.rs`'s module doc comment and root `AGENTS.md`'s
-//! file-splitting precedent).
+//! Name-based sandbox lookup and get-or-create — split from
+//! `routes_sandbox.rs` since this crosses into snapshot territory and
+//! needs `AppState::lock_name`.
 //!
-//! Two routes:
-//! - `GET /sandboxes/by-name/:name` resolves a name to a *live* sandbox's
-//!   id, so a caller who created a sandbox with a name doesn't have to
-//!   track the opaque id itself to act on it later. Deliberately narrow:
-//!   it does not resume a stopped (snapshotted) sandbox on the caller's
-//!   behalf — that's a real side effect (booting a VM) a plain `GET`
-//!   shouldn't perform implicitly, so a name that currently resolves to a
-//!   held snapshot instead is a `409` pointing at `get-or-create` (below)
-//!   rather than a silent resume or a bare `404` that hides *why* it
-//!   can't be found.
-//! - `POST /sandboxes/get-or-create` is the "resume-or-create by name in
-//!   one call" primitive the ROADMAP asks for. Shaped as its own endpoint
-//!   rather than a flag on `POST /sandboxes` or a by-name variant of
-//!   `POST /snapshots/:id/resume`: get-or-create is a genuinely different
-//!   operation from either — it can resolve to three different outcomes
-//!   (return a live sandbox unchanged, resume a held snapshot, or create
-//!   fresh) depending on state the caller doesn't need to inspect
-//!   up front, and burying that behind a boolean flag on `POST
-//!   /sandboxes` would make an idempotent, side-effect-aware operation
-//!   look like an ordinary (non-idempotent) create with an obscure
-//!   modifier. A dedicated endpoint documents the contract by existing.
+//! - `GET /sandboxes/by-name/:name`: live sandboxes only. Deliberately
+//!   doesn't resume a held snapshot on the caller's behalf (a real side
+//!   effect a plain `GET` shouldn't perform implicitly) — that case is a
+//!   `409` pointing at `get-or-create` instead of a silent resume or an
+//!   unexplained `404`.
+//! - `POST /sandboxes/get-or-create`: resume-or-create by name in one
+//!   call. A dedicated endpoint rather than a flag on `POST /sandboxes`,
+//!   since it resolves to three different outcomes (return live as-is,
+//!   resume a held snapshot, or create fresh) the caller doesn't need to
+//!   inspect state up front for — a boolean flag would make this
+//!   idempotent, side-effect-aware operation look like an ordinary
+//!   non-idempotent create with a modifier.
 
 use crate::error::AppError;
 use crate::routes_sandbox::{create_sandbox_core, CreateSandboxRequest};
@@ -113,21 +100,17 @@ pub struct GetOrCreateSandboxResponse {
     created: bool,
 }
 
-/// Resolves a name to a sandbox in one call, creating it if it doesn't
-/// exist yet: a live sandbox with this name is returned as-is; a held
-/// snapshot with this name is resumed (consuming it, same as
-/// `POST /snapshots/:id/resume`); otherwise a fresh sandbox is created
-/// and given this name. `tags`/`drives`/`vcpu_count`/`mem_size_mib` are
-/// used only for the create-fresh case — resuming an existing snapshot
-/// always uses what was recorded on it when it was taken, exactly like
-/// `POST /snapshots/:id/resume` accepts no overrides today.
+/// Returns a live sandbox with this name as-is, resumes a held snapshot
+/// (consuming it, like `POST /snapshots/:id/resume`), or creates fresh.
+/// `tags`/`drives`/`vcpu_count`/`mem_size_mib` apply only to the
+/// create-fresh case — resuming always uses what was recorded at
+/// snapshot time.
 ///
-/// Race-safe under concurrent calls with the same brand-new name: the
-/// whole check-then-act sequence runs under `AppState::lock_name(name)`,
-/// so a second concurrent call for the same name blocks until the first
-/// either commits its claim (the second then finds it live and returns
-/// the same id, `created: false`) or fails outright (the name is free
-/// again). See `AppState::lock_name`'s doc comment.
+/// Race-safe: the whole check-then-act sequence runs under
+/// `AppState::lock_name(name)`, so a second concurrent call for the same
+/// brand-new name blocks until the first commits (then finds it live,
+/// `created: false`) or fails (name free again). See `lock_name`'s doc
+/// comment.
 #[tracing::instrument(skip(state, request), fields(name = %request.name))]
 pub async fn get_or_create_sandbox(
     State(state): State<Arc<AppState>>,

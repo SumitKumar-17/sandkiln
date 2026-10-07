@@ -69,6 +69,20 @@ pub enum Request {
         path: String,
         size: u64,
     },
+    /// Starts a guest-side TCP listener on `guest_port` for the local
+    /// tunnel feature — see `crate::TUNNEL_PORT`'s doc comment for the
+    /// full design. The daemon sends this once per tunnel, right after
+    /// allocating a fresh `tunnel_id`.
+    StartTunnel {
+        tunnel_id: String,
+        guest_port: u16,
+    },
+    /// Stops a previously-started tunnel's listener and every connection
+    /// it currently has open on `TUNNEL_PORT`. Not an error if the
+    /// tunnel is already gone.
+    StopTunnel {
+        tunnel_id: String,
+    },
 }
 
 /// One entry from a `ListDir` response — enough metadata to distinguish
@@ -126,6 +140,21 @@ pub enum ExecStreamEvent {
     Stdout { data_base64: String },
     Stderr { data_base64: String },
     Exit { exit_code: i32 },
+}
+
+/// The one framed message a guest-initiated [`crate::TUNNEL_PORT`]
+/// connection sends immediately after connecting, before it becomes a
+/// raw byte passthrough — same handshake-then-passthrough shape as
+/// [`PtyHandshake`], except this connection is opened by the *guest*
+/// (see [`crate::TUNNEL_PORT`]'s doc comment for why). `tunnel_id` says
+/// which tunnel this belongs to (one listener, many possible concurrent
+/// connections); `conn_id` identifies this one connection among however
+/// many are open on that tunnel right now, since the host multiplexes
+/// them all over a single relay to the original caller.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunnelOpen {
+    pub tunnel_id: String,
+    pub conn_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -351,6 +380,27 @@ mod tests {
     }
 
     #[test]
+    fn start_tunnel_request_wire_shape() {
+        let req = Request::StartTunnel { tunnel_id: "t1".to_string(), guest_port: 8080 };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"cmd":"start_tunnel","tunnel_id":"t1","guest_port":8080}"#);
+    }
+
+    #[test]
+    fn stop_tunnel_request_wire_shape() {
+        let req = Request::StopTunnel { tunnel_id: "t1".to_string() };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"cmd":"stop_tunnel","tunnel_id":"t1"}"#);
+    }
+
+    #[test]
+    fn tunnel_open_wire_shape() {
+        let open = TunnelOpen { tunnel_id: "t1".to_string(), conn_id: "c1".to_string() };
+        let json = serde_json::to_string(&open).unwrap();
+        assert_eq!(json, r#"{"tunnel_id":"t1","conn_id":"c1"}"#);
+    }
+
+    #[test]
     fn every_request_variant_roundtrips() {
         let requests = [
             Request::Exec { command: "ls".to_string(), args: vec!["-la".to_string()], env: HashMap::new() },
@@ -365,6 +415,8 @@ mod tests {
             Request::Symlink { target: "/a".to_string(), link_path: "/b".to_string() },
             Request::Readlink { path: "/a".to_string() },
             Request::Truncate { path: "/a".to_string(), size: 0 },
+            Request::StartTunnel { tunnel_id: "t1".to_string(), guest_port: 8080 },
+            Request::StopTunnel { tunnel_id: "t1".to_string() },
         ];
         for req in requests {
             let json = serde_json::to_vec(&req).unwrap();

@@ -1,74 +1,54 @@
 # AGENTS.md — images/
 
-Read the root `AGENTS.md` first for project-wide conventions. This
-directory has no build system of its own — it's kernel/rootfs build and
-manipulation scripts, all bash, following the same conventions as
-`scripts/` (`set -euo pipefail`, clear usage comments in the header,
-idempotent where reasonable, a trap for cleanup on privileged scripts
-that mount/chroot).
+Read root `AGENTS.md` first. No build system of its own — kernel/rootfs
+build and manipulation scripts, bash, same conventions as `scripts/`
+(`set -euo pipefail`, header usage comment, idempotent where reasonable,
+cleanup trap on anything that mounts/chroots).
 
 ## What exists here
 
 - `fetch-test-image.sh` — pulls a known-good kernel + minimal rootfs from
-  Firecracker's public CI artifacts. **Not a production image** — it's
-  what Phase-1-era manual boot testing used, kept because it's still
-  useful for a fast sanity check (it lacks even CA certificates, so
-  don't mistake it for something a real sandbox should boot from).
-- `inject-agent.sh` — bakes the guest agent binary into a rootfs image
-  (mount, copy to `/usr/local/bin/`, install + enable a systemd service).
-  Works against any rootfs with systemd, including whatever
-  `build-universal-image.sh` produces (if that exists yet — check).
-- `build-guest-kernel.sh` — rebuilds `vmlinux` from vanilla kernel source
-  with `CONFIG_FUSE_FS` enabled (Firecracker's own default/CI kernel
-  configs don't set it, and guest kernels can't load modules at
-  runtime), starting from Firecracker's own published recommended config
-  and reconciling with `make olddefconfig`. Only needed for remote
-  storage mounts (`routes_mounts.rs`) — most sandboxes never need this.
-- `inject-rclone.sh` — bakes `rclone` plus `fusermount3` into a rootfs
-  image, same mount/copy shape as `inject-agent.sh`. `fusermount3` is
-  needed even though the guest agent (and everything it execs) runs as
-  root: rclone's Linux FUSE backend always execs `fusermount3` to do the
-  actual mount, with no direct-`mount(2)` fallback for root. It only
-  depends on libc, not `libfuse3` — copy it straight from any Debian/
-  Ubuntu build host's `/bin/fusermount3` (`fuse3` package).
-- Whatever image-build and multi-agent-user-setup scripts exist beyond
-  this — check `ls` and each script's own header comment, this file
-  isn't guaranteed to enumerate every script that's been added since it
-  was written.
+  Firecracker's public CI artifacts. **Not a production image** (lacks
+  even CA certificates) — kept for a fast manual sanity check only.
+- `inject-agent.sh` — bakes the guest agent into a rootfs (mount, copy to
+  `/usr/local/bin/`, install + enable a systemd service). Works against
+  any systemd rootfs.
+- `build-guest-kernel.sh` — rebuilds `vmlinux` with `CONFIG_FUSE_FS`
+  enabled (off in Firecracker's default/CI configs; guest kernels can't
+  load modules at runtime), from Firecracker's published recommended
+  config, reconciled with `make olddefconfig`. Only needed for remote
+  storage mounts — most sandboxes don't need it.
+- `inject-rclone.sh` — bakes `rclone` + `fusermount3` into a rootfs, same
+  shape as `inject-agent.sh`. `fusermount3` is needed even running as
+  root: rclone's FUSE backend always execs it, no direct `mount(2)`
+  fallback. Depends only on libc — copy straight from any Debian/Ubuntu
+  host's `/bin/fusermount3` (`fuse3` package).
+- Other image-build/multi-agent-user-setup scripts may exist beyond
+  this list — check `ls` and each script's own header comment.
 
 ## Non-obvious things
 
-- **Every script here that mounts a loop device needs a cleanup trap.**
-  A script that dies mid-mount without unmounting leaves a stale loop
-  device and a locked image file behind — this has real consequences on
-  the shared dev box (other processes, other users). Follow the
-  `trap cleanup EXIT` pattern already in `inject-agent.sh`.
-- **These scripts need real root and real network access to actually
-  run** (debootstrap-style builds pull packages over the network; mount
-  operations need root) — they cannot be meaningfully tested in an
-  isolated/sandboxed environment without both. If you're an agent
-  without that access, write the script correctly and say so plainly
-  rather than claiming it works; whoever has access to the real dev box
-  needs to actually run it before it's "done."
-- The daemon's `SANDKILN_BASE_ROOTFS` env var controls which image every
-  new sandbox boots from **by default** — building a new image doesn't
-  change that default until the env var points at it (and the daemon is
-  restarted). A single sandbox can instead boot from a *registered*
-  image without touching that default at all — see "Managed images"
-  below.
-- **Managed images**: `core/crates/daemon/src/routes_images.rs`
-  (`POST /images`, `GET /images`, `DELETE /images/:id`) lets a caller
-  register an already-built ext4 rootfs file — one built with the
-  scripts here — under a name, and reference it per sandbox via
-  `POST /sandboxes`'s `image_id` field (`kiln sandbox create --image
-  <id>`). Registration copies the file (via `sandkiln_vmm::image::ImageStore`)
-  into `SANDKILN_IMAGES_DIR`; it does not accept an HTTP upload and does
-  not build or convert anything — the file handed to it must already be a
-  real ext4 rootfs, produced the same way `SANDKILN_BASE_ROOTFS` is (this
-  directory's scripts, run out of band, with the agent already injected
-  via `inject-agent.sh`). The daemon cannot verify that last step itself
-  (no root to loop-mount) — `scripts/preflight-check.sh --root-checks
-  --rootfs-image <path>` is the way to confirm it before registering.
-  **Converting a Docker/OCI image into a bootable rootfs is a separate,
-  larger problem, not attempted by this mechanism** — see "Still open"
-  below.
+- **Every loop-device-mounting script needs a cleanup trap** — a
+  mid-mount death without unmounting leaves a stale loop device and a
+  locked image file on the shared dev box. Follow `inject-agent.sh`'s
+  `trap cleanup EXIT` pattern.
+- **These scripts need real root and network access** — can't be
+  meaningfully tested sandboxed. Without that access, write the script
+  correctly and say so plainly; whoever has the real dev box must
+  actually run it before it's "done."
+- `SANDKILN_BASE_ROOTFS` controls the **default** image every new
+  sandbox boots from — building a new image doesn't change that until
+  the env var points at it and the daemon restarts. A single sandbox can
+  instead boot from a *registered* image without touching the default
+  (see Managed images below).
+- **Managed images**: `routes_images.rs` (`POST/GET /images`,
+  `DELETE /images/:id`) registers an already-built ext4 rootfs under a
+  name, referenced per sandbox via `image_id`
+  (`kiln sandbox create --image <id>`). Copies the file into
+  `SANDKILN_IMAGES_DIR` — no HTTP upload, no building/converting; the
+  file must already be a real ext4 rootfs with the agent injected
+  (`inject-agent.sh`). The daemon can't verify that itself (no root to
+  loop-mount) — `scripts/preflight-check.sh --root-checks --rootfs-image
+  <path>` confirms it before registering. Converting a Docker/OCI image
+  into a bootable rootfs is a separate, larger problem this mechanism
+  doesn't attempt.

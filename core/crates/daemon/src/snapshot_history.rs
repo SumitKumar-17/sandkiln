@@ -1,63 +1,40 @@
 //! Retired snapshot checkpoints — the durable record behind "time-travel
-//! restore" (see `ROADMAP.md`'s "Persistence and snapshotting" section).
+//! restore" (`ROADMAP.md`'s "Persistence and snapshotting"). Without this,
+//! `resume_snapshot_by_id` deletes what it resumes and the new sandbox
+//! takes over the exact same rootfs file, making "restore an earlier
+//! point" structurally impossible once you've moved forward.
 //!
-//! Today, `routes_snapshot::resume_snapshot_by_id` deletes the snapshot it
-//! resumes: `state.snap`/`mem.bin` are removed, and the new live sandbox
-//! takes over the *exact same* rootfs file the snapshot pointed at. That
-//! makes "restore to an earlier point" structurally impossible once you've
-//! ever moved forward — the earlier point's files are gone, and even if
-//! they weren't, the rootfs they'd need is now being mutated by whatever
-//! came after.
-//!
-//! This module is the fix: `resume_snapshot_by_id` (by default — see its
-//! own doc comment for the `retain_history` opt-out) now *retires* the
-//! snapshot it resumes instead of deleting it. Retiring means:
-//! - `state.snap`/`mem.bin` move into this module's own directory tree
-//!   (`retired_root()`), under the same three-file-plus-`meta.json` shape
-//!   `snapshot.rs` already uses.
-//! - The rootfs file it referenced is left **completely untouched** —
-//!   ownership doesn't transfer. Instead, the *new* live sandbox gets a
-//!   fresh `routes_sandbox::clone_rootfs` copy of it, so any future write
-//!   from continued use can never retroactively corrupt a checkpoint
-//!   whose `state.snap` still describes the file's contents as of the
-//!   moment it was taken. This is the load-bearing property of the whole
-//!   feature: without it, restoring an "earlier" checkpoint could hand
-//!   back a memory image that thinks a file contains bytes the (shared,
-//!   since-mutated) rootfs no longer has.
-//! - The retired record itself is inert data, not a live resource: unlike
-//!   `Snapshot`, it holds a `NetworkConfig` (plus the `host_octet` needed
-//!   to re-derive a `Lease`), **not** a live `sandkiln_vmm::network::Lease`
-//!   — nothing is reserved out of `NetworkManager`'s free pool just by a
-//!   checkpoint sitting in history. A lease is only ever reserved at
-//!   *restore* time (`routes_snapshot_history::restore_snapshot_history`),
-//!   exactly like a startup `reconcile()` reserves one for an on-disk
-//!   `Snapshot` — see that function for why this still needs an explicit
-//!   conflict check first (`AppState::tap_device_holder`): unlike
-//!   `reconcile()`'s once-at-startup-before-anything-else-runs guarantee,
-//!   a restore can race a live sandbox or held snapshot that's *already*
-//!   using this exact tap device (the same frozen network identity every
-//!   checkpoint in one lineage shares — see `sandkiln_vmm::vm::Vm::resume`'s
-//!   doc comment for why that identity can never change post-hoc).
+//! The fix: `resume_snapshot_by_id` (by default — see its own doc comment
+//! for the `retain_history` opt-out) *retires* instead of deletes:
+//! - `state.snap`/`mem.bin` move into this module's directory tree
+//!   (`retired_root()`), same three-file-plus-`meta.json` shape as
+//!   `snapshot.rs`.
+//! - The referenced rootfs file is left **completely untouched** — the
+//!   new live sandbox gets a fresh `clone_rootfs` copy instead, so a
+//!   future write can never retroactively corrupt a checkpoint whose
+//!   `state.snap` still describes the file as of the moment it was taken.
+//!   This is the load-bearing property: without it, restoring could hand
+//!   back a memory image believing bytes the shared, since-mutated rootfs
+//!   no longer has.
+//! - The record is inert data, not a live resource: it holds a
+//!   `NetworkConfig` + `host_octet`, **not** a live `Lease` — nothing is
+//!   reserved from `NetworkManager`'s pool just by sitting in history. A
+//!   lease is only reserved at *restore* time, gated by
+//!   `AppState::tap_device_holder` (unlike `reconcile()`'s
+//!   once-at-startup guarantee, a restore can race an already-live user
+//!   of the same frozen tap/network identity).
 //!
 //! **Sequential, not branching**: restoring an old checkpoint doesn't
-//! delete or invalidate whatever came after it in that lineage — they stay
-//! in history too, exactly like an old git commit's descendants survive a
-//! `git checkout` of an ancestor. What restoring *does* require is that
-//! nothing else sharing this checkpoint's network identity is currently
-//! live or held right now (`tap_device_holder`'s job) — the same
-//! one-live-descendant-at-a-time rule `Snapshot::forked_into` already
-//! enforces for fork, generalized across a checkpoint's entire history
-//! instead of just its single most recent snapshot. True *parallel*
-//! branching (two checkpoints from one lineage live at once) is a
-//! different, harder problem — see `routes_snapshot.rs`'s own module doc
-//! comment on why concurrent forking is genuinely open (the guest's own
-//! network identity can't be changed without in-guest cooperation this
-//! project's guest agent doesn't have) — restoring never attempts it.
+//! invalidate what came after it (like `git checkout` of an ancestor
+//! commit doesn't delete its descendants) — it only requires nothing else
+//! sharing this checkpoint's network identity is live right now, the same
+//! one-live-descendant rule `Snapshot::forked_into` enforces for fork,
+//! generalized across a whole lineage. True parallel branching is a
+//! separate, harder, still-open problem (see `routes_snapshot.rs`) that
+//! restoring never attempts.
 //!
-//! Restoring a checkpoint does **not** consume it — same `clone_rootfs`
-//! trick in reverse: the *new* sandbox produced by a restore gets its own
-//! fresh rootfs clone, so the retired checkpoint's own files stay exactly
-//! as they were and can be restored again later, as many times as wanted.
+//! Restoring does **not** consume the checkpoint — same `clone_rootfs`
+//! trick in reverse, so it can be restored again later, repeatedly.
 
 use crate::state::{AttachedDrive, Mount};
 use sandkiln_vmm::egress::EgressPolicy;
@@ -70,28 +47,25 @@ use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// One retired checkpoint — everything needed to restore it later, minus
-/// anything that requires an actively-held daemon resource (a live
-/// `Lease`). See the module doc comment for the full design. `Clone`
-/// (unlike `Snapshot`, which deliberately isn't — it holds a `Lease`
-/// nothing should ever silently duplicate) is safe and needed here
-/// precisely because nothing in this struct is an exclusively-held
-/// resource: `routes_snapshot_history::restore_snapshot_history_by_id`
-/// clones one out from under a short-lived lock rather than removing it
-/// from `AppState::retired_snapshots`, since restoring doesn't consume it.
+/// One retired checkpoint — everything needed to restore it, minus any
+/// actively-held resource (a live `Lease`). See the module doc comment.
+/// `Clone` (unlike `Snapshot`, which holds a `Lease` nothing should
+/// silently duplicate) is safe here precisely because nothing in this
+/// struct is exclusively held — `restore_snapshot_history_by_id` clones
+/// one out from under a short-lived lock rather than removing it from
+/// `AppState::retired_snapshots`, since restoring doesn't consume it.
 #[derive(Clone)]
 pub struct RetiredSnapshot {
     pub id: String,
     pub source_sandbox_id: String,
     pub snapshot_path: PathBuf,
     pub mem_file_path: PathBuf,
-    /// Left exactly where it was at the moment of retirement — never
-    /// moved, never mutated. See the module doc comment for why this is
-    /// the property that makes retiring safe at all.
+    /// Left exactly where it was at retirement — never moved, never
+    /// mutated. The property that makes retiring safe at all.
     pub rootfs_path: PathBuf,
-    /// Not a live `Lease` — see the module doc comment. `host_octet` is
-    /// carried alongside since `NetworkManager::reserve` needs it (mirrors
-    /// exactly what `SnapshotMeta` already stores for the same reason).
+    /// Not a live `Lease` — see the module doc comment. `host_octet`
+    /// travels alongside since `NetworkManager::reserve` needs it (same
+    /// reason `SnapshotMeta` stores it).
     pub network: NetworkConfig,
     pub host_octet: u8,
     pub attached_drives: Vec<AttachedDrive>,
@@ -100,32 +74,24 @@ pub struct RetiredSnapshot {
     pub created_at: SystemTime,
     pub retired_at: SystemTime,
     pub name: Option<String>,
-    /// The snapshot this checkpoint's own source sandbox was resumed or
-    /// forked from, if any — same lineage-parent-pointer meaning as
-    /// `Snapshot::parent_snapshot_id`, carried straight over so a
-    /// checkpoint's history doesn't go dark just because it was later
-    /// retired instead of staying "hot."
+    /// Same lineage-parent-pointer meaning as `Snapshot::parent_snapshot_id`
+    /// — carried over so history doesn't go dark on retirement.
     pub parent_snapshot_id: Option<String>,
     pub egress: Option<EgressPolicy>,
-    /// Carried over from the source `Snapshot::mounts` — see
-    /// `crate::routes_mounts`'s module doc comment. No credentials here
-    /// either; nothing to re-apply on restore, same reasoning as
-    /// `Snapshot::mounts`.
+    /// Carried over from `Snapshot::mounts` — no credentials, nothing to
+    /// re-apply on restore.
     pub mounts: Vec<Mount>,
-    /// Carried over from the source `Snapshot::env` — see that field's
-    /// doc comment. Restored onto the new sandbox unchanged when this
-    /// checkpoint is later restored.
+    /// Carried over from `Snapshot::env`, restored onto the new sandbox
+    /// unchanged.
     pub env: HashMap<String, String>,
 }
 
-/// On-disk mirror of `RetiredSnapshot`, written by `persist`, read back by
-/// `reconcile` — same "filesystem is the source of truth" shape
-/// `snapshot.rs`'s own `SnapshotMeta` uses, deliberately not shared as one
-/// type with it: a `Snapshot`'s metadata round-trips a live `Lease`
-/// (`NetworkManager::reserve` needs to reclaim it at startup), a retired
-/// checkpoint's metadata deliberately does not reclaim anything until an
-/// explicit restore — conflating the two would blur a real distinction
-/// (hot, resource-holding vs. dormant, inert) into one struct with a flag.
+/// On-disk mirror of `RetiredSnapshot`, same "filesystem is the source of
+/// truth" shape as `snapshot::SnapshotMeta` but deliberately not shared
+/// with it as one type: a `Snapshot`'s metadata round-trips a live
+/// `Lease` to reclaim at startup; a retired checkpoint's doesn't reclaim
+/// anything until an explicit restore. Conflating the two would blur a
+/// real hot-vs-dormant distinction into one struct with a flag.
 #[derive(Serialize, Deserialize)]
 struct RetiredSnapshotMeta {
     id: String,
@@ -151,9 +117,7 @@ struct RetiredSnapshotMeta {
 }
 
 impl RetiredSnapshot {
-    /// Mirrors `Snapshot::persist` exactly, minus anything `Lease`-shaped
-    /// — see this module's own doc comment for why a retired checkpoint
-    /// carries a bare `NetworkConfig`/`host_octet` instead.
+    /// Mirrors `Snapshot::persist`, minus anything `Lease`-shaped.
     pub fn persist(&self, dir: &Path) -> io::Result<()> {
         let meta = RetiredSnapshotMeta {
             id: self.id.clone(),
@@ -181,14 +145,10 @@ impl RetiredSnapshot {
     }
 }
 
-/// Where every retired checkpoint's own per-id directory lives — a
-/// sibling of `snapshot::snapshots_root()` under the same daemon temp
-/// dir, same "OS temp dir, daemon-prefixed" convention, deliberately a
-/// separate root rather than a subdirectory of `snapshots_root()` itself:
-/// `snapshot::reconcile` scans its root expecting every entry to be a
-/// *hot, lease-holding* `Snapshot` — mixing in lease-free retired
-/// checkpoints there would either break that assumption or need every
-/// caller of `snapshots_root()` to start filtering, for no real benefit.
+/// Sibling of `snapshot::snapshots_root()`, deliberately a separate root:
+/// `snapshot::reconcile` expects every entry under its root to be a hot,
+/// lease-holding `Snapshot` — mixing in lease-free checkpoints there would
+/// break that assumption for no benefit.
 pub fn retired_root() -> PathBuf {
     std::env::temp_dir().join("sandkiln-snapshot-history")
 }
@@ -198,15 +158,10 @@ pub fn retired_dir(id: &str) -> PathBuf {
     retired_root().join(id)
 }
 
-/// Scans `retired_root()` and reconstructs every valid `RetiredSnapshot`
-/// found on disk — the reconciliation step that makes retired checkpoints
-/// durable across a daemon restart, mirroring `snapshot::reconcile`'s own
-/// shape closely. **Deliberately does not touch `NetworkManager` at all**
-/// (no `reserve()` call) — see the module doc comment: a retired
-/// checkpoint doesn't hold a live lease, so there's nothing to reclaim out
-/// of the free pool just because it exists on disk. Call at startup
-/// alongside `snapshot::reconcile`, order doesn't matter between the two
-/// (neither touches the other's resources).
+/// Scans `retired_root()`, mirroring `snapshot::reconcile`'s shape.
+/// **Never touches `NetworkManager`** — a retired checkpoint holds no
+/// live lease, nothing to reclaim. Call at startup alongside
+/// `snapshot::reconcile`; order between the two doesn't matter.
 pub fn reconcile() -> HashMap<String, RetiredSnapshot> {
     let mut retired = HashMap::new();
     let entries = match fs::read_dir(retired_root()) {

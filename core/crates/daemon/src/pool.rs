@@ -1,57 +1,29 @@
 //! Pre-warmed snapshot pools: keep a small number of ready-to-resume
 //! snapshots around per (image, resource-config), so a matching
 //! `POST /sandboxes` can resume one instead of paying full cold-create
-//! cost. See `ROADMAP.md`'s "Persistence and snapshotting" section,
-//! "Pre-warmed snapshot pool", for the design this implements.
+//! cost. Full design, the `warm_count`/`max_count` split, and the
+//! producer/consumer queueing this implements are written up in
+//! `docs/architecture/02-vm-boot-and-latency.md` — this comment only
+//! keeps the invariants a reader editing this file needs at hand:
 //!
-//! Two independently optional knobs, since they solve different
-//! problems: `warm_count` (latency — how many ready-to-resume snapshots
-//! to keep sitting around) and `max_count` (concurrency — the total
-//! number of *live* instances this pool's profile may ever have at once,
-//! `None` meaning unbounded, today's original behavior). A request
-//! matching a pool with room claims a warm snapshot if one's ready, or
-//! cold-creates if under `max_count`, or **queues** (via `Pool::notify`)
-//! until either happens — see `routes_sandbox::create_sandbox_core`.
-//! Every live instance counted against `max_count`, warm or cold-boosted
-//! alike, is tracked by `Sandbox::source_pool_id` for exactly as long as
-//! it stays that one live sandbox; stopping it (destroy *or* snapshot)
-//! releases the slot back (`routes_sandbox::destroy_sandbox_by_id`,
-//! `routes_snapshot::snapshot_and_stop`) — a later resume/fork of the
-//! resulting snapshot is a fresh creation event, evaluated against
-//! whatever pool it matches (if any) at that time, not tied back to this
-//! one forever.
-//!
-//! Scoped honestly, not silently incomplete:
-//! - **A request with `drives` or a custom `rate_limit` never matches a
-//!   pool.** Both are baked into a VM's state at boot time, and a warm
-//!   snapshot was booted with neither — satisfying either from a warm
-//!   snapshot isn't possible without teaching the pool to vary on them
-//!   too. Falls through to cold create rather than silently ignoring the
-//!   request's own drives/rate_limit — and a `drives`/`rate_limit`
-//!   request also never queues, even if a `max_count`-bounded pool with
-//!   the same image/resources is at capacity, for the same reason: it
-//!   was never going to match that pool anyway.
-//! - **A queued claim waits a bounded time, not forever** — see
-//!   `pool_claim::POOL_QUEUE_TIMEOUT` — and returns a real error
-//!   (`503`) if nothing frees up in time, rather than hanging the
-//!   caller's request indefinitely.
-//! - **Pool configuration lives only in memory** (`AppState::pools`), not
-//!   durable across a daemon restart the way snapshots themselves are —
-//!   a caller that needs a pool to survive a restart has to re-`POST
-//!   /pools` afterward. See `crate::pool_replenisher` for the background
-//!   task that actually keeps a pool topped up.
+//! - A request with `drives` or a custom `rate_limit` never matches a
+//!   pool (both are baked into a VM at boot time; a warm snapshot was
+//!   booted with neither) and never queues on one either — falls through
+//!   to cold create instead.
+//! - A queued claim waits at most `pool_claim::POOL_QUEUE_TIMEOUT`, then
+//!   returns a real `503` rather than hanging the caller.
+//! - Pool *configuration* lives only in `AppState::pools` — not durable
+//!   across a daemon restart the way snapshots themselves are.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Notify;
 
 /// A configured pool's identity and target size. `vcpu_count`/
-/// `mem_size_mib` are already resolved to concrete values (see
-/// `routes_pool::create_pool`) — not the request-style `Option<T>`
-/// "override the daemon default" shape used elsewhere — specifically so
-/// matching a `POST /sandboxes` request against a pool is plain equality
-/// (`PoolKey`) rather than needing the daemon's default config threaded
-/// through every comparison.
+/// `mem_size_mib` are resolved concrete values (see
+/// `routes_pool::create_pool`), not the request-style `Option<T>`
+/// override shape — so matching a request against a pool is plain
+/// `PoolKey` equality, no daemon-default threading needed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PoolConfig {
     pub id: String,
@@ -59,10 +31,8 @@ pub struct PoolConfig {
     pub vcpu_count: u8,
     pub mem_size_mib: u32,
     pub warm_count: u32,
-    /// Maximum number of live instances (warm + claimed, combined) this
-    /// pool's profile may ever have at once. `None` is unbounded — the
-    /// original behavior, before this field existed: a claim past what's
-    /// warm always just cold-creates.
+    /// Max live instances (warm + claimed) at once. `None` = unbounded
+    /// (original behavior: a claim past warm just cold-creates).
     pub max_count: Option<u32>,
 }
 
@@ -81,28 +51,22 @@ impl PoolConfig {
     }
 }
 
-/// One configured pool's live state: its config, the snapshot ids
-/// (already present in `AppState::snapshots`) currently sitting warm, and
-/// how many live instances of this pool's profile currently exist.
-/// FIFO purely so replenishment order roughly matches claim order —
-/// nothing depends on that ordering being exact.
+/// One configured pool's live state: config, warm snapshot ids (already
+/// in `AppState::snapshots`), and the live-instance count. FIFO since
+/// replenishment order should roughly match claim order, though nothing
+/// depends on it being exact.
 pub struct Pool {
     pub config: PoolConfig,
     warm: VecDeque<String>,
-    /// Live instances of this pool's profile right now — both a resumed
-    /// warm claim and a cold-created one under `max_count` headroom count
-    /// here, for as long as that one sandbox stays live. See this
-    /// module's own doc comment for exactly when this is incremented and
-    /// released.
+    /// Live instances of this profile right now (warm-resumed or
+    /// cold-created under `max_count` headroom), for as long as that
+    /// sandbox stays live.
     claimed: u32,
-    /// Woken whenever a slot might have freed up — a new warm snapshot
-    /// arrives (`push_warm`) or a live claim ends (`record_release`) —
-    /// so a queued `POST /sandboxes` waiting on this pool (see
-    /// `routes_sandbox::create_sandbox_core`) knows to re-check rather
-    /// than poll. `notify_waiters` (not `notify_one`): every waiter
-    /// re-evaluates the real condition itself on wake, so waking more
-    /// than the one that can actually proceed is harmless, just a wasted
-    /// re-check — the standard tokio `Notify`-as-condvar pattern.
+    /// Woken when a slot might have freed (`push_warm`/`record_release`),
+    /// so a queued claim (`routes_sandbox::create_sandbox_core`) re-checks
+    /// instead of polling. `notify_waiters`, not `notify_one`: every
+    /// waiter re-evaluates the real condition on wake, so an extra wakeup
+    /// is just a harmless re-check — standard `Notify`-as-condvar.
     pub notify: Arc<Notify>,
 }
 
@@ -119,12 +83,8 @@ impl Pool {
         self.claimed
     }
 
-    /// How many warm snapshots this pool should actually try to keep
-    /// ready right now — `warm_count`, unless `max_count` is set and
-    /// already-claimed instances leave less headroom than that, in which
-    /// case replenishing only fills the remaining room. Keeps a
-    /// `max_count`-bounded pool from ever producing more total instances
-    /// (warm + claimed) than its own ceiling allows.
+    /// `warm_count`, capped by remaining `max_count` headroom if set —
+    /// keeps a bounded pool from ever exceeding its own ceiling.
     fn effective_warm_target(&self) -> u32 {
         match self.config.max_count {
             Some(max) => self.config.warm_count.min(max.saturating_sub(self.claimed)),
@@ -141,36 +101,30 @@ impl Pool {
         self.notify.notify_waiters();
     }
 
-    /// Takes one warm snapshot id for a matching claim, if any is ready.
-    /// The caller still has to actually resume it (see
-    /// `routes_sandbox::create_sandbox_core`) — this only ever manages
-    /// the queue itself, so it stays testable without a real `AppState`.
+    /// Pops one ready warm snapshot id, if any — resuming it is the
+    /// caller's job (`routes_sandbox::create_sandbox_core`); this only
+    /// manages the queue, kept testable without a real `AppState`.
     pub fn take_warm(&mut self) -> Option<String> {
         self.warm.pop_front()
     }
 
-    /// Whether a brand-new live instance (resumed from a warm snapshot,
-    /// or cold-created) is allowed to start counting against this pool
-    /// right now — always `true` when `max_count` is unset.
+    /// Whether a new live instance may start counting against this pool —
+    /// always `true` when `max_count` is unset.
     pub fn has_room_for_new_claim(&self) -> bool {
         self.config.max_count.is_none_or(|max| self.claimed < max)
     }
 
-    /// Reserves a slot for a new live instance — call before actually
-    /// resuming/booting it, so a concurrent second claim can't
-    /// over-commit past `max_count` in the race window before the first
-    /// one's `Sandbox` is inserted. Pair with `record_release` on any
-    /// exit path that doesn't end in a real, tracked `Sandbox` (a failed
-    /// resume, a failed cold boot, a failed health check) — see
-    /// `routes_sandbox::PoolClaimGuard`.
+    /// Reserves a slot before actually resuming/booting, so a concurrent
+    /// claim can't over-commit past `max_count` in the race window before
+    /// the `Sandbox` is inserted. Pair with `record_release` on any exit
+    /// path that doesn't end in a tracked `Sandbox` (failed resume/boot/
+    /// health check) — see `routes_sandbox::PoolClaimGuard`.
     pub fn record_claim(&mut self) {
         self.claimed += 1;
     }
 
-    /// Releases a slot — either because the reservation above didn't pan
-    /// out, or because a real, live pool-sourced sandbox was just
-    /// stopped (destroyed or snapshotted). Wakes anyone queued on this
-    /// pool, since this may be exactly the room they were waiting for.
+    /// Releases a slot (a reservation that didn't pan out, or a real
+    /// pool-sourced sandbox stopping) and wakes anyone queued.
     pub fn record_release(&mut self) {
         self.claimed = self.claimed.saturating_sub(1);
         self.notify.notify_waiters();
