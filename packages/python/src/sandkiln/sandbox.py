@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 
 from ._config import resolve_auth_token, resolve_base_url
 from ._http import request
+from .tunnel import TunnelHandle, open_tunnel
 
 
 @dataclass(frozen=True)
@@ -497,6 +498,15 @@ class Sandbox:
         normalized_path = path if path.startswith("/") else f"/{path}"
         suffix = f"?{urlencode({'token': self._auth_token})}" if self._auth_token else ""
         return f"{self._base_url}/sandboxes/{self.id}/preview/{port}{normalized_path}{suffix}"
+
+    def tunnel(self, guest_port: int, local_port: int, local_host: str = "127.0.0.1") -> TunnelHandle:
+        """Opens a local tunnel: code running inside this sandbox connects
+        to `guest_port` and reaches whatever's listening on `local_port`
+        on *this* machine — the reverse of `preview_url`, which exposes a
+        port inside the sandbox outward. Returns a handle; call
+        `.close()` when done forwarding.
+        """
+        return open_tunnel(self._base_url, self._auth_token, self.id, guest_port, local_port, local_host)
 
     def snapshot(self) -> str:
         """Saves this sandbox's full state (memory + disk) to disk and

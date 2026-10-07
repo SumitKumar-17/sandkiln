@@ -43,6 +43,24 @@ SDK's calls are occasional, not high-throughput).
 - **`_http.py` / `_http_async.py`** — the one `urllib.request` /
   `asyncio.open_connection` call site each; same `SandkilnApiError`
   shape, different transport.
+- **`tunnel.py` / `atunnel.py`** — `Sandbox.tunnel`/`AsyncSandbox.tunnel`.
+  This package's first (and so far only) WebSocket-based feature, so
+  there's no stdlib client to build on — both hand-roll the whole thing:
+  the RFC 6455 handshake (`Sec-WebSocket-Key`/`-Accept`, verified against
+  the spec's own published test vector in review, not just "it connects"),
+  masked client frames, and the tunnel's own small binary multiplexing
+  frame (shared wire format with the JS SDK's `tunnel.ts` and the
+  daemon's `routes_tunnel.rs` — change one, change all three). `tunnel.py`
+  runs its relay loop on a background `threading.Thread`;
+  `atunnel.py` mirrors it as an `asyncio.Task`, importing every pure
+  encode/decode helper (`_encode_ws_frame`, `_encode_tunnel_frame`,
+  `_expected_accept`, ...) from `tunnel.py` rather than duplicating them —
+  only the actual I/O (blocking socket vs. `asyncio.open_connection`) is
+  written twice, same convention as every other async mirror here. Not
+  fragmentation-aware by design: every payload either side ever sends is
+  far under any size where a real WebSocket implementation would
+  fragment, so a minimal non-fragmenting reader is correct for this
+  specific protocol, not a general-purpose gap.
 - **`_config.py`** — env fallback (`SANDKILN_DAEMON_URL`/
   `SANDKILN_AUTH_TOKEN`), matching `config.ts` exactly.
 - **`errors.py`** — `SandkilnApiError(status, message)`.
