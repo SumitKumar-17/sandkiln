@@ -16,7 +16,7 @@ Two consequences fall directly out of that shape, and both matter in this codeba
 
 ## Why sandkiln uses it here
 
-This is the standard technique for closing the gap between "a cold boot is fast" and "a workload is actually ready to do something": see [Startup latency & the pre-warmed pool](../startup-latency/) for the measured ~25-100x difference between a cold sandbox's first real command and a resumed one's. sandkiln builds three distinct operations on top of the same underlying mechanism, because "boot from a snapshot" turns out to have two genuinely different use cases that need different consumption rules.
+This is the standard technique for closing the gap between "a cold boot is fast" and "a workload is actually ready to do something": see [Startup latency & the pre-warmed pool](../../architecture/startup-latency/) for the measured ~25-100x difference between a cold sandbox's first real command and a resumed one's. sandkiln builds three distinct operations on top of the same underlying mechanism, because "boot from a snapshot" turns out to have two genuinely different use cases that need different consumption rules.
 
 ## Key terms
 

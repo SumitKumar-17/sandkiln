@@ -7,7 +7,7 @@ description: "What a rootfs image actually is at the filesystem level, and the h
 
 ## What it is
 
-A "rootfs image" here is a single ext4 filesystem image file: one file that, mounted, looks like a normal Linux root filesystem (`/bin`, `/etc`, `/usr`, and so on), the same shape the daemon's own default `SANDKILN_BASE_ROOTFS` already is. Firecracker attaches it to a VM as the boot drive the same way it attaches any other `virtio-blk` device (see [Drives: the mechanism](./drives/)). There's no separate "image" concept at the hypervisor level, just a block device the kernel happens to boot from because Firecracker's boot-source configuration points at it.
+A "rootfs image" here is a single ext4 filesystem image file: one file that, mounted, looks like a normal Linux root filesystem (`/bin`, `/etc`, `/usr`, and so on), the same shape the daemon's own default `SANDKILN_BASE_ROOTFS` already is. Firecracker attaches it to a VM as the boot drive the same way it attaches any other `virtio-blk` device (see [Drives: the mechanism](../drives/)). There's no separate "image" concept at the hypervisor level, just a block device the kernel happens to boot from because Firecracker's boot-source configuration points at it.
 
 **ext4 superblock**: every ext2/3/4 filesystem has a fixed-format header (the superblock) at a fixed byte offset from the start of the device, containing a magic number identifying it as ext-family. Checking for that magic number is a cheap, privilege-free way to confirm "this file at least looks like an ext4 filesystem" without needing to mount it.
 
