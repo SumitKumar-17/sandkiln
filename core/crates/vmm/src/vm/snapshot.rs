@@ -118,6 +118,15 @@ impl Vm {
         // `Vm::boot`. A jailed sandbox's snapshot bakes in in-jail paths
         // that would need relinking into a fresh chroot; `routes_snapshot`
         // refuses to attempt this yet rather than half-support it.
+        //
+        // Non-fatal like egress re-apply on resume/fork, and for the same
+        // reason: the VM has already resumed successfully by this point,
+        // and destroying it over a tunnel-listener setup failure (a rare,
+        // one-off path issue) would be worse than leaving the local
+        // tunnel feature unavailable on this one sandbox.
+        if let Err(e) = crate::tunnel::listen(&vsock_socket) {
+            tracing::warn!(vm_id = id, error = %e, "failed to start tunnel listener on resume; local tunnels unavailable on this sandbox");
+        }
         Ok(Self { id, child, api_socket, vsock_socket, jail_instance_dir: None })
     }
 }

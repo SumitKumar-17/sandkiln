@@ -17,6 +17,14 @@ pub fn handle(req: Request) -> Response {
         Request::Symlink { target, link_path } => symlink(&target, &link_path),
         Request::Readlink { path } => readlink(&path),
         Request::Truncate { path, size } => truncate(&path, size),
+        Request::StartTunnel { tunnel_id, guest_port } => match crate::tunnel::start(tunnel_id, guest_port) {
+            Ok(()) => Response::Ok,
+            Err(e) => Response::Error { message: e.to_string() },
+        },
+        Request::StopTunnel { tunnel_id } => {
+            crate::tunnel::stop(&tunnel_id);
+            Response::Ok
+        }
     }
 }
 

@@ -50,7 +50,11 @@ calls `vmm`, shapes responses.
   in-flight restore. `image_holder`/`tap_device_holder` share a
   `first_match()` walk; `drive_holders()` stays separate since it
   returns *every* matching holder (multiple read-only holders are
-  legitimate), not just the first.
+  legitimate), not just the first. Also owns `tunnels`
+  (`Mutex<HashMap<String, mpsc::Receiver<TunnelConnection>>>`) — the
+  handoff between `POST /sandboxes/:id/tunnel` (registers, stores the
+  receiver) and the matching `GET .../tunnel/:tunnel_id/ws` (takes it,
+  `409` if already taken or never created) — see `routes_tunnel.rs`.
 - **`sandbox.rs`** — `Sandbox`: id, `Vm` handle, `Lease`, rootfs path,
   tags, timestamps, `image_id` (`None` = daemon default rootfs),
   `jail_id`, `name`, `pty_session_count` (`Arc<AtomicU32>`, survives past
@@ -173,6 +177,20 @@ calls `vmm`, shapes responses.
   `broadcast` channel) independent of whether anyone's attached.
   `GET .../logs` replays then live-tails, callable any number of times.
   Not carried across resume/fork/restart.
+- **`routes_tunnel.rs`** — local tunnel: `POST /sandboxes/:id/tunnel`
+  (registers with `sandkiln_vmm::tunnel`, sends `StartTunnel` over vsock,
+  stores the receiver in `AppState::tunnels`) / `DELETE .../tunnel/:id`
+  (bearer-gated, normal router) and `GET .../tunnel/:id/ws` (its own
+  router, `require_preview_token` — even though the caller is always
+  SDK/CLI code, never a browser, no WebSocket constructor in any runtime
+  can set a custom header, so the `?token=` fallback applies here too).
+  `proxy_tunnel` multiplexes every guest-accepted connection over that
+  one WebSocket with a small binary frame (`op` byte + `conn_id` +
+  payload — `open`/`data`/`close`), using a `tokio::sync::Mutex`-guarded
+  `writers` map since writing to a connection's socket has to `.await`
+  while holding the lock. Bridges `sandkiln_vmm::tunnel`'s blocking
+  `std::sync::mpsc::Receiver` into async via a plain `spawn_blocking`
+  forwarding into a `tokio::sync::mpsc` channel.
 - **`error.rs`** — `AppError`, the one error type every handler returns.
 
 ## Building and verifying

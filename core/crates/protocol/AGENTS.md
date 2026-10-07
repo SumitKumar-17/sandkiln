@@ -31,14 +31,22 @@ process-related need belongs in `vmm`/`guest-agent`, not here.
   `ExecStreamEvent` (`Stdout`/`Stderr`/`Exit`, internally tagged like
   `Response`) for `EXEC_STREAM_PORT` — framing never stops here, a
   structured exit code is part of the contract (see `exec_stream.rs` /
-  `routes_logs.rs`).
+  `routes_logs.rs`). Also defines `Request::StartTunnel { tunnel_id,
+  guest_port }`/`StopTunnel { tunnel_id }` (plain request/response over
+  `AGENT_PORT`, for the local tunnel feature) and `TunnelOpen { tunnel_id,
+  conn_id }` (the one framed handshake a guest-initiated `TUNNEL_PORT`
+  connection sends — see `TUNNEL_PORT`'s own doc comment).
 - **`framing.rs`** — length-prefixed framing (4-byte LE length + payload),
   not newline-delimited, so binary file content can never be
-  misinterpreted as a frame boundary. Also what frames `PtyHandshake`,
-  the only framed message on `PTY_PORT`.
-- **`lib.rs`** — re-exports, `AGENT_PORT`/`PTY_PORT`/`EXEC_STREAM_PORT`,
-  and `encode_*`/`decode_*` helpers keeping `serde_json` an
-  implementation detail.
+  misinterpreted as a frame boundary. Also what frames `PtyHandshake`/
+  `TunnelOpen`, the only framed messages on `PTY_PORT`/`TUNNEL_PORT`.
+- **`lib.rs`** — re-exports, `AGENT_PORT`/`PTY_PORT`/`EXEC_STREAM_PORT`/
+  `TUNNEL_PORT`, and `encode_*`/`decode_*` helpers keeping `serde_json` an
+  implementation detail. `TUNNEL_PORT` is the one deliberate exception to
+  this protocol's universal "host connects in, guest only listens" rule —
+  see its own doc comment for why and how (Firecracker's guest-initiated-
+  connection mechanism, a `<uds_path>_<port>` listener, not the
+  `CONNECT <port>` handshake the other three ports use).
 
 ## Changing the protocol
 

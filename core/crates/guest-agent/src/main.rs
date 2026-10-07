@@ -1,6 +1,7 @@
 mod exec_stream;
 mod handler;
 mod pty;
+mod tunnel;
 
 use sandkiln_protocol::{decode_request, encode_response, read_message, write_message, Response, AGENT_PORT, EXEC_STREAM_PORT, PTY_PORT};
 use std::io::{Read, Write};

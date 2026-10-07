@@ -7,7 +7,7 @@ mod framing;
 mod messages;
 
 pub use framing::{read_message, write_message};
-pub use messages::{DirEntry, ExecStreamEvent, ExecStreamHandshake, PtyHandshake, Request, Response};
+pub use messages::{DirEntry, ExecStreamEvent, ExecStreamHandshake, PtyHandshake, Request, Response, TunnelOpen};
 
 /// The vsock port the guest agent listens on for exec/file-op requests,
 /// host-connected. Lives here so the two sides can't drift out of sync.
@@ -28,6 +28,31 @@ pub const PTY_PORT: u32 = 5001;
 /// since a caller needs structured output (which stream, and the exit
 /// code), not an undifferentiated byte stream.
 pub const EXEC_STREAM_PORT: u32 = 5002;
+
+/// A fourth port, for the local tunnel feature: exposing a service on the
+/// *caller's own machine* to code running inside the sandbox — the
+/// reverse direction of dev-server preview. `StartTunnel`/`StopTunnel`
+/// (sent over [`AGENT_PORT`], ordinary request/response) tell the guest
+/// agent to bind a TCP listener on a guest port; every connection
+/// accepted there becomes its own connection here.
+///
+/// **The one deliberate exception to this protocol's otherwise universal
+/// rule that the host always connects in and the guest only ever
+/// listens** (true of `AGENT_PORT`/`PTY_PORT`/`EXEC_STREAM_PORT` alike).
+/// It has to be: the event that needs to travel outward is "something
+/// *inside* the guest just tried to connect," which the host can't have
+/// initiated by definition. Firecracker's vsock device supports this
+/// natively but differently from the host-initiated direction: a guest
+/// `connect()` to this port doesn't go through the `CONNECT <port>`
+/// handshake `vsock_client.rs` uses at all — Firecracker instead forwards
+/// it to a Unix socket the host must already have bound and listening at
+/// `<uds_path>_<TUNNEL_PORT>` (the vsock UDS path with the port number
+/// appended), and bridges it as a raw connection with no handshake line
+/// of its own. Every connection here starts with exactly one framed
+/// [`TunnelOpen`] (sandkiln's own application-level handshake, layered on
+/// top of that raw bridge to say which tunnel/connection this is), then
+/// becomes a raw byte passthrough identical in shape to [`PTY_PORT`]'s.
+pub const TUNNEL_PORT: u32 = 5003;
 
 /// The wire encoding (JSON) is an implementation detail; this alias lets
 /// callers handle codec errors without depending on serde_json directly.
@@ -81,6 +106,19 @@ pub fn encode_exec_stream_event(event: &ExecStreamEvent) -> Result<Vec<u8>, Code
 
 /// Decodes an [`ExecStreamEvent`] — host-side client reading the stream.
 pub fn decode_exec_stream_event(payload: &[u8]) -> Result<ExecStreamEvent, CodecError> {
+    serde_json::from_slice(payload)
+}
+
+/// Encodes a [`TUNNEL_PORT`] connection's opening handshake — guest side
+/// (the guest is the connecting party here, see that constant's doc
+/// comment).
+pub fn encode_tunnel_open(open: &TunnelOpen) -> Result<Vec<u8>, CodecError> {
+    serde_json::to_vec(open)
+}
+
+/// Decodes a [`TunnelOpen`] — host-side listener accepting a guest-
+/// initiated `TUNNEL_PORT` connection.
+pub fn decode_tunnel_open(payload: &[u8]) -> Result<TunnelOpen, CodecError> {
     serde_json::from_slice(payload)
 }
 

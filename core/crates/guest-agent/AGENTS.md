@@ -5,12 +5,15 @@ Read root `AGENTS.md` first.
 ## What this crate is
 
 A ~700KB static binary running *inside* every microVM as a systemd
-service, listening on three vsock ports: `AGENT_PORT` (request/response —
+service, listening on four vsock ports: `AGENT_PORT` (request/response —
 exec, file ops, chmod/chown/mkdir/rename/copy/symlink/readlink/truncate),
 `PTY_PORT` (interactive shell, long-lived, drops to raw bytes after one
 handshake — see `pty.rs`), `EXEC_STREAM_PORT` (streamed background exec,
-long-lived but stays framed the whole time — see `exec_stream.rs`). The
-only code that runs inside the guest; everything else is host-side.
+long-lived but stays framed the whole time — see `exec_stream.rs`),
+`TUNNEL_PORT` (local tunnel — see `tunnel.rs`, the one port this crate
+*dials out on* instead of listening, per `TUNNEL_PORT`'s own doc
+comment). The only code that runs inside the guest; everything else is
+host-side.
 
 Built for `x86_64-unknown-linux-musl` (static, no glibc-version
 dependency). Size-optimized in the workspace root `Cargo.toml` since it
@@ -39,6 +42,16 @@ ships inside every rootfs image.
   synchronization needed), wait for the child only after both pipes hit
   EOF (waiting first risks deadlocking on a full pipe buffer), send one
   final `Exit`.
+- **`tunnel.rs`** — local tunnel: `start(tunnel_id, guest_port)` binds a
+  `TcpListener` on `127.0.0.1:guest_port` and accepts in the background;
+  each accepted connection dials `TUNNEL_PORT` (`VsockStream::
+  connect_with_cid_port(VMADDR_CID_HOST, ...)`), sends one framed
+  `TunnelOpen`, then shovels bytes until either side ends — same
+  `try_clone()`-on-one-socket hangup hazard and `shutdown(Shutdown::Both)`
+  fix as `pty.rs`'s `shovel_bytes`. `stop(tunnel_id)` sets a flag and
+  connects to the listener itself to unblock its `accept()` (std has no
+  other way to cancel a blocking accept). A process-wide registry
+  (`OnceLock<Mutex<HashMap<...>>>`) tracks active tunnels by id.
 
 ## Building
 
@@ -78,6 +91,9 @@ injected into, or the daemon keeps booting the old image.
   `shutdown(Shutdown::Both)` on shell exit; the vsock-input side sends
   the child `SIGHUP` (same as a real terminal) if it ends first. This was
   a real 10-second-hang bug, only ever caught via a live CLI test.
+  `tunnel.rs`'s `relay` function applies the identical `shutdown(Shutdown::Both)`
+  pattern proactively (no process to `SIGHUP` here, just two plain
+  sockets) — built in from the start, not found the hard way twice.
 
 ## Verifying a change
 

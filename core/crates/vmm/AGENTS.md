@@ -93,6 +93,24 @@ behavior belongs here, not in `daemon`.
   ~4-18ms) — previously unmeasured. `open_exec_stream` is the same shape
   against `EXEC_STREAM_PORT` with an `ExecStreamHandshake`, reading
   framed `ExecStreamEvent`s instead of raw bytes.
+- **`tunnel.rs`** — host-side acceptor for guest-*initiated* `TUNNEL_PORT`
+  connections, the local tunnel feature's one deliberate exception to
+  every other port's host-connects-in direction (see
+  `sandkiln_protocol::TUNNEL_PORT`'s doc comment). `listen(vsock_socket)`
+  binds a `UnixListener` at `tunnel_socket_path()` (the vsock UDS path
+  with `_<TUNNEL_PORT>` appended — Firecracker's own guest-initiated-
+  connection convention, not the `CONNECT <port>` handshake
+  `vsock_client.rs` uses) and accepts on a background thread for the
+  VM's whole life; each accepted connection reads one `TunnelOpen` and
+  is dispatched by `tunnel_id` to whoever called `register()` for it.
+  Deliberately `std::sync::mpsc`, not a tokio channel — this crate has no
+  async runtime dependency, and the daemon already bridges every vmm call
+  through `spawn_blocking`; bridging this channel the same way keeps that
+  boundary consistent. `Vm::boot`/`Vm::resume` both call `listen()` right
+  after constructing the VM (non-fatal on failure — a tunnel-listener
+  bind failure shouldn't fail an otherwise-successful boot/resume, same
+  reasoning as egress re-apply being a warning, not fatal, on resume);
+  `stop_inner` calls `cleanup()`.
 
 ## Building and testing
 

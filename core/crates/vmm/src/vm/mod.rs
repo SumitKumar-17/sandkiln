@@ -117,7 +117,14 @@ impl Vm {
     pub fn boot(config: &VmConfig) -> io::Result<Self> {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let log_path = console_log_path(id);
-        boot::boot(config, id, &log_path).map_err(|e| annotate_with_console_log(e, &log_path))
+        let vm = boot::boot(config, id, &log_path).map_err(|e| annotate_with_console_log(e, &log_path))?;
+        // Non-fatal: a freshly booted VM with no tunnel listener just
+        // can't use the local tunnel feature, which is rare enough not
+        // to be worth failing every create over. See `tunnel` module doc.
+        if let Err(e) = crate::tunnel::listen(&vm.vsock_socket) {
+            tracing::warn!(vm_id = vm.id, error = %e, "failed to start tunnel listener; local tunnels unavailable on this sandbox");
+        }
+        Ok(vm)
     }
 
     /// Whether this VM booted under Firecracker's jailer rather than a
@@ -215,6 +222,7 @@ impl Vm {
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.api_socket);
         let _ = std::fs::remove_file(&self.vsock_socket);
+        crate::tunnel::cleanup(&self.vsock_socket);
         // Tears down the whole chroot in one shot. A jailed VM's sockets
         // already live inside it (the removals above are redundant there
         // but needed for a direct boot, where this is `None`).

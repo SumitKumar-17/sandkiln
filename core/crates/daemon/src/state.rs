@@ -87,6 +87,14 @@ pub struct AppState {
     /// refcount like `pending_image_boots` — only one restore per tap
     /// device can ever be in flight.
     pending_tap_restores: Mutex<std::collections::HashSet<String>>,
+    /// One entry per tunnel between `POST /sandboxes/:id/tunnel`
+    /// (register) and the matching `GET .../tunnel/:tunnel_id/ws`
+    /// (take) — see `routes_tunnel.rs`. The receiving half of
+    /// `sandkiln_vmm::tunnel::register`'s channel; removed the moment a
+    /// WebSocket takes it, so a second WS attempt on the same tunnel_id
+    /// gets a clear `409` instead of silently racing the first for
+    /// connections.
+    pub tunnels: Mutex<HashMap<String, std::sync::mpsc::Receiver<sandkiln_vmm::tunnel::TunnelConnection>>>,
 }
 
 impl AppState {
@@ -119,6 +127,7 @@ impl AppState {
             history,
             pools: Mutex::new(HashMap::new()),
             pending_tap_restores: Mutex::new(std::collections::HashSet::new()),
+            tunnels: Mutex::new(HashMap::new()),
         }
     }
 
