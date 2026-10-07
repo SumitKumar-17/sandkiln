@@ -12,6 +12,26 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Daemon & core — 2026-10-07
+
+Covers every daemon/`sandkiln-vmm`/`sandkiln-guest-agent`/`sandkiln-protocol`
+change since the dated section below. Full narrative in `ROADMAP.md`'s "Dev
+servers and live preview" section and the engineering notebook.
+
+### Added
+- Local tunnel: a new `TUNNEL_PORT` vsock port, the one deliberate
+  exception to this project's "host always connects in" invariant — the
+  guest agent dials *out* to the host using Firecracker's guest-initiated-
+  connection mechanism (a pre-bound `<uds_path>_<port>` Unix socket, not
+  the `CONNECT <port>` handshake the other three ports use). New
+  `Request::StartTunnel`/`StopTunnel` (`sandkiln-protocol`), a guest-side
+  TCP listener + relay (`sandkiln-guest-agent::tunnel`), a host-side
+  acceptor dispatching by `tunnel_id` (`sandkiln-vmm::tunnel`), and
+  `POST/DELETE /sandboxes/:id/tunnel` + a multiplexing `GET
+  .../tunnel/:tunnel_id/ws` (`sandkiln-daemon::routes_tunnel`). See
+  ROADMAP's "Dev servers and live preview" section and the Internals page
+  for the full design.
+
 ## Daemon & core — 2026-09-16
 
 The daemon and core crates don't have their own release train (see the
@@ -118,6 +138,17 @@ this list stays terse on purpose.
   `examples/named-persistent-sandbox` (persistent-by-default stop
   across two separate process runs).
 
+## sandkiln (Python) [0.3.0] — 2026-10-07
+
+### Added
+- Local tunnel: `Sandbox.tunnel(guest_port, local_port)` and
+  `AsyncSandbox.tunnel(...)` — the reverse of `preview_url`. This
+  package's first WebSocket-based feature: since the standard library has
+  no WebSocket client, `tunnel.py`/`atunnel.py` hand-roll the RFC 6455
+  handshake and frame masking directly (verified against the RFC's own
+  published test vector), matching this SDK's existing zero-runtime-
+  dependency design.
+
 ## sandkiln (Python) [0.2.0] — 2026-09-16
 
 ### Added
@@ -136,6 +167,16 @@ entry below and earlier), this just ships it to PyPI via
 `.github/workflows/publish-python-sdk.yml`'s OIDC trusted-publishing
 flow. No code change; versioned separately from the JS/TS SDK/CLI table
 below from here on, since the two don't need to move in lockstep.
+
+## [0.12.0] — 2026-10-07
+
+### Added
+- Local tunnel: `Sandbox.tunnel(guestPort, { localPort })` (JS/TS),
+  `kiln sandbox tunnel <id> <guest-port> --local-port <port>` (CLI) — the
+  reverse of dev-server preview, exposing a service on the caller's own
+  machine to code running inside a sandbox. New `examples/local-tunnel`
+  reference project. See the daemon/core section above for the
+  guest-initiated-vsock mechanism this is built on.
 
 ## [0.11.0] — 2026-09-16
 

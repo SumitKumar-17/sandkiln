@@ -32,7 +32,7 @@ accident. JSON itself is boring on purpose: no schema compiler needed for a
 protocol this small, readable in a packet capture, and `#[serde(tag = "cmd")]`
 on the `Request`/`Response` enums keeps message shapes self-describing.
 
-## Three connection shapes, one port each
+## Four connection shapes, one port each
 
 - **`AGENT_PORT` (5000).** One request in, one response out, then close.
   `exec`, `read_file`, `write_file`, `chmod`, and the rest of the file
@@ -47,17 +47,29 @@ on the `Request`/`Response` enums keeps message shapes self-describing.
   `PTY_PORT`), but one long-lived connection per session (unlike `AGENT_PORT`'s
   one-shot request/response) — for streaming a long-running command's output
   as it's produced.
+- **`TUNNEL_PORT` (5003).** The one exception to the direction invariant below
+  — the local tunnel feature's guest-initiated connections. One framed
+  `TunnelOpen { tunnel_id, conn_id }`, then a raw passthrough, same shape as
+  `PTY_PORT`'s handshake-then-passthrough. See
+  [12-local-tunnel.md](12-local-tunnel.md).
 
-## The direction invariant
+## The direction invariant — and its one exception
 
-**The host always connects in; the guest agent only ever listens.** Every one
-of the three ports above follows this — `vmm::vsock_client` is the thing that
-dials `UnixStream::connect(uds_path)` and sends the `CONNECT <port>` handshake
-Firecracker's own vsock proxy expects. This is a deliberate architectural
-choice (one mental model for every port) rather than an accident, and it's the
-reason a feature needing the *opposite* direction (something initiated from
-inside the guest reaching back out to the host) is a genuinely novel addition,
-not a small extension.
+**The host always connects in; the guest agent only ever listens.** Three of
+the four ports above follow this — `vmm::vsock_client` is the thing that dials
+`UnixStream::connect(uds_path)` and sends the `CONNECT <port>` handshake
+Firecracker's own vsock proxy expects. This was a deliberate architectural
+choice (one mental model for every port), not an accident.
+
+`TUNNEL_PORT` breaks it, necessarily: a tunnel's whole point is reacting to a
+connection *initiated inside the guest*, which the host cannot have started.
+Firecracker supports this as a genuinely different mechanism, not the same
+handshake reversed — confirmed against Firecracker's own documentation before
+building it, since an initial design sketch assumed otherwise (see
+[12-local-tunnel.md](12-local-tunnel.md) and the engineering notebook's entry
+on this). The host pre-binds a plain Unix socket at the vsock device's own
+`uds_path` with `_<port>` appended; a guest `connect()` toward that port
+number arrives there with no handshake line at all.
 
 ## Status
 

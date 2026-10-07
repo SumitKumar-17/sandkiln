@@ -47,7 +47,9 @@ hardware, not just code that compiles.
   restore (retired, non-consumed checkpoints, restorable repeatedly);
   per-exec/per-create environment variables; remote storage mounts
   (S3-compatible buckets via FUSE + rclone); an async Python client
-  (`AsyncSandbox`/`AsyncDrive`/`AsyncImage`/`AsyncPool`).
+  (`AsyncSandbox`/`AsyncDrive`/`AsyncImage`/`AsyncPool`); a local tunnel
+  (the reverse of dev-server preview — a sandboxed process reaching a
+  service on the caller's own machine).
   All exposed through both SDKs and the CLI (interactive PTY: JS/TS SDK
   and CLI only, not yet Python; idle-lifecycle archiving: daemon-operator
   config only, no client surface; snapshot lineage and time-travel
@@ -706,13 +708,27 @@ outbound HTTP both still work.
   owning one). WebSocket proxying (dev-server HMR/live-reload) is a real,
   explicitly-scoped-out follow-up, not silently broken — plain HTTP only
   for now.
-- **Not yet built: the reverse direction (a local tunnel).** Everything
-  above exposes a port *inside* the sandbox outward; there's nothing
-  today that reaches the other way — a sandboxed process reaching a
-  service running on the caller's own machine (a local database, a local
-  API a coding agent needs to call during a test run) without that
-  service already being reachable from the sandbox's own network
-  namespace. Checked and confirmed absent, not just undocumented.
+- **Done: the reverse direction (a local tunnel).** `sandbox.tunnel(guestPort,
+  { localPort })` (JS/TS and Python, sync and async) / `kiln sandbox tunnel
+  <id> <guest-port> --local-port <port>` makes `127.0.0.1:guestPort` inside
+  the sandbox actually be `127.0.0.1:localPort` on the caller's own
+  machine. The one deliberate exception to this project's "host always
+  connects in, guest only listens" vsock invariant: a new `TUNNEL_PORT`
+  where the *guest* connects out, using Firecracker's actual guest-
+  initiated-connection mechanism (a pre-bound `<uds_path>_<port>` Unix
+  socket, confirmed against Firecracker's own documentation — not the
+  `CONNECT <port>` handshake the other three ports use, reversed, which
+  an earlier design sketch incorrectly assumed). Every guest connection on
+  a tunnel is multiplexed over one WebSocket back to the caller with a
+  small binary frame. JS/TS rides the runtime's native `WebSocket`;
+  Python has none in its standard library, so this is a hand-rolled RFC
+  6455 client (its handshake math checked against the RFC's own published
+  test vector before trusting it live) — the SDK's first WebSocket-based
+  feature. Live-verified end to end on all three surfaces: a real local
+  HTTP server, reached via a real `curl` run inside a real sandbox,
+  byte-for-byte matching. `examples/local-tunnel` is the runnable
+  reference; see the engineering notebook for the guest-initiated-vsock
+  discovery and the Internals page for the full mechanism.
 - **Alternative worth considering alongside the proxy**: today's
   `/preview/:port` is a daemon-proxied *path*, not a real routable
   domain. A dedicated public domain/subdomain per exposed port (the

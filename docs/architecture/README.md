@@ -46,7 +46,8 @@ Each row links to the brief file covering it. "Status" is honest, not aspiration
 | Networking, egress policy | tap pool, Linux bridge, `CAP_NET_ADMIN` vs `TUNSETIFF`, iptables chains, MMDS | [03-networking-and-egress.md](03-networking-and-egress.md) |
 | Snapshot / resume / fork | pause-and-snapshot, parent-pointer lineage DAG, retired checkpoints, time-travel restore | [04-snapshots-resume-fork.md](04-snapshots-resume-fork.md) |
 | Drives, images, remote mounts | read-only sharing + ownership tracking, managed image registry, FUSE + rclone | [05-storage-drives-images-mounts.md](05-storage-drives-images-mounts.md) |
-| vsock wire protocol | `AF_VSOCK`, length-prefixed framing, 3 connection shapes | [06-vsock-protocol.md](06-vsock-protocol.md) |
+| vsock wire protocol | `AF_VSOCK`, length-prefixed framing, 4 connection shapes | [06-vsock-protocol.md](06-vsock-protocol.md) |
+| Local tunnel | guest-initiated vsock, `<uds_path>_<port>` listener, WebSocket multiplexing frame | [12-local-tunnel.md](12-local-tunnel.md) |
 | Security & privilege model | ambient capabilities, jailer (chroot/cgroups/setuid), path-traversal validation | [07-security-and-privilege.md](07-security-and-privilege.md) |
 | Durable history (sqlite) | WAL journaling, `synchronous=NORMAL`, best-effort writes | [08-persistence-sqlite.md](08-persistence-sqlite.md) |
 | PTY, exec-stream, rate limiting | `forkpty`, WebSocket relay, token-bucket algorithm | [09-interactive-sessions-and-rate-limits.md](09-interactive-sessions-and-rate-limits.md) |

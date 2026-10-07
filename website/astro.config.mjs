@@ -65,6 +65,7 @@ export default defineConfig({
             { label: "Networking & isolation", slug: docs("concepts/networking") },
             { label: "Auth", slug: docs("concepts/auth") },
             { label: "Dev-server preview", slug: docs("concepts/preview") },
+            { label: "Local tunnel", slug: docs("concepts/local-tunnel") },
           ],
         },
         {
@@ -94,6 +95,7 @@ export default defineConfig({
             { label: "PTY and forkpty", slug: docs("internals/pty") },
             { label: "exec-stream sessions", slug: docs("internals/exec-stream") },
             { label: "Pre-warmed pools", slug: docs("internals/pre-warmed-pools") },
+            { label: "Local tunnel: the mechanism", slug: docs("internals/local-tunnel") },
           ],
         },
         {

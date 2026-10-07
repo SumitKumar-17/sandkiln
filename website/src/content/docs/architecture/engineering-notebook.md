@@ -151,6 +151,20 @@ Already shipped by this point, with an honest but modest "70-200ms vs. 160-200ms
 
 **What's still open, and it's a product question, not a bug**: should `create()` block until the guest agent answers once, so `200` genuinely means "ready," the way this whole investigation assumed it already did? Today's fast create-time number is an honest answer to the question it actually measures; it's just an easy question to misread as answering a different one.
 
+## Building the one feature that needed the host and guest to swap roles
+
+Every vsock-based feature up to this point — exec, file ops, PTY, streamed exec — followed the same direction without exception: the host connects to the guest, never the reverse. Local tunnel (exposing a service on the caller's own machine to code inside the sandbox) broke that by definition: the event that matters is "something inside the guest just tried to connect," which the host structurally cannot have initiated.
+
+The first design sketch got the mechanism wrong. The plan was to have the host's existing vsock-listening code also watch for a `CONNECT <port>\n` line arriving on its own connection — the same handshake `vsock_client.rs` already sends for the host-initiated direction, just read instead of written. That would have been built against an assumption, not a fact.
+
+:::caution[Checked against Firecracker's own documentation before writing any code]
+Firecracker's guest-initiated connection mechanism is not the reverse of the host-initiated one. It's a completely separate convention: the host must pre-create and bind a plain Unix domain socket at the vsock device's own `uds_path` with `_<port>` appended (`v.sock_5003`, say), *before* the guest ever tries to connect. When the guest calls `connect()` toward that port number, Firecracker bridges it straight to whatever's listening on that socket — no `CONNECT` line, no handshake of its own at all. Building the originally-sketched design would have produced a listener that correctly bound a socket and then sat there forever, since nothing would ever have spoken the handshake it was waiting to read.
+:::
+
+Catching this before writing the accept loop, not after, is the only reason it worked on the first real end-to-end attempt: a real local HTTP server on the host, a real `curl` run inside a real sandbox, reached through a tunnel, byte-for-byte matching — verified in one pass, not debugged into working. See [local tunnel: the mechanism](../../internals/local-tunnel/) for the resulting design and a real captured example.
+
+The Python SDK needed its own new ground: `tunnel()` is this package's first WebSocket-based feature, and Python's standard library has none. Rather than add a dependency or ship something unverified, the handshake math (`Sec-WebSocket-Accept` from `Sec-WebSocket-Key`) was checked against RFC 6455's own published worked example before trusting it against a real daemon — a cheap check that would have caught a masking or hashing mistake immediately instead of as an intermittent, hard-to-reproduce connection failure later.
+
 ## Currently open
 
 Honest status on what's still unresolved, not swept into a changelog and forgotten:
