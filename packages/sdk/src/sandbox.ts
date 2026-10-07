@@ -1,6 +1,7 @@
 import { decodeBase64, encodeBase64 } from "./base64.js";
 import { resolveClient, type ClientContext } from "./client.js";
 import { request } from "./http.js";
+import { openTunnel, type TunnelHandle, type TunnelOptions } from "./tunnel.js";
 import type {
   ChmodRequestBody,
   ChownRequestBody,
@@ -286,6 +287,16 @@ export class Sandbox {
       url.searchParams.set("token", this.client.authToken);
     }
     return new WebSocket(url);
+  }
+
+  /** Opens a local tunnel: code running inside the sandbox connects to
+   * `guestPort` and reaches whatever's listening on `options.localPort`
+   * on *this* machine — the reverse of `previewUrl()`. Node-only (see
+   * `tunnel.ts`'s own doc comment for why `pty()`/`attachLogs()` don't
+   * have this restriction and this does). Returns a handle; call
+   * `.close()` when done forwarding. */
+  async tunnel(guestPort: number, options: TunnelOptions): Promise<TunnelHandle> {
+    return openTunnel(this.client, this.id, guestPort, options);
   }
 
   /** Starts `command` detached and returns immediately with a session

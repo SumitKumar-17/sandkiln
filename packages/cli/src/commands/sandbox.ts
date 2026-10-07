@@ -473,6 +473,32 @@ export function registerSandboxCommands(program: Command): void {
     });
 
   sandbox
+    .command("tunnel <id> <guest-port>")
+    .description(
+      "Expose a service running on this machine to code inside a sandbox -- the reverse of preview. Runs in the foreground until Ctrl+C.",
+    )
+    .requiredOption("--local-port <port>", "port on this machine to forward connections to", parsePositiveInt("--local-port"))
+    .option("--local-host <host>", "host on this machine to forward to (default: 127.0.0.1)")
+    .action(async function (this: Command, id: string, guestPortArg: string, opts: { localPort: number; localHost?: string }) {
+      const { baseUrl, token } = clientOptions(this);
+      const guestPort = parsePositiveInt("<guest-port>")(guestPortArg);
+      try {
+        const handle = await attachSandbox(id, baseUrl, token).tunnel(guestPort, { localPort: opts.localPort, localHost: opts.localHost });
+        process.stderr.write(`tunnel ${handle.tunnelId} open: sandbox:${guestPort} -> ${opts.localHost ?? "127.0.0.1"}:${opts.localPort}\n`);
+        process.stderr.write("Press Ctrl+C to close.\n");
+        const close = async () => {
+          await handle.close();
+          process.exit(0);
+        };
+        process.on("SIGINT", close);
+        process.on("SIGTERM", close);
+        await new Promise(() => {});
+      } catch (error) {
+        await handleApiError(error);
+      }
+    });
+
+  sandbox
     .command("exec-stream <id> <command> [args...]")
     .description(
       "Run a long-running command inside a sandbox in the background and follow its output live (replay so far, then a live tail) until it exits. Ctrl+C detaches without stopping the command -- reattach later with 'kiln sandbox logs <id> <session-id>'.",

@@ -20,7 +20,7 @@ operation delegates to the SDK.
   SDK's env resolution when unset), `fail`/`handleApiError` (clean
   `error: ...` on stderr + exit 1, never a raw stack trace).
 - **`src/commands/sandbox.ts`** — the large group: `sandbox
-  create|get-or-create|by-name|ls|rm|exec|read|write|preview|pty|
+  create|get-or-create|by-name|ls|rm|exec|read|write|preview|pty|tunnel|
   exec-stream|logs|snapshot|snapshots|resume|fork|chmod|chown|mkdir|
   rename|cp|symlink|readlink|truncate|ls-dir|mount|mounts|unmount`, each
   a thin call into `Sandbox`/`Sandbox.attach()`. Also owns
@@ -32,6 +32,11 @@ operation delegates to the SDK.
     after shell exit was a guest-side bug (`close` never fired until the
     guest tore down its side — see `sandkiln-guest-agent/pty.rs`), not a
     client leak — check the server side first if this recurs.
+  - `tunnel <id> <guest-port> --local-port <port>`: runs in the
+    foreground until `Ctrl+C`/`SIGTERM`, which calls `handle.close()`
+    then exits — no raw-stdin mode needed (unlike `pty`), since this
+    forwards bytes between the daemon's WebSocket and a real local
+    socket, not a terminal.
   - `exec-stream`/`logs` resolve exit code by parsing the daemon's
     bracketed `[process exited with code N]` notice out of plain output.
   - `resume`/`fork`/`get-or-create`/`by-name` call the SDK's static

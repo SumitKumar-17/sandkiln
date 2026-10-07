@@ -15,10 +15,12 @@ implements logic the daemon doesn't already have; new behavior goes in
   `fork`/`byName`/`getOrCreate`; instance `runCommand`/`readFile`/
   `writeFile`/`chmod`/`chown`/`mkdir`/`rename`/`copy`/`symlink`/
   `readlink`/`truncate`/`listDir`/`stop`/`snapshot`/`previewUrl`/`pty`/
-  `execStream`/`listExecStreams`/`attachLogs`. `pty`/`attachLogs` return a
-  native `WebSocket` directly instead of awaiting (live streams, not a
-  single call); both throw a clear error if `WebSocket` is undefined
-  rather than adding a `ws` dependency (keeps zero-runtime-deps intact).
+  `execStream`/`listExecStreams`/`attachLogs`/`tunnel`. `pty`/`attachLogs`
+  return a native `WebSocket` directly instead of awaiting (live streams,
+  not a single call); both throw a clear error if `WebSocket` is
+  undefined rather than adding a `ws` dependency (keeps zero-runtime-deps
+  intact). `tunnel` is async (it POSTs to create the tunnel first) and
+  returns a `TunnelHandle` — see `tunnel.ts`.
   `chmod`/.../`listDir` all forward paths unvalidated, same as
   `readFile`/`writeFile` (validation belongs daemon/guest-agent side).
   `resume`/`fork`/`byName` are static since none acts on an existing
@@ -49,6 +51,19 @@ implements logic the daemon doesn't already have; new behavior goes in
 - **`types.ts`** — wire shapes matching the daemon's JSON exactly
   (`snake_case` fields); public types (`ExecResult`, `SandboxInfo`,
   `ImageInfo`) translate to `camelCase`.
+- **`tunnel.ts`** — `openTunnel`/`TunnelHandle`/`TunnelOptions`. Node-only
+  (dynamically `import("node:net")` rather than a top-level import, so
+  the module still loads — just can't be called — in a browser bundle):
+  forwarding to a real local TCP socket needs `node:net`, which doesn't
+  exist in a browser, unlike `pty`/`attachLogs` which only need a
+  WebSocket. POSTs `/sandboxes/:id/tunnel` for a `tunnel_id`, opens the
+  `.../ws` WebSocket (`?token=` fallback, same reason as `pty` — no
+  WebSocket constructor in any runtime, browser or Node, can set a custom
+  header), then demuxes/muxes a small binary frame (`op` byte + `conn_id`
+  length + `conn_id` + payload) against real `net.Socket`s per
+  `conn_id`. This exact frame format is shared with the daemon's
+  `routes_tunnel.rs` and the Python SDK's `tunnel.py`/`atunnel.py` —
+  change one, change all three.
 
 ## Testing
 
