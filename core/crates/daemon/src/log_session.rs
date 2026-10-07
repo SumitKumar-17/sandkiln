@@ -1,33 +1,20 @@
-//! `LogSession`: the daemon-side state backing one streamed background
-//! exec session (`kiln logs -f`'s underlying mechanism — see
-//! `crate::routes_logs`'s module doc comment for the full design).
+//! `LogSession`: daemon-side state for one streamed background exec
+//! session (`kiln logs -f` — see `crate::routes_logs` for the full
+//! design). Own file, not part of `routes_logs.rs`: pure state a
+//! background pump task mutates and any number of WebSocket clients read
+//! concurrently, no HTTP/axum concern — same state/surface seam as
+//! `pool.rs`/`routes_pool.rs`.
 //!
-//! Deliberately its own file rather than living inside `routes_logs.rs`:
-//! this is pure state a background "pump" task mutates and any number of
-//! attached WebSocket clients read from concurrently, with no HTTP/axum
-//! concern of its own — the same seam `pool.rs`/`routes_pool.rs` already
-//! draw between pure state and its HTTP surface.
-//!
-//! **stdout and stderr are merged into one buffer, in arrival order** —
-//! like a real terminal would show them, which is what `kiln logs -f`'s
-//! own UX wants. The wire protocol (`sandkiln_protocol::ExecStreamEvent`)
-//! still tags each chunk by stream on the way in, in case a future
-//! consumer wants to split them back apart; nothing today needs that, so
-//! nothing here keeps it.
-//!
-//! **Bounded ring buffer, not unbounded.** A session's buffer holds only
-//! its last [`BUFFER_CAP_BYTES`] — old bytes are dropped from the front
-//! once that's exceeded, tracked in `truncated_bytes` so a newly
-//! attaching client can be told some history is gone rather than silently
-//! handed a partial log with no indication of the gap.
-//!
-//! **Not persisted anywhere, and not carried across resume/fork/restore**
-//! — same convention as `Sandbox::pty_session_count`: a session is purely
-//! in-memory daemon-process state tied to one specific `Sandbox` Rust
-//! value, freshly empty on every new one (including a resumed/forked/
-//! restored sandbox, which is a *new* `Sandbox` value in this daemon
-//! process even though the guest's memory carries over). A daemon
-//! restart, or the sandbox itself stopping, ends every session it held.
+//! stdout/stderr merge into one buffer in arrival order (like a real
+//! terminal), even though the wire protocol still tags each chunk by
+//! stream on the way in. Bounded ring buffer: holds only the last
+//! [`BUFFER_CAP_BYTES`], older bytes dropped and counted in
+//! `truncated_bytes` so a late attacher is told history is missing rather
+//! than handed a silent partial log. Not persisted, not carried across
+//! resume/fork/restore — same as `Sandbox::pty_session_count`, a resumed
+//! sandbox is a *new* `Sandbox` value even though the guest's memory
+//! carries over, so every session it held ends with it or a daemon
+//! restart.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -120,14 +107,10 @@ impl LogSession {
         self.inner.lock().unwrap().exit_code
     }
 
-    /// Attaches to this session for replay-then-live-tail: returns
-    /// everything currently buffered (already-truncated bytes counted,
-    /// not included), plus a receiver that yields everything appended
-    /// *from this point on*. Snapshotting the buffer and subscribing to
-    /// the broadcast channel happen under the same lock an `append`/
-    /// `finish` call also takes, so there's no gap a byte could fall
-    /// into (delivered by neither the snapshot nor the live receiver) and
-    /// no overlap (delivered by both).
+    /// Replay-then-live-tail: everything currently buffered, plus a
+    /// receiver for everything appended from this point on. Snapshotting
+    /// the buffer and subscribing happen under the same lock `append`/
+    /// `finish` take, so no byte is ever missed or double-delivered.
     pub fn subscribe(&self) -> (Vec<u8>, u64, Option<i32>, broadcast::Receiver<LogEvent>) {
         let inner = self.inner.lock().unwrap();
         let replay: Vec<u8> = inner.buffer.iter().copied().collect();

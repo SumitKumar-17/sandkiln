@@ -1,31 +1,21 @@
 //! Keeps a `tracing::Span`'s context intact across a
 //! `tokio::task::spawn_blocking` thread boundary.
 //!
-//! `tracing`'s "current span" bookkeeping is thread-local, and
-//! `tokio::task::spawn_blocking(f)` runs `f` on a fresh blocking-pool
-//! thread that starts with none — a bare `spawn_blocking` silently drops
-//! span context, so every `tracing::info!`/`debug!`/`warn!` call inside
-//! `sandkiln-vmm`'s `Vm::boot`/`call`/`stop` (all invoked from inside
-//! `spawn_blocking` — see `routes_sandbox`/`routes_exec`/
-//! `routes_snapshot`/`routes_drives`) would otherwise log with no request
-//! context at all, defeating request/trace correlation
-//! (`request_id::correlate`) for exactly the operations that matter most.
+//! `tracing`'s "current span" is thread-local; a fresh blocking-pool
+//! thread starts with none, so a bare `spawn_blocking` silently drops
+//! span context — every event inside `sandkiln-vmm`'s `Vm::boot`/`call`/
+//! `stop` (always called from inside `spawn_blocking`) would log with no
+//! request correlation otherwise.
 //!
-//! `tracing::Span::enter`'s own documentation ("In Asynchronous Code")
-//! confirms spans don't propagate on their own and must be re-entered
-//! explicitly; what it doesn't spell out is that `tracing::Span::current()`
-//! and the `tracing::info!`/etc. macros both resolve *which subscriber to
-//! talk to* via the thread-local "current default dispatch"
-//! (`tracing::dispatcher::get_default`) — a completely separate piece of
-//! thread-local state from the span itself. Re-entering the span alone is
-//! not sufficient on a thread with no default dispatch configured (i.e. a
-//! blocking-pool thread, unless a *global* default subscriber happens to
-//! be installed process-wide via `set_global_default`, which `main.rs`
-//! does, but this helper doesn't rely on that in case it's ever used
-//! somewhere it isn't — see `spawn_blocking_in_current_span_carries_
-//! span_context_and_events_into_the_new_thread` below, which exercises
-//! this without a global subscriber, proving both pieces are actually
-//! necessary and sufficient).
+//! Two separate pieces of thread-local state, both needed: the span
+//! itself, and the "current default dispatch"
+//! (`tracing::dispatcher::get_default`) the `tracing::info!`-style macros
+//! use to resolve which subscriber to talk to. Re-entering the span alone
+//! isn't enough on a thread with no default dispatch configured — this
+//! helper captures and re-establishes both, rather than relying on
+//! `main.rs`'s process-global default subscriber, so it still works
+//! wherever it's used. The test below proves both are actually necessary
+//! by exercising this with no global subscriber installed at all.
 
 /// Runs `f` on a blocking-pool thread (via `tokio::task::spawn_blocking`)
 /// inside the span and dispatcher that were active on the calling task,
@@ -72,27 +62,18 @@ mod tests {
         }
     }
 
-    /// Proves the propagation this module exists for actually works, by
-    /// building a throwaway (not process-global) JSON subscriber, entering
-    /// a span carrying a unique `request_id`, running an event through
-    /// `spawn_blocking_in_current_span` on a real blocking-pool thread, and
-    /// asserting that event's logged JSON carries that `request_id` in its
-    /// span context — i.e. this is a real regression test for the thread
-    /// boundary, not just an assertion that the code compiles.
+    /// Real regression test, not just a compile check: a throwaway JSON
+    /// subscriber, a span carrying a unique `request_id`, an event emitted
+    /// via `spawn_blocking_in_current_span` on a real blocking-pool
+    /// thread, then asserts the logged JSON carries that `request_id`.
     ///
-    /// Deliberately uses `tracing::subscriber::set_default` (a thread-local
-    /// override) rather than `set_global_default` (process-global, and
-    /// settable only once per process — other tests in this binary would
-    /// break it). That override only applies to the thread it's set on, so
-    /// it's held across the whole `.await` below rather than dropped early
-    /// — the default `#[tokio::test]` runtime is single-threaded, so the
-    /// test body and everything it polls up to the `spawn_blocking` call
-    /// itself all run on that one thread. This is exactly why
-    /// `spawn_blocking_in_current_span` also captures and re-establishes
-    /// the *dispatcher* (not just the span) inside the spawned closure: the
-    /// blocking-pool thread `f` actually runs on is a genuinely different
-    /// OS thread than the one this guard is scoped to, and has no
-    /// dispatcher of its own at all, thread-local or global, in this test.
+    /// Uses `tracing::subscriber::set_default` (thread-local), not
+    /// `set_global_default` (process-global, settable once — other tests
+    /// would break it), held across the whole `.await` since the
+    /// single-threaded `#[tokio::test]` runtime runs the test body on that
+    /// same thread. The blocking-pool thread `f` actually runs on has no
+    /// dispatcher of its own at all, thread-local or global — proving this
+    /// module's dispatcher capture is necessary, not just the span.
     #[tokio::test]
     async fn spawn_blocking_in_current_span_carries_span_context_and_events_into_the_new_thread() {
         let buf = SharedBuf::default();

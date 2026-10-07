@@ -16,14 +16,12 @@ pub struct Sandbox {
     /// `Snapshot::forked_into`), so this sandbox's teardown never
     /// releases it. Every other sandbox owns its lease outright.
     pub network: Option<Lease>,
-    /// Always this sandbox's own private rootfs clone, including a
-    /// fork/restore (each gets a fresh clone via
-    /// `routes_sandbox::clone_rootfs`, never the source's file directly)
-    /// — so `destroy_sandbox_by_id` can always remove it unconditionally.
-    /// **Not always true**: forking used to share the source snapshot's
-    /// rootfs file directly, a real corruption bug (fork, mutate, stop,
-    /// resume the original — its memory disagreed with the file on disk)
-    /// found live building time-travel restore. See
+    /// Always this sandbox's own private rootfs clone (fork/restore each
+    /// get a fresh one via `routes_sandbox::clone_rootfs`, never the
+    /// source's file directly), so `destroy_sandbox_by_id` can always
+    /// remove it unconditionally. Forking once shared the source's rootfs
+    /// file directly — a real corruption bug (fork, mutate, stop, resume
+    /// original: memory disagreed with disk), caught live. See
     /// `routes_snapshot::fork_snapshot`.
     pub rootfs_path: PathBuf,
     /// Drives attached at creation, with read-only/write mode. Not
@@ -81,14 +79,12 @@ pub struct Sandbox {
     /// `routes_exec::resolve_env`). Unlike `egress`, no external resource
     /// to re-apply, so it carries through resume **and** fork identically.
     pub env: HashMap<String, String>,
-    /// Informational lineage pointer, carried onto `Snapshot::parent_snapshot_id`
-    /// if this sandbox is later snapshotted. **A separate field from
-    /// `source_snapshot_id`, not a reuse**: that field is `Some` only on
-    /// a fork (to refuse re-snapshotting it) and `None` on resume (so a
-    /// resumed sandbox stays snapshottable) — lineage needs the opposite
-    /// shape, `Some` on both. Reusing the wrong field would have made
-    /// every resumed sandbox's lineage a dead end; caught live, not on
-    /// paper (`ROADMAP.md`'s "Snapshot lineage").
+    /// Lineage pointer, carried onto `Snapshot::parent_snapshot_id` on a
+    /// later snapshot. Separate from `source_snapshot_id` (see its own
+    /// doc comment) on purpose: lineage needs `Some` on both resume and
+    /// fork, the opposite shape — reusing that field first made every
+    /// resumed sandbox's lineage a dead end, caught live
+    /// (`ROADMAP.md`'s "Snapshot lineage").
     pub parent_snapshot_id: Option<String>,
     /// Active remote-storage mounts (`crate::routes_mounts`). Never
     /// re-applied on resume/fork/restore — a mount is a live guest FUSE
