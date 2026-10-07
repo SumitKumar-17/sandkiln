@@ -20,11 +20,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-/// Checking more often than the shortest configured timeout wastes work;
-/// checking only once per timeout risks a sandbox running up to ~2x the
-/// configured window before being caught. Splitting the difference, capped
-/// so a huge configured timeout doesn't make the loop check absurdly
-/// rarely.
+/// Halving the shortest configured timeout balances "catches idle
+/// sandboxes promptly" against "don't scan needlessly often"; this caps
+/// how rarely that halving can land for a huge configured timeout.
 const MAX_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 pub async fn run(
@@ -45,13 +43,11 @@ pub async fn run(
     }
 }
 
-/// One reaper tick. Auto-suspend runs first: a sandbox it successfully
-/// suspends leaves `AppState::sandboxes` entirely (it's a `Snapshot` now),
-/// so the destroy pass below naturally never sees it again — see
-/// `config::Config::auto_suspend_timeout`'s doc comment for why this
-/// ordering, plus the required `auto_suspend_timeout < idle_timeout`
-/// invariant enforced at startup, is what makes destroy a backstop rather
-/// than a race.
+/// Auto-suspend runs first: a successfully-suspended sandbox leaves
+/// `AppState::sandboxes` (it's a `Snapshot` now), so destroy below never
+/// sees it — this ordering plus the enforced
+/// `auto_suspend_timeout < idle_timeout` invariant is what makes destroy
+/// a backstop, not a race (see `config::Config::auto_suspend_timeout`).
 async fn reap_once(state: &Arc<AppState>, idle_timeout: Option<Duration>, auto_suspend_timeout: Option<Duration>, now: Instant) {
     if let Some(suspend_timeout) = auto_suspend_timeout {
         suspend_idle_sandboxes(state, suspend_timeout, now).await;
@@ -69,22 +65,15 @@ async fn suspend_idle_sandboxes(state: &Arc<AppState>, timeout: Duration, now: I
                 tracing::info!(sandbox_id = %id, snapshot_id = %snapshot_id, "auto-suspended idle sandbox");
             }
             Err(SnapshotStopError::NotFound) => {
-                // Only realistic cause: it was already removed (raced with
-                // a concurrent explicit stop/snapshot) between the scan
-                // above and here — same tolerance `destroy_idle_sandboxes`
-                // already has for the destroy path.
+                // Raced with a concurrent explicit stop/snapshot between
+                // the scan and here.
                 tracing::warn!(sandbox_id = %id, "idle sandbox was already gone by the time the reaper tried to auto-suspend it");
             }
             Err(SnapshotStopError::Blocked(reason)) => {
-                // Structurally ineligible for suspend (booted jailed, or
-                // forked from a snapshot and sharing its rootfs — see
-                // `snapshot_and_stop`'s own precondition checks), not an
-                // operational failure. Left running: it'll be scanned
-                // again next tick and log this again until either it goes
-                // idle-active again or `SANDKILN_IDLE_TIMEOUT_SECS`, if
-                // configured, eventually destroys it instead. `debug`
-                // rather than `warn` specifically because this can repeat
-                // every tick for as long as such a sandbox stays idle.
+                // Structurally ineligible (jailed, or forked and sharing
+                // its rootfs), not an operational failure -- left running,
+                // rescanned next tick. `debug`, not `warn`: can repeat
+                // every tick for as long as it stays idle.
                 let reason: &str = match reason {
                     SnapshotBlocked::Jailed => "jailed",
                     SnapshotBlocked::ForkedFrom(_) => "forked from another snapshot",
@@ -92,20 +81,12 @@ async fn suspend_idle_sandboxes(state: &Arc<AppState>, timeout: Duration, now: I
                 tracing::debug!(sandbox_id = %id, reason, "sandbox is idle but not eligible for auto-suspend — leaving it running");
             }
             Err(SnapshotStopError::Io(e)) => {
-                // A real failure partway through pause/snapshot (disk
-                // full, a Firecracker API error, a metadata-persist
-                // failure) — `snapshot_and_stop` itself already degrades
-                // this the same way the manual `POST .../snapshot` route
-                // does: stop the VM and release its resources rather than
-                // hand back something claiming to still be a live,
-                // running sandbox. There's no primitive to un-pause a VM
-                // once Firecracker's `/vm` PATCH to `Paused` has taken
-                // effect, so "leave it running and retry" isn't actually
-                // available once pause has succeeded — the sandbox is
-                // gone either way by the time this arm runs, same net
-                // effect as an idle-destroy, just logged distinctly so an
-                // operator can tell the difference between "reclaimed on
-                // purpose" and "auto-suspend broke".
+                // Real failure mid pause/snapshot -- `snapshot_and_stop`
+                // already degrades to stop+release (no primitive to
+                // un-pause a VM once Firecracker's Paused PATCH lands), so
+                // the sandbox is gone either way; logged distinctly so an
+                // operator can tell "reclaimed on purpose" from
+                // "auto-suspend broke".
                 tracing::warn!(
                     sandbox_id = %id,
                     error = %e,
@@ -120,26 +101,19 @@ async fn suspend_idle_sandboxes(state: &Arc<AppState>, timeout: Duration, now: I
 async fn destroy_idle_sandboxes(state: &Arc<AppState>, timeout: Duration, now: Instant) {
     for id in idle_sandbox_ids(state, timeout, now) {
         tracing::info!(sandbox_id = %id, "stopping idle sandbox");
-        // `keep: true` — same "preserve by default" behavior as an
-        // explicit `DELETE /sandboxes/:id`, via the exact same shared
-        // path (see `stop_sandbox_by_id`'s doc comment): an idle-timeout
-        // stop shouldn't discard state a caller would keep if they'd
-        // stopped it themselves.
+        // keep: true -- same preserve-by-default behavior as an explicit
+        // DELETE, via the same shared path.
         match stop_sandbox_by_id(state.clone(), id.clone(), true).await {
             Ok(_) => {}
             Err(StopError::NotFound) => {
-                // Only realistic cause: it was already removed (raced with
-                // a concurrent explicit stop, or already auto-suspended
-                // above in this same tick) between the scan above and here.
+                // Raced with a concurrent stop, or already auto-suspended
+                // above this same tick.
                 tracing::warn!(sandbox_id = %id, "idle sandbox was already gone by the time the reaper tried to stop it");
             }
             Err(StopError::CannotPreserve(_)) => {
-                // Preservation is structurally impossible for this
-                // sandbox (jailed — see `SnapshotBlocked`), and unlike the
-                // `DELETE` route there's no caller here to redirect
-                // toward `?keep=false`: leaving it running forever would
-                // just leak its VM/network resources. Free them instead,
-                // same as an explicit destroy would.
+                // Structurally impossible to preserve (jailed), and unlike
+                // DELETE there's no caller to redirect to ?keep=false --
+                // free the resources instead of leaking them forever.
                 tracing::warn!(
                     sandbox_id = %id,
                     "idle sandbox cannot be preserved on stop (unsupported for this sandbox) — destroying it instead to free its resources"
@@ -149,10 +123,8 @@ async fn destroy_idle_sandboxes(state: &Arc<AppState>, timeout: Duration, now: I
                 }
             }
             Err(StopError::Io(e)) => {
-                // `snapshot_and_stop` already tore the VM down on this
-                // path (see its doc comment: "whether or not the snapshot
-                // succeeded, this VM is done") — nothing further to clean
-                // up here, just a data-loss signal worth logging loudly.
+                // snapshot_and_stop already tore the VM down on this path
+                // -- nothing left to clean up, just a loud data-loss signal.
                 tracing::warn!(sandbox_id = %id, error = %e, "idle sandbox's snapshot-on-stop failed — its state was not preserved");
             }
         }
@@ -168,15 +140,11 @@ fn idle_sandbox_ids(state: &Arc<AppState>, timeout: Duration, now: Instant) -> V
         .collect()
 }
 
-/// The archive tier: moves every eligible held snapshot's files off
-/// `snapshots_root()` onto `Config::archive_dir` — see
-/// `crate::routes_snapshot::archive_snapshot_by_id`. Eligible means: not
-/// already archived (`archived_at.is_none()`), no live fork
-/// (`forked_into.is_none()` — a fork's `Vm::resume` call is actively using
-/// this snapshot's *current* file paths right now), and old enough
-/// (`is_archive_due`). Independent of the sandbox-side passes above —
-/// this looks at `AppState::snapshots`, not `AppState::sandboxes`, and
-/// applies to a snapshot regardless of how it came to exist.
+/// Archive tier: moves eligible held snapshots' files onto
+/// `Config::archive_dir` (`archive_snapshot_by_id`). Eligible = not
+/// already archived, no live fork (a fork's `Vm::resume` is actively
+/// using the current file paths), and old enough. Looks at
+/// `AppState::snapshots`, independent of the sandbox-side passes above.
 async fn archive_idle_snapshots(state: &Arc<AppState>, timeout: Duration, archive_dir: &std::path::Path, now: SystemTime) {
     for id in due_for_archive_ids(state, timeout, now) {
         tracing::info!(snapshot_id = %id, "archiving idle snapshot");
@@ -185,28 +153,20 @@ async fn archive_idle_snapshots(state: &Arc<AppState>, timeout: Duration, archiv
                 tracing::info!(snapshot_id = %id, "archived idle snapshot");
             }
             Err(ArchiveError::NotFound) => {
-                // Only realistic cause: it was resumed, forked, deleted,
-                // or already archived by something else between the scan
-                // above and here.
+                // Resumed, forked, deleted, or already archived between
+                // the scan and here.
                 tracing::warn!(snapshot_id = %id, "idle snapshot was already gone by the time the reaper tried to archive it");
             }
             Err(ArchiveError::Forked) => {
-                // A fork started concurrently, after the scan's own
-                // `forked_into.is_none()` filter already passed — rare,
-                // and correctly left alone rather than archived out from
-                // under the fork now using it. Picked up again next tick
-                // if the fork ends before this snapshot is otherwise
-                // resumed/deleted.
+                // Forked concurrently, after the scan's own filter passed
+                // -- left alone rather than archived out from under the
+                // fork; retried next tick.
                 tracing::debug!(snapshot_id = %id, "idle snapshot gained a live fork before it could be archived — leaving it alone");
             }
             Err(ArchiveError::Io(e)) => {
-                // See `crate::snapshot::move_snapshot_files`'s own doc
-                // comment: a failure here can leave the snapshot with a
-                // genuinely mixed set of old/new file paths, already
-                // reinserted into `AppState::snapshots` exactly as-is by
-                // `archive_snapshot_by_id` — a real, loud signal that
-                // this one needs manual attention, not silently retried
-                // every tick.
+                // Can leave a genuinely mixed set of old/new file paths
+                // (see `move_snapshot_files`) -- a loud signal this one
+                // needs manual attention, not silent retry.
                 tracing::warn!(snapshot_id = %id, error = %e, "failed to archive an idle snapshot — its files may now be split across the hot and archive directories");
             }
         }
@@ -223,31 +183,22 @@ fn due_for_archive_ids(state: &Arc<AppState>, timeout: Duration, now: SystemTime
         .collect()
 }
 
-/// Pure decision logic, mirroring `is_idle`'s own separation from the
-/// scan/archive plumbing above. `SystemTime`, not `Instant`, since
-/// `Snapshot::created_at` has to survive a daemon restart (persisted as a
-/// unix timestamp) — `Instant` can't be compared across process
-/// lifetimes, let alone serialized. A `created_at` somehow after `now`
-/// (clock skew, or the two racing within the same instant) is treated as
-/// "not due yet" rather than a panic or a nonsensical negative duration.
+/// `SystemTime`, not `Instant`: `Snapshot::created_at` persists as a unix
+/// timestamp across restarts, which `Instant` can't do. `created_at`
+/// somehow after `now` (clock skew) reads as "not due" rather than panic.
 fn is_archive_due(created_at: SystemTime, now: SystemTime, timeout: Duration) -> bool {
     now.duration_since(created_at).is_ok_and(|elapsed| elapsed >= timeout)
 }
 
-/// Pure decision logic, pulled out of the scan/stop plumbing above so it's
-/// directly testable without a real `AppState`/`Sandbox` — same pattern as
-/// `auth::token_matches`.
+/// Pulled out of the scan/stop plumbing so it's directly testable, same
+/// pattern as `auth::token_matches`.
 fn is_idle(last_activity: Instant, now: Instant, timeout: Duration) -> bool {
     now.saturating_duration_since(last_activity) >= timeout
 }
 
-/// Picks how often the reaper wakes to scan, based on the shortest of
-/// whichever timeouts are actually configured — same halve-and-clamp
-/// reasoning as when there was only ever one timeout to consider, just
-/// generalized to more than one independent threshold. `run` is spawned
-/// unconditionally now (see this module's own doc comment), so the empty
-/// case (nothing configured at all, `MAX_CHECK_INTERVAL`) is a real,
-/// common case in practice, not just a testability nicety.
+/// Halves the shortest configured timeout, clamped. `run` spawns
+/// unconditionally, so the nothing-configured case (`MAX_CHECK_INTERVAL`)
+/// is common in practice, not just a testability nicety.
 fn compute_check_interval(configured_timeouts: &[Duration]) -> Duration {
     match configured_timeouts.iter().copied().min() {
         Some(shortest) => (shortest / 2).clamp(Duration::from_secs(1), MAX_CHECK_INTERVAL),

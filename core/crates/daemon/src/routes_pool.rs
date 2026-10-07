@@ -1,11 +1,7 @@
-//! HTTP handlers for pre-warmed pool configuration — creating, listing,
-//! and deleting a pool's *configuration*. The actual replenishment
-//! (booting and snapshotting warm instances in the background) lives in
-//! `crate::pool_replenisher`; the actual claiming (a matching
-//! `POST /sandboxes` resuming a warm snapshot instead of cold-booting)
-//! lives in `crate::pool_claim`, invoked from
-//! `routes_sandbox::create_sandbox_core`. See `crate::pool`'s
-//! module doc comment for the feature's overall shape and scope.
+//! HTTP handlers for pool *configuration* only — create/list/delete.
+//! Replenishment lives in `crate::pool_replenisher`, claiming in
+//! `crate::pool_claim` (invoked from `routes_sandbox::create_sandbox_core`).
+//! See `crate::pool`'s doc comment for the feature's overall shape.
 
 use crate::error::AppError;
 use crate::pool::{Pool, PoolConfig};
@@ -20,34 +16,25 @@ use std::sync::Arc;
 
 #[derive(Deserialize)]
 pub struct CreatePoolRequest {
-    /// Caller-given identity, unique among currently configured pools —
-    /// `409` if already taken, same convention as `POST /images`. Not
-    /// exposed to the guest or a sandbox created from this pool in any
-    /// way; purely how a caller refers back to this configuration.
+    /// Unique among configured pools — `409` if taken, same convention as
+    /// `POST /images`. Never exposed to the guest; purely a caller handle.
     pub id: String,
-    /// Boots warm instances from this registered image (see
-    /// `POST /images`) instead of the daemon's `SANDKILN_BASE_ROOTFS`
-    /// default. Same semantics as `CreateSandboxRequest::image_id` — a
-    /// `POST /sandboxes` only ever matches a pool whose `image_id` is
-    /// exactly the same as its own (both `None` counts as a match).
+    /// Boots warm instances from this registered image instead of
+    /// `SANDKILN_BASE_ROOTFS`. A `POST /sandboxes` only matches a pool
+    /// with the exact same `image_id` (both `None` counts as a match).
     #[serde(default)]
     pub image_id: Option<String>,
     #[serde(default)]
     pub vcpu_count: Option<u8>,
     #[serde(default)]
     pub mem_size_mib: Option<u32>,
-    /// How many resumable snapshots to keep ready at once. `0` is valid
-    /// (configures the pool's identity/matching key without ever keeping
-    /// anything warm) but a strange thing to actually want — accepted
-    /// rather than rejected since there's no *incorrect* behavior it
-    /// would cause, just an inert pool.
+    /// `0` is valid (configures identity/matching with nothing ever warm)
+    /// but pointless — accepted anyway since it's not actually incorrect.
     pub warm_count: u32,
-    /// Maximum number of live instances (warm + claimed, combined) this
-    /// pool's profile may ever have at once. Omitted means unbounded — a
-    /// claim past what's warm always just cold-creates, the original
-    /// behavior from before this field existed. When set, a claim that
-    /// arrives at the ceiling queues (up to `pool_claim::POOL_QUEUE_TIMEOUT`)
-    /// instead of either rejecting it or exceeding the ceiling.
+    /// Max live instances (warm + claimed) at once. Omitted = unbounded
+    /// (a claim past warm just cold-creates). When set, a claim at the
+    /// ceiling queues (up to `pool_claim::POOL_QUEUE_TIMEOUT`) rather
+    /// than rejecting or exceeding it.
     #[serde(default)]
     pub max_count: Option<u32>,
 }
@@ -60,16 +47,12 @@ pub struct PoolSummary {
     mem_size_mib: u32,
     warm_count: u32,
     max_count: Option<u32>,
-    /// How many resumable snapshots are actually sitting warm right now
-    /// — can be less than `warm_count` right after the pool is created
-    /// or a claim just drained it; `crate::pool_replenisher` tops it back
-    /// up in the background, not instantly.
+    /// Snapshots actually sitting warm right now — can be under
+    /// `warm_count` right after creation or a claim drain;
+    /// `pool_replenisher` tops it back up in the background, not instantly.
     warm_ready: usize,
-    /// How many live instances of this pool's profile exist right now
-    /// (a resumed warm claim or a cold-created match, either way) —
-    /// tracked regardless of whether `max_count` is set, since it's
-    /// useful visibility on its own; only *enforced against* when
-    /// `max_count` is set.
+    /// Live instances right now, tracked regardless of `max_count` (useful
+    /// visibility either way) but only enforced against when it's set.
     claimed: u32,
 }
 
@@ -132,14 +115,10 @@ pub async fn list_pools(State(state): State<Arc<AppState>>) -> Json<ListPoolsRes
     Json(ListPoolsResponse { pools: pools.values().map(summarize).collect() })
 }
 
-/// Removes a pool's configuration and destroys whatever it currently has
-/// warm — `crate::pool_replenisher` naturally stops topping it up once
-/// it's gone from `AppState::pools`, so nothing further to signal there.
-/// A pool with nothing warm right now deletes just as cleanly (the loop
-/// below is simply empty). Wakes anything queued on this pool (see
-/// `routes_sandbox::create_sandbox_core`'s `max_count` queueing) one
-/// last time so a queued caller notices the pool is gone and fails
-/// clearly, instead of waiting out its own timeout for nothing.
+/// Removes a pool's configuration and destroys whatever it has warm —
+/// `pool_replenisher` naturally stops once it's gone from
+/// `AppState::pools`. Wakes anything queued on this pool one last time so
+/// a queued caller fails clearly instead of waiting out its own timeout.
 #[tracing::instrument(skip(state))]
 pub async fn delete_pool(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<StatusCode, AppError> {
     let mut pool = { state.pools.lock().unwrap().remove(&id).ok_or_else(|| AppError::NotFound(id.clone()))? };
