@@ -1,14 +1,11 @@
 //! A single Firecracker microVM's lifecycle: boot, talk to its guest
-//! agent, tear down. This is the Rust equivalent of what
-//! `scripts/dev-tools/boot-test-vm.sh` does by hand — the daemon drives this
-//! directly instead of shelling out.
+//! agent, tear down — the Rust equivalent of
+//! `scripts/dev-tools/boot-test-vm.sh`, driven directly instead of shelled
+//! out to.
 //!
-//! Snapshot/resume (`pause`, `snapshot`, `resume`, `ResumeConfig`) lives in
-//! [`snapshot`] — split out because it's a distinct capability with its
-//! own long gotchas, not because `Vm` itself is two structs. Boot
-//! mechanics (process spawning, the Firecracker API PUT sequence) live in
-//! [`boot`] for the same reason — this file is the public API surface
-//! only.
+//! Snapshot/resume lives in [`snapshot`], boot mechanics in [`boot`] —
+//! both split out as distinct capabilities with their own gotchas; this
+//! file is the public `Vm` API surface only.
 
 mod boot;
 mod snapshot;
@@ -38,11 +35,9 @@ pub struct NetworkConfig {
     pub guest_mac: String,
 }
 
-/// A non-root drive to attach at boot, in addition to the mandatory
-/// rootfs — e.g. a persistent drive from `crate::drive::DriveStore`. Each
-/// one becomes its own `PUT /drives/<drive_id>` call before
-/// `InstanceStart`, and shows up inside the guest as a separate block
-/// device (`/dev/vdb`, `/dev/vdc`, ... in attachment order).
+/// A non-root drive to attach at boot (e.g. from `crate::drive::DriveStore`)
+/// — one `PUT /drives/<drive_id>` call before `InstanceStart`, shows up
+/// guest-side as `/dev/vdb`, `/dev/vdc`, ... in attachment order.
 #[derive(Clone)]
 pub struct DriveConfig {
     /// Must be unique among all drives attached to this VM, and must not
@@ -52,12 +47,10 @@ pub struct DriveConfig {
     pub read_only: bool,
 }
 
-/// Firecracker's own token-bucket rate limiter — a maximum capacity
-/// (`size`), replenished at a constant rate derived from `size` and
-/// `refill_time` (ms), with an optional initial burst
-/// (`one_time_burst`) consumed before the refill rate applies. Field
-/// names match Firecracker's wire format exactly (see its `TokenBucket`
-/// schema) since this is serialized directly into the PUT body.
+/// Firecracker's token-bucket rate limiter: capacity `size`, refilled at
+/// a rate derived from `size`/`refill_time` (ms), optional initial
+/// `one_time_burst`. Field names match Firecracker's own `TokenBucket`
+/// schema exactly — serialized directly into the PUT body.
 #[derive(Clone, Copy, serde::Serialize)]
 pub struct TokenBucket {
     pub size: u64,
@@ -66,13 +59,11 @@ pub struct TokenBucket {
     pub refill_time: u64,
 }
 
-/// Independent bandwidth (bytes/s) and ops (operations/s) limits — either
-/// or both may be set. Applied uniformly to the rootfs drive, every extra
-/// drive, and both directions of the network interface (Firecracker
-/// itself limits ingress/egress independently via `rx_rate_limiter`/
-/// `tx_rate_limiter`, but sandkiln exposes one combined sandbox-level
-/// knob rather than four independent ones — a deliberately simpler
-/// surface than Firecracker's own, not a limitation of the device model).
+/// Independent bandwidth/ops limits, either or both set — applied
+/// uniformly to the rootfs drive, every extra drive, and both network
+/// directions. Firecracker itself limits rx/tx independently; sandkiln
+/// exposes one combined knob instead of four as a deliberately simpler
+/// surface, not a device-model limitation.
 #[derive(Clone, Copy, serde::Serialize)]
 pub struct RateLimiter {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,37 +75,28 @@ pub struct RateLimiter {
 pub struct VmConfig {
     pub firecracker_bin: PathBuf,
     pub kernel_path: PathBuf,
-    /// Path to a rootfs image dedicated to this VM — the caller owns
-    /// copy-on-boot semantics; this module writes to it in place.
+    /// Dedicated rootfs image for this VM — caller owns copy-on-boot
+    /// semantics, this module writes to it in place.
     pub rootfs_path: PathBuf,
     pub vcpu_count: u8,
     pub mem_size_mib: u32,
     pub network: Option<NetworkConfig>,
-    /// Additional (non-root) drives to attach at boot, e.g. persistent
-    /// drives requested by the caller. Empty for a VM with just a rootfs.
+    /// Extra (non-root) drives, e.g. persistent drives. Empty for a
+    /// rootfs-only VM.
     pub extra_drives: Vec<DriveConfig>,
-    /// When set, boots via Firecracker's jailer (chroot, cgroup v2
-    /// limits, a dedicated unprivileged uid/gid) instead of the direct
-    /// process spawn used when this is `None`. See `crate::jailer`.
+    /// `Some` boots via Firecracker's jailer (chroot, cgroup v2, a
+    /// dedicated uid/gid) instead of a direct spawn. See `crate::jailer`.
     pub jail: Option<JailLaunch>,
-    /// When set, applied to the rootfs drive, every entry in
-    /// `extra_drives`, and both directions of the network interface.
-    /// `None` (the default) means unlimited host I/O, unchanged from
-    /// before this existed.
+    /// Applied to the rootfs drive, every extra drive, and both network
+    /// directions. `None` = unlimited host I/O.
     pub rate_limit: Option<RateLimiter>,
-    /// Arbitrary JSON served to the guest via Firecracker's own MMDS
-    /// (Microvm Metadata Service) at `http://169.254.169.254/` — a
-    /// link-local HTTP endpoint Firecracker's device model answers
-    /// directly, no vsock/guest-agent involvement at all. Configured
-    /// V2 (token-gated: the guest must `PUT .../latest/api/token` for a
-    /// session token before `GET`ting anything) rather than V1's plain
-    /// unauthenticated GET, since a sandbox may run untrusted or
-    /// AI-generated code that could otherwise SSRF an unauthenticated
-    /// metadata endpoint. Requires `network` to also be set — MMDS
-    /// intercepts requests via a configured network interface, so
-    /// there's nothing for it to intercept without one. `None` (the
-    /// default) configures no MMDS at all, unchanged from before this
-    /// existed.
+    /// Guest-visible JSON via Firecracker's own MMDS at
+    /// `169.254.169.254` — answered by Firecracker's device model
+    /// directly, no vsock/guest-agent involved. Configured V2
+    /// (token-gated) rather than V1's unauthenticated GET, since a
+    /// sandbox may run untrusted code that could otherwise SSRF an open
+    /// metadata endpoint. Requires `network` (MMDS intercepts via a
+    /// configured interface). `None` configures no MMDS.
     pub metadata: Option<serde_json::Value>,
 }
 
@@ -123,30 +105,24 @@ pub struct Vm {
     child: Child,
     api_socket: PathBuf,
     vsock_socket: PathBuf,
-    /// Set only for a jailed boot — the `<chroot_base>/<exec>/<id>`
-    /// directory jailer owns for this VM. Removed wholesale on `stop()`;
-    /// `None` for a direct (unjailed) boot, which has no such directory.
+    /// `Some(<chroot_base>/<exec>/<id>)` for a jailed boot, removed
+    /// wholesale on `stop()`; `None` for a direct boot.
     jail_instance_dir: Option<PathBuf>,
 }
 
 impl Vm {
-    /// Boots a new microVM. On failure, the returned error's message
-    /// includes the path to this VM's captured guest console log (see
-    /// [`console_log_path`]) — a guest kernel panic or agent crash before
-    /// vsock comes up is otherwise completely invisible from the host, so
-    /// pointing the caller at where to look is the least this can do.
+    /// Boots a new microVM. A failure's message includes the path to the
+    /// captured guest console log ([`console_log_path`]) — a kernel panic
+    /// or agent crash before vsock comes up is otherwise invisible.
     pub fn boot(config: &VmConfig) -> io::Result<Self> {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let log_path = console_log_path(id);
         boot::boot(config, id, &log_path).map_err(|e| annotate_with_console_log(e, &log_path))
     }
 
-    /// Whether this VM is running under Firecracker's jailer (chroot,
-    /// cgroup limits, dedicated uid/gid) rather than a direct process
-    /// spawn. Used by callers that need to treat the two differently —
-    /// e.g. snapshotting a jailed sandbox isn't supported yet (see
-    /// `crate::jailer`'s module doc comment), so the daemon checks this
-    /// before attempting one.
+    /// Whether this VM booted under Firecracker's jailer rather than a
+    /// direct spawn — the daemon checks this to refuse snapshotting a
+    /// jailed sandbox (not yet supported, see `crate::jailer`).
     pub fn is_jailed(&self) -> bool {
         self.jail_instance_dir.is_some()
     }
@@ -166,14 +142,10 @@ impl Vm {
         result
     }
 
-    /// Opens a new interactive PTY session inside this VM, sized to
-    /// `cols`x`rows` — a fundamentally different call shape from
-    /// `call()` above: this returns a raw, still-open stream the caller
-    /// shovels bytes through for as long as the session lasts, rather
-    /// than one request answered by one response. Retries briefly like
-    /// `call()` does, for the same reason (the agent may not be
-    /// listening yet immediately after boot) even though in practice a
-    /// PTY is usually opened well after a sandbox is already responsive.
+    /// Opens an interactive PTY session sized `cols`x`rows` — unlike
+    /// `call()`, returns a raw, still-open stream for the session's whole
+    /// life rather than one request/response. Retries briefly like
+    /// `call()`, though in practice a PTY opens well after boot.
     pub fn open_pty(&self, cols: u16, rows: u16) -> io::Result<UnixStream> {
         let started = Instant::now();
         let result = retry_with_backoff(Duration::from_secs(5), Duration::from_millis(1), Duration::from_millis(20), || {
@@ -186,14 +158,10 @@ impl Vm {
         result
     }
 
-    /// Starts a streamed background exec session inside this VM — same
-    /// "open once, keep reading" shape as `open_pty` above, but the
-    /// returned stream carries framed `ExecStreamEvent`s (see
-    /// `sandkiln_protocol::EXEC_STREAM_PORT`'s own doc comment) rather
-    /// than raw bytes, and the process it names has no controlling
-    /// terminal — this is for a long-running background command
-    /// (`kiln logs -f`'s underlying mechanism), not an interactive shell.
-    /// Retries briefly like `call()`/`open_pty` do, for the same reason.
+    /// Starts a streamed background exec session — same open-once shape
+    /// as `open_pty`, but carries framed `ExecStreamEvent`s (see
+    /// `EXEC_STREAM_PORT`) instead of raw bytes, and the process has no
+    /// controlling terminal (`kiln logs -f`'s mechanism, not a shell).
     pub fn open_exec_stream(&self, command: &str, args: &[String], env: &HashMap<String, String>) -> io::Result<UnixStream> {
         let started = Instant::now();
         let result = retry_with_backoff(Duration::from_secs(5), Duration::from_millis(1), Duration::from_millis(20), || {
@@ -206,19 +174,15 @@ impl Vm {
         result
     }
 
-    /// Updates this VM's MMDS content in place, without a reboot or
-    /// fresh boot — for when a sandbox's real identity (id/name/tags) is
-    /// only known *after* it's already running, e.g. one resumed from a
-    /// pre-warmed pool snapshot (see `sandkiln-daemon`'s `pool` module).
-    ///
-    /// Redoes the full `PUT /mmds/config` + `PUT /mmds` sequence rather
-    /// than a bare `PATCH /mmds`: a resumed VM's MMDS data store comes
-    /// back uninitialized even though it was configured before being
-    /// snapshotted, so `PATCH` alone fails — see the Engineering
-    /// Notebook's "MMDS forgets who you are after a resume" for why.
-    /// Fails if this VM has no network interface at all — `/mmds/config`
-    /// needs one — which should never happen for a sandbox that reached
-    /// this call, since every sandbox is networked.
+    /// Updates this VM's MMDS content in place — for when a sandbox's
+    /// real identity (id/name/tags) is only known after it's running,
+    /// e.g. resumed from a pre-warmed pool snapshot. Redoes the full
+    /// `PUT /mmds/config` + `PUT /mmds` rather than a bare `PATCH`: a
+    /// resumed VM's MMDS store comes back uninitialized even though it
+    /// was configured pre-snapshot, so `PATCH` alone fails (Engineering
+    /// Notebook: "MMDS forgets who you are after a resume"). Fails if
+    /// this VM has no network interface — shouldn't happen, every
+    /// sandbox is networked.
     pub fn update_metadata(&self, metadata: &serde_json::Value) -> io::Result<()> {
         let mut api = ApiClient::connect(&self.api_socket)?;
         put_checked(&mut api, "/mmds/config", &serde_json::json!({ "network_interfaces": ["eth0"], "version": "V2" }))?;
@@ -229,25 +193,18 @@ impl Vm {
         self.stop_inner(true)
     }
 
-    /// Like `stop`, but skips the optimistic "sync before kill" call
-    /// entirely — for tearing down a VM already known to be dead or
-    /// unresponsive (see `sandkiln-daemon`'s `destroy_unhealthy_claim`,
-    /// used after a pool claim's own post-resume health check already
-    /// failed), where that call would just retry for its own separate
-    /// ~5-second timeout for nothing: there's no guest write to protect
-    /// on a VM that never did any real work, and the health check already
-    /// proved it isn't listening.
+    /// Like `stop`, but skips the "sync before kill" call — for a VM
+    /// already known dead (e.g. failed its post-resume pool-claim health
+    /// check): nothing to flush, and the sync would just pay its own
+    /// ~5s timeout for nothing.
     pub fn force_stop(self) -> io::Result<()> {
         self.stop_inner(false)
     }
 
     fn stop_inner(mut self, sync_first: bool) -> io::Result<()> {
-        // SIGKILL-ing Firecracker directly loses anything the guest
-        // hasn't flushed from its page cache to the virtio-blk backing
-        // file yet — this was silently losing recent writes to attached
-        // drives (rootfs copies don't care, they're discarded anyway).
-        // Best-effort: if the agent isn't reachable for any reason, fall
-        // through to the kill rather than hang shutdown on it.
+        // A bare SIGKILL loses unflushed guest page-cache writes to
+        // attached drives (rootfs copies don't care, they're discarded
+        // anyway). Best-effort: fall through to the kill if unreachable.
         if sync_first {
             if let Err(e) = self.call(&Request::Exec { command: "sync".to_string(), args: vec![], env: HashMap::new() }) {
                 tracing::warn!(vm_id = self.id, error = %e, "sync before stop failed, proceeding anyway");
@@ -258,12 +215,9 @@ impl Vm {
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.api_socket);
         let _ = std::fs::remove_file(&self.vsock_socket);
-        // Tears down everything jailer created for this VM in one shot —
-        // the chroot (with its hard-linked kernel/rootfs/drive copies)
-        // and anything else jailer keeps alongside it. A jailed VM's
-        // `api_socket`/`vsock_socket` already live inside this directory,
-        // so the two removals above are redundant with this one but kept
-        // for a direct (unjailed) boot, where this is `None`.
+        // Tears down the whole chroot in one shot. A jailed VM's sockets
+        // already live inside it (the removals above are redundant there
+        // but needed for a direct boot, where this is `None`).
         if let Some(dir) = &self.jail_instance_dir {
             if let Err(e) = std::fs::remove_dir_all(dir) {
                 tracing::warn!(vm_id = self.id, error = %e, dir = %dir.display(), "failed to remove jail instance directory");
@@ -285,18 +239,16 @@ fn put_checked(api: &mut ApiClient, path: &str, body: &serde_json::Value) -> io:
     Ok(())
 }
 
-/// Where a given VM's captured serial console (Firecracker's own
-/// stdout/stderr, which carries the guest kernel's `console=ttyS0` output)
-/// is written. Shared with `snapshot::resume`, which boots a fresh
-/// Firecracker process the same way `boot` does.
+/// Where a VM's captured serial console (the guest kernel's
+/// `console=ttyS0` output) is written. Shared with `snapshot::resume`,
+/// which boots a fresh Firecracker process the same way `boot` does.
 pub(crate) fn console_log_path(id: u64) -> PathBuf {
     PathBuf::from(format!("/tmp/sandkiln-fc-{id}.log"))
 }
 
-/// Opens the console log file and returns two independent handles to it
-/// for the child process's stdout/stderr — interleaved into one file the
-/// way a shell's `2>&1` would, since both streams are just the same
-/// serial console and splitting them buys nothing.
+/// Two independent handles to the console log file for the child's
+/// stdout/stderr — interleaved like a shell's `2>&1`, since both streams
+/// are the same serial console.
 pub(crate) fn console_log_stdio(log_path: &Path) -> io::Result<(Stdio, Stdio)> {
     let file = std::fs::File::create(log_path)?;
     let stderr_file = file.try_clone()?;
@@ -311,20 +263,14 @@ pub(crate) fn annotate_with_console_log(err: io::Error, log_path: &Path) -> io::
     io::Error::other(format!("{err} (guest console log: {})", log_path.display()))
 }
 
-/// Retries `attempt` with an exponential backoff (starting at
-/// `initial_interval`, capped at `max_interval`) until it succeeds or
-/// `timeout` elapses, returning the last error on timeout. Shared by
-/// `connect_api_with_retry` (Firecracker's own API socket) and
-/// `Vm::call`/`open_pty`/`open_exec_stream` (the guest agent's vsock
-/// socket) — both are a plain "is the other side listening yet" race,
-/// previously solved by two separate, inconsistent fixed-sleep loops.
-/// One of them (`wait_for_socket`, this function's direct predecessor)
-/// measured a flat ~20.1ms cost on *every single* boot before being
-/// fixed this way — see ROADMAP.md's Benchmarking section for the full
-/// finding. `Vm::call`'s own fixed 100ms-per-attempt loop was the same
-/// bug, just conditional (only paid when a call actually races the
-/// guest agent's own vsock-listener startup) rather than unconditional,
-/// which is why it went unnoticed for longer.
+/// Retries `attempt` with exponential backoff (`initial_interval` to
+/// `max_interval`) until it succeeds or `timeout` elapses. Shared by
+/// `connect_api_with_retry` and `Vm::call`/`open_pty`/`open_exec_stream`
+/// — both are an "is the other side listening yet" race, previously two
+/// separate fixed-sleep loops. The API-socket one measured a flat
+/// ~20.1ms on every boot before this fix (ROADMAP.md Benchmarking); the
+/// vsock one was the same bug, just conditional on actually racing the
+/// agent's startup, which is why it went unnoticed longer.
 fn retry_with_backoff<T>(
     timeout: Duration,
     initial_interval: Duration,
@@ -346,20 +292,14 @@ fn retry_with_backoff<T>(
 }
 
 /// Connects to a freshly spawned Firecracker's API socket, retrying with
-/// a backoff until it actually accepts a connection or `timeout` elapses.
-///
-/// Retries the *connect* rather than waiting for the socket file to
-/// exist and then connecting once. The file appears at `bind()`, which
-/// is a moment before `listen()`, so a poll that only checks existence
-/// can win that race and hand the caller an `ECONNREFUSED`. Polling the
-/// thing actually needed has no such window — which is what makes it
-/// safe to poll this fast.
-///
-/// The interval starts far below the socket's real appearance time
-/// deliberately: the fixed 20ms poll this replaced measured a flat
-/// ~20.1ms on *every* boot (min 20.04, max 20.18 over 20 boots — the
-/// signature of one quantized sleep, not of real waiting), which was
-/// more than half of a ~34ms boot. See ROADMAP.md's Benchmarking section.
+/// backoff until it accepts a connection or `timeout` elapses. Retries
+/// the *connect* rather than polling for the socket file to exist first
+/// — the file appears at `bind()`, a moment before `listen()`, so an
+/// existence check can win that race and get `ECONNREFUSED`; polling the
+/// connect itself has no such window, which is what makes polling this
+/// fast safe. The fixed 20ms sleep this replaced measured a flat
+/// ~20.1ms on every boot (more than half of a ~34ms boot) — a quantized
+/// sleep, not real waiting. See ROADMAP.md's Benchmarking section.
 fn connect_api_with_retry(path: &Path, timeout: Duration) -> io::Result<ApiClient> {
     retry_with_backoff(timeout, Duration::from_micros(200), Duration::from_millis(5), || ApiClient::connect(path)).map_err(|e| {
         io::Error::new(io::ErrorKind::TimedOut, format!("{path:?} never accepted a connection within {timeout:?}: {e}"))

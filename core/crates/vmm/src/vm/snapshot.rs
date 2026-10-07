@@ -34,12 +34,9 @@ impl Vm {
     }
 
     /// Snapshots a paused microVM's full state (device state + guest
-    /// memory) to disk. Call `pause()` first.
-    ///
-    /// The snapshot records the rootfs drive's *host path*, not its
-    /// contents — the backing file isn't copied into either output file,
-    /// so it must still exist at the same path whenever this snapshot is
-    /// resumed via `Vm::resume`.
+    /// memory) to disk. Call `pause()` first. Records the rootfs drive's
+    /// *host path*, not its contents — the backing file must still exist
+    /// at that path whenever this snapshot is resumed.
     pub fn snapshot(&self, mem_path: &Path, snapshot_path: &Path) -> io::Result<()> {
         let mut api = ApiClient::connect(&self.api_socket)?;
         put_checked(
@@ -54,29 +51,20 @@ impl Vm {
         Ok(())
     }
 
-    /// Boots a new microVM by loading a previously taken snapshot instead
-    /// of a fresh kernel boot — skips `/boot-source`, `/drives`,
-    /// `/machine-config`, and `/network-interfaces` entirely, since all of
-    /// that is reconstructed from the snapshot's own device state.
-    /// `resume_vm: true` in the load request starts the VM running as
-    /// part of the same call, so there's no separate `InstanceStart`
-    /// action the way `boot()` needs.
+    /// Boots a VM from a previously taken snapshot instead of a fresh
+    /// kernel boot — skips `/boot-source`/`/drives`/`/machine-config`/
+    /// `/network-interfaces` entirely, reconstructed from the snapshot's
+    /// device state. `resume_vm: true` starts it as part of the same
+    /// call, no separate `InstanceStart`.
     ///
-    /// The rootfs backing file and the network tap device are both
-    /// referenced by host path/name rather than by value inside the
-    /// snapshot, and the caller is responsible for getting both right
-    /// (still at the same path; still the same tap device) — see the
-    /// website's Persistence model architecture page for why moving
-    /// either one silently breaks a resume rather than erroring cleanly.
-    /// This module deliberately takes no `network` field on
-    /// `ResumeConfig` as a result — the daemon holds the original `Lease`
-    /// across a snapshot instead of releasing it, and hands that exact
-    /// one back.
-    ///
-    /// The vsock socket path is the one exception: it's host-side
-    /// plumbing the guest never sees, so it's safe to reassign fresh via
-    /// Firecracker's `vsock_override`, generating a new path the same way
-    /// `boot()` does.
+    /// The rootfs file and tap device are referenced by host path/name,
+    /// not by value, inside the snapshot — moving either silently breaks
+    /// a resume rather than erroring (see the Persistence model doc).
+    /// `ResumeConfig` deliberately has no `network` field: the daemon
+    /// holds the original `Lease` across a snapshot and hands that exact
+    /// one back. The vsock socket path is the one exception — host-side
+    /// plumbing the guest never sees, safely reassigned fresh via
+    /// Firecracker's `vsock_override`, same as `boot()`.
     pub fn resume(config: &ResumeConfig) -> io::Result<Self> {
         let started = Instant::now();
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -126,15 +114,10 @@ impl Vm {
             resume_ms = started.elapsed().as_millis(),
             "vm resumed from snapshot"
         );
-        // Resuming a snapshot always spawns Firecracker directly — jailer
-        // support only covers `Vm::boot` in this pass (see
-        // `crate::jailer`'s module doc comment). A snapshot taken from a
-        // jailed sandbox would need its device state's baked-in in-jail
-        // paths (`/rootfs.ext4`, etc.) relinked into a *fresh* chroot
-        // before this could work, which `daemon::routes_snapshot`
-        // deliberately refuses to attempt yet (see
-        // `Vm::is_jailed`/`AGENTS.md`'s "no half-finished surfaces") —
-        // this always constructs an unjailed `Vm` as a result.
+        // Always spawns directly, never jailed — jailer only covers
+        // `Vm::boot`. A jailed sandbox's snapshot bakes in in-jail paths
+        // that would need relinking into a fresh chroot; `routes_snapshot`
+        // refuses to attempt this yet rather than half-support it.
         Ok(Self { id, child, api_socket, vsock_socket, jail_instance_dir: None })
     }
 }

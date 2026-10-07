@@ -1,10 +1,7 @@
 //! Boot mechanics: turning a `VmConfig` into a running `Vm`, direct or
-//! jailed. Split out of `vm/mod.rs` because it's a second, separately-
-//! workable piece of "how a VM comes to exist" — the public API surface
-//! (`VmConfig`, `Vm` and its lifecycle methods) shouldn't have to sit
-//! next to the process-spawning and Firecracker-API-PUT-sequence details
-//! that back `Vm::boot`, same reasoning [`super::snapshot`] already gives
-//! for itself.
+//! jailed. Split out of `vm/mod.rs` as a separately-workable piece —
+//! process-spawning and the Firecracker PUT sequence shouldn't sit next
+//! to the public `Vm` API, same reasoning [`super::snapshot`] gives.
 
 use super::{connect_api_with_retry, console_log_stdio, path_str, put_checked, RateLimiter, Vm, VmConfig};
 use crate::jailer::{self, JailLaunch};
@@ -15,57 +12,47 @@ use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 /// Everything the API-configuration sequence needs after spawning the
-/// child process (direct or jailed), gathered in one place so that
-/// sequence doesn't need to branch on jail-vs-direct at all — only the
-/// paths in `BootTarget` differ, not the sequence of calls.
+/// child (direct or jailed), so that sequence never branches on
+/// jail-vs-direct — only the paths here differ.
 struct BootTarget {
     child: Child,
-    /// Host-visible path to Firecracker's API socket — always a real
-    /// host path, even for a jailed boot (`<chroot_root>/api.sock`),
-    /// since the host process (this one) never enters the chroot itself.
+    /// Always a real host path, even jailed (`<chroot_root>/api.sock`) —
+    /// the host process never enters the chroot itself.
     api_socket: PathBuf,
-    /// Host-visible path to the vsock UDS, for `Vm::call`'s own
-    /// connections after boot.
+    /// Host-visible vsock UDS path, for `Vm::call`'s post-boot connections.
     vsock_socket: PathBuf,
-    /// The value to send Firecracker's API for `kernel_image_path` — a
-    /// plain host path for a direct boot, an in-jail path (e.g.
-    /// `/kernel`) for a jailed one, since Firecracker itself can only see
-    /// the latter once jailer has called `chroot()`.
+    /// `kernel_image_path` to send Firecracker: a host path direct, an
+    /// in-jail path (e.g. `/kernel`) jailed — Firecracker only sees the
+    /// latter once jailer has `chroot()`'d.
     kernel_image_path: PathBuf,
     rootfs_path: PathBuf,
     /// Parallel to `VmConfig::extra_drives`, by index.
     drive_paths: Vec<PathBuf>,
-    /// The value to send Firecracker's API for `/vsock`'s `uds_path` —
-    /// same host/in-jail distinction as `kernel_image_path`.
+    /// `/vsock`'s `uds_path` value — same host/in-jail distinction as
+    /// `kernel_image_path`.
     vsock_uds_path: PathBuf,
     jail_instance_dir: Option<PathBuf>,
 }
 
-/// Where a boot's wall-clock time actually went, for the profiling
-/// breakdown `boot` logs at debug level. Kept as a struct rather than a
-/// tuple so the phases stay named at the one call site that reads them.
+/// Where a boot's wall-clock time went, for the debug-level profiling
+/// breakdown — a struct rather than a tuple so phases stay named.
 struct BootPhases {
-    /// Waiting for Firecracker's API socket to accept a connection — see
-    /// [`connect_api_with_retry`], whose poll interval sets the
-    /// granularity of what this can measure.
+    /// Waiting for the API socket to accept — see
+    /// [`connect_api_with_retry`] for the poll granularity.
     socket_wait: Duration,
     /// Every pre-`InstanceStart` configuration PUT.
     api_config: Duration,
-    /// The `InstanceStart` action alone — where vCPUs and the guest
-    /// kernel actually start.
+    /// `InstanceStart` alone — where vCPUs/the guest kernel actually start.
     instance_start: Duration,
-    /// Per-endpoint `api_config` detail, pre-rendered as
-    /// `"/path=NNNus /path=NNNus ..."`. A string because the set of
-    /// endpoints varies per VM (extra drives, optional network/MMDS) and
-    /// a `tracing` event's fields can't.
+    /// Per-endpoint detail as `"/path=NNNus ..."` — a string since the
+    /// endpoint set varies per VM and a `tracing` field can't.
     per_put: String,
 }
 
-/// Boots a new microVM for `Vm::boot`: spawns the child (direct or
-/// jailed), runs the Firecracker API configuration sequence, and cleans
-/// up the spawned process/chroot on any failure partway through — a boot
-/// that fails after the child exists but before `InstanceStart` succeeds
-/// must not leak an orphaned process or a world-readable chroot.
+/// Boots a new microVM for `Vm::boot`: spawns the child, runs the
+/// Firecracker API configuration sequence, and cleans up the spawned
+/// process/chroot on any failure partway through — must not leak an
+/// orphaned process or a world-readable chroot.
 pub(super) fn boot(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<Vm> {
     let started = Instant::now();
 
@@ -78,16 +65,11 @@ pub(super) fn boot(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<Vm
     let phases = match configure_and_start(config, &mut target) {
         Ok(phases) => phases,
         Err(e) => {
-            // A boot that fails partway through the API PUT sequence
-            // still has a live child process (jailer, or firecracker
-            // directly) holding the console log fds and — for a jailed
-            // boot — a real chroot directory with hard-linked copies of
-            // the kernel/rootfs/drives. Leaving either behind is a
-            // resource leak (an orphaned process for a direct boot) or a
-            // real information-disclosure surface (a leftover
-            // world-readable chroot for a jailed one), not just untidy
-            // state — clean up exactly like `snapshot::resume` already
-            // does for the equivalent failure.
+            // A failure partway through still has a live child process
+            // and, if jailed, a chroot with hard-linked kernel/rootfs/
+            // drive copies. Leaving either is a resource leak or an
+            // info-disclosure surface, not just untidy state — same
+            // cleanup `snapshot::resume` does for the equivalent failure.
             let _ = target.child.kill();
             let _ = target.child.wait();
             let _ = std::fs::remove_file(&target.api_socket);
@@ -99,10 +81,9 @@ pub(super) fn boot(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<Vm
         }
     };
 
-    // Split out from the `vm booted` event below rather than folded into
-    // it: `boot_ms` is the number an operator watches, while this
-    // breakdown only matters when someone is actually profiling where a
-    // boot's milliseconds go (see ROADMAP.md's Benchmarking section).
+    // Separate from the `vm booted` event below: `boot_ms` is the number
+    // an operator watches, this breakdown only matters when profiling
+    // (see ROADMAP.md's Benchmarking section).
     tracing::debug!(
         vm_id = id,
         spawn_us = spawn.as_micros(),
@@ -149,12 +130,10 @@ fn spawn_direct(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<BootT
     })
 }
 
-/// Spawns Firecracker via jailer instead of directly: builds the chroot,
-/// links every resource the VM config references into it, then execs
-/// jailer. If anything fails partway (a link fails, the spawn itself
-/// fails), the partially-built chroot directory is removed — a half-built
-/// jail with, say, only the kernel linked in is not a state worth leaving
-/// on disk.
+/// Spawns Firecracker via jailer: builds the chroot, links every
+/// resource the VM config references into it, then execs jailer. Any
+/// partial failure removes the half-built chroot — not a state worth
+/// leaving on disk.
 fn spawn_jailed(config: &VmConfig, jail: &JailLaunch, id: u64, log_path: &Path) -> io::Result<BootTarget> {
     let jail_id = jailer::jail_instance_id(id);
     let chroot_root = jailer::chroot_root(&jail.chroot_base_dir, &config.firecracker_bin, &jail_id);
@@ -211,18 +190,11 @@ fn spawn_jailed_inner(
     })
 }
 
-/// The Firecracker API PUT sequence that turns a freshly spawned (direct
-/// or jailed) process into a running VM. Identical for both boot modes —
-/// only the paths in `target` differ, already resolved by
-/// `spawn_direct`/`spawn_jailed` into whatever Firecracker itself needs
-/// to see them as.
-///
-/// The bodies are built up front by [`configuration_requests`] and issued
-/// here in a loop, rather than built and issued one at a time inline.
-/// That split is what makes each PUT individually timeable without
-/// scattering an `Instant` through the sequence, and it keeps the
-/// ordering constraints (see `configuration_requests`) expressed as one
-/// readable list.
+/// The Firecracker API PUT sequence turning a freshly spawned process
+/// into a running VM — identical for both boot modes, only `target`'s
+/// paths differ. Bodies are built up front by [`configuration_requests`]
+/// and issued in a loop here, which is what makes each PUT individually
+/// timeable and keeps the ordering constraints as one readable list.
 fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result<BootPhases> {
     let before_socket = Instant::now();
     let mut api = connect_api_with_retry(&target.api_socket, Duration::from_secs(2))?;
@@ -239,10 +211,9 @@ fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result
     }
     let api_config = before_api_config.elapsed();
 
-    // Separated from the configuration PUTs above because it is a
-    // different kind of cost: the others only record intent in
-    // Firecracker's in-memory config, while this one is where the vCPU
-    // threads and the guest kernel actually start.
+    // A different kind of cost than the PUTs above: those only record
+    // intent in Firecracker's config, this is where vCPUs/the guest
+    // kernel actually start.
     let before_instance_start = Instant::now();
     put_checked(&mut api, "/actions", &json!({"action_type": "InstanceStart"}))?;
     let instance_start = before_instance_start.elapsed();
@@ -311,9 +282,8 @@ fn configuration_requests(config: &VmConfig, target: &BootTarget) -> io::Result<
         if config.network.is_none() {
             return Err(io::Error::other("VmConfig::metadata requires VmConfig::network to also be set"));
         }
-        // Pre-boot only, and only valid once the interface it names is
-        // itself configured -- must come after the /network-interfaces
-        // PUT above, not before.
+        // Must come after /network-interfaces -- only valid once that
+        // interface is configured.
         requests.push(("/mmds/config".to_string(), json!({ "network_interfaces": ["eth0"], "version": "V2" })));
         requests.push(("/mmds".to_string(), metadata.clone()));
     }
@@ -330,12 +300,10 @@ fn configuration_requests(config: &VmConfig, target: &BootTarget) -> io::Result<
     Ok(requests)
 }
 
-/// Inserts `rate_limit` (if set) into `body` under `key` — `key` is
-/// `"rate_limiter"` for a drive body, or `"rx_rate_limiter"`/
-/// `"tx_rate_limiter"` for a network-interface body (Firecracker limits
-/// each direction independently even though sandkiln applies the same
-/// limiter to both). A no-op when `rate_limit` is `None`, leaving the
-/// body exactly as it was before this existed.
+/// Inserts `rate_limit` into `body` under `key` (`"rate_limiter"` for a
+/// drive, `"rx_rate_limiter"`/`"tx_rate_limiter"` for network — Firecracker
+/// limits each direction independently even though sandkiln applies one
+/// limiter to both). No-op when `None`.
 fn insert_rate_limiter(body: &mut serde_json::Value, key: &str, rate_limit: &Option<RateLimiter>) {
     if let Some(rl) = rate_limit {
         let value = serde_json::to_value(rl).expect("RateLimiter always serializes");
