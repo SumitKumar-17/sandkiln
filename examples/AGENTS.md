@@ -44,6 +44,12 @@ user would actually write.
   allow/deny behavior, not just "doesn't break normal use." No hardcoded
   target: a public IP silently "passes" on a host with no outbound route
   (a real dev-box finding), a LAN IP isn't portable.
+- `local-tunnel/` — JS/TS. Starts a real local HTTP server on this
+  machine, opens a tunnel with `sandbox.tunnel()`, then `curl`s it from
+  **inside** the sandbox and confirms the exact bytes came back — the
+  reverse of `dev-server-preview/`. Points at `../../packages/sdk`
+  directly (`tunnel()` is unreleased as of this example), not a published
+  version — switch back once it ships.
 
 ## Conventions
 

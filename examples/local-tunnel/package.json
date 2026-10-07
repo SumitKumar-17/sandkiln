@@ -1,0 +1,17 @@
+{
+  "name": "sandkiln-example-local-tunnel",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Reference local-tunnel example: expose a service running on this machine to code inside a sandbox, the reverse of dev-server preview.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "sandkiln": "file:../../packages/sdk"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
