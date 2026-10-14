@@ -14,7 +14,7 @@ isolate first, then run.
 benchmark numbers, live feature status, and startup-latency research) —
 also mirrored at https://sandkiln.vercel.app. Full docs (getting
 started, guides, API/SDK/CLI reference) at
-https://sumitkumar-17.github.io/sandkiln/docs/.
+https://sandkiln.mintlify.site/.
 
 ## Quickstart
 
@@ -82,10 +82,11 @@ already hit and fixed once.
 - **`scripts/`** — dev-box setup and daily-use tooling (`dev.sh` is the
   master dispatcher; one-time host provisioning lives under
   `host-setup/`, narrow manual-debugging tools under `dev-tools/`).
-- **`website/`** — the project site (deployed via GitHub Pages) and, in
-  `website/docs/`, the full docs site (getting started, core concepts,
-  guides, API/SDK/CLI reference, architecture) — see
-  https://sumitkumar-17.github.io/sandkiln/docs/.
+- **`website/`** — the project site (deployed via GitHub Pages): architecture,
+  benchmarks, roadmap, changelog.
+- **`docs-site/`** — the full docs site (getting started, core concepts,
+  guides, API/SDK/CLI reference, architecture), a separate Mintlify
+  project — see https://sandkiln.mintlify.site/.
 
 ## License
 

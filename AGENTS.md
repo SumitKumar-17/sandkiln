@@ -22,7 +22,8 @@ packages/python/         sandkiln PyPI package (Python)
 packages/cli/            kiln CLI, wraps the JS/TS SDK
 images/                  rootfs/kernel build + agent-injection scripts
 scripts/                 dev-box bootstrap, daemon lifecycle, tests
-website/                 marketing pages + Starlight docs, one Astro project
+website/                 marketing pages only, Astro, deployed via GitHub Pages
+docs-site/               full docs, Mintlify project — sandkiln.mintlify.site
 examples/                runnable reference projects — see examples/AGENTS.md
 docs/architecture/       brief, code-referenced system tour (not the website)
 ```

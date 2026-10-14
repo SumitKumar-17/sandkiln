@@ -1436,13 +1436,14 @@ eventually if there's appetite," not "next."
 
 ## Documentation and examples
 
-- **Done**: a full docs site (`website/docs/`, Astro + Starlight) —
-  Getting Started, Core Concepts, Guides, Reference (daemon HTTP API,
-  JS/TS SDK, Python SDK, CLI), and Architecture, covering both SDKs and
-  the CLI with runnable examples throughout. Deployed three ways: as a
-  `/docs` subpath of the main site (GitHub Pages and the merged Vercel
-  build) and standalone at its own domain root
-  (sandkiln-docs.vercel.app) — see `website/AGENTS.md`.
+- **Done**: a full docs site (`docs-site/`, Mintlify) — Getting Started,
+  Core Concepts, Guides, Internals, Reference (daemon HTTP API, JS/TS
+  SDK, Python SDK, CLI), and Architecture, covering both SDKs and the
+  CLI with runnable examples throughout. Deployed independently of the
+  marketing site at sandkiln.mintlify.site via Mintlify's own GitHub
+  integration — see `docs-site/AGENTS.md`. The marketing site
+  (`website/`, GitHub Pages + a Vercel mirror) links out to it; it no
+  longer carries any docs content of its own.
 - Example projects: **done** — ten real, runnable reference projects
   against each SDK's published API, one per major feature surface: code
   playground, AI-agent sandbox runner, dev-server preview, interactive

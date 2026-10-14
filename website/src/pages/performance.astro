@@ -3,8 +3,6 @@ import BaseLayout from "../layouts/BaseLayout.astro";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
 
-const base = import.meta.env.BASE_URL.replace(/\/$/, "");
-
 // Every figure here is one recorded in ROADMAP.md's Benchmarking section.
 // Ranges are published as ranges; a dash means the run did not record that
 // figure, not that it was zero.
@@ -170,7 +168,7 @@ const createPhases = [
               earlier test's clone could never have actually reflinked even though the base image sat
               on XFS. A device-mapper layer would have hit the identical wall for the identical
               reason and remains not planned. See{" "}
-              <a href={`${base}/docs/architecture/engineering-notebook/`}>the engineering notebook</a>{" "}
+              <a href="https://sandkiln.mintlify.site/architecture/engineering-notebook">the engineering notebook</a>{" "}
               for the full story, including this project's own mistake in reaching the wrong
               conclusion the first time.
             </p>
@@ -232,7 +230,7 @@ const createPhases = [
               diagnosis. Every claim runs a post-resume health check, and a failed check tears the
               sandbox down and falls back to a cold create. A caller never receives a dead sandbox
               id. The full investigation is in the{" "}
-              <a href={`${base}/docs/architecture/engineering-notebook/`}>engineering notebook</a>.
+              <a href="https://sandkiln.mintlify.site/architecture/engineering-notebook">engineering notebook</a>.
             </p>
           </div>
         </div>
@@ -271,7 +269,7 @@ const createPhases = [
           </div>
           <p class="fine prose">
             Deeper write-up:{" "}
-            <a href={`${base}/docs/architecture/startup-latency/`}>Startup latency & the pre-warmed pool</a>.
+            <a href="https://sandkiln.mintlify.site/architecture/startup-latency">Startup latency & the pre-warmed pool</a>.
           </p>
         </div>
       </div>

@@ -33,14 +33,11 @@ const favicon =
     href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&display=swap"
     rel="stylesheet"
   />
-  {/* Starlight owns the theme toggle and persists the choice under its own
-      localStorage key. These pages aren't rendered by Starlight, so without
-      this they'd ignore that choice and snap back to the OS setting the
-      moment a reader crossed from the docs — one site, two themes. Runs
-      before first paint to avoid a flash of the wrong one. */}
+  {/* Persists the theme-toggle's choice (Header.astro) across page loads.
+      Runs before first paint to avoid a flash of the wrong one. */}
   <script is:inline>
     try {
-      const stored = localStorage.getItem("starlight-theme");
+      const stored = localStorage.getItem("theme");
       if (stored === "dark" || stored === "light") {
         document.documentElement.dataset.theme = stored;
       }
