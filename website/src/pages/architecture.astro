@@ -44,11 +44,13 @@ const steps = [
   { n: "04", title: "Ready", body: "The host's vsock client connects. The sandbox can now run anything you send it." },
 ];
 
+const DOCS_URL = "https://sandkiln.mintlify.site";
+
 const essays = [
-  { kind: "Jailer & privilege model", href: `${base}/docs/internals/jailer-privilege-model/`, name: "Chroot, cgroups, setuid, and a root that stays out of the hot path" },
-  { kind: "Wire protocol", href: `${base}/docs/internals/vsock-wire-protocol/`, name: "vsock, a length-prefixed JSON frame, and a client that doesn't reach for a full HTTP stack" },
-  { kind: "Snapshot, resume, fork", href: `${base}/docs/internals/snapshot-resume-fork/`, name: "Why a snapshot points at paths instead of carrying values, and the rootfs bug that taught us that" },
-  { kind: "Bug hunt", href: `${base}/docs/architecture/bug-hunt-vsock-timeout/`, name: "The vsock timeout that could hang a stop forever" },
+  { kind: "Jailer & privilege model", href: `${DOCS_URL}/internals/jailer-privilege-model`, name: "Chroot, cgroups, setuid, and a root that stays out of the hot path" },
+  { kind: "Wire protocol", href: `${DOCS_URL}/internals/vsock-wire-protocol`, name: "vsock, a length-prefixed JSON frame, and a client that doesn't reach for a full HTTP stack" },
+  { kind: "Snapshot, resume, fork", href: `${DOCS_URL}/internals/snapshot-resume-fork`, name: "Why a snapshot points at paths instead of carrying values, and the rootfs bug that taught us that" },
+  { kind: "Bug hunt", href: `${DOCS_URL}/architecture/bug-hunt-vsock-timeout`, name: "The vsock timeout that could hang a stop forever" },
 ];
 ---
 

@@ -1,17 +1,18 @@
 ---
 interface Props {
-  active?: "home" | "architecture" | "performance" | "roadmap" | "changelog" | "docs";
+  active?: "home" | "architecture" | "performance" | "roadmap" | "changelog";
 }
 const { active } = Astro.props as Props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 const link = (path: string) => (path === "" ? `${base}/` : `${base}/${path}/`);
+
+const DOCS_URL = "https://sandkiln.mintlify.site/";
 
 const nav = [
   { label: "Architecture", path: "architecture", key: "architecture" },
   { label: "Performance", path: "performance", key: "performance" },
   { label: "Roadmap", path: "roadmap", key: "roadmap" },
   { label: "Changelog", path: "changelog", key: "changelog" },
-  { label: "Docs", path: "docs", key: "docs" },
 ];
 ---
 
@@ -23,6 +24,7 @@ const nav = [
       {nav.map((item) => (
         <a href={link(item.path)} aria-current={active === item.key ? "page" : undefined}>{item.label}</a>
       ))}
+      <a href={DOCS_URL}>Docs</a>
     </nav>
 
     <a class="icon-btn" href="https://github.com/SumitKumar-17/sandkiln" aria-label="Source on GitHub">
@@ -49,14 +51,15 @@ const nav = [
         {nav.map((item) => (
           <a href={link(item.path)} aria-current={active === item.key ? "page" : undefined}>{item.label}</a>
         ))}
+        <a href={DOCS_URL}>Docs</a>
       </div>
     </details>
   </div>
 </header>
 
 <script>
-  // Writes the same localStorage key Starlight's own toggle uses, so the
-  // choice carries in both directions across the two halves of the site.
+  // Persists the theme choice so it survives a page reload (read back by
+  // BaseLayout.astro's inline script before first paint).
   (function () {
     var button = document.querySelector(".theme-toggle");
     if (!(button instanceof HTMLButtonElement)) return;
@@ -68,7 +71,7 @@ const nav = [
       var next = isDark ? "light" : "dark";
       root.dataset.theme = next;
       try {
-        localStorage.setItem("starlight-theme", next);
+        localStorage.setItem("theme", next);
       } catch {}
     });
 

@@ -1,8 +1,7 @@
 /*
-  The design system for both halves of the site. The marketing pages import
-  this via global.css, the docs via Starlight's customCss; starlight.css maps
-  Starlight's own --sl-* variables onto these and holds no hex literal of its
-  own. Add a value here or nowhere, or it breaks in one theme or on one half.
+  The design system for the marketing site, imported via global.css. Docs
+  live on a separate Mintlify site (sandkiln.mintlify.site) with their
+  own theming. Add a value here or nowhere, or it breaks in one theme.
 
   ─ The organising rule: ONE VOICE, ONE HUE. ────────────────────────────────
 

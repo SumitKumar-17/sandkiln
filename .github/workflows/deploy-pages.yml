@@ -31,9 +31,9 @@ jobs:
       - uses: actions/configure-pages@v5
       # GitHub Pages serves this as a project page (a subpath, not the domain
       # root), so ASTRO_BASE drives asset/link paths instead of being
-      # hardcoded — see website/astro.config.mjs. The docs are part of this
-      # same Astro project now, built and emitted into dist/docs by the one
-      # build below, so there is nothing to merge afterwards.
+      # hardcoded — see website/astro.config.mjs. Docs are a separate
+      # Mintlify project (docs-site/) deployed independently; nothing here
+      # touches them.
       - name: Build site
         working-directory: website
         run: |

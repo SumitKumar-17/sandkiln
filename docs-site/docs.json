@@ -1,0 +1,107 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "sandkiln",
+  "description": "Docs for sandkiln -- a compute primitive for safely running untrusted or AI-generated code in hardware-isolated Firecracker microVMs.",
+  "colors": {
+    "primary": "#ae5309",
+    "light": "#ffa13b",
+    "dark": "#ae5309"
+  },
+  "favicon": "/favicon.svg",
+  "navbar": {
+    "links": [
+      {
+        "label": "Website",
+        "href": "https://sumitkumar-17.github.io/sandkiln/"
+      },
+      {
+        "type": "github",
+        "href": "https://github.com/SumitKumar-17/sandkiln"
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/SumitKumar-17/sandkiln"
+    }
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Getting Started",
+        "pages": [
+          "index",
+          "getting-started/introduction",
+          "getting-started/self-hosting",
+          "getting-started/js",
+          "getting-started/python",
+          "getting-started/cli"
+        ]
+      },
+      {
+        "group": "Core Concepts",
+        "pages": [
+          "concepts/sandbox-lifecycle",
+          "concepts/snapshots",
+          "concepts/named-sandboxes",
+          "concepts/drives",
+          "concepts/remote-storage",
+          "concepts/images",
+          "concepts/networking",
+          "concepts/auth",
+          "concepts/preview",
+          "concepts/local-tunnel"
+        ]
+      },
+      {
+        "group": "Guides",
+        "pages": [
+          "guides/run-untrusted-code",
+          "guides/persist-by-name",
+          "guides/share-a-drive",
+          "guides/custom-image",
+          "guides/auto-suspend"
+        ]
+      },
+      {
+        "group": "Internals",
+        "pages": [
+          "internals/sqlite-history-store",
+          "internals/snapshot-resume-fork",
+          "internals/drives",
+          "internals/images",
+          "internals/vsock-wire-protocol",
+          "internals/jailer-privilege-model",
+          "internals/egress-iptables",
+          "internals/tap-bridge-networking",
+          "internals/fuse-rclone-mounts",
+          "internals/rate-limiting",
+          "internals/mmds",
+          "internals/pty",
+          "internals/exec-stream",
+          "internals/pre-warmed-pools",
+          "internals/local-tunnel"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "reference/cli",
+          "reference/http-api",
+          "reference/js-sdk",
+          "reference/python-sdk"
+        ]
+      },
+      {
+        "group": "Architecture",
+        "pages": [
+          "architecture/overview",
+          "architecture/startup-latency",
+          "architecture/bug-hunt-vsock-timeout",
+          "architecture/engineering-notebook"
+        ]
+      }
+    ]
+  }
+}

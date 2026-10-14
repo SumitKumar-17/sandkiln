@@ -1,0 +1,24 @@
+---
+title: sandkiln docs
+description: Docs for sandkiln — a compute primitive for safely running untrusted or AI-generated code in hardware-isolated Firecracker microVMs.
+---
+
+Pick a starting point. Five ways into the same docs, by what you already know you need.
+
+<CardGroup cols={1}>
+  <Card title="New here" href="/getting-started/introduction">
+    [Introduction](/getting-started/introduction) → [Self-hosting quickstart](/getting-started/self-hosting) → your language: [JS/TS](/getting-started/js), [Python](/getting-started/python), [CLI](/getting-started/cli).
+  </Card>
+  <Card title="Understand a capability" href="/concepts/sandbox-lifecycle">
+    [Core Concepts](/concepts/sandbox-lifecycle) — lifecycle, snapshots, naming, drives, images, networking, auth, preview.
+  </Card>
+  <Card title="Have a specific task" href="/guides/run-untrusted-code">
+    [Guides](/guides/run-untrusted-code) — task-oriented, real-code recipes.
+  </Card>
+  <Card title="Need exact signatures" href="/reference/http-api">
+    [Reference](/reference/http-api) — daemon HTTP API, JS/TS SDK, Python SDK, CLI.
+  </Card>
+  <Card title="Curious how it's built" href="/internals/vsock-wire-protocol">
+    [Internals](/internals/vsock-wire-protocol) — one page per mechanism (vsock, the jailer, snapshots, sqlite, rate limiting, and nine more), each with a real request/response captured from the live daemon. Or the shorter [Architecture](/architecture/overview) tour first, if you want the map before the terrain.
+  </Card>
+</CardGroup>
