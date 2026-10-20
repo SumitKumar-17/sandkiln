@@ -24,11 +24,34 @@ The guest agent (`sandkiln-guest-agent`, a small binary baked into every sandbox
 
 `sandkiln-protocol` (a small crate depended on by both the host-side `sandkiln-vmm` and the guest-side `sandkiln-guest-agent`, so the two sides can never define the message shapes differently) defines the actual framing: every message is a 4-byte little-endian length prefix, followed by exactly that many bytes of JSON. It's deliberately not newline-delimited, since `exec` output can contain arbitrary bytes, including embedded newlines and even embedded null bytes, and a length prefix is the one framing scheme a payload like that can't corrupt by accident. JSON itself is a deliberate, boring choice on top of that: no schema compiler needed for a protocol this small, readable directly in a packet capture while debugging, and a tagged `cmd`/`status` field on the `Request`/`Response` enums (`#[serde(tag = "cmd")]` on the Rust side) keeps the handful of message shapes self-describing.
 
-There are three separate vsock ports, not one, because the three kinds of traffic have genuinely different shapes:
+There are four separate vsock ports, not one, because the different kinds of traffic have genuinely different shapes:
+
+```mermaid
+flowchart TD
+    subgraph Host["Host (sandkiln-vmm)"]
+        direction LR
+        H1["dials AGENT_PORT"]
+        H2["dials PTY_PORT"]
+        H3["dials EXEC_STREAM_PORT"]
+        H4["listens on TUNNEL_PORT"]
+    end
+    subgraph Guest["Guest (sandkiln-guest-agent)"]
+        direction LR
+        G1["listens: exec, read_file, write_file, chmod"]
+        G2["listens: PtyHandshake, then raw passthrough"]
+        G3["listens: ExecStreamHandshake, then framed events"]
+        G4["dials out: TunnelOpen, then raw passthrough"]
+    end
+    H1 -- "5000, request/response" --> G1
+    H2 -- "5001, handshake + passthrough" --> G2
+    H3 -- "5002, framed events" --> G3
+    G4 -- "5003, guest-initiated" --> H4
+```
 
 - **`AGENT_PORT` (5000).** One request in, one response out, then the connection can close. This is where `exec`, `read_file`, `write_file`, `chmod`, and the rest of the file-operation calls all go, each as one `Request` variant and one matching `Response`.
 - **`PTY_PORT` (5001).** A long-lived connection that sends exactly one framed handshake (`PtyHandshake { cols, rows }`), then drops into a raw, unframed byte passthrough for the rest of its life. An interactive shell's input and output aren't discrete messages, and framing them would just add overhead to a channel that's supposed to feel like a real terminal.
 - **`EXEC_STREAM_PORT` (5002).** Also long-lived, but unlike `PTY_PORT` it never stops being framed: after one `ExecStreamHandshake`, every subsequent message is a framed `ExecStreamEvent` (`Stdout`, `Stderr`, or one final `Exit` carrying the process's exit code). A caller watching a detached background command needs to know *which* stream a chunk came from and when the process actually exited, not just an undifferentiated blob of bytes.
+- **`TUNNEL_PORT` (5003).** The one port where the direction reverses — the guest dials *out* instead of the host dialing in (see [Local tunnel: the mechanism](/internals/local-tunnel)). The host pre-binds a plain Unix socket at `<uds_path>_<port>`; each connection the guest's local tunnel listener accepts dials this port, sends one framed `TunnelOpen { tunnel_id, conn_id }` handshake, then becomes a raw passthrough, the same handshake-then-passthrough shape `PTY_PORT` uses.
 
 Firecracker's own control plane is a related but separate problem, solved differently: the daemon configures boot-source, drives, and machine-config, then later pauses, snapshots, and resumes a VM. That traffic goes over a *different* socket (Firecracker's own API Unix socket, not vsock) using plain HTTP/1.1, but a full HTTP client crate would buy nothing there either, since no redirects, chunked encoding, or TLS will ever be exercised against a socket that speaks exactly one small, fixed JSON PUT/PATCH API. So `sandkiln-vmm` hand-rolls the roughly ninety lines a minimal client actually needs: write the request line and body, read the status line, read headers looking only for `Content-Length`, then read exactly that many bytes back.
 
