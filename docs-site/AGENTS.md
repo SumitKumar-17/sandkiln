@@ -56,3 +56,11 @@ The marketing site (`website/`) links out to this site by absolute URL
 (`https://sandkiln.mintlify.site/...`) — see `website/AGENTS.md`.
 There is no shared content, shared config, or shared design system
 between the two; they're separate deployments by design.
+
+## `changelog.mdx` is a manual copy, not auto-synced
+
+Unlike the old website page (which parsed root `CHANGELOG.md` at Astro
+build time so it could never drift), this page is a one-time copy —
+Mintlify has no build step to parse it automatically. Update it by hand
+whenever `CHANGELOG.md` gains a new entry; there's nothing that catches
+drift here the way there was before.

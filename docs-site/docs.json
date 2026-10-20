@@ -67,6 +67,12 @@
               "guides/custom-image",
               "guides/auto-suspend"
             ]
+          },
+          {
+            "group": "Changelog",
+            "pages": [
+              "changelog"
+            ]
           }
         ]
       },
