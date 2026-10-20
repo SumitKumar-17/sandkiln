@@ -17,9 +17,9 @@ bug, like a stale doc comment in code.
 
 - `src/pages/` — `index.astro` (hero, isolation argument, feature
   manifest, SDK example), `architecture.astro` (crate breakdown, boot
-  lifecycle), `performance.astro`, `roadmap.astro`, `changelog.astro`
-  (parses root `CHANGELOG.md` via `marked` at build time — one `## `
-  heading per entry, so it can't drift from the file).
+  lifecycle), `performance.astro`, `roadmap.astro`. No changelog page —
+  that moved to `docs-site/release-notes.mdx` (a manual copy, not
+  auto-synced; see `docs-site/AGENTS.md`).
 - `src/components/`, `src/layouts/` — shared marketing pieces.
   `Header.astro`'s nav links to docs with a plain absolute URL to the
   Mintlify site (`DOCS_URL` constant); update that one place if the

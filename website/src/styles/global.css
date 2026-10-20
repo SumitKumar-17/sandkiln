@@ -685,12 +685,31 @@ a.rail:hover {
    sandbox is alive. */
 
 .tty {
+  position: relative;
   background: var(--tty-bg);
   color: var(--tty-fg);
   border: 1px solid var(--rule-strong);
   font-size: var(--t-xs);
   line-height: 1.8;
   min-width: 0;
+}
+
+/* Every real boot line here is wider than the box at every width this ships
+   at (`.tty pre` deliberately never wraps — see below), so this isn't a rare
+   edge case needing a hint, it's the normal state. Without this, a line
+   stopping mid-word at the box's hard right edge reads as a layout bug, not
+   as "scroll for more" — caught live from a real screenshot, not assumed.
+   Fades to the box's own background, not transparent-to-white, so it works
+   identically in both themes. */
+.tty::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  width: 28px;
+  background: linear-gradient(to right, transparent, var(--tty-bg));
+  pointer-events: none;
 }
 
 /* Wraps to two rows on a phone rather than letting both labels wrap inside
@@ -712,13 +731,31 @@ a.rail:hover {
 }
 
 /* A console line is not prose: wrapping one mid-token turns a boot log into
-   noise. It scrolls instead, which is what the real thing does. */
+   noise. It scrolls instead, which is what the real thing does. A persistent
+   thin scrollbar (not the OS default, which auto-hides on macOS/mobile until
+   actively scrolling) is the other half of making that legible — without it
+   there's no visible sign this is scrollable at all, only the fade above. */
 .tty pre {
   margin: 0;
   padding: var(--s-5);
   white-space: pre;
   overflow-x: auto;
   overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--tty-dim) transparent;
+}
+
+.tty pre::-webkit-scrollbar {
+  height: 6px;
+}
+
+.tty pre::-webkit-scrollbar-thumb {
+  background: var(--tty-dim);
+  border-radius: 3px;
+}
+
+.tty pre::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .tty .dim {
@@ -1362,87 +1399,11 @@ a.rail:hover {
   border-left-color: var(--rule-strong);
 }
 
-/* ========================================================== changelog */
-
-.changelog-entry + .changelog-entry {
-  margin-top: var(--s-8);
-}
-
-.changelog-heading {
-  font-size: var(--t-body);
-}
-
-.changelog-body {
-  margin-top: var(--s-4);
-}
-
-.changelog-body h3 {
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-  margin-top: var(--s-5);
-  margin-bottom: var(--s-2);
-}
-
-.changelog-body p {
-  font-size: var(--t-sm);
-  color: var(--ink-2);
-  line-height: 1.7;
-}
-
-.changelog-body ul {
-  margin: 0;
-  padding-left: var(--s-5);
-  list-style: none;
-}
-
-.changelog-body li {
-  position: relative;
-  font-size: var(--t-sm);
-  color: var(--ink-2);
-  line-height: 1.7;
-  padding-block: 3px;
-}
-
-.changelog-body li::before {
-  content: "";
-  position: absolute;
-  left: calc(var(--s-4) * -1);
-  top: 0.8em;
-  width: 4px;
-  height: 4px;
-  background: var(--rule-strong);
-}
-
-.changelog-body li ul {
-  margin-top: var(--s-2);
-  margin-bottom: var(--s-2);
-}
-
-.changelog-body strong {
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.changelog-body a {
-  color: inherit;
-  text-decoration: underline;
-  text-decoration-color: var(--flare-soft);
-  text-underline-offset: 0.22em;
-  text-decoration-thickness: 1px;
-}
-
-.changelog-body a:hover {
-  color: var(--flare);
-  text-decoration-color: var(--flare);
-}
-
 .finding code,
 .lede code,
 .fine code,
 .rdesc code,
-.metric-ctx code,
-.changelog-heading code,
-.changelog-body code {
+.metric-ctx code {
   font-size: 0.92em;
   color: var(--ink);
   background: var(--well-2);

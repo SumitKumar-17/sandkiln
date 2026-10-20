@@ -3,7 +3,7 @@ title: Custom & managed images
 description: Boot sandboxes from your own registered rootfs image.
 ---
 
-By default every sandbox boots from the daemon's configured base rootfs (`SANDKILN_BASE_ROOTFS`). A registered image lets you boot from something else — your own tooling baked in, a specific runtime version, whatever your workload needs — without changing the daemon's own default.
+By default every sandbox boots from the daemon's configured base rootfs (`SANDKILN_BASE_ROOTFS`). A registered image lets you boot from **something else** — your own tooling baked in, a specific runtime version, whatever your workload needs — **without changing the daemon's own default**.
 
 ## Registering an image
 
@@ -15,7 +15,7 @@ Pass `image_id` to `POST /sandboxes` instead of leaving it unset. A nonexistent 
 
 ## Guest agent verification is honest, not silent
 
-Every response from `POST/GET /images` includes `"guest_agent_verified": false` and a `verification_hint` string — the daemon runs unprivileged and can't loop-mount a candidate image as root to confirm the guest agent is actually baked in. Run `scripts/preflight-check.sh --root-checks --rootfs-image <path>` out of band, before registering, to get that confirmation yourself. This is a deliberate choice: pretending to verify something the daemon structurally can't check would be worse than saying so plainly.
+Every response from `POST/GET /images` includes **`"guest_agent_verified": false`** and a `verification_hint` string — the daemon runs unprivileged and can't loop-mount a candidate image as root to confirm the guest agent is actually baked in. Run `scripts/preflight-check.sh --root-checks --rootfs-image <path>` out of band, before registering, to get that confirmation yourself. This is a deliberate choice: pretending to verify something the daemon structurally can't check would be worse than saying so plainly.
 
 ## Deleting
 

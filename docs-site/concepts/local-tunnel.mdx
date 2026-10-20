@@ -17,11 +17,11 @@ Call `tunnel.close()` (JS/Python) or stop the CLI process (`Ctrl+C`) when done. 
 
 ## Why this needed a new mechanism, not just another route
 
-Every other vsock-based feature in sandkiln follows the same direction: the host connects in, the guest only ever listens. A tunnel's defining event — "something *inside* the guest just tried to connect" — can't be initiated by the host, by definition. This is the one place in the whole protocol where the guest dials out to the host instead, using a Firecracker vsock mechanism distinct from everything else here (no `CONNECT <port>` handshake — a pre-bound Unix socket the host listens on). See [the vsock wire protocol](/internals/vsock-wire-protocol) and [local tunnel: the mechanism](/internals/local-tunnel) for the full picture.
+Every other vsock-based feature in sandkiln follows the same direction: **the host connects in, the guest only ever listens**. A tunnel's defining event — "something *inside* the guest just tried to connect" — can't be initiated by the host, by definition. This is the one place in the whole protocol where the guest dials out to the host instead, using a Firecracker vsock mechanism distinct from everything else here (no `CONNECT <port>` handshake — a pre-bound Unix socket the host listens on). See [the vsock wire protocol](/internals/vsock-wire-protocol) and [local tunnel: the mechanism](/internals/local-tunnel) for the full picture.
 
 ## Multiple connections, one tunnel
 
-A tunnel's guest-side listener can accept more than one connection at a time (a sandboxed test suite opening several requests in parallel, say). Every one of them is multiplexed over the same single WebSocket back to the caller, each tagged with its own connection id — not a new WebSocket per connection.
+A tunnel's guest-side listener can accept **more than one connection at a time** (a sandboxed test suite opening several requests in parallel, say). Every one of them is **multiplexed over the same single WebSocket** back to the caller, each tagged with its own connection id — not a new WebSocket per connection.
 
 ## Auth
 

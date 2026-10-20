@@ -532,7 +532,8 @@ header gets `401`.
 This is a single shared-secret token, not a multi-tenant identity
 system — this is a self-hosted, single-operator daemon, not a platform.
 If you need per-caller scoping (which sandboxes a given token can see),
-that isn't implemented yet — see `ROADMAP.md`'s Authentication section.
+that isn't implemented yet — see `ROADMAP.md`'s "Authentication and
+multi-tenancy" section.
 
 Beyond the token, see section 14 for the broader security posture
 (privilege model, network isolation between sandboxes, what's still
@@ -567,7 +568,7 @@ conflict detection), snapshot/resume/fork, named sandboxes and
 persistent-by-default stop, registered images, auth, `/metrics`, and
 error cases — and cleans up everything it creates whether it passes or
 fails. This is exactly the process used to validate this guide itself;
-see `AGENTS.md`'s "Integration testing" section for more.
+see `AGENTS.md`'s "Testing and verification" section for more.
 
 Or point a real client at it instead of `curl`:
 ```

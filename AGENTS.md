@@ -25,7 +25,6 @@ scripts/                 dev-box bootstrap, daemon lifecycle, tests
 website/                 marketing pages only, Astro, deployed via GitHub Pages
 docs-site/               full docs, Mintlify project — sandkiln.mintlify.site
 examples/                runnable reference projects — see examples/AGENTS.md
-docs/architecture/       brief, code-referenced system tour (not the website)
 ```
 
 ## Where the real work happens
@@ -204,7 +203,7 @@ concept. Never name a commercial platform in code/docs/website — generic
 technique descriptions only (a required filename like `vercel.json` is
 not "naming" it). Comments explain *why*, only when non-obvious — not
 what the code already says, and not a design essay (that belongs in
-`docs/architecture/` or the website, not a source comment).
+`docs-site/` or the website, not a source comment).
 
 ## 14. Architecture and abstractions
 

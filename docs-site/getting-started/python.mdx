@@ -21,7 +21,7 @@ print(result.stdout.strip(), result.exit_code)
 sandbox.stop()  # preserved as a resumable snapshot by default
 ```
 
-Same operations as the JS/TS SDK, Python-idiomatic naming (`run_command` not `runCommand`, snake_case fields), zero runtime dependencies (stdlib `urllib` only). One real gap, not just a naming difference: streamed background exec (`exec_stream`/attaching to its live log) and `pty` aren't implemented in this SDK yet — use the [CLI](/getting-started/cli#long-running-commands-exec-stream-and-logs) or the [daemon HTTP API](/reference/http-api) directly for those today.
+Same operations as the JS/TS SDK, Python-idiomatic naming (`run_command` not `runCommand`, snake_case fields), zero runtime dependencies (stdlib `urllib` only). One real gap, not just a naming difference: streamed background exec (`exec_stream`/attaching to its live log) and `pty` aren't implemented in this SDK yet — use the [CLI](/getting-started/cli#long-running-commands-exec-stream-and-logs) or the [daemon HTTP API](/api-reference/http-api/overview) directly for those today.
 
 ## A failed command doesn't raise — it returns a non-zero exit code
 
@@ -49,4 +49,4 @@ except SandkilnApiError as err:
 
 - Give the sandbox a name so you can find it again later: [Named sandboxes & persistent stop](/concepts/named-sandboxes).
 - Boot from your own image instead of the daemon's default: [Boot from a custom image](/guides/custom-image).
-- Full method reference: [Python SDK](/reference/python-sdk).
+- Full method reference: [Python SDK](/api-reference/python-sdk/overview).

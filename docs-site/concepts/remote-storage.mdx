@@ -41,17 +41,17 @@ curl -s -X DELETE "$BASE/sandboxes/build-worker/mounts/<mount-id>" \
 # 204 No Content
 ```
 
-`endpoint` is required and never defaulted, so a mount's target is always explicit. `mount_path` is created (`mkdir -p`) if it isn't already there, and `read_only: true` passes rclone's read-only flag — the default is read-write. Mounting a second bucket at a `mount_path` already in use in the same sandbox is a `409` naming the existing bucket and the `DELETE` URL that clears it. Full field and error-code details are in the [Daemon HTTP API](/reference/http-api#remote-storage-mounts) reference.
+`endpoint` is required and never defaulted, so a mount's target is always explicit. `mount_path` is created (`mkdir -p`) if it isn't already there, and `read_only: true` passes rclone's read-only flag — the default is read-write. Mounting a second bucket at a `mount_path` already in use in the same sandbox is a `409` naming the existing bucket and the `DELETE` URL that clears it. Full field and error-code details are in the [Daemon HTTP API](/api-reference/http-api/drives#remote-storage-mounts) reference.
 
 The daemon verifies the result rather than trusting rclone's exit code: after a successful mount it runs `mountpoint -q <path>` inside the guest, and if that disagrees it unmounts, removes the config, and returns a `500`. Unmounting is best-effort past the bookkeeping — the mount is dropped from daemon state whether or not the guest-side `umount` succeeded, and a stuck mount is logged as a warning rather than failing the request.
 
 ## Credentials
 
-Credentials go into the guest as a small single-remote rclone config file, written with the same `write-file` and `chmod` guest operations the filesystem routes expose, locked to `0600` before rclone ever runs. They're never passed as a command-line argument, so nothing inside the guest can read them out of `ps`. The daemon doesn't log them, doesn't persist them on the host, and never echoes them back — a mount response carries only `id`, `bucket`, `endpoint`, `mount_path`, and `read_only`.
+Credentials go into the guest as a small single-remote rclone config file, written with the same `write-file` and `chmod` guest operations the filesystem routes expose, **locked to `0600`** before rclone ever runs. They're **never passed as a command-line argument**, so nothing inside the guest can read them out of `ps`. The daemon doesn't log them, doesn't persist them on the host, and never echoes them back — a mount response carries only `id`, `bucket`, `endpoint`, `mount_path`, and `read_only`.
 
 ## What's not done yet
 
-Mounts are not re-applied on resume, fork, or restore. A mount is a live guest-side FUSE process, captured along with everything else in the snapshot of guest memory, so a restored sandbox's mount keeps working with no daemon involvement — but nothing re-establishes one that didn't survive. The recorded metadata is carried on snapshots purely so `GET /sandboxes/:id/mounts` can answer without a round-trip into the guest; it isn't surfaced in sandbox or snapshot list responses.
+**Mounts are not re-applied on resume, fork, or restore.** A mount is a live guest-side FUSE process, captured along with everything else in the snapshot of guest memory, so a restored sandbox's mount keeps working with no daemon involvement — but nothing re-establishes one that didn't survive. The recorded metadata is carried on snapshots purely so `GET /sandboxes/:id/mounts` can answer without a round-trip into the guest; it isn't surfaced in sandbox or snapshot list responses.
 
 There's no holder-tracking or exclusivity the way [Drives](/concepts/drives) have it — two sandboxes may mount the same bucket at the same time. The only conflict rule is a duplicate `mount_path` within a single sandbox. `mount_path` itself gets no validation beyond being non-empty.
 

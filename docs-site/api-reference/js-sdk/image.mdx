@@ -1,0 +1,23 @@
+---
+title: "JS/TS: Image"
+description: Register, list, and delete custom rootfs images.
+---
+
+## `Image`
+
+```ts
+import { Image, Sandbox } from "sandkiln";
+
+const registered = await Image.register("node-lts-custom", "/home/t1000/images/node-lts-custom.ext4");
+if (!registered.guestAgentVerified) {
+  console.warn(registered.verificationHint);
+}
+
+const sandbox = await Sandbox.create({ imageId: "node-lts-custom" });
+
+const images = await Image.list();
+await Image.delete("node-lts-custom"); // 409 while any sandbox/snapshot still references it
+```
+
+- **`Image.register(id, path, options?)`** — registers an already-built ext4 rootfs file at `path` on the daemon's own host filesystem, for `Sandbox.create({ imageId })` to boot from. Not a file upload. `guestAgentVerified` on the response is always `false` — see [Custom & managed images](/concepts/images).
+- **`Image.list(options?)`** / **`Image.delete(id, options?)`** — list registered images, or delete one (`409` while anything references it).

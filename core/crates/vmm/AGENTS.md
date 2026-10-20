@@ -93,6 +93,22 @@ behavior belongs here, not in `daemon`.
   ~4-18ms) — previously unmeasured. `open_exec_stream` is the same shape
   against `EXEC_STREAM_PORT` with an `ExecStreamHandshake`, reading
   framed `ExecStreamEvent`s instead of raw bytes.
+- **`drive.rs`** — `DriveStore`: persistent, standalone ext4 block-device
+  files that outlive any one sandbox and can be detached/reattached
+  across sandboxes — distinct from the per-sandbox rootfs copy
+  `Vm::boot` writes to in place. Formats new drives as ext4, one file per
+  drive, filesystem is the source of truth (same pattern `image.rs` and
+  `sandkiln-store` all follow).
+- **`image.rs`** — `ImageStore`: registers an already-built ext4 rootfs
+  file under a caller-given id by checking its superblock magic
+  (`looks_like_ext4`) then `cp --reflink=auto`-copying it into a managed
+  directory — registration never builds or uploads an image, only
+  adopts one already on the host. Can't verify the guest agent is
+  actually baked in (needs loop-mounting as root, which this
+  unprivileged daemon doesn't have) — every response says so plainly via
+  `guest_agent_verified: false` plus a `verification_hint` pointing at
+  `scripts/preflight-check.sh --root-checks`. See
+  `docs-site/internals/images.mdx`.
 - **`tunnel.rs`** — host-side acceptor for guest-*initiated* `TUNNEL_PORT`
   connections, the local tunnel feature's one deliberate exception to
   every other port's host-connects-in direction (see

@@ -47,9 +47,7 @@ user would actually write.
 - `local-tunnel/` — JS/TS. Starts a real local HTTP server on this
   machine, opens a tunnel with `sandbox.tunnel()`, then `curl`s it from
   **inside** the sandbox and confirms the exact bytes came back — the
-  reverse of `dev-server-preview/`. Points at `../../packages/sdk`
-  directly (`tunnel()` is unreleased as of this example), not a published
-  version — switch back once it ships.
+  reverse of `dev-server-preview/`.
 
 ## Conventions
 
@@ -59,8 +57,10 @@ user would actually write.
   readable, that abstraction belongs in a library, not here.
 - Depend on the published `sandkiln` package, not in-repo source paths.
   Exception: an SDK method not yet published points at `packages/sdk`,
-  stated visibly in its README, switched back next release
-  (`exec-stream-logs/` is the current instance). A daemon feature with no
-  SDK surface calls the HTTP API directly — don't invent SDK methods to demo it.
+  stated visibly in its README, switched back to a version range the
+  next release after it ships (checked and fixed for `local-tunnel/`
+  this session — `tunnel()` shipped in SDK 0.12.0). A daemon feature with
+  no SDK surface calls the HTTP API directly — don't invent SDK methods
+  to demo it.
 - Each `README.md` states what it does, exact run commands, config env
   vars, and a pointer to `SELF_HOSTING.md`.

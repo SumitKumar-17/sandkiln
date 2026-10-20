@@ -377,8 +377,11 @@ outbound HTTP both still work.
     concurrent forking (see `routes_snapshot.rs`'s own module doc
     comment: the guest's IP/MAC can't be changed post-hoc without
     in-guest cooperation this project's guest agent doesn't have), not a
-    scope choice. No SDK/CLI surface yet — daemon HTTP API only, same
-    precedent as egress policy and snapshot lineage.
+    scope choice. Time-travel restore itself has no SDK/CLI surface yet
+    — daemon HTTP API only, same as snapshot lineage. (Egress policy
+    used to be cited here too as the same kind of daemon-only gap — it
+    no longer is, both SDKs and the CLI wrap it as of the Firewall and
+    egress policy section below.)
 - **Done: tiered idle lifecycle, the archive tier — a first honestly-scoped
   slice.** Extends today's binary auto-suspend (running → snapshot) with
   a second, independent tier: `SANDKILN_ARCHIVE_TIMEOUT_SECS` moves a
@@ -1001,6 +1004,27 @@ outbound HTTP both still work.
     sitting on the critical path, 5.5% of a create, for a write whose own
     doc comment already calls it best-effort — **since fixed**, immediately
     below.
+  - **Still unfixed as of this writing (re-confirmed, not assumed —
+    `clone_rootfs`'s destination in `routes_sandbox.rs` is still a flat
+    `std::env::temp_dir().join(...)` call), and the single most
+    load-bearing open item in this whole section**: the rootfs clone is
+    74% of a cold create per the profiling pass below, and every number
+    gathered so far is consistent with it *never* having actually
+    reflinked on any of this project's test runs, CoW-capable filesystem
+    or not — the real win is still sitting there unclaimed. Concretely,
+    next: (1) make the clone destination configurable
+    (`SANDKILN_ROOTFS_CLONE_DIR` or similar), defaulting to the same
+    directory as `SANDKILN_BASE_ROOTFS` so `--reflink=auto` has an actual
+    chance to reflink instead of a guaranteed cross-filesystem fallback;
+    (2) stop failing silently when it doesn't — surface whether a given
+    create actually got a reflink or fell back to a full copy, e.g. a
+    `create_phase_duration_ms{phase="rootfs_clone"}` outlier is
+    indistinguishable today from "this host just has a slow disk" when
+    the real cause is "this host silently never reflinks." Re-run the
+    exact XFS-loopback experiment above with the destination fixed before
+    touching anything else, since the previous attempt is now known to
+    have been invalidated by this same bug rather than by XFS not
+    helping. See also the filesystem-architecture idea below.
   - **Done: the sqlite write.** `sandkiln-store` opened its database with
     sqlite's defaults (`journal_mode=DELETE`, `synchronous=FULL`), which
     fsyncs twice per write — once for the rollback journal, once for the
@@ -1428,11 +1452,45 @@ as the GPU-passthrough note above) rather than left as a silent gap:
   small extension of `snapshot`/`resume`/`fork` — those stay path-based
   and single-lineage; this would be a different persistence model
   layered alongside them, not a replacement.
+- **A dedicated rootfs/CoW crate, explicit block-level dirty tracking
+  instead of an implicit filesystem reflink.** Prompted by a public
+  write-up of another sandbox platform's VM filesystem work, read for
+  this entry — not reused code or an architecture copy, just the
+  observation that they hit the same class of problem this project
+  already has, and solved it with an explicit mechanism instead of
+  leaning on a filesystem feature that fails silently (see the
+  still-open `clone_rootfs` item above: `cp --reflink=auto` either
+  reflinks or quietly falls back to a full copy, and today nothing
+  tells you which one just happened). Their actual approach — lazily
+  fetching a sparse ext4 image's blocks on demand from remote blob
+  storage across a fleet, lower in the stack than any filesystem —
+  solves a distribution problem sandkiln doesn't have: one self-hosted
+  daemon with its base image already resident on local disk has no
+  "fetch an image's blocks from a remote region" step to make lazy.
+  What *would* transfer: a small crate that owns rootfs provisioning as
+  a first-class concern (today it's a couple of free functions split
+  across `routes_sandbox.rs` and `vmm::image`) and tracks per-sandbox
+  writes against the base image with an explicit dirty bitmap over a
+  sparse file, the same shape Firecracker's own diff-snapshots already
+  use for guest memory — rather than hoping the host filesystem's own
+  CoW does the equivalent for disk. That would make "did this clone
+  actually share blocks with its parent" an explicit, checkable fact
+  instead of a silent filesystem-dependent maybe, and it's the same
+  bookkeeping a cheaper, smaller rootfs snapshot (today's snapshot-take
+  is 309.6–335.0ms, full memory *and* disk each time, per the
+  Benchmarking section above) would need anyway. Real scope, stated
+  plainly: a new crate, a new on-disk format, and a migration story for
+  every existing snapshot — not a quick win, and strictly smaller than
+  the two items above (it strengthens the existing path-based
+  snapshot/resume/fork model rather than replacing it), but a more
+  concrete, nearer-term direction than either.
 
-Both are plausible future directions for this project specifically
+All three are plausible future directions for this project specifically
 because it's a personal project without a fixed roadmap deadline, not
-because either is a small lift — treat this section as "worth doing
-eventually if there's appetite," not "next."
+because any of them is a small lift — treat this section as "worth doing
+eventually if there's appetite," not "next." The `clone_rootfs`
+configurable-destination fix earlier in the Benchmarking section is the
+actually-next, much smaller step that sits in front of all of this.
 
 ## Documentation and examples
 
@@ -1450,3 +1508,87 @@ eventually if there's appetite," not "next."
   terminal, pre-warmed pool, streamed exec/logs, remote storage mount,
   snapshot/resume/fork lifecycle, named/persistent sandboxes, and egress
   policy. See `examples/AGENTS.md` for what each one demonstrates and why.
+
+## Load testing: finding the real concurrency ceiling
+
+**Planned, not started.** `scripts/load-test.sh` reports concurrency and
+latency for one fixed concurrency value you pick ahead of time; it does
+not find the box's actual ceiling. The next version should ramp
+concurrency step by step (a plausible sequence: 4, 8, 16, 32, and
+onward) until something genuinely degrades: p95 latency spiking, a real
+error rate appearing, or a specific resource running out (the tap pool,
+the configured vCPU/memory ceiling, open file descriptors). That point
+is the number worth publishing, not an arbitrarily chosen concurrency
+that happened to work fine.
+
+Also worth a real answer here, not a guess: how much a cold create's
+latency actually degrades as concurrency rises. Every number in the
+Benchmarking section above is one sandbox at a time; nothing has
+measured what happens to per-request latency under load from lock
+contention in the daemon's own in-memory state, or from the tap pool
+running low. The results should land as a report worth keeping,
+reusable the same way `scripts/bench-report.sh` already is, not a
+one-off terminal scroll.
+
+## Further latency investigation
+
+Concrete open questions, in priority order, picked because they're the
+ones an actual measurement (or a documented external fact) could answer
+rather than further guessing:
+
+1. **The `clone_rootfs` destination bug above should be fixed first.**
+   Every later latency number in this list would otherwise be measured
+   on top of a baseline already known to be wrong.
+2. **Snapshot-take latency** (309.6–990ms measured so far, called out
+   above as the most load-sensitive figure in this whole document) is
+   now partly explained, not fully root-caused. Firecracker's own
+   documentation confirms the asymmetry is structural: snapshot-take
+   writes every dirty memory page to disk synchronously, while resume
+   loads memory lazily through copy-on-write. That reframes the open
+   question from "find the bug" to "measure how much sandkiln's own
+   wrapping adds on top of an operation that is inherently this
+   expensive" — still unmeasured on this project's own hardware.
+3. **Firecracker's native Diff snapshot type** is a real, already-
+   available mechanism worth evaluating directly, smaller in scope than
+   the dedicated rootfs/CoW crate idea above: it captures only the
+   memory pages dirtied since the last snapshot rather than a full dump
+   each time. At least one other small Firecracker-based project chains
+   roughly ten incremental diffs before collapsing back to a full
+   snapshot. Would need its own measurement on this project's workload
+   shape (frequent snapshot/resume on the same sandbox, not a one-off)
+   before claiming a real win — not assumed to transfer automatically
+   from someone else's numbers.
+4. **Guest boot time is not actually a priority, on the evidence
+   available.** Sat inside the already-measured ~10ms cold-boot window.
+   Public comparisons put typical Firecracker-based sandbox cold starts
+   at 150ms to 2 seconds; this project's own measured 10.5–10.9ms is
+   already well ahead of that range, which is reason enough to leave
+   this one alone rather than chase a gain nothing suggests is actually
+   there.
+5. Memory compression during snapshot-take (one academic result reports
+   up to 4.5x smaller snapshots and 55% faster restoration) is a real
+   technique, filed here as "much further out" rather than planned —
+   integrating compression into the snapshot pipeline is a meaningfully
+   bigger lift than items 1 through 3 above, worth it only once those
+   are actually done.
+
+## Writing style: a pass to cut back on em-dashes
+
+**Planned, not started, and genuinely large in scope.** This repository's
+documentation, `AGENTS.md` files, and source comments lean on the em dash
+heavily and consistently as a house style — noticed as reading like an AI
+tic rather than a deliberate choice, and worth a real pass to cut back on
+project-wide, not just in one file.
+
+Stated honestly: this is not a find-and-replace job. Deleting an em dash
+and leaving the two halves of the sentence jammed together produces
+broken prose; each instance needs an actual rewrite, choosing a comma, a
+period and a new sentence, a parenthetical, or a connecting word like
+"since" or "and," whichever reads most naturally for that specific
+sentence. Given how many files are affected (nearly every file this
+project has touched this year, by a rough count), this needs its own
+dedicated pass, broken into batches by directory (`docs-site/`, `website/`,
+each crate and package's `AGENTS.md`, the Rust/TS/Python source comments
+themselves), each batch reviewed for correctness afterward rather than
+trusted on the strength of a mechanical substitution. Not attempted in
+this pass for that reason.

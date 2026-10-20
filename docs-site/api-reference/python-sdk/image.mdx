@@ -1,0 +1,22 @@
+---
+title: "Python: Image"
+description: Register, list, and delete custom rootfs images.
+---
+
+## `Image`
+
+```python
+from sandkiln import Image, Sandbox
+
+registered = Image.register("node-lts-custom", "/home/t1000/images/node-lts-custom.ext4")
+if not registered.guest_agent_verified:
+    print(f"warning: {registered.verification_hint}")
+
+sandbox = Sandbox.create(image_id="node-lts-custom")
+
+images = Image.list()
+Image.delete("node-lts-custom")  # 409 while any sandbox/snapshot still references it
+```
+
+- **`Image.register(id, path, base_url=None, auth_token=None)`** — registers an already-built ext4 rootfs file at `path` on the daemon's own host filesystem, for `Sandbox.create(image_id=...)` to boot from. Not a file upload.
+- **`Image.list(base_url=None, auth_token=None)`** / **`Image.delete(id, base_url=None, auth_token=None)`** — list registered images, or delete one (`409` while anything references it).

@@ -109,7 +109,7 @@ calls `vmm`, shapes responses.
   corruption risk) and no re-application on resume/fork (a mount is a
   live guest FUSE process, captured by Firecracker's own snapshot).
 - **`pool.rs`** — pure pool state/matching logic; see
-  `docs/architecture/02-vm-boot-and-latency.md` for the full design.
+  `docs-site/internals/pre-warmed-pools.mdx` for the full design.
   `Pool::notify` wakes `pool_claim::resolve_pool_claim` on a
   `max_count`-bounded pool — condvar-style, every waiter re-checks on
   wake.
@@ -124,7 +124,7 @@ calls `vmm`, shapes responses.
   explicit `0` — omit for unbounded). `DELETE` wakes queued waiters first
   so they fail clearly instead of timing out on a pool that's gone.
 - **`idle_reaper.rs`** — unconditional background task; see
-  `docs/architecture/02-vm-boot-and-latency.md`. Runs auto-suspend, then
+  `docs-site/internals/pre-warmed-pools.mdx`. Runs auto-suspend, then
   destroy, then an independent archive pass each tick.
 - **`snapshot.rs`** — `Snapshot` + durability: atomic `meta.json`
   write-then-rename, `reconcile()` rebuilds `AppState::snapshots` from
@@ -192,6 +192,16 @@ calls `vmm`, shapes responses.
   `std::sync::mpsc::Receiver` into async via a plain `spawn_blocking`
   forwarding into a `tokio::sync::mpsc` channel.
 - **`error.rs`** — `AppError`, the one error type every handler returns.
+- **`request_id.rs`** — `correlate`, the outermost `main.rs` layer:
+  resolves a request id (caller's `X-Request-Id` if well-formed, else a
+  fresh UUID), echoes it on the response, wraps the request in a
+  `tracing::Span` carrying it so every log line for that request —
+  including ones from deep inside `sandkiln-vmm`'s `spawn_blocking`
+  calls — carries the same id.
+- **`tracing_util.rs`** — `spawn_blocking_in_current_span`: `tracing`'s
+  "current span" is thread-local, so a bare `spawn_blocking` silently
+  drops request correlation; this re-establishes both the span and the
+  default dispatcher on the blocking-pool thread.
 
 ## Building and verifying
 

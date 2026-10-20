@@ -5,12 +5,6 @@ running on *this* machine to code running inside a sandbox — the exact
 reverse of dev-server preview, which exposes a port inside the sandbox
 outward.
 
-**Uses `../../packages/sdk` directly, not a published npm version** —
-`Sandbox.tunnel()` is new and hasn't shipped in a release yet. Switch
-`package.json`'s `sandkiln` dependency back to a version range once it
-has (same convention this directory already follows elsewhere; check
-`CHANGELOG.md` for whether it's landed).
-
 ## What it does
 
 1. Starts a plain Node HTTP server on `127.0.0.1:9999` — a stand-in for a

@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import Analytics from "@vercel/analytics/astro";
 
 interface Props {
   title?: string;
@@ -46,5 +47,6 @@ const favicon =
 </head>
 <body>
   <slot />
+  <Analytics />
 </body>
 </html>

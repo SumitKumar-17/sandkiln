@@ -66,8 +66,10 @@ node index.js
 
 ## Known limitations
 
-- No `maxCount` ceiling or queueing yet — a claim that arrives while
-  nothing is warm just falls through to a normal cold create, unbounded.
+- This example doesn't set `maxCount`, so claims here always fall
+  through to a normal cold create when nothing's warm, unbounded — the
+  daemon does support an optional ceiling with queueing
+  (`Pool.create(id, { maxCount })`), just not exercised by this example.
 - Pool configuration lives only in the daemon's memory, not durable
   across a restart — re-run `Pool.create()` afterward if you need it back.
 

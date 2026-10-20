@@ -8,11 +8,21 @@ CI workflow to maintain.
 
 ## Structure
 
-`docs.json` is the nav (groups: Getting Started, Core Concepts, Guides,
-Internals, Reference, Architecture) and theme config. Every page is
-`.mdx`; page paths in `docs.json` are root-relative with no extension
-(`"concepts/networking"`, not `"concepts/networking.mdx"` or
-`"/concepts/networking"`).
+`docs.json` is the nav and theme config. Navigation is three top-level
+tabs, each its own groups:
+
+- **Docs** — Getting Started, Core Concepts, Guides.
+- **API Reference** — HTTP API, JS/TS SDK, Python SDK, CLI, each split
+  into `overview` + one page per resource (`sandbox`/`sandboxes`,
+  `image`/`images`, `drive`/`drives`, `pool`/`pools`) under
+  `api-reference/<section>/`, rather than one long page per client.
+- **Engineering Blog** — Architecture (overview, startup latency, bug
+  hunts, SDK/CLI design, testing, the engineering notebook) and
+  Internals (15 mechanism deep-dives).
+
+Every page is `.mdx`; page paths in `docs.json` are root-relative with
+no extension (`"concepts/networking"`, not `"concepts/networking.mdx"`
+or `"/concepts/networking"`).
 
 ## Conventions
 
@@ -46,3 +56,16 @@ The marketing site (`website/`) links out to this site by absolute URL
 (`https://sandkiln.mintlify.site/...`) — see `website/AGENTS.md`.
 There is no shared content, shared config, or shared design system
 between the two; they're separate deployments by design.
+
+## `release-notes.mdx` is a manual copy, not auto-synced
+
+Named `release-notes.mdx`, not `changelog.mdx` — Mintlify has its own
+built-in Changelog feature (`<Update>` blocks) that reserves the
+`/changelog` path; a plain content page there gets silently shadowed
+(served a 404 instead of the file, confirmed live — not assumed).
+
+Unlike the old website page (which parsed root `CHANGELOG.md` at Astro
+build time so it could never drift), this page is a one-time copy —
+Mintlify has no build step to parse it automatically. Update it by hand
+whenever `CHANGELOG.md` gains a new entry; there's nothing that catches
+drift here the way there was before.

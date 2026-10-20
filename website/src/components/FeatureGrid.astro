@@ -35,21 +35,21 @@ const features: Feature[] = [
   { status: "done", name: "Python SDK" },
   { status: "done", name: "Benchmarking" },
   { status: "done", name: "Local tunnel" },
+  { status: "done", name: "JS/TS SDK" },
+  { status: "done", name: "CLI" },
+  { status: "done", name: "Streamed output" },
 
   // Partial, not shipped, and the roadmap says why: pool configuration is
   // in-memory only, and resuming has a real failure rate a health check has
   // to fall back from. This page said "shipped" while the roadmap said
   // "partial" — one of them had to be wrong.
   { status: "partial", name: "Pre-warmed pools" },
-  { status: "partial", name: "JS/TS SDK" },
-  { status: "partial", name: "CLI" },
   { status: "partial", name: "Remote storage mounts" },
   { status: "partial", name: "Time-travel restore" },
   { status: "partial", name: "Egress firewall" },
   { status: "partial", name: "Custom & managed images" },
   { status: "partial", name: "Jailer hardening" },
 
-  { status: "planned", name: "Streamed output" },
   { status: "planned", name: "Seccomp filters & disk quotas" },
   { status: "planned", name: "System-privileged workloads" },
 ];

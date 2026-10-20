@@ -1,0 +1,38 @@
+name: CI (JS/TS)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/sdk/**"
+      - "packages/cli/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ci-js.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/sdk/**"
+      - "packages/cli/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ci-js.yml"
+
+jobs:
+  js:
+    name: JS/TS packages (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      # sandkiln has to typecheck+build before kiln, which imports it as a
+      # workspace dependency resolved through its built dist/ — verified
+      # locally that skipping this order breaks kiln's typecheck.
+      - run: npm run typecheck -w sandkiln
+      - run: npm run build -w sandkiln
+      - run: npm run typecheck -w sandkiln-cli
+      - run: npm run build -w sandkiln-cli
