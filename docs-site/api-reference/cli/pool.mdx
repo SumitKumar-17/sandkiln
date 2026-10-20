@@ -9,7 +9,7 @@ Configures pre-warmed pools — ready-to-resume snapshots a matching `kiln sandb
 
 | Command | What it does |
 |---|---|
-| `create <id>` | Configure a pool under `<id>`. `--image <id>`, `--vcpu <count>`, `--mem <mib>` (all daemon defaults if omitted — a matching create must resolve to the exact same values to claim from this pool), `--warm-count <n>` (default `0`, how many resumable snapshots to keep ready). |
+| `create <id>` | Configure a pool under `<id>`. `--image <id>`, `--vcpu <count>`, `--mem <mib>` (all daemon defaults if omitted — a matching create must resolve to the exact same values to claim from this pool), `--warm-count <n>` (default `0`, how many resumable snapshots to keep ready), `--max-count <n>` (caps total live instances of this pool's profile, warm-resumed or cold-created alike — omitted means unbounded; a create at the ceiling with nothing warm queues up to 30s instead of exceeding it or rejecting outright). |
 | `ls` | List configured pools, including how many are currently warm and ready. |
 | `rm <id>` | Remove a pool's configuration and destroy whatever it currently has warm. A sandbox already claimed from it is unaffected. |
 

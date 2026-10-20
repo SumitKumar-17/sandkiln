@@ -16,7 +16,7 @@ Pool.create("build-workers", vcpu_count=2, mem_size_mib=1024, warm_count=3)
 sandbox = Sandbox.create(vcpu_count=2, mem_size_mib=1024)
 ```
 
-- **`Pool.create(id, image_id=None, vcpu_count=None, mem_size_mib=None, warm_count=0, base_url=None, auth_token=None)`** — configures a pool under a caller-given `id` (`409` if already taken — delete it first to reconfigure). `warm_count` is how many resumable snapshots to keep ready.
+- **`Pool.create(id, image_id=None, vcpu_count=None, mem_size_mib=None, warm_count=0, max_count=None, base_url=None, auth_token=None)`** — configures a pool under a caller-given `id` (`409` if already taken — delete it first to reconfigure). `warm_count` is how many resumable snapshots to keep ready. `max_count` caps total live instances of this pool's profile (warm-resumed or cold-created alike) — omitted means unbounded. A create matching a pool at its `max_count` ceiling with nothing warm queues (up to 30s, event-driven not polled) instead of exceeding it or rejecting outright.
 - **`Pool.list(base_url=None, auth_token=None)`** — lists configured pools, including `warm_ready` (how many are actually ready right now — replenishment happens in the background, not instantly).
 - **`Pool.delete(id, base_url=None, auth_token=None)`** — removes a pool's configuration and destroys whatever it currently has warm. A sandbox already claimed from it is unaffected.
 

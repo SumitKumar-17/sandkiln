@@ -16,7 +16,7 @@ await Pool.create("build-workers", { vcpuCount: 2, memSizeMib: 1024, warmCount: 
 const sandbox = await Sandbox.create({ vcpuCount: 2, memSizeMib: 1024 });
 ```
 
-- **`Pool.create(id, options?)`** — configures a pool under a caller-given `id` (`409` if already taken — delete it first to reconfigure). `options.imageId`/`options.vcpuCount`/`options.memSizeMib` define which creates can match it; `options.warmCount` (default `0`) is how many resumable snapshots to keep ready.
+- **`Pool.create(id, options?)`** — configures a pool under a caller-given `id` (`409` if already taken — delete it first to reconfigure). `options.imageId`/`options.vcpuCount`/`options.memSizeMib` define which creates can match it; `options.warmCount` (default `0`) is how many resumable snapshots to keep ready. `options.maxCount` caps total live instances of this pool's profile (warm-resumed or cold-created alike) — omitted means unbounded. A create matching a pool at its `maxCount` ceiling with nothing warm queues (up to 30s, event-driven not polled) instead of exceeding it or rejecting outright.
 - **`Pool.list(options?)`** — lists configured pools, including `warmReady` (how many are actually ready right now — replenishment happens in the background, not instantly).
 - **`Pool.delete(id, options?)`** — removes a pool's configuration and destroys whatever it currently has warm. A sandbox already claimed from it is unaffected.
 
