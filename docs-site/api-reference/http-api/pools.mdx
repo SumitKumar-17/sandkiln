@@ -12,3 +12,19 @@ Pool *configuration* only — replenishment happens in the background, and claim
 | `POST /pools` | Configure a pool. Body: `id` (required, caller-given, `409` if already taken), `image_id?`, `vcpu_count?`, `mem_size_mib?`, `warm_count` (required, `0` is valid — an inert pool), `max_count?` (a ceiling on total live instances of this pool's profile — omitted means unbounded, the original behavior). A `POST /sandboxes` matching a pool at its `max_count` ceiling with nothing warm queues (up to 30s) instead of exceeding it or rejecting outright — `503` if nothing frees up in time. |
 | `GET /pools` | List configured pools, including `warm_ready` (how many resumable snapshots are actually ready right now) and `claimed` (how many live instances of this pool's profile exist right now, warm-resumed or cold-created alike). |
 | `DELETE /pools/:id` | Remove a pool's configuration and destroy whatever it currently has warm. A sandbox already claimed from it is unaffected. |
+
+## Example
+
+Configure a pool, then check how many warm instances are actually ready — replenishment runs in the background, so this won't be instant right after configuring:
+
+```bash
+curl -s -X POST http://127.0.0.1:7777/pools \
+  -H 'content-type: application/json' \
+  -d '{"id":"build-workers","vcpu_count":2,"mem_size_mib":1024,"warm_count":3}'
+{"id":"build-workers","warm_ready":0,"claimed":0}
+
+curl -s http://127.0.0.1:7777/pools
+{"pools":[{"id":"build-workers","vcpu_count":2,"mem_size_mib":1024,"warm_count":3,"max_count":null,"warm_ready":3,"claimed":0}]}
+```
+
+A plain `POST /sandboxes` matching this pool's `vcpu_count`/`mem_size_mib` (no `drives`, no `rate_limit`) transparently resumes one of those warm instances instead of cold-booting — see the [HTTP API overview](/api-reference/http-api/overview) for a plain create.

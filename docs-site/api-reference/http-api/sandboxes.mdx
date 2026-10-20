@@ -63,3 +63,35 @@ The reverse of preview: exposes a service running on the *caller's* machine to c
 | `POST /sandboxes/:id/tunnel` | Body: `{"guest_port": <n>}`. Tells the guest agent to start listening on `guest_port`. Returns `{"tunnel_id": "...", "guest_port": <n>}`. |
 | `GET /sandboxes/:id/tunnel/:tunnel_id/ws` | Upgrades to a WebSocket: the long-lived relay the caller holds open for the tunnel's whole life, multiplexing every guest-accepted connection over it with a small binary frame. Accepts the token as `?token=` as well as a header, same reason as `/pty` above. |
 | `DELETE /sandboxes/:id/tunnel/:tunnel_id` | Tells the guest agent to stop listening and tears down the relay. |
+
+## Example
+
+Writing a file into a sandbox, then reading it back — the [HTTP API overview](/api-reference/http-api/overview) already covers create/exec/stop, so this shows the other half of the Sandboxes surface instead:
+
+```bash
+curl -si -X POST http://127.0.0.1:7777/sandboxes/12b9dd16-5787-44fa-aceb-5c9bb404b854/write-file \
+  -H 'content-type: application/json' \
+  -d '{"path":"/tmp/config.json","content_base64":"eyJvayI6dHJ1ZX0="}'
+HTTP/1.1 204 No Content
+
+curl -s -X POST http://127.0.0.1:7777/sandboxes/12b9dd16-5787-44fa-aceb-5c9bb404b854/read-file \
+  -H 'content-type: application/json' \
+  -d '{"path":"/tmp/config.json"}'
+{"content_base64":"eyJvayI6dHJ1ZX0="}
+```
+
+Snapshotting that sandbox, then resuming it into a new one — `resume` consumes the snapshot, so a second resume of the same id `404`s:
+
+```bash
+curl -s -X POST http://127.0.0.1:7777/sandboxes/12b9dd16-5787-44fa-aceb-5c9bb404b854/snapshot
+{"snapshot_id":"a1e9c3d2-2f0a-4b1e-9c3a-7d5e6f8b9c0d"}
+
+curl -s -X POST http://127.0.0.1:7777/snapshots/a1e9c3d2-2f0a-4b1e-9c3a-7d5e6f8b9c0d/resume
+{"id":"f3b2a1c0-9e8d-4c7b-a6f5-e4d3c2b1a0f9"}
+
+curl -si -X POST http://127.0.0.1:7777/snapshots/a1e9c3d2-2f0a-4b1e-9c3a-7d5e6f8b9c0d/resume
+HTTP/1.1 404 Not Found
+content-type: application/json
+
+{"error":"sandbox not found: a1e9c3d2-2f0a-4b1e-9c3a-7d5e6f8b9c0d"}
+```

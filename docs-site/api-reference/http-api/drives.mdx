@@ -22,3 +22,34 @@ Daemon-only — no SDK or CLI wrapper yet. Needs a FUSE-capable guest kernel and
 | `DELETE /sandboxes/:id/mounts/:mount_id` | Unmount and forget it (`204`). Best-effort past the bookkeeping: removed from daemon state whether or not the guest-side `umount` succeeded, with a warning logged if it didn't. |
 
 Errors on create: `400` for any empty required field, for a failed mount (`rclone mount failed (exit N): <stderr><stdout>`), or for any guest-agent error; `404` for an unknown sandbox id; `409` if something is already mounted at that `mount_path` (the message names the existing bucket, its path, and the `DELETE` URL); `500` if rclone exits `0` but `mountpoint -q <path>` disagrees — the daemon unmounts and removes the config before returning. `DELETE` returns `404` for an unknown sandbox or mount id.
+
+## Example
+
+Create a drive, attach it read-write to one sandbox, then try attaching it read-write to a second — only simultaneous *read-only* attachments are allowed:
+
+```bash
+curl -s -X POST http://127.0.0.1:7777/drives -H 'content-type: application/json' -d '{"size_mib":512}'
+{"id":"037aecc5-b10a-475c-8dba-27d82bb11402","size_mib":512,"created_at_unix":1789536245,"attached_to":[]}
+
+curl -s -X POST http://127.0.0.1:7777/sandboxes -H 'content-type: application/json' \
+  -d '{"drives":[{"id":"037aecc5-b10a-475c-8dba-27d82bb11402"}]}'
+{"id":"12b9dd16-5787-44fa-aceb-5c9bb404b854"}
+
+curl -si -X POST http://127.0.0.1:7777/sandboxes -H 'content-type: application/json' \
+  -d '{"drives":[{"id":"037aecc5-b10a-475c-8dba-27d82bb11402"}]}'
+HTTP/1.1 409 Conflict
+content-type: application/json
+
+{"error":"drive 037aecc5-b10a-475c-8dba-27d82bb11402 is already attached to sandbox 12b9dd16-5787-44fa-aceb-5c9bb404b854 — a read-write attachment needs exclusive access; only simultaneous read-only attachments are allowed"}
+```
+
+Mounting an S3-compatible bucket, then unmounting it:
+
+```bash
+curl -s -X POST http://127.0.0.1:7777/sandboxes/12b9dd16-5787-44fa-aceb-5c9bb404b854/mounts \
+  -H 'content-type: application/json' \
+  -d '{"bucket":"build-cache","endpoint":"https://s3.example.com","access_key":"...","secret_key":"...","mount_path":"/mnt/cache"}'
+{"id":"6a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9","bucket":"build-cache","endpoint":"https://s3.example.com","mount_path":"/mnt/cache","read_only":false}
+
+curl -s -X DELETE http://127.0.0.1:7777/sandboxes/12b9dd16-5787-44fa-aceb-5c9bb404b854/mounts/6a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9
+```

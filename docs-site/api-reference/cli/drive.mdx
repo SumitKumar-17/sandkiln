@@ -10,3 +10,18 @@ description: Create, list, and delete persistent drives.
 | `create <size-mib>` | Create a new empty persistent drive of `<size-mib>` MiB. Prints its id — attach it with `sandbox create --drive <id[:ro]>`. See [Drives](/concepts/drives). |
 | `ls` | List persistent drives, including every current holder. |
 | `rm <id>` | Delete a drive and its backing file. Refused while any sandbox or held snapshot still attaches it. |
+
+## Example
+
+```bash
+kiln drive create 512
+037aecc5-b10a-475c-8dba-27d82bb11402
+
+kiln sandbox create --drive 037aecc5-b10a-475c-8dba-27d82bb11402
+12b9dd16-5787-44fa-aceb-5c9bb404b854
+
+kiln drive ls
+037aecc5-b10a-475c-8dba-27d82bb11402  512 MiB  sandbox 12b9dd16-5787-44fa-aceb-5c9bb404b854 (rw)
+```
+
+A second sandbox can attach the same drive concurrently only with `:ro` (e.g. `--drive 037aecc5-b10a-475c-8dba-27d82bb11402:ro`) — see [Drives](/concepts/drives) for the exclusivity rule.

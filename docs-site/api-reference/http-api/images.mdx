@@ -10,3 +10,17 @@ description: Register, list, and delete custom rootfs images.
 | `POST /images` | Body: `{"id": "...", "path": "..."}`. Registers an already-built ext4 rootfs from a host path. |
 | `GET /images` | List registered images (`guest_agent_verified` is always `false`, see [Custom & managed images](/concepts/images)). |
 | `DELETE /images/:id` | Delete an image. `409` while any live sandbox, in-flight boot, or held snapshot references it. |
+
+## Example
+
+Register an already-built rootfs, then boot a sandbox from it instead of the daemon's default:
+
+```bash
+curl -s -X POST http://127.0.0.1:7777/images \
+  -H 'content-type: application/json' \
+  -d '{"id":"node-lts-custom","path":"/home/t1000/images/node-lts-custom.ext4"}'
+{"id":"node-lts-custom","size_mib":300,"created_at_unix":1789536245,"in_use_by":null,"guest_agent_verified":false,"verification_hint":"the daemon cannot verify the guest agent is baked into this image (that needs loop-mounting it as root, which this unprivileged daemon does not have) — run 'scripts/preflight-check.sh --root-checks --rootfs-image <path>' against the source file before relying on it"}
+
+curl -s -X POST http://127.0.0.1:7777/sandboxes -H 'content-type: application/json' -d '{"image_id":"node-lts-custom"}'
+{"id":"ecc699a4-fa84-4bd2-9346-5e5c6b320e9e"}
+```

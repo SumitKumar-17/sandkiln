@@ -33,3 +33,23 @@ description: Every kiln sandbox subcommand -- lifecycle, filesystem, preview, tu
 | `snapshots` | List snapshots. `--source <sandbox-id>` narrows to the one (if any) taken from that original sandbox id. |
 | `resume <snapshot-id>` | Boot a new sandbox from a snapshot, consuming it. Prints the new sandbox id. |
 | `fork <snapshot-id>` | Boot a new sandbox from a snapshot without consuming it. Prints the new sandbox id. |
+
+## Example
+
+```bash
+kiln sandbox create --vcpu 2 --mem 1024
+9f1ad482-e9ee-4a0f-9a7c-7826f77b9cfc
+
+kiln sandbox write 9f1ad482-e9ee-4a0f-9a7c-7826f77b9cfc /tmp/config.json ./local-config.json
+
+kiln sandbox exec 9f1ad482-e9ee-4a0f-9a7c-7826f77b9cfc -- cat /tmp/config.json
+{"ok":true}
+
+kiln sandbox snapshot 9f1ad482-e9ee-4a0f-9a7c-7826f77b9cfc
+a1e9c3d2-2f0a-4b1e-9c3a-7d5e6f8b9c0d
+
+kiln sandbox resume a1e9c3d2-2f0a-4b1e-9c3a-7d5e6f8b9c0d
+f3b2a1c0-9e8d-4c7b-a6f5-e4d3c2b1a0f9
+```
+
+Every subcommand here takes the real opaque `<id>` a `create` printed, not a name — resolve a name back to a live id first with `by-name`, or skip straight to a live sandbox with `get-or-create`. See [Named sandboxes & persistent stop](/concepts/named-sandboxes).

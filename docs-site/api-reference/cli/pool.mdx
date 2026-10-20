@@ -12,3 +12,17 @@ Configures pre-warmed pools — ready-to-resume snapshots a matching `kiln sandb
 | `create <id>` | Configure a pool under `<id>`. `--image <id>`, `--vcpu <count>`, `--mem <mib>` (all daemon defaults if omitted — a matching create must resolve to the exact same values to claim from this pool), `--warm-count <n>` (default `0`, how many resumable snapshots to keep ready). |
 | `ls` | List configured pools, including how many are currently warm and ready. |
 | `rm <id>` | Remove a pool's configuration and destroy whatever it currently has warm. A sandbox already claimed from it is unaffected. |
+
+## Example
+
+```bash
+kiln pool create build-workers --vcpu 2 --mem 1024 --warm-count 3
+
+kiln pool ls
+build-workers  vcpu=2 mem=1024  warm=3/3 ready
+
+kiln sandbox create --vcpu 2 --mem 1024
+f3b2a1c0-9e8d-4c7b-a6f5-e4d3c2b1a0f9
+```
+
+That last `create` matches `build-workers`' profile exactly (no `--drive`, no rate-limit flags), so it transparently resumed a warm instance instead of cold-booting — no separate "claim" command to run.
