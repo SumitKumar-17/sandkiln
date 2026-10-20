@@ -122,3 +122,16 @@ fork2 = Sandbox.fork(snapshot_id)  # fork it again
 - **`Sandbox.resume(snapshot_id, base_url=None, auth_token=None)`** — boots from a snapshot, **consuming** it.
 - **`Sandbox.fork(snapshot_id, base_url=None, auth_token=None)`** — boots from a snapshot **without** consuming it. Raises `SandkilnApiError` (`409`) while an earlier fork is still live.
 - **`Sandbox.list_snapshots(source_sandbox_id=None, base_url=None, auth_token=None)`** — lists snapshots. `source_sandbox_id` narrows to the one taken from that original sandbox id.
+
+### Remote storage mounts
+
+```python
+sandbox = Sandbox.create()
+mount = sandbox.mount("build-cache", "https://s3.example.com", access_key="...", secret_key="...", mount_path="/mnt/cache")
+# Ordinary read_file()/write_file() against mount_path now read/write through to the bucket.
+sandbox.unmount(mount.id)
+```
+
+- **`sandbox.mount(bucket, endpoint, access_key, secret_key, mount_path, read_only=False)`** — mounts an S3-compatible bucket at `mount_path` via `rclone mount`. `endpoint` is the full URL of the S3-compatible service, never defaulted; `access_key`/`secret_key` are written into a `0600` rclone config file inside the guest, never passed as a command-line argument. Needs the optional FUSE-capable rootfs setup in `SELF_HOSTING.md`; raises `SandkilnApiError` on a guest-side mount failure. Not carried across `resume()`/`fork()` — it's a live guest FUSE process, already captured by Firecracker's own snapshot.
+- **`sandbox.list_mounts()`** — lists every remote-storage mount currently active in this sandbox.
+- **`sandbox.unmount(mount_id)`** — tears down one mount. Best-effort on the guest side — a failed `umount` is a daemon-log warning, not a failed request.

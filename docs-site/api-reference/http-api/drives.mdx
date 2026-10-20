@@ -13,7 +13,7 @@ description: Persistent drives and remote storage (S3-compatible) mounts.
 
 ## Remote storage mounts
 
-Daemon-only — no SDK or CLI wrapper yet. Needs a FUSE-capable guest kernel and `rclone`/`fusermount3` in the rootfs; there's no preflight check, so a host missing either surfaces it as a `400` from the create call. See [Remote storage mounts](/concepts/remote-storage).
+Also wrapped in both SDKs (`Sandbox.mount()`/`.listMounts()`/`.unmount()` in JS/TS, `sandbox.mount()`/`.list_mounts()`/`.unmount()` in Python) and the CLI (`kiln sandbox mount|mounts|unmount`) — see [JS/TS: Sandbox](/api-reference/js-sdk/sandbox), [Python: Sandbox](/api-reference/python-sdk/sandbox), or [kiln sandbox](/api-reference/cli/sandbox). Needs a FUSE-capable guest kernel and `rclone`/`fusermount3` in the rootfs; there's no preflight check, so a host missing either surfaces it as a `400` from the create call. See [Remote storage mounts](/concepts/remote-storage).
 
 | Route | What it does |
 |---|---|

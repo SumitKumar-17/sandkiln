@@ -29,6 +29,9 @@ description: Every kiln sandbox subcommand -- lifecycle, filesystem, preview, tu
 | `pty <id>` | Open a live, interactive shell session inside a sandbox over a WebSocket — distinct from `exec`'s request/response shape. Raw terminal mode: keystrokes, including Ctrl+C, pass straight through to the remote shell. Exit the remote shell (or Ctrl+D) to end the session. |
 | `preview <id> <port>` | Print the URL to reach a server listening on `<port>` inside a sandbox. `--path <path>` (default `/`). |
 | `tunnel <id> <guest-port>` | Expose a service running on **this machine** to code inside the sandbox — the reverse of `preview`. `--local-port <port>` (required), `--local-host <host>` (default `127.0.0.1`). Runs in the foreground until Ctrl+C, which closes the tunnel cleanly. See [Local tunnel](/concepts/local-tunnel). |
+| `mount <id> <bucket> <endpoint> <mount-path>` | Mount an S3-compatible bucket into a sandbox via `rclone mount`. `--access-key <key>`/`--secret-key <key>` (required), `--read-only` (mount read-only). Needs the optional FUSE-capable rootfs setup in `SELF_HOSTING.md`. Prints the new mount's id. |
+| `mounts <id>` | List a sandbox's active remote-storage mounts. |
+| `unmount <id> <mount-id>` | Unmount and tear down one remote-storage mount. |
 | `snapshot <id>` | Save a sandbox's full state to disk and stop it. Prints the resulting snapshot id. |
 | `snapshots` | List snapshots. `--source <sandbox-id>` narrows to the one (if any) taken from that original sandbox id. |
 | `resume <snapshot-id>` | Boot a new sandbox from a snapshot, consuming it. Prints the new sandbox id. |

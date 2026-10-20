@@ -153,3 +153,22 @@ const fork2 = await Sandbox.fork(snapshotId); // fork it again
 - **`Sandbox.resume(snapshotId, options?)`** — boots from a snapshot, **consuming** it.
 - **`Sandbox.fork(snapshotId, options?)`** — boots from a snapshot **without** consuming it. `409` while an earlier fork is still live.
 - **`Sandbox.listSnapshots(options?)`** — lists snapshots. `options.sourceSandboxId` narrows to the one taken from that original sandbox id.
+
+### Remote storage mounts
+
+```ts
+const sandbox = await Sandbox.create();
+const mount = await sandbox.mount({
+  bucket: "build-cache",
+  endpoint: "https://s3.example.com",
+  accessKey: "...",
+  secretKey: "...",
+  mountPath: "/mnt/cache",
+});
+// Ordinary readFile()/writeFile() against mountPath now read/write through to the bucket.
+await sandbox.unmount(mount.id);
+```
+
+- **`sandbox.mount(options)`** — mounts an S3-compatible bucket at `options.mountPath` via `rclone mount`. `options.endpoint` is the full URL of the S3-compatible service, never defaulted. Needs the optional FUSE-capable rootfs setup in `SELF_HOSTING.md`; throws `SandkilnApiError` on a guest-side mount failure. Not carried across `resume()`/`fork()` — it's a live guest FUSE process, already captured by Firecracker's own snapshot.
+- **`sandbox.listMounts()`** — lists every remote-storage mount currently active in this sandbox.
+- **`sandbox.unmount(mountId)`** — tears down one mount. Best-effort on the guest side — a failed `umount` is a daemon-log warning, not a failed request.
