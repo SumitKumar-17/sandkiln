@@ -7,7 +7,7 @@ description: Install, configuration, and auth for the sandkiln npm package.
 npm install sandkiln
 ```
 
-Everything this SDK wraps is listed under [Sandbox](/api-reference/js-sdk/sandbox), [Image](/api-reference/js-sdk/image), [Drive](/api-reference/js-sdk/drive), and [Pool](/api-reference/js-sdk/pool). One daemon feature has no wrapper yet: remote storage mounts (an S3-compatible bucket mounted inside a sandbox) are available on the daemon HTTP API only — see [Drives](/api-reference/http-api/drives#remote-storage-mounts).
+Everything this SDK wraps is listed under [Sandbox](/api-reference/js-sdk/sandbox) (including remote storage mounts — `mount()`/`listMounts()`/`unmount()`), [Image](/api-reference/js-sdk/image), [Drive](/api-reference/js-sdk/drive), and [Pool](/api-reference/js-sdk/pool). Two daemon features have no wrapper in any client yet, reachable only over the raw daemon HTTP API: snapshot lineage filtering (`?parent_snapshot_id=`) and time-travel restore (`GET /snapshots/history`, `POST /snapshots/history/:id/restore`) — see [Sandboxes](/api-reference/http-api/sandboxes).
 
 ## Configuration
 

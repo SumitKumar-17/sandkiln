@@ -9,7 +9,7 @@ npm install -g sandkiln-cli   # installs the `kiln` command
 
 Global options, available on every subcommand: `--base-url <url>` (default: `SANDKILN_DAEMON_URL` or `http://127.0.0.1:7777`), `--token <token>` (default: `SANDKILN_AUTH_TOKEN`).
 
-One daemon feature has no `kiln` command yet: remote storage mounts (an S3-compatible bucket mounted inside a sandbox) are available on the daemon HTTP API only — see [Drives](/api-reference/http-api/drives#remote-storage-mounts).
+Two daemon features have no `kiln` command yet, reachable only over the raw daemon HTTP API: snapshot lineage filtering (`?parent_snapshot_id=`) and time-travel restore — see [Sandboxes](/api-reference/http-api/sandboxes).
 
 ## A complete session
 
