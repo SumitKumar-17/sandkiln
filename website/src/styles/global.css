@@ -685,12 +685,31 @@ a.rail:hover {
    sandbox is alive. */
 
 .tty {
+  position: relative;
   background: var(--tty-bg);
   color: var(--tty-fg);
   border: 1px solid var(--rule-strong);
   font-size: var(--t-xs);
   line-height: 1.8;
   min-width: 0;
+}
+
+/* Every real boot line here is wider than the box at every width this ships
+   at (`.tty pre` deliberately never wraps — see below), so this isn't a rare
+   edge case needing a hint, it's the normal state. Without this, a line
+   stopping mid-word at the box's hard right edge reads as a layout bug, not
+   as "scroll for more" — caught live from a real screenshot, not assumed.
+   Fades to the box's own background, not transparent-to-white, so it works
+   identically in both themes. */
+.tty::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  width: 28px;
+  background: linear-gradient(to right, transparent, var(--tty-bg));
+  pointer-events: none;
 }
 
 /* Wraps to two rows on a phone rather than letting both labels wrap inside
@@ -712,13 +731,31 @@ a.rail:hover {
 }
 
 /* A console line is not prose: wrapping one mid-token turns a boot log into
-   noise. It scrolls instead, which is what the real thing does. */
+   noise. It scrolls instead, which is what the real thing does. A persistent
+   thin scrollbar (not the OS default, which auto-hides on macOS/mobile until
+   actively scrolling) is the other half of making that legible — without it
+   there's no visible sign this is scrollable at all, only the fade above. */
 .tty pre {
   margin: 0;
   padding: var(--s-5);
   white-space: pre;
   overflow-x: auto;
   overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--tty-dim) transparent;
+}
+
+.tty pre::-webkit-scrollbar {
+  height: 6px;
+}
+
+.tty pre::-webkit-scrollbar-thumb {
+  background: var(--tty-dim);
+  border-radius: 3px;
+}
+
+.tty pre::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .tty .dim {
