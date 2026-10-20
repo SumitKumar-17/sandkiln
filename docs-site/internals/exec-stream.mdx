@@ -29,7 +29,7 @@ Not carried across resume, fork, or a restored checkpoint, and doesn't survive a
 
 Starting a session and attaching to it *while it's still running*:
 
-```
+```bash
 $ curl -s -X POST http://127.0.0.1:7777/sandboxes/<id>/exec-stream \
     -H 'content-type: application/json' \
     -d '{"command":"sh","args":["-c","for i in 1 2 3; do echo line-$i; sleep 1; done"]}'
@@ -39,13 +39,13 @@ $ curl -s -X POST http://127.0.0.1:7777/sandboxes/<id>/exec-stream \
 
 Attaching immediately (before the 3-second command has finished):
 
-```
+```bash
 FIRST ATTACH (mid-run, replay + live tail): "line-1\nline-2\nline-3\n[process exited with code 0]\n"
 ```
 
 Attaching again afterward, to the same session id:
 
-```
+```bash
 SECOND ATTACH (after finish, full replay): "line-1\nline-2\nline-3\n[process exited with code 0]\n"
 ```
 

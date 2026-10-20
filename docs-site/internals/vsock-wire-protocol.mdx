@@ -59,7 +59,7 @@ Firecracker's own control plane is a related but separate problem, solved differ
 
 A real `exec` call, captured live against a running daemon (`curl -i`, full headers included):
 
-```
+```bash
 $ curl -s -i -X POST http://127.0.0.1:7777/sandboxes/354dbc49-.../exec \
     -H 'content-type: application/json' \
     -d '{"command":"echo","args":["hello-vsock"]}'
@@ -75,7 +75,7 @@ date: Wed, 16 Sep 2026 05:24:32 GMT
 
 That HTTP round trip is the daemon's own public API. The vsock traffic it triggers underneath is invisible to the caller, by design. What the daemon actually sends the guest agent over `AGENT_PORT`, in the exact wire format `sandkiln-protocol` defines, for that same call:
 
-```
+```bash
 request:  67 bytes on the wire = 4-byte length prefix (0x3f 0x00 0x00 0x00, i.e. 63) + this JSON:
           {"cmd":"exec","command":"echo","args":["hello-vsock"],"env":{}}
 

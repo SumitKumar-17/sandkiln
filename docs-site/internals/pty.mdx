@@ -29,7 +29,7 @@ Both hangup directions are handled explicitly: if the shell exits first (the use
 
 A small script (matching this repo's own `scripts/lib/pty-check.mjs`, used by its integration test suite) opens a real PTY session, sends a command, and captures the raw bytes:
 
-```
+```bash
 $ node pty_demo.mjs http://127.0.0.1:7777 <sandbox-id>
 
 RAW BYTES RECEIVED:

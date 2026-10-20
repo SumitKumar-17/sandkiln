@@ -32,7 +32,7 @@ Every other capability in this project follows one rule: the host connects to th
 
 A real tunnel, opened against a live daemon, relaying a real HTTP response from a Node server on the host into a `curl` running inside the sandbox:
 
-```
+```bash
 $ curl -s -X POST http://127.0.0.1:7777/sandboxes/c63766c1-aec7-4231-9986-562f443d653f/tunnel \
     -H 'content-type: application/json' -d '{"guest_port": 8080}'
 {"tunnel_id":"238565ce-3163-4bb5-8f4a-db4ee1a8032f","guest_port":8080}
@@ -40,7 +40,7 @@ $ curl -s -X POST http://127.0.0.1:7777/sandboxes/c63766c1-aec7-4231-9986-562f44
 
 Then, from inside that same sandbox, with the tunnel open:
 
-```
+```bash
 $ curl -s http://127.0.0.1:8080/
 hello from the real local machine, 1791345337714
 ```

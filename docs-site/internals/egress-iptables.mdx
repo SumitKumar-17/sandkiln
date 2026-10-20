@@ -33,7 +33,7 @@ A policy is tied to a sandbox's network *lease*, not to the VM process itself. `
 
 Creating a sandbox with `deny_all` plus one explicitly allowed address, then proving the policy's actual effect from inside the guest, not just that the create call succeeded:
 
-```
+```bash
 $ curl -s -X POST http://127.0.0.1:7777/sandboxes -H 'content-type: application/json' \
     -d '{"egress":{"mode":"deny_all","allow_cidrs":["10.5.31.2/32"]}}'
 {"id":"354dbc49-b764-45a9-a90a-68903ddbade0"}
@@ -41,7 +41,7 @@ $ curl -s -X POST http://127.0.0.1:7777/sandboxes -H 'content-type: application/
 
 Pinging the one allowed address from inside that sandbox:
 
-```
+```bash
 $ curl -s -X POST http://127.0.0.1:7777/sandboxes/354dbc49.../exec \
     -H 'content-type: application/json' -d '{"command":"ping","args":["-c1","-W2","10.5.31.2"]}'
 
@@ -50,7 +50,7 @@ $ curl -s -X POST http://127.0.0.1:7777/sandboxes/354dbc49.../exec \
 
 Pinging a *different* address, never listed in `allow_cidrs`, from the same sandbox: blocked, not merely unreachable for some unrelated reason.
 
-```
+```bash
 $ curl -s -X POST http://127.0.0.1:7777/sandboxes/354dbc49.../exec \
     -H 'content-type: application/json' -d '{"command":"ping","args":["-c1","-W2","10.5.31.1"]}'
 

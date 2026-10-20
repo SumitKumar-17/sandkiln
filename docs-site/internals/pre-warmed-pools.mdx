@@ -26,7 +26,7 @@ A plain `POST /sandboxes`/`Sandbox.create()` that requests nothing a warm snapsh
 
 ## See it in action
 
-```
+```bash
 $ curl -s -X POST http://127.0.0.1:7777/pools \
     -H 'content-type: application/json' \
     -d '{"id":"docs-demo-pool","warm_count":1}'
@@ -36,7 +36,7 @@ $ curl -s -X POST http://127.0.0.1:7777/pools \
 
 `warm_ready` starts at `0`, the pool was just configured and the replenisher hasn't had a chance to act yet. Checking again about 12 seconds later, after the replenisher's own 2-second check interval has had time to boot, pause, and snapshot a fresh instance:
 
-```
+```bash
 $ curl -s http://127.0.0.1:7777/pools
 
 {"pools":[{"id":"docs-demo-pool","image_id":null,"vcpu_count":2,"mem_size_mib":512,"warm_count":1,"max_count":null,"warm_ready":1,"claimed":0}]}

@@ -12,7 +12,7 @@ export SANDKILN_DAEMON_URL=http://127.0.0.1:7777
 
 Real, captured output from a running daemon:
 
-```
+```bash
 $ kiln sandbox create --tag env=demo
 9f1ad482-e9ee-4a0f-9a7c-7826f77b9cfc
 
@@ -32,7 +32,7 @@ $ kiln sandbox rm 9f1ad482-e9ee-4a0f-9a7c-7826f77b9cfc
 
 `exec`'s command and args are passed straight to `commander`'s own option parser, so an argument starting with `-` (a `python3 -c` script, `grep -v`, ...) needs `--` in front of it or `kiln` tries to parse it as its own flag:
 
-```
+```bash
 $ kiln sandbox exec <id> python3 -c "print(1)"
 error: unknown option '-c'
 
@@ -44,7 +44,7 @@ $ kiln sandbox exec <id> -- python3 -c "print(1)"
 
 `exec` runs the command and reports whatever it actually did, exit code included; `cat`-ing a missing file isn't a CLI error, it's a normal result with a non-zero exit:
 
-```
+```bash
 $ kiln sandbox exec <id> -- false; echo "exit: $?"
 exit: 1
 ```
@@ -53,7 +53,7 @@ exit: 1
 
 `exec` waits for the command to finish and returns everything at once — fine for a short script, not for a build or a server you want to watch live. `exec-stream` starts the command in the background and follows its output as it happens:
 
-```
+```bash
 $ kiln sandbox exec-stream <id> -- sh -c 'for i in 1 2 3; do echo tick $i; sleep 1; done'
 session b479098a-80e6-485f-9709-15efde8f1078 started
 tick 1

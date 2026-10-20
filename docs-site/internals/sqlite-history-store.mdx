@@ -55,7 +55,7 @@ Three write paths touch the table, all wired in from `sandkiln-daemon`, none of 
 
 A cold create, followed by a destroy, followed by reading it back from history. Three real calls against a running daemon:
 
-```
+```bash
 $ curl -s -X POST http://127.0.0.1:7777/sandboxes \
     -H 'content-type: application/json' \
     -d '{"tags":{"purpose":"docs-example"}}'
@@ -78,7 +78,7 @@ The row survives even though the sandbox itself is gone from `GET /sandboxes`. T
 
 Before this session, `HistoryStore::open` used SQLite's own defaults (`journal_mode=DELETE`, `synchronous=FULL`): fsync twice per write, once for the journal and once for the database file. That measured at **~9.24ms on a real cold create's critical path** (5.5% of the total create time). An isolated A/B on the same disk, 20 sequential `record_created` calls, default settings against the fix, nothing else running, measured:
 
-```
+```bash
 default settings:  mean=1897.8µs  min=1360µs  max=6956µs
 WAL + NORMAL:       mean=37.1µs   min=33µs    max=60µs
 ```

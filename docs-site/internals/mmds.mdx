@@ -29,7 +29,7 @@ MMDS requires a network interface to exist at all (`sandkiln_vmm::vm::VmConfig::
 
 First, the token:
 
-```
+```bash
 $ curl -si -X PUT http://169.254.169.254/latest/api/token \
     -H 'X-metadata-token-ttl-seconds: 21600'
 
@@ -45,7 +45,7 @@ lKr9iNwNA2uursz71GJQSAtpRn1zu4iA31Dmrt251M37zM2s
 
 That request and everything below it runs *from inside a running sandbox* (via `exec`), not from the host -- MMDS is only reachable from the guest's own network. Then the actual metadata, using that token:
 
-```
+```bash
 $ curl -s -H 'X-metadata-token: lKr9iNwNA2uursz71GJQSAtpRn1zu4iA31Dmrt251M37zM2s' \
     -H 'Accept: application/json' \
     http://169.254.169.254/

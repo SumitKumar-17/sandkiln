@@ -59,7 +59,7 @@ Resume consumes the snapshot record outright (a second resume `404`s); fork only
 
 Fork the same snapshot twice in a row. This is the daemon's own concurrency lock, captured live:
 
-```
+```bash
 $ curl -s -X POST http://127.0.0.1:7777/sandboxes \
     -H 'content-type: application/json' -d '{"tags":{"purpose":"docs-example"}}'
 {"id":"5ce396c6-a633-4262-b1a5-b307674a870c"}

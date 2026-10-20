@@ -40,7 +40,7 @@ Read as English: a new attachment is allowed if nothing holds the drive yet, or 
 
 Create a drive, attach it read-write, then try attaching it read-write again while it's still held:
 
-```
+```bash
 $ curl -s -X POST http://127.0.0.1:7777/drives -H 'content-type: application/json' -d '{"size_mib":32}'
 {"id":"037aecc5-b10a-475c-8dba-27d82bb11402","size_mib":32,"created_at_unix":1789536245,"attached_to":[]}
 
