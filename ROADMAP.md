@@ -1532,22 +1532,45 @@ one-off terminal scroll.
 
 ## Further latency investigation
 
-Three concrete open questions, in priority order, picked because
-they're the ones an actual measurement could answer rather than
-further guessing:
+Concrete open questions, in priority order, picked because they're the
+ones an actual measurement (or a documented external fact) could answer
+rather than further guessing:
 
 1. **The `clone_rootfs` destination bug above should be fixed first.**
    Every later latency number in this list would otherwise be measured
    on top of a baseline already known to be wrong.
 2. **Snapshot-take latency** (309.6–990ms measured so far, called out
-   above as the most load-sensitive figure in this whole document) has
-   never been root-caused. Is the cost the guest-memory dump's size, the
-   disk write itself, or something serializing that doesn't need to?
-3. **Guest boot time** sits inside the already-measured ~10ms cold-boot
-   window. Nobody has checked whether kernel command-line tuning or a
-   smaller initrd could shrink it further, since nothing so far
-   suggested the gain would be worth chasing ahead of the two items
-   above.
+   above as the most load-sensitive figure in this whole document) is
+   now partly explained, not fully root-caused. Firecracker's own
+   documentation confirms the asymmetry is structural: snapshot-take
+   writes every dirty memory page to disk synchronously, while resume
+   loads memory lazily through copy-on-write. That reframes the open
+   question from "find the bug" to "measure how much sandkiln's own
+   wrapping adds on top of an operation that is inherently this
+   expensive" — still unmeasured on this project's own hardware.
+3. **Firecracker's native Diff snapshot type** is a real, already-
+   available mechanism worth evaluating directly, smaller in scope than
+   the dedicated rootfs/CoW crate idea above: it captures only the
+   memory pages dirtied since the last snapshot rather than a full dump
+   each time. At least one other small Firecracker-based project chains
+   roughly ten incremental diffs before collapsing back to a full
+   snapshot. Would need its own measurement on this project's workload
+   shape (frequent snapshot/resume on the same sandbox, not a one-off)
+   before claiming a real win — not assumed to transfer automatically
+   from someone else's numbers.
+4. **Guest boot time is not actually a priority, on the evidence
+   available.** Sat inside the already-measured ~10ms cold-boot window.
+   Public comparisons put typical Firecracker-based sandbox cold starts
+   at 150ms to 2 seconds; this project's own measured 10.5–10.9ms is
+   already well ahead of that range, which is reason enough to leave
+   this one alone rather than chase a gain nothing suggests is actually
+   there.
+5. Memory compression during snapshot-take (one academic result reports
+   up to 4.5x smaller snapshots and 55% faster restoration) is a real
+   technique, filed here as "much further out" rather than planned —
+   integrating compression into the snapshot pipeline is a meaningfully
+   bigger lift than items 1 through 3 above, worth it only once those
+   are actually done.
 
 ## Writing style: a pass to cut back on em-dashes
 
