@@ -1505,3 +1505,64 @@ actually-next, much smaller step that sits in front of all of this.
   terminal, pre-warmed pool, streamed exec/logs, remote storage mount,
   snapshot/resume/fork lifecycle, named/persistent sandboxes, and egress
   policy. See `examples/AGENTS.md` for what each one demonstrates and why.
+
+## Load testing: finding the real concurrency ceiling
+
+**Planned, not started.** `scripts/load-test.sh` reports concurrency and
+latency for one fixed concurrency value you pick ahead of time; it does
+not find the box's actual ceiling. The next version should ramp
+concurrency step by step (a plausible sequence: 4, 8, 16, 32, and
+onward) until something genuinely degrades: p95 latency spiking, a real
+error rate appearing, or a specific resource running out (the tap pool,
+the configured vCPU/memory ceiling, open file descriptors). That point
+is the number worth publishing, not an arbitrarily chosen concurrency
+that happened to work fine.
+
+Also worth a real answer here, not a guess: how much a cold create's
+latency actually degrades as concurrency rises. Every number in the
+Benchmarking section above is one sandbox at a time; nothing has
+measured what happens to per-request latency under load from lock
+contention in the daemon's own in-memory state, or from the tap pool
+running low. The results should land as a report worth keeping,
+reusable the same way `scripts/bench-report.sh` already is, not a
+one-off terminal scroll.
+
+## Further latency investigation
+
+Three concrete open questions, in priority order, picked because
+they're the ones an actual measurement could answer rather than
+further guessing:
+
+1. **The `clone_rootfs` destination bug above should be fixed first.**
+   Every later latency number in this list would otherwise be measured
+   on top of a baseline already known to be wrong.
+2. **Snapshot-take latency** (309.6–990ms measured so far, called out
+   above as the most load-sensitive figure in this whole document) has
+   never been root-caused. Is the cost the guest-memory dump's size, the
+   disk write itself, or something serializing that doesn't need to?
+3. **Guest boot time** sits inside the already-measured ~10ms cold-boot
+   window. Nobody has checked whether kernel command-line tuning or a
+   smaller initrd could shrink it further, since nothing so far
+   suggested the gain would be worth chasing ahead of the two items
+   above.
+
+## Writing style: a pass to cut back on em-dashes
+
+**Planned, not started, and genuinely large in scope.** This repository's
+documentation, `AGENTS.md` files, and source comments lean on the em dash
+heavily and consistently as a house style — noticed as reading like an AI
+tic rather than a deliberate choice, and worth a real pass to cut back on
+project-wide, not just in one file.
+
+Stated honestly: this is not a find-and-replace job. Deleting an em dash
+and leaving the two halves of the sentence jammed together produces
+broken prose; each instance needs an actual rewrite, choosing a comma, a
+period and a new sentence, a parenthetical, or a connecting word like
+"since" or "and," whichever reads most naturally for that specific
+sentence. Given how many files are affected (nearly every file this
+project has touched this year, by a rough count), this needs its own
+dedicated pass, broken into batches by directory (`docs-site/`, `website/`,
+each crate and package's `AGENTS.md`, the Rust/TS/Python source comments
+themselves), each batch reviewed for correctness afterward rather than
+trusted on the strength of a mechanical substitution. Not attempted in
+this pass for that reason.
