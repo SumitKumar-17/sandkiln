@@ -99,6 +99,8 @@
           "architecture/overview",
           "architecture/startup-latency",
           "architecture/bug-hunt-vsock-timeout",
+          "architecture/sdk-cli-design",
+          "architecture/testing-and-benchmarking",
           "architecture/engineering-notebook"
         ]
       }

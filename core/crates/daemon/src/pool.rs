@@ -3,7 +3,7 @@
 //! `POST /sandboxes` can resume one instead of paying full cold-create
 //! cost. Full design, the `warm_count`/`max_count` split, and the
 //! producer/consumer queueing this implements are written up in
-//! `docs/architecture/02-vm-boot-and-latency.md` — this comment only
+//! `docs-site/internals/pre-warmed-pools.mdx` — this comment only
 //! keeps the invariants a reader editing this file needs at hand:
 //!
 //! - A request with `drives` or a custom `rate_limit` never matches a

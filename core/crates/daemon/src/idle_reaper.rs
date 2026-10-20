@@ -1,6 +1,6 @@
 //! Background task that reclaims idle sandboxes and archives old held
 //! snapshots. Full tiered-lifecycle design is written up in
-//! `docs/architecture/02-vm-boot-and-latency.md`; the invariants a reader
+//! `docs-site/internals/pre-warmed-pools.mdx`; the invariants a reader
 //! editing this file needs: auto-suspend (pause + snapshot, see
 //! `crate::routes_snapshot::snapshot_sandbox_by_id`, past
 //! `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`) must run before destroy (past

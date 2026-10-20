@@ -58,7 +58,7 @@ node index.js
 - `SANDKILN_AUTH_TOKEN` — auth token, only needed if the daemon was
   started with one.
 
-See the [Snapshots, resume, and fork](../../website/src/content/docs/concepts/snapshots.md)
+See the [Snapshots, resume, and fork](https://sandkiln.mintlify.site/concepts/snapshots)
 docs page, and `ROADMAP.md`'s "Persistence and snapshotting" section at
 the repo root, for the full design — including the pre-warmed pool
 feature this same primitive underpins (see `pool-warm-start/`).
