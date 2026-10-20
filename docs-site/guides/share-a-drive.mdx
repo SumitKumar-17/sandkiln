@@ -9,7 +9,9 @@ A common pattern: one drive holds data or a base layer many sandboxes need to re
 
 A drive read-only-shared later still needs writing at least once, before anything ever attaches it read-only — a read-only mount can't format or write to it.
 
-```bash
+<CodeGroup>
+
+```bash curl
 curl -X POST http://127.0.0.1:7777/drives -d '{"size_mib": 512}'
 # {"id": "<drive-id>", ...}
 
@@ -18,19 +20,77 @@ curl -X POST http://127.0.0.1:7777/sandboxes \
 # attach read-write, seed it, then stop this sandbox (or delete it with ?keep=false)
 ```
 
+```ts seed.ts
+import { Drive, Sandbox } from "sandkiln";
+
+const drive = await Drive.create(512);
+const sandbox = await Sandbox.create({ drives: [{ id: drive.id }] });
+// attach read-write, seed it, then stop this sandbox (or delete it with keep: false)
+```
+
+```python seed.py
+from sandkiln import Drive, DriveAttachment, Sandbox
+
+drive = Drive.create(512)
+sandbox = Sandbox.create(drives=[DriveAttachment(id=drive.id)])
+# attach read-write, seed it, then stop this sandbox (or delete it with keep=False)
+```
+
+```bash CLI
+kiln drive create 512
+# prints the new drive's id
+
+kiln sandbox create --drive <drive-id>
+# attach read-write, seed it, then stop this sandbox (or `rm --destroy`)
+```
+
+</CodeGroup>
+
 ## Attach it read-only, as many times as you need
 
-```bash
+<CodeGroup>
+
+```bash curl
 curl -X POST http://127.0.0.1:7777/sandboxes \
   -d '{"drives":[{"id":"<drive-id>","read_only":true}]}'
 ```
+
+```ts attach-readonly.ts
+const reader = await Sandbox.create({ drives: [{ id: drive.id, readOnly: true }] });
+```
+
+```python attach_readonly.py
+reader = Sandbox.create(drives=[DriveAttachment(id=drive.id, read_only=True)])
+```
+
+```bash CLI
+kiln sandbox create --drive <drive-id>:ro
+```
+
+</CodeGroup>
 
 Repeat this against as many sandboxes as you want — every one succeeds, concurrently, as long as every existing holder and every new attach are all `read_only: true`. A single read-write attach — existing or newly requested — still needs exclusive access; see [Drives](/concepts/drives) for the exact rule.
 
 ## Check who's holding it
 
-```bash
+<CodeGroup>
+
+```bash curl
 curl http://127.0.0.1:7777/drives
 ```
+
+```ts list-drives.ts
+const drives = await Drive.list();
+```
+
+```python list_drives.py
+drives = Drive.list()
+```
+
+```bash CLI
+kiln drive ls
+```
+
+</CodeGroup>
 
 `attached_to` lists every current holder (`sandbox <id>` or `snapshot <id>`) with its `read_only` flag — useful for confirming a conflict's actual cause, or checking a drive is free before deleting it.

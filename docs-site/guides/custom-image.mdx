@@ -7,10 +7,24 @@ The daemon's default rootfs is whatever `SANDKILN_BASE_ROOTFS` is configured to.
 
 ## Register it
 
-```bash
+<CodeGroup>
+
+```bash curl
 curl -X POST http://127.0.0.1:7777/images \
   -d '{"id": "node-lts-custom", "path": "/home/t1000/images/node-lts-custom.ext4"}'
 ```
+
+```python register_image.py
+from sandkiln import Image
+
+Image.register("node-lts-custom", "/home/t1000/images/node-lts-custom.ext4")
+```
+
+```bash CLI
+kiln image create node-lts-custom /home/t1000/images/node-lts-custom.ext4
+```
+
+</CodeGroup>
 
 `path` is a path on the **daemon's own host filesystem** — this isn't a file upload. Build the image first (`images/build-universal-image.sh` is the reference build script for the project's own universal image, adaptable for a custom one) and get it onto the daemon's host before registering.
 
@@ -24,8 +38,20 @@ scripts/preflight-check.sh --root-checks --rootfs-image /home/t1000/images/node-
 
 ## Boot from it
 
-```ts
+<CodeGroup>
+
+```ts boot.ts
 const sandbox = await Sandbox.create({ imageId: "node-lts-custom" });
 ```
+
+```python boot.py
+sandbox = Sandbox.create(image_id="node-lts-custom")
+```
+
+```bash CLI
+kiln sandbox create --image node-lts-custom
+```
+
+</CodeGroup>
 
 A nonexistent `imageId` fails fast with a `404`, checked before the slow boot ever starts. See [Custom & managed images](/concepts/images) for the full mechanics, including deletion and what's genuinely not done yet (OCI/Docker conversion).

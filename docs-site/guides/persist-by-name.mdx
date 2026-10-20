@@ -7,7 +7,9 @@ The default create/stop/gone lifecycle works for one-shot runs, but a lot of rea
 
 ## The pattern
 
-```ts
+<CodeGroup>
+
+```ts persist.ts
 import { Sandbox } from "sandkiln";
 
 // First run: creates a fresh sandbox named "agent-session-42".
@@ -21,6 +23,30 @@ if (created) {
 await sandbox.runCommand("your-agent-loop", []);
 await sandbox.stop(); // preserved by default — nothing to do here
 ```
+
+```python persist.py
+from sandkiln import Sandbox
+
+# First run: creates a fresh sandbox named "agent-session-42".
+# Every later run: resumes it if it was stopped, or returns it as-is if still live.
+sandbox, created = Sandbox.get_or_create(name="agent-session-42")
+
+if created:
+    pass  # set up whatever this environment needs once
+
+sandbox.run_command("your-agent-loop", [])
+sandbox.stop()  # preserved by default — nothing to do here
+```
+
+```bash CLI
+kiln sandbox get-or-create --name agent-session-42
+# prints the sandbox id and whether it was freshly created
+
+kiln sandbox exec agent-session-42 your-agent-loop
+# preserved by default -- nothing to do here
+```
+
+</CodeGroup>
 
 Next time this runs — tomorrow, next week — the exact same `getOrCreate({ name: "agent-session-42" })` call resumes the same filesystem state, no explicit snapshot id to track or pass around yourself.
 

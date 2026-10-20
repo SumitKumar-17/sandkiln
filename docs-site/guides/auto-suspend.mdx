@@ -19,11 +19,23 @@ Any sandbox with no exec/read/write activity for that many seconds is paused and
 
 A sandbox reclaimed this way disappears from `GET /sandboxes` on its own, not just after an explicit stop. To find out what it turned into:
 
-```ts
+<CodeGroup>
+
+```ts find-snapshot.ts
 const snapshots = await Sandbox.listSnapshots({ sourceSandboxId: theOldId });
 ```
 
-or `kiln sandbox snapshots --source <id>`. At most one snapshot can ever match, since a sandbox id is retired the moment it's snapshotted.
+```python find_snapshot.py
+snapshots = Sandbox.list_snapshots(source_sandbox_id=the_old_id)
+```
+
+```bash CLI
+kiln sandbox snapshots --source <the-old-id>
+```
+
+</CodeGroup>
+
+At most one snapshot can ever match, since a sandbox id is retired the moment it's snapshotted.
 
 ## Combining with a hard destroy backstop
 
