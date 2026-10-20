@@ -7,6 +7,12 @@ Kernel and rootfs build scripts for sandbox base images.
   production image source.
 - `inject-agent.sh` — bakes the guest agent binary into a rootfs image and
   enables it as a systemd service.
+- `build-guest-kernel.sh` — rebuilds `vmlinux` with `CONFIG_FUSE_FS`
+  enabled (off by default; guest kernels can't load modules at runtime).
+  Only needed for remote storage mounts — most sandboxes don't need it.
+- `inject-rclone.sh` — bakes `rclone` + `fusermount3` into a rootfs, same
+  shape as `inject-agent.sh`. Needed even running as root: rclone's FUSE
+  backend always execs `fusermount3`, no direct `mount(2)` fallback.
 - `build-universal-image.sh` — builds the production universal base rootfs
   from scratch with `debootstrap`: current Ubuntu LTS, current Node.js LTS,
   Python 3, common CLI tooling, and a working systemd init, as a single

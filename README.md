@@ -81,8 +81,8 @@ already hit and fixed once.
 - **`scripts/`** — dev-box setup and daily-use tooling (`dev.sh` is the
   master dispatcher; one-time host provisioning lives under
   `host-setup/`, narrow manual-debugging tools under `dev-tools/`).
-- **`website/`** — the project site (deployed via GitHub Pages): architecture,
-  benchmarks, roadmap, changelog.
+- **`website/`** — the project site at https://sandkiln.vercel.app:
+  architecture, benchmarks, roadmap.
 - **`docs-site/`** — the full docs site (getting started, core concepts,
   guides, API/SDK/CLI reference, architecture), a separate Mintlify
   project — see https://sandkiln.mintlify.site/.
