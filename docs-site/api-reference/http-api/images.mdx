@@ -1,0 +1,12 @@
+---
+title: Images
+description: Register, list, and delete custom rootfs images.
+---
+
+## Images
+
+| Route | What it does |
+|---|---|
+| `POST /images` | Body: `{"id": "...", "path": "..."}`. Registers an already-built ext4 rootfs from a host path. |
+| `GET /images` | List registered images (`guest_agent_verified` is always `false`, see [Custom & managed images](/concepts/images)). |
+| `DELETE /images/:id` | Delete an image. `409` while any live sandbox, in-flight boot, or held snapshot references it. |

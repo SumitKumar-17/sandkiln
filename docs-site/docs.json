@@ -27,81 +27,130 @@
     }
   },
   "navigation": {
-    "groups": [
+    "tabs": [
       {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "getting-started/introduction",
-          "getting-started/self-hosting",
-          "getting-started/js",
-          "getting-started/python",
-          "getting-started/cli"
+        "tab": "Docs",
+        "icon": "book-open",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "index",
+              "getting-started/introduction",
+              "getting-started/self-hosting",
+              "getting-started/js",
+              "getting-started/python",
+              "getting-started/cli"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/sandbox-lifecycle",
+              "concepts/snapshots",
+              "concepts/named-sandboxes",
+              "concepts/drives",
+              "concepts/remote-storage",
+              "concepts/images",
+              "concepts/networking",
+              "concepts/auth",
+              "concepts/preview",
+              "concepts/local-tunnel"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/run-untrusted-code",
+              "guides/persist-by-name",
+              "guides/share-a-drive",
+              "guides/custom-image",
+              "guides/auto-suspend"
+            ]
+          }
         ]
       },
       {
-        "group": "Core Concepts",
-        "pages": [
-          "concepts/sandbox-lifecycle",
-          "concepts/snapshots",
-          "concepts/named-sandboxes",
-          "concepts/drives",
-          "concepts/remote-storage",
-          "concepts/images",
-          "concepts/networking",
-          "concepts/auth",
-          "concepts/preview",
-          "concepts/local-tunnel"
+        "tab": "API Reference",
+        "icon": "square-terminal",
+        "groups": [
+          {
+            "group": "HTTP API",
+            "pages": [
+              "api-reference/http-api/overview",
+              "api-reference/http-api/sandboxes",
+              "api-reference/http-api/drives",
+              "api-reference/http-api/images",
+              "api-reference/http-api/pools"
+            ]
+          },
+          {
+            "group": "JS/TS SDK",
+            "pages": [
+              "api-reference/js-sdk/overview",
+              "api-reference/js-sdk/sandbox",
+              "api-reference/js-sdk/image",
+              "api-reference/js-sdk/drive",
+              "api-reference/js-sdk/pool"
+            ]
+          },
+          {
+            "group": "Python SDK",
+            "pages": [
+              "api-reference/python-sdk/overview",
+              "api-reference/python-sdk/sandbox",
+              "api-reference/python-sdk/image",
+              "api-reference/python-sdk/drive",
+              "api-reference/python-sdk/pool"
+            ]
+          },
+          {
+            "group": "CLI (kiln)",
+            "pages": [
+              "api-reference/cli/overview",
+              "api-reference/cli/sandbox",
+              "api-reference/cli/image",
+              "api-reference/cli/drive",
+              "api-reference/cli/pool"
+            ]
+          }
         ]
       },
       {
-        "group": "Guides",
-        "pages": [
-          "guides/run-untrusted-code",
-          "guides/persist-by-name",
-          "guides/share-a-drive",
-          "guides/custom-image",
-          "guides/auto-suspend"
-        ]
-      },
-      {
-        "group": "Internals",
-        "pages": [
-          "internals/sqlite-history-store",
-          "internals/snapshot-resume-fork",
-          "internals/drives",
-          "internals/images",
-          "internals/vsock-wire-protocol",
-          "internals/jailer-privilege-model",
-          "internals/egress-iptables",
-          "internals/tap-bridge-networking",
-          "internals/fuse-rclone-mounts",
-          "internals/rate-limiting",
-          "internals/mmds",
-          "internals/pty",
-          "internals/exec-stream",
-          "internals/pre-warmed-pools",
-          "internals/local-tunnel"
-        ]
-      },
-      {
-        "group": "Reference",
-        "pages": [
-          "reference/cli",
-          "reference/http-api",
-          "reference/js-sdk",
-          "reference/python-sdk"
-        ]
-      },
-      {
-        "group": "Architecture",
-        "pages": [
-          "architecture/overview",
-          "architecture/startup-latency",
-          "architecture/bug-hunt-vsock-timeout",
-          "architecture/sdk-cli-design",
-          "architecture/testing-and-benchmarking",
-          "architecture/engineering-notebook"
+        "tab": "Engineering Blog",
+        "icon": "newspaper",
+        "groups": [
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/startup-latency",
+              "architecture/bug-hunt-vsock-timeout",
+              "architecture/sdk-cli-design",
+              "architecture/testing-and-benchmarking",
+              "architecture/engineering-notebook"
+            ]
+          },
+          {
+            "group": "Internals",
+            "pages": [
+              "internals/sqlite-history-store",
+              "internals/snapshot-resume-fork",
+              "internals/drives",
+              "internals/images",
+              "internals/vsock-wire-protocol",
+              "internals/jailer-privilege-model",
+              "internals/egress-iptables",
+              "internals/tap-bridge-networking",
+              "internals/fuse-rclone-mounts",
+              "internals/rate-limiting",
+              "internals/mmds",
+              "internals/pty",
+              "internals/exec-stream",
+              "internals/pre-warmed-pools",
+              "internals/local-tunnel"
+            ]
+          }
         ]
       }
     ]

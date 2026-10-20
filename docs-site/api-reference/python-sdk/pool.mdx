@@ -1,0 +1,23 @@
+---
+title: "Python: Pool"
+description: Configure pre-warmed snapshot pools.
+---
+
+## `Pool`
+
+```python
+from sandkiln import Pool, Sandbox
+
+Pool.create("build-workers", vcpu_count=2, mem_size_mib=1024, warm_count=3)
+
+# Some time later, once the background replenisher has warmed instances up:
+# matches the pool's image/resources and no drives/rate_limit -- resumes
+# a warm snapshot automatically instead of cold-booting. No special call.
+sandbox = Sandbox.create(vcpu_count=2, mem_size_mib=1024)
+```
+
+- **`Pool.create(id, image_id=None, vcpu_count=None, mem_size_mib=None, warm_count=0, base_url=None, auth_token=None)`** — configures a pool under a caller-given `id` (`409` if already taken — delete it first to reconfigure). `warm_count` is how many resumable snapshots to keep ready.
+- **`Pool.list(base_url=None, auth_token=None)`** — lists configured pools, including `warm_ready` (how many are actually ready right now — replenishment happens in the background, not instantly).
+- **`Pool.delete(id, base_url=None, auth_token=None)`** — removes a pool's configuration and destroys whatever it currently has warm. A sandbox already claimed from it is unaffected.
+
+There's no `Pool.claim()` — claiming is entirely transparent, done by `Sandbox.create()` itself matching a configured pool. See [Startup latency & the pre-warmed pool](/architecture/startup-latency) for real measured numbers, including a genuinely non-rare resume failure mode and how it's handled.

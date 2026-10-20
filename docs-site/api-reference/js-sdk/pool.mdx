@@ -1,0 +1,23 @@
+---
+title: "JS/TS: Pool"
+description: Configure pre-warmed snapshot pools.
+---
+
+## `Pool`
+
+```ts
+import { Pool, Sandbox } from "sandkiln";
+
+await Pool.create("build-workers", { vcpuCount: 2, memSizeMib: 1024, warmCount: 3 });
+
+// Some time later, once the background replenisher has warmed instances up:
+// matches the pool's image/resources and no drives/rateLimit -- resumes
+// a warm snapshot automatically instead of cold-booting. No special call.
+const sandbox = await Sandbox.create({ vcpuCount: 2, memSizeMib: 1024 });
+```
+
+- **`Pool.create(id, options?)`** — configures a pool under a caller-given `id` (`409` if already taken — delete it first to reconfigure). `options.imageId`/`options.vcpuCount`/`options.memSizeMib` define which creates can match it; `options.warmCount` (default `0`) is how many resumable snapshots to keep ready.
+- **`Pool.list(options?)`** — lists configured pools, including `warmReady` (how many are actually ready right now — replenishment happens in the background, not instantly).
+- **`Pool.delete(id, options?)`** — removes a pool's configuration and destroys whatever it currently has warm. A sandbox already claimed from it is unaffected.
+
+There's no `Pool.claim()` — claiming is entirely transparent, done by `Sandbox.create()` itself matching a configured pool. See [Startup latency & the pre-warmed pool](/architecture/startup-latency) for real measured numbers, including a genuinely non-rare resume failure mode and how it's handled.

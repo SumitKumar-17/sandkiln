@@ -1,0 +1,40 @@
+---
+title: CLI overview
+description: Install, global options, and a complete kiln session.
+---
+
+```bash
+npm install -g sandkiln-cli   # installs the `kiln` command
+```
+
+Global options, available on every subcommand: `--base-url <url>` (default: `SANDKILN_DAEMON_URL` or `http://127.0.0.1:7777`), `--token <token>` (default: `SANDKILN_AUTH_TOKEN`).
+
+One daemon feature has no `kiln` command yet: remote storage mounts (an S3-compatible bucket mounted inside a sandbox) are available on the daemon HTTP API only — see [Drives](/api-reference/http-api/drives#remote-storage-mounts).
+
+## A complete session
+
+```bash
+export SANDKILN_DAEMON_URL=http://127.0.0.1:7777
+export SANDKILN_AUTH_TOKEN=...   # omit entirely for an unauthenticated local daemon
+
+# Named, so you can find it again tomorrow without tracking an id yourself.
+kiln sandbox get-or-create --name build-worker --vcpu 2 --mem 1024
+
+kiln sandbox exec build-worker npm install
+kiln sandbox exec build-worker npm test
+
+kiln sandbox write build-worker /tmp/config.json ./local-config.json
+kiln sandbox read build-worker /tmp/result.json
+
+kiln sandbox preview build-worker 3000
+
+kiln sandbox ls --tag env=ci
+
+# Preserves state as a snapshot -- resolve it by the same name tomorrow
+# with another `get-or-create`, no snapshot id to remember.
+kiln sandbox rm build-worker
+```
+
+See [`kiln sandbox`](/api-reference/cli/sandbox), [`kiln image`](/api-reference/cli/image), [`kiln drive`](/api-reference/cli/drive), and [`kiln pool`](/api-reference/cli/pool) for every subcommand.
+
+Every subcommand's own action handler catches errors and reports them on stderr with a non-zero exit — nothing escapes as a raw stack trace.

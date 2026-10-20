@@ -1,0 +1,21 @@
+---
+title: "Python: Drive"
+description: Create, list, and delete persistent drives.
+---
+
+## `Drive`
+
+```python
+from sandkiln import Drive, DriveAttachment, Sandbox
+
+drive = Drive.create(512)  # 512 MiB, empty
+sandbox = Sandbox.create(drives=[DriveAttachment(id=drive.id)])
+# A second sandbox can share it read-only alongside others, but not read-write:
+reader = Sandbox.create(drives=[DriveAttachment(id=drive.id, read_only=True)])
+
+Drive.delete(drive.id)  # 409 while any sandbox or held snapshot still attaches it
+```
+
+- **`Drive.create(size_mib, base_url=None, auth_token=None)`** — creates a new empty persistent drive, returns its id.
+- **`Drive.list(base_url=None, auth_token=None)`** — lists drives, including every current holder and whether each is read-only.
+- **`Drive.delete(id, base_url=None, auth_token=None)`** — permanently removes a drive and its backing file.

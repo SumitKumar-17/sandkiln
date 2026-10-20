@@ -1,0 +1,14 @@
+---
+title: "kiln pool"
+description: Configure pre-warmed snapshot pools.
+---
+
+## `kiln pool`
+
+Configures pre-warmed pools — ready-to-resume snapshots a matching `kiln sandbox create` claims automatically instead of cold-booting. No separate "claim" command; see [Startup latency & the pre-warmed pool](/architecture/startup-latency).
+
+| Command | What it does |
+|---|---|
+| `create <id>` | Configure a pool under `<id>`. `--image <id>`, `--vcpu <count>`, `--mem <mib>` (all daemon defaults if omitted — a matching create must resolve to the exact same values to claim from this pool), `--warm-count <n>` (default `0`, how many resumable snapshots to keep ready). |
+| `ls` | List configured pools, including how many are currently warm and ready. |
+| `rm <id>` | Remove a pool's configuration and destroy whatever it currently has warm. A sandbox already claimed from it is unaffected. |

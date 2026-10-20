@@ -8,11 +8,21 @@ CI workflow to maintain.
 
 ## Structure
 
-`docs.json` is the nav (groups: Getting Started, Core Concepts, Guides,
-Internals, Reference, Architecture) and theme config. Every page is
-`.mdx`; page paths in `docs.json` are root-relative with no extension
-(`"concepts/networking"`, not `"concepts/networking.mdx"` or
-`"/concepts/networking"`).
+`docs.json` is the nav and theme config. Navigation is three top-level
+tabs, each its own groups:
+
+- **Docs** — Getting Started, Core Concepts, Guides.
+- **API Reference** — HTTP API, JS/TS SDK, Python SDK, CLI, each split
+  into `overview` + one page per resource (`sandbox`/`sandboxes`,
+  `image`/`images`, `drive`/`drives`, `pool`/`pools`) under
+  `api-reference/<section>/`, rather than one long page per client.
+- **Engineering Blog** — Architecture (overview, startup latency, bug
+  hunts, SDK/CLI design, testing, the engineering notebook) and
+  Internals (15 mechanism deep-dives).
+
+Every page is `.mdx`; page paths in `docs.json` are root-relative with
+no extension (`"concepts/networking"`, not `"concepts/networking.mdx"`
+or `"/concepts/networking"`).
 
 ## Conventions
 

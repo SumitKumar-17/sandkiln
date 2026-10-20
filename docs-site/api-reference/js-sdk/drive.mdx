@@ -1,0 +1,21 @@
+---
+title: "JS/TS: Drive"
+description: Create, list, and delete persistent drives.
+---
+
+## `Drive`
+
+```ts
+import { Drive, Sandbox } from "sandkiln";
+
+const drive = await Drive.create(512); // 512 MiB, empty
+const sandbox = await Sandbox.create({ drives: [{ id: drive.id }] });
+// A second sandbox can share it read-only alongside others, but not read-write:
+const reader = await Sandbox.create({ drives: [{ id: drive.id, readOnly: true }] });
+
+await Drive.delete(drive.id); // 409 while any sandbox or held snapshot still attaches it
+```
+
+- **`Drive.create(sizeMib, options?)`** — creates a new empty persistent drive, returns its id.
+- **`Drive.list(options?)`** — lists drives, including every current holder (`attachedTo`) and whether each is read-only.
+- **`Drive.delete(id, options?)`** — permanently removes a drive and its backing file.

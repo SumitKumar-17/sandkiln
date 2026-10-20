@@ -1,0 +1,12 @@
+---
+title: "kiln drive"
+description: Create, list, and delete persistent drives.
+---
+
+## `kiln drive`
+
+| Command | What it does |
+|---|---|
+| `create <size-mib>` | Create a new empty persistent drive of `<size-mib>` MiB. Prints its id — attach it with `sandbox create --drive <id[:ro]>`. See [Drives](/concepts/drives). |
+| `ls` | List persistent drives, including every current holder. |
+| `rm <id>` | Delete a drive and its backing file. Refused while any sandbox or held snapshot still attaches it. |

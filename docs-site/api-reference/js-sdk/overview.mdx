@@ -1,0 +1,30 @@
+---
+title: JS/TS SDK overview
+description: Install, configuration, and auth for the sandkiln npm package.
+---
+
+```bash
+npm install sandkiln
+```
+
+Everything this SDK wraps is listed under [Sandbox](/api-reference/js-sdk/sandbox), [Image](/api-reference/js-sdk/image), [Drive](/api-reference/js-sdk/drive), and [Pool](/api-reference/js-sdk/pool). One daemon feature has no wrapper yet: remote storage mounts (an S3-compatible bucket mounted inside a sandbox) are available on the daemon HTTP API only — see [Drives](/api-reference/http-api/drives#remote-storage-mounts).
+
+## Configuration
+
+- **Daemon URL**: pass `baseUrl` to any method, or set `SANDKILN_DAEMON_URL`. Defaults to `http://127.0.0.1:7777`.
+- **Auth**: pass `authToken`, or set `SANDKILN_AUTH_TOKEN`. Omit entirely for an unauthenticated local daemon.
+
+```ts
+import { Sandbox } from "sandkiln";
+
+// Explicit per-call config...
+const sandbox = await Sandbox.create({
+  baseUrl: "https://daemon.internal:7777",
+  authToken: process.env.SANDKILN_TOKEN,
+});
+
+// ...or set both as environment variables once and omit them everywhere:
+// SANDKILN_DAEMON_URL=https://daemon.internal:7777
+// SANDKILN_AUTH_TOKEN=...
+const sameSandbox = await Sandbox.create();
+```

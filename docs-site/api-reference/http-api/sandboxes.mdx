@@ -1,45 +1,7 @@
 ---
-title: Daemon HTTP API
-description: Every route sandkilnd exposes.
+title: Sandboxes
+description: Every /sandboxes route -- lifecycle, filesystem ops, exec-stream, snapshots, preview, and local tunnel.
 ---
-
-Base URL defaults to `http://127.0.0.1:7777`. Every route below except `/healthz` and `/metrics` requires `Authorization: Bearer <token>` when `SANDKILN_AUTH_TOKEN` is set — see [Auth](/concepts/auth).
-
-## A complete session, in raw HTTP
-
-```bash
-TOKEN=...
-BASE=http://127.0.0.1:7777
-
-# Create, named so it can be found again by name later.
-curl -s -X POST "$BASE/sandboxes" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"name":"build-worker","tags":{"env":"ci"},"vcpu_count":2,"mem_size_mib":1024}'
-# {"id":"..."}
-
-curl -s -X POST "$BASE/sandboxes/build-worker/exec" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"command":"npm","args":["test"]}'
-# {"stdout":"...","stderr":"","exit_code":0}
-```
-
-Every id above is written as `build-worker` for readability — the real
-`id` a create call actually returns is an opaque UUID; resolve a name
-back to its live id first with `GET /sandboxes/by-name/build-worker`
-if you only have the name (see [Named sandboxes](/concepts/named-sandboxes)).
-
-```bash
-# Stop it -- preserves state as a snapshot by default.
-curl -s -X DELETE "$BASE/sandboxes/build-worker" -H "Authorization: Bearer $TOKEN"
-# {"kept":true,"snapshot_id":"..."}
-
-# Tomorrow: resolve the same name back to a live sandbox in one call,
-# resuming the snapshot above automatically.
-curl -s -X POST "$BASE/sandboxes/get-or-create" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"name":"build-worker"}'
-# {"id":"...","created":false}
-```
 
 ## Sandboxes
 
@@ -86,44 +48,6 @@ curl -s -X POST "$BASE/sandboxes/get-or-create" \
 | `POST /snapshots/history/:id/restore` | Boot a new sandbox from a retired checkpoint. Does **not** consume it — restorable again later. `409` (naming the current holder) while anything live or held shares that checkpoint's frozen network identity. |
 | `DELETE /snapshots/history/:id` | Delete a retired checkpoint outright, reclaiming its disk usage (a full guest-memory dump plus a private rootfs copy) — there's no automatic expiry yet. |
 
-## Drives
-
-| Route | What it does |
-|---|---|
-| `POST /drives` | Body: `{"size_mib": <n>}`. Creates an empty drive. |
-| `GET /drives` | List drives, including current holders (`attached_to`) and their `read_only` flag. |
-| `DELETE /drives/:id` | Delete a drive. `409` while anything still references it. |
-
-## Remote storage mounts
-
-Daemon-only — no SDK or CLI wrapper yet. Needs a FUSE-capable guest kernel and `rclone`/`fusermount3` in the rootfs; there's no preflight check, so a host missing either surfaces it as a `400` from the create call. See [Remote storage mounts](/concepts/remote-storage).
-
-| Route | What it does |
-|---|---|
-| `POST /sandboxes/:id/mounts` | Mount an S3-compatible bucket inside the sandbox. Body: `bucket`, `endpoint` (full URL of the S3-compatible endpoint, required, never defaulted), `access_key`, `secret_key`, `mount_path` (created with `mkdir -p` if absent), `read_only?` (defaults `false`). Returns `200` with `{"id", "bucket", "endpoint", "mount_path", "read_only"}` — credentials are never echoed back. |
-| `GET /sandboxes/:id/mounts` | List this sandbox's mounts: `{"mounts": [...]}`, same object shape as above. |
-| `DELETE /sandboxes/:id/mounts/:mount_id` | Unmount and forget it (`204`). Best-effort past the bookkeeping: removed from daemon state whether or not the guest-side `umount` succeeded, with a warning logged if it didn't. |
-
-Errors on create: `400` for any empty required field, for a failed mount (`rclone mount failed (exit N): <stderr><stdout>`), or for any guest-agent error; `404` for an unknown sandbox id; `409` if something is already mounted at that `mount_path` (the message names the existing bucket, its path, and the `DELETE` URL); `500` if rclone exits `0` but `mountpoint -q <path>` disagrees — the daemon unmounts and removes the config before returning. `DELETE` returns `404` for an unknown sandbox or mount id.
-
-## Images
-
-| Route | What it does |
-|---|---|
-| `POST /images` | Body: `{"id": "...", "path": "..."}`. Registers an already-built ext4 rootfs from a host path. |
-| `GET /images` | List registered images (`guest_agent_verified` is always `false`, see [Custom & managed images](/concepts/images)). |
-| `DELETE /images/:id` | Delete an image. `409` while any live sandbox, in-flight boot, or held snapshot references it. |
-
-## Pools
-
-Pool *configuration* only — replenishment happens in the background, and claiming is entirely transparent (a matching `POST /sandboxes`, above). See [Startup latency & the pre-warmed pool](/architecture/startup-latency).
-
-| Route | What it does |
-|---|---|
-| `POST /pools` | Configure a pool. Body: `id` (required, caller-given, `409` if already taken), `image_id?`, `vcpu_count?`, `mem_size_mib?`, `warm_count` (required, `0` is valid — an inert pool), `max_count?` (a ceiling on total live instances of this pool's profile — omitted means unbounded, the original behavior). A `POST /sandboxes` matching a pool at its `max_count` ceiling with nothing warm queues (up to 30s) instead of exceeding it or rejecting outright — `503` if nothing frees up in time. |
-| `GET /pools` | List configured pools, including `warm_ready` (how many resumable snapshots are actually ready right now) and `claimed` (how many live instances of this pool's profile exist right now, warm-resumed or cold-created alike). |
-| `DELETE /pools/:id` | Remove a pool's configuration and destroy whatever it currently has warm. A sandbox already claimed from it is unaffected. |
-
 ## Preview
 
 | Route | What it does |
@@ -139,10 +63,3 @@ The reverse of preview: exposes a service running on the *caller's* machine to c
 | `POST /sandboxes/:id/tunnel` | Body: `{"guest_port": <n>}`. Tells the guest agent to start listening on `guest_port`. Returns `{"tunnel_id": "...", "guest_port": <n>}`. |
 | `GET /sandboxes/:id/tunnel/:tunnel_id/ws` | Upgrades to a WebSocket: the long-lived relay the caller holds open for the tunnel's whole life, multiplexing every guest-accepted connection over it with a small binary frame. Accepts the token as `?token=` as well as a header, same reason as `/pty` above. |
 | `DELETE /sandboxes/:id/tunnel/:tunnel_id` | Tells the guest agent to stop listening and tears down the relay. |
-
-## Operational
-
-| Route | What it does |
-|---|---|
-| `GET /healthz` | Unauthenticated. Returns `ok`. |
-| `GET /metrics` | Unauthenticated. Prometheus text-exposition format. |

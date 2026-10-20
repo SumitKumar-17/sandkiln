@@ -1,0 +1,14 @@
+---
+title: Pools
+description: Configure pre-warmed snapshot pools.
+---
+
+## Pools
+
+Pool *configuration* only — replenishment happens in the background, and claiming is entirely transparent (a matching `POST /sandboxes`, above). See [Startup latency & the pre-warmed pool](/architecture/startup-latency).
+
+| Route | What it does |
+|---|---|
+| `POST /pools` | Configure a pool. Body: `id` (required, caller-given, `409` if already taken), `image_id?`, `vcpu_count?`, `mem_size_mib?`, `warm_count` (required, `0` is valid — an inert pool), `max_count?` (a ceiling on total live instances of this pool's profile — omitted means unbounded, the original behavior). A `POST /sandboxes` matching a pool at its `max_count` ceiling with nothing warm queues (up to 30s) instead of exceeding it or rejecting outright — `503` if nothing frees up in time. |
+| `GET /pools` | List configured pools, including `warm_ready` (how many resumable snapshots are actually ready right now) and `claimed` (how many live instances of this pool's profile exist right now, warm-resumed or cold-created alike). |
+| `DELETE /pools/:id` | Remove a pool's configuration and destroy whatever it currently has warm. A sandbox already claimed from it is unaffected. |
