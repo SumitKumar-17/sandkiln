@@ -377,8 +377,11 @@ outbound HTTP both still work.
     concurrent forking (see `routes_snapshot.rs`'s own module doc
     comment: the guest's IP/MAC can't be changed post-hoc without
     in-guest cooperation this project's guest agent doesn't have), not a
-    scope choice. No SDK/CLI surface yet — daemon HTTP API only, same
-    precedent as egress policy and snapshot lineage.
+    scope choice. Time-travel restore itself has no SDK/CLI surface yet
+    — daemon HTTP API only, same as snapshot lineage. (Egress policy
+    used to be cited here too as the same kind of daemon-only gap — it
+    no longer is, both SDKs and the CLI wrap it as of the Firewall and
+    egress policy section below.)
 - **Done: tiered idle lifecycle, the archive tier — a first honestly-scoped
   slice.** Extends today's binary auto-suspend (running → snapshot) with
   a second, independent tier: `SANDKILN_ARCHIVE_TIMEOUT_SECS` moves a
