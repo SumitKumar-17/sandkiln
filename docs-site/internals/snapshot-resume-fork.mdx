@@ -60,17 +60,17 @@ Resume consumes the snapshot record outright (a second resume `404`s); fork only
 Fork the same snapshot twice in a row. This is the daemon's own concurrency lock, captured live:
 
 ```bash
-$ curl -s -X POST http://127.0.0.1:7777/sandboxes \
+curl -s -X POST http://127.0.0.1:7777/sandboxes \
     -H 'content-type: application/json' -d '{"tags":{"purpose":"docs-example"}}'
 {"id":"5ce396c6-a633-4262-b1a5-b307674a870c"}
 
-$ curl -s -X POST http://127.0.0.1:7777/sandboxes/5ce396c6-a633-4262-b1a5-b307674a870c/snapshot
+curl -s -X POST http://127.0.0.1:7777/sandboxes/5ce396c6-a633-4262-b1a5-b307674a870c/snapshot
 {"snapshot_id":"b53b17e7-8211-4a80-bc23-bbe6111f6e11"}
 
-$ curl -s -X POST http://127.0.0.1:7777/snapshots/b53b17e7-8211-4a80-bc23-bbe6111f6e11/fork
+curl -s -X POST http://127.0.0.1:7777/snapshots/b53b17e7-8211-4a80-bc23-bbe6111f6e11/fork
 {"id":"b94d7a70-94c5-4162-b87b-25f0a03b951e"}
 
-$ curl -si -X POST http://127.0.0.1:7777/snapshots/b53b17e7-8211-4a80-bc23-bbe6111f6e11/fork
+curl -si -X POST http://127.0.0.1:7777/snapshots/b53b17e7-8211-4a80-bc23-bbe6111f6e11/fork
 HTTP/1.1 409 Conflict
 content-type: application/json
 x-request-id: d0d4aeab-df13-4936-9eaa-f14a6d3d769e

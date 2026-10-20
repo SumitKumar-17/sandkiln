@@ -42,7 +42,7 @@ There's a real, structural reason the daemon can't do any of this itself without
 Checking whether jailer mode is on for the currently running daemon, and what a plain (non-jailed) sandbox create looks like today, the default, verified-working path:
 
 ```bash
-$ curl -s -i -X POST http://127.0.0.1:7777/sandboxes -H 'content-type: application/json' -d '{}'
+curl -s -i -X POST http://127.0.0.1:7777/sandboxes -H 'content-type: application/json' -d '{}'
 
 HTTP/1.1 200 OK
 content-type: application/json

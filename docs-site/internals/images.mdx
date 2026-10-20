@@ -39,16 +39,16 @@ Every sandbox used to be stuck with one daemon-wide default rootfs. Registering 
 The verification-hint text, exactly as a caller sees it, plus what happens booting from a valid vs. nonexistent image:
 
 ```bash
-$ curl -s http://127.0.0.1:7777/images
+curl -s http://127.0.0.1:7777/images
 {"images":[{"id":"integration-test-image-174204","size_mib":300,"created_at_unix":1788205903,
   "in_use_by":null,"guest_agent_verified":false,
   "verification_hint":"the daemon cannot verify the guest agent is baked into this image (that needs loop-mounting it as root, which this unprivileged daemon does not have) — run 'scripts/preflight-check.sh --root-checks --rootfs-image <path>' against the source file before relying on it, or a sandbox booted from it may boot but never respond to exec"}, ...]}
 
-$ curl -s -X POST http://127.0.0.1:7777/sandboxes -H 'content-type: application/json' \
+curl -s -X POST http://127.0.0.1:7777/sandboxes -H 'content-type: application/json' \
     -d '{"image_id":"integration-test-image-174204"}'
 {"id":"ecc699a4-fa84-4bd2-9346-5e5c6b320e9e"}
 
-$ curl -si -X POST http://127.0.0.1:7777/sandboxes -H 'content-type: application/json' \
+curl -si -X POST http://127.0.0.1:7777/sandboxes -H 'content-type: application/json' \
     -d '{"image_id":"does-not-exist"}'
 HTTP/1.1 404 Not Found
 content-type: application/json

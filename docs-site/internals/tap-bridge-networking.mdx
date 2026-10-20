@@ -36,11 +36,11 @@ The fixed pool size is a real, explicit ceiling. It caps how many sandboxes can 
 The bridge itself, and the pool of persistent TAP devices sitting idle (state `DOWN`, not yet attached to any live sandbox) before any sandbox exists:
 
 ```bash
-$ ip addr show sktapbr0
+ip addr show sktapbr0
 4: sktapbr0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 ...
     inet 172.16.0.1/24 scope global sktapbr0
 
-$ ip link show | grep sktap | head -3
+ip link show | grep sktap | head -3
 5: sktap0: <BROADCAST,MULTICAST> mtu 1500 ... state DOWN ...
 6: sktap1: <BROADCAST,MULTICAST> mtu 1500 ... state DOWN ...
 7: sktap2: <BROADCAST,MULTICAST> mtu 1500 ... state DOWN ...
@@ -49,10 +49,10 @@ $ ip link show | grep sktap | head -3
 Creating a real sandbox, then checking which TAP device it was actually leased and attached to:
 
 ```bash
-$ curl -s -X POST http://127.0.0.1:7777/sandboxes -H 'content-type: application/json' -d '{}'
+curl -s -X POST http://127.0.0.1:7777/sandboxes -H 'content-type: application/json' -d '{}'
 {"id":"354dbc49-b764-45a9-a90a-68903ddbade0"}
 
-$ ip link show | grep sktap | grep -v DOWN
+ip link show | grep sktap | grep -v DOWN
 4: sktapbr0: <BROADCAST,MULTICAST,UP,LOWER_UP> ...
 9: sktap4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel master sktapbr0 state UP ...
 ```

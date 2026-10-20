@@ -39,7 +39,7 @@ Unmounting is the same shape in reverse: `Exec umount`, then `Exec rm -f` on the
 This dev box's test rootfs doesn't have rclone injected (no real S3-compatible endpoint is configured here either -- see `examples/remote-storage-mount/README.md`'s own caveat about that), so the honest example is the clean-failure path, which is itself a real, useful thing to see: a missing prerequisite reports as an ordinary `400` with rclone's own error text, not a crash or an opaque `500`.
 
 ```bash
-$ curl -si -X POST http://127.0.0.1:7777/sandboxes/<id>/mounts \
+curl -si -X POST http://127.0.0.1:7777/sandboxes/<id>/mounts \
     -H 'content-type: application/json' \
     -d '{"bucket":"demo-bucket","endpoint":"http://127.0.0.1:1","access_key":"demo","secret_key":"demo","mount_path":"/mnt/data"}'
 

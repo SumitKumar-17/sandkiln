@@ -56,15 +56,15 @@ Three write paths touch the table, all wired in from `sandkiln-daemon`, none of 
 A cold create, followed by a destroy, followed by reading it back from history. Three real calls against a running daemon:
 
 ```bash
-$ curl -s -X POST http://127.0.0.1:7777/sandboxes \
+curl -s -X POST http://127.0.0.1:7777/sandboxes \
     -H 'content-type: application/json' \
     -d '{"tags":{"purpose":"docs-example"}}'
 {"id":"58186bbf-1f0a-462f-bd5d-9e6c116219a8"}
 
-$ curl -s -X DELETE 'http://127.0.0.1:7777/sandboxes/58186bbf-1f0a-462f-bd5d-9e6c116219a8?keep=false'
+curl -s -X DELETE 'http://127.0.0.1:7777/sandboxes/58186bbf-1f0a-462f-bd5d-9e6c116219a8?keep=false'
 # HTTP/1.1 204 No Content
 
-$ curl -s 'http://127.0.0.1:7777/sandboxes/history?limit=1'
+curl -s 'http://127.0.0.1:7777/sandboxes/history?limit=1'
 {"history":[{"id":"58186bbf-1f0a-462f-bd5d-9e6c116219a8","name":null,"tags":{"purpose":"docs-example"},"image_id":null,"created_at_unix":1789536161,"ended_at_unix":1789536170,"end_reason":"destroyed","final_snapshot_id":null}]}
 ```
 

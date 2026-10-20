@@ -30,7 +30,7 @@ Not carried across resume, fork, or a restored checkpoint, and doesn't survive a
 Starting a session and attaching to it *while it's still running*:
 
 ```bash
-$ curl -s -X POST http://127.0.0.1:7777/sandboxes/<id>/exec-stream \
+curl -s -X POST http://127.0.0.1:7777/sandboxes/<id>/exec-stream \
     -H 'content-type: application/json' \
     -d '{"command":"sh","args":["-c","for i in 1 2 3; do echo line-$i; sleep 1; done"]}'
 

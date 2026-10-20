@@ -60,7 +60,7 @@ Firecracker's own control plane is a related but separate problem, solved differ
 A real `exec` call, captured live against a running daemon (`curl -i`, full headers included):
 
 ```bash
-$ curl -s -i -X POST http://127.0.0.1:7777/sandboxes/354dbc49-.../exec \
+curl -s -i -X POST http://127.0.0.1:7777/sandboxes/354dbc49-.../exec \
     -H 'content-type: application/json' \
     -d '{"command":"echo","args":["hello-vsock"]}'
 
