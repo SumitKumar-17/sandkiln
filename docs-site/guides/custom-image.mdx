@@ -30,7 +30,7 @@ kiln image create node-lts-custom /home/t1000/images/node-lts-custom.ext4
 
 ## Verify the guest agent is actually there
 
-The response includes `"guest_agent_verified": false` — always, by design, because the unprivileged daemon can't loop-mount your image to check. Do this yourself before relying on it:
+The response includes `"guest_agent_verified": false` — **always, by design**, because the unprivileged daemon can't loop-mount your image to check. Do this yourself before relying on it:
 
 ```bash
 scripts/preflight-check.sh --root-checks --rootfs-image /home/t1000/images/node-lts-custom.ext4
@@ -54,4 +54,4 @@ kiln sandbox create --image node-lts-custom
 
 </CodeGroup>
 
-A nonexistent `imageId` fails fast with a `404`, checked before the slow boot ever starts. See [Custom & managed images](/concepts/images) for the full mechanics, including deletion and what's genuinely not done yet (OCI/Docker conversion).
+A nonexistent `imageId` **fails fast with a `404`**, checked before the slow boot ever starts. See [Custom & managed images](/concepts/images) for the full mechanics, including deletion and what's genuinely not done yet (OCI/Docker conversion).

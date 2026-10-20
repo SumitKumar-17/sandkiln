@@ -47,11 +47,11 @@ The daemon verifies the result rather than trusting rclone's exit code: after a 
 
 ## Credentials
 
-Credentials go into the guest as a small single-remote rclone config file, written with the same `write-file` and `chmod` guest operations the filesystem routes expose, locked to `0600` before rclone ever runs. They're never passed as a command-line argument, so nothing inside the guest can read them out of `ps`. The daemon doesn't log them, doesn't persist them on the host, and never echoes them back — a mount response carries only `id`, `bucket`, `endpoint`, `mount_path`, and `read_only`.
+Credentials go into the guest as a small single-remote rclone config file, written with the same `write-file` and `chmod` guest operations the filesystem routes expose, **locked to `0600`** before rclone ever runs. They're **never passed as a command-line argument**, so nothing inside the guest can read them out of `ps`. The daemon doesn't log them, doesn't persist them on the host, and never echoes them back — a mount response carries only `id`, `bucket`, `endpoint`, `mount_path`, and `read_only`.
 
 ## What's not done yet
 
-Mounts are not re-applied on resume, fork, or restore. A mount is a live guest-side FUSE process, captured along with everything else in the snapshot of guest memory, so a restored sandbox's mount keeps working with no daemon involvement — but nothing re-establishes one that didn't survive. The recorded metadata is carried on snapshots purely so `GET /sandboxes/:id/mounts` can answer without a round-trip into the guest; it isn't surfaced in sandbox or snapshot list responses.
+**Mounts are not re-applied on resume, fork, or restore.** A mount is a live guest-side FUSE process, captured along with everything else in the snapshot of guest memory, so a restored sandbox's mount keeps working with no daemon involvement — but nothing re-establishes one that didn't survive. The recorded metadata is carried on snapshots purely so `GET /sandboxes/:id/mounts` can answer without a round-trip into the guest; it isn't surfaced in sandbox or snapshot list responses.
 
 There's no holder-tracking or exclusivity the way [Drives](/concepts/drives) have it — two sandboxes may mount the same bucket at the same time. The only conflict rule is a duplicate `mount_path` within a single sandbox. `mount_path` itself gets no validation beyond being non-empty.
 

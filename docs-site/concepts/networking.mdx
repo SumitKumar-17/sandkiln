@@ -3,7 +3,7 @@ title: Networking & isolation
 description: How sandboxes reach the internet, and why they can't reach each other.
 ---
 
-Every sandbox gets its own tap device, leased from a pre-created pool, attached to a shared Linux bridge. That's what gives it a real network namespace distinct from every other sandbox on the host.
+Every sandbox gets its **own tap device**, leased from a pre-created pool, attached to a shared Linux bridge. That's what gives it a real network namespace distinct from every other sandbox on the host.
 
 ## Outbound access
 
@@ -11,7 +11,7 @@ Sandboxes NAT outbound through the bridge and resolve DNS through a host-local D
 
 ## Sandbox-to-sandbox isolation
 
-Bridge port isolation means sandboxes can't reach each other directly — verified live: two sandboxes on the same bridge, neither can open a connection to the other, while both can still reach the gateway and the outbound internet. This is the network-layer half of isolation; the kernel/hardware half is the microVM boundary itself (see [The jailer and privilege model](/internals/jailer-privilege-model)).
+**Bridge port isolation** means sandboxes can't reach each other directly — verified live: two sandboxes on the same bridge, neither can open a connection to the other, while both can still reach the gateway and the outbound internet. This is the network-layer half of isolation; the kernel/hardware half is the microVM boundary itself (see [The jailer and privilege model](/internals/jailer-privilege-model)).
 
 ## Why a pre-created tap pool
 
@@ -47,7 +47,7 @@ By default every sandbox keeps unrestricted outbound access — the behavior abo
 }
 ```
 
-`mode` is `allow_all` (today's default-open behavior, minus whatever `deny_cidrs` subtracts from it) or `deny_all` (nothing outbound except what `allow_cidrs` opens back up). Enforced with one dedicated iptables chain per sandbox, named from its tap device, with a single jump rule inserted ahead of the daemon's own bridge-wide rule so only that sandbox's traffic is affected. `deny_cidrs` rules always win over `allow_cidrs` on overlap — iptables evaluates a chain top to bottom, first match wins, and every deny rule is placed before every allow rule, so there's no special-casing needed to make deny authoritative.
+`mode` is `allow_all` (today's default-open behavior, minus whatever `deny_cidrs` subtracts from it) or `deny_all` (nothing outbound except what `allow_cidrs` opens back up). Enforced with **one dedicated iptables chain per sandbox**, named from its tap device, with a single jump rule inserted ahead of the daemon's own bridge-wide rule so only that sandbox's traffic is affected. **`deny_cidrs` rules always win** over `allow_cidrs` on overlap — iptables evaluates a chain top to bottom, first match wins, and every deny rule is placed before every allow rule, so there's no special-casing needed to make deny authoritative.
 
 Rules match only traffic actually leaving through the daemon's own uplink interface, the same scoping the bridge-wide rule already uses — which has a useful side effect: DNS queries to the bridge's own gateway IP never transit the uplink at all, so they're structurally exempt from any egress policy without needing an explicit allowlist entry. Even a `deny_all` sandbox with nothing allowed can still resolve names; it just can't reach anything past the gateway that isn't explicitly permitted.
 

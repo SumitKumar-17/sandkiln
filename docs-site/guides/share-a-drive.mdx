@@ -3,11 +3,11 @@ title: Share a drive read-only
 description: Attach the same drive to many sandboxes at once.
 ---
 
-A common pattern: one drive holds data or a base layer many sandboxes need to read, but none of them need to write. Read-only sharing exists for exactly this — no per-sandbox copies, no coordination needed.
+A common pattern: one drive holds data or a base layer many sandboxes need to **read**, but none of them need to **write**. Read-only sharing exists for exactly this — no per-sandbox copies, no coordination needed.
 
 ## Seed it once
 
-A drive read-only-shared later still needs writing at least once, before anything ever attaches it read-only — a read-only mount can't format or write to it.
+A drive read-only-shared later still needs **writing at least once**, before anything ever attaches it read-only — a read-only mount can't format or write to it.
 
 <CodeGroup>
 
@@ -69,7 +69,7 @@ kiln sandbox create --drive <drive-id>:ro
 
 </CodeGroup>
 
-Repeat this against as many sandboxes as you want — every one succeeds, concurrently, as long as every existing holder and every new attach are all `read_only: true`. A single read-write attach — existing or newly requested — still needs exclusive access; see [Drives](/concepts/drives) for the exact rule.
+Repeat this against **as many sandboxes as you want** — every one succeeds, concurrently, as long as every existing holder and every new attach are all `read_only: true`. A single **read-write attach** — existing or newly requested — still needs exclusive access; see [Drives](/concepts/drives) for the exact rule.
 
 ## Check who's holding it
 
@@ -93,4 +93,4 @@ kiln drive ls
 
 </CodeGroup>
 
-`attached_to` lists every current holder (`sandbox <id>` or `snapshot <id>`) with its `read_only` flag — useful for confirming a conflict's actual cause, or checking a drive is free before deleting it.
+`attached_to` lists **every current holder** (`sandbox <id>` or `snapshot <id>`) with its `read_only` flag — useful for confirming a conflict's actual cause, or checking a drive is free before deleting it.

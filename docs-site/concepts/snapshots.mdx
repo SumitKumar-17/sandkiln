@@ -3,7 +3,7 @@ title: Snapshots, resume, and fork
 description: Save a sandbox's full state to disk and boot from it later.
 ---
 
-A snapshot saves a running sandbox's full state — memory and disk — to disk, and stops the VM. The sandbox stops existing as a live sandbox; a snapshot record takes its place, ready to boot a new sandbox from without repeating boot or dependency installation.
+A snapshot saves a running sandbox's **full state** — memory and disk — to disk, and stops the VM. The sandbox stops existing as a live sandbox; a snapshot record takes its place, ready to boot a new sandbox from **without repeating boot or dependency installation**.
 
 ## Taking a snapshot
 
@@ -37,4 +37,4 @@ This is sequential, not branching: restoring an old checkpoint doesn't erase or 
 
 ## Durability
 
-Snapshot metadata is written atomically to disk alongside its state/memory files and reconciled back into the daemon at startup — a snapshot taken before a daemon crash or restart is still listable and resumable afterward. Not durable across a host *reboot* by default: snapshot storage lives under `$TMPDIR`, which may or may not be `tmpfs` on your host — see `SELF_HOSTING.md`'s persistent-state section.
+Snapshot metadata is written **atomically** to disk alongside its state/memory files and reconciled back into the daemon at startup — a snapshot taken before a daemon crash or restart is still listable and resumable afterward. **Not durable across a host *reboot*** by default: snapshot storage lives under `$TMPDIR`, which may or may not be `tmpfs` on your host — see `SELF_HOSTING.md`'s persistent-state section.
