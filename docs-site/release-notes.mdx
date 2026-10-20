@@ -173,7 +173,7 @@ First publish. The core execution primitive plus a full first pass of lifecycle,
 - A `pkill -f` pattern that could match its own invocation and kill the wrong process (including, once, the SSH session running it).
 - A duplicate-command crash in the CLI (`program.command()` already registers a command; a trailing `addCommand()` re-added the same instance) — caught on the very first live run.
 - Sandbox creation latency: rootfs clone now runs concurrently with the network lease instead of after it, and uses `cp --reflink=auto` (free copy-on-write where the filesystem supports it). Measured `create` latency mean dropped 369ms → 211ms.
-- Python SDK import crash on Python <3.14 (`from __future__ import annotations` needed — see `AGENTS.md`), caught by CI on 3.12 even though local testing on 3.14 didn't hit it.
+- Python SDK import crash on Python versions before 3.14 (`from __future__ import annotations` needed — see `AGENTS.md`), caught by CI on 3.12 even though local testing on 3.14 didn't hit it.
 - CI build order: `kiln` needs `sandkiln`'s `dist/` built before it can typecheck, since it resolves it as a real workspace dependency.
 
 ## Known gaps (tracked in `ROADMAP.md`)
