@@ -23,8 +23,19 @@ cleanup trap on anything that mounts/chroots).
   root: rclone's FUSE backend always execs it, no direct `mount(2)`
   fallback. Depends only on libc — copy straight from any Debian/Ubuntu
   host's `/bin/fusermount3` (`fuse3` package).
-- Other image-build/multi-agent-user-setup scripts may exist beyond
-  this list — check `ls` and each script's own header comment.
+- `build-universal-image.sh` — builds the actual production
+  `SANDKILN_BASE_ROOTFS` from scratch with `debootstrap`: Ubuntu + current
+  Node.js LTS + Python 3 + common CLI tooling + a working systemd init, as
+  an ext4 image. Replaces `fetch-test-image.sh`'s stripped CI test image
+  for anything real — that one is missing even `ca-certificates`. Calls
+  `setup-multi-agent-users.sh` automatically as its last step. See "Base
+  and custom images" in `ROADMAP.md`.
+- `setup-multi-agent-users.sh` — bakes multi-agent isolation into a
+  rootfs: N sequential agent user accounts, each a private home
+  directory, plus a shared group/directory for deliberate cross-agent
+  file sharing. Runs automatically from `build-universal-image.sh`, but
+  also standalone against any already-built ext4 image. See "Multi-agent
+  isolation" in `ROADMAP.md`.
 
 ## Non-obvious things
 

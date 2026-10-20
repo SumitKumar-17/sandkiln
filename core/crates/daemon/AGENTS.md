@@ -192,6 +192,16 @@ calls `vmm`, shapes responses.
   `std::sync::mpsc::Receiver` into async via a plain `spawn_blocking`
   forwarding into a `tokio::sync::mpsc` channel.
 - **`error.rs`** — `AppError`, the one error type every handler returns.
+- **`request_id.rs`** — `correlate`, the outermost `main.rs` layer:
+  resolves a request id (caller's `X-Request-Id` if well-formed, else a
+  fresh UUID), echoes it on the response, wraps the request in a
+  `tracing::Span` carrying it so every log line for that request —
+  including ones from deep inside `sandkiln-vmm`'s `spawn_blocking`
+  calls — carries the same id.
+- **`tracing_util.rs`** — `spawn_blocking_in_current_span`: `tracing`'s
+  "current span" is thread-local, so a bare `spawn_blocking` silently
+  drops request correlation; this re-establishes both the span and the
+  default dispatcher on the blocking-pool thread.
 
 ## Building and verifying
 
