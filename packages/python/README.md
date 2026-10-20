@@ -8,14 +8,19 @@ its own kernel, its own filesystem, its own network.
 This package is the client. It talks to a `sandkilnd` daemon over HTTP —
 you need one running somewhere reachable (see the main repo for how to
 run one; there is no hosted service). Zero runtime dependencies —
-`urllib` from the standard library is all it needs.
+`urllib`/`asyncio` from the standard library is all it needs.
+
+Every class below also ships as an `asyncio`-native mirror —
+`AsyncSandbox`, `AsyncDrive`, `AsyncImage`, `AsyncPool` — with identical
+method names and arguments, just `async def` and awaited. They're
+deliberately separate classes rather than sync+async methods on one
+class, since a sync call in an async context blocks the event loop
+silently rather than raising a clear error.
 
 ## Install
 
-Not published to PyPI yet — install from this repo:
-
 ```
-pip install ./packages/python
+pip install sandkiln
 ```
 
 ## Usage
@@ -46,14 +51,18 @@ sandbox.stop()
 
 ## API
 
-- `Sandbox.create(name=None, tags=None, base_url=None, auth_token=None, vcpu_count=None, mem_size_mib=None, image_id=None)` —
+- `Sandbox.create(name=None, tags=None, base_url=None, auth_token=None, vcpu_count=None, mem_size_mib=None, image_id=None, drives=None)` —
   boots a sandbox. `name` is a caller-given identity, unique among live
   sandboxes and held snapshots (409 if already taken) — see `by_name`/
   `get_or_create` below to find it again later. `vcpu_count`/
   `mem_size_mib` override the daemon's configured defaults for this one
   sandbox, subject to the daemon's configured ceiling. `image_id` boots
   from a registered image (see `Image.register` below) instead of the
-  daemon's configured default rootfs.
+  daemon's configured default rootfs. `drives` is a list of
+  `DriveAttachment` to attach existing persistent drives (see `Drive`
+  below). (A few more keyword arguments exist for rate limiting,
+  per-sandbox environment variables, and egress policy — see the full
+  reference in the main repo's docs for all of them.)
 - `Sandbox.attach(id, base_url=None, auth_token=None)` — wraps an
   existing sandbox id without a network round-trip.
 - `Sandbox.by_name(name, base_url=None, auth_token=None)` — resolves a
@@ -71,9 +80,30 @@ sandbox.stop()
   (`stdout`, `stderr`, `exit_code`).
 - `sandbox.read_file(path)` — returns file contents as `bytes`.
 - `sandbox.write_file(path, content)` — `content` is `str` or `bytes`.
+- `sandbox.chmod(path, mode)`, `sandbox.chown(path, uid, gid)`,
+  `sandbox.mkdir(path, parents=False)`, `sandbox.rename(from_path, to_path)`,
+  `sandbox.copy(from_path, to_path)`, `sandbox.symlink(target, link_path)`,
+  `sandbox.readlink(path)`, `sandbox.truncate(path, size)`,
+  `sandbox.list_dir(path)` (returns `list[DirEntry]` with real
+  `is_dir`/`is_symlink`/`size`/`mode`/`mtime` metadata) — the full
+  filesystem operation set.
 - `sandbox.preview_url(port, path="/")` — the URL a browser can open
   directly to reach a server listening on `port` inside this sandbox,
   proxied through the daemon.
+- `sandbox.tunnel(guest_port, local_port, local_host="127.0.0.1")` — the
+  reverse of `preview_url`: exposes a service running on **this
+  machine** to code inside the sandbox. Returns a `TunnelHandle` with
+  `.tunnel_id`/`.close()`. This package's only WebSocket-based feature —
+  hand-rolled (RFC 6455 handshake and frame masking), since the standard
+  library has no WebSocket client.
+- `sandbox.mount(bucket, endpoint, access_key, secret_key, mount_path, read_only=False)`
+  — mounts an S3-compatible bucket into the sandbox via `rclone mount`;
+  ordinary `read_file()`/`write_file()` calls against `mount_path` then
+  read/write through to the bucket. Needs the optional FUSE-capable
+  rootfs setup described in `SELF_HOSTING.md`.
+- `sandbox.list_mounts()` — lists every remote-storage mount currently
+  active in the sandbox.
+- `sandbox.unmount(mount_id)` — tears down one mount.
 - `sandbox.stop(keep=None)` — stops the sandbox. By default (`keep`
   omitted or `True`) this *preserves* its state as a resumable snapshot,
   same as `snapshot()`, and returns a `StopResult(kept, snapshot_id)`.
@@ -109,18 +139,43 @@ sandbox.stop()
 - `Image.list(base_url=None, auth_token=None)` / `Image.delete(id, base_url=None, auth_token=None)`
   — list registered images, or delete one (refused with 409 while any
   live sandbox, in-flight boot, or held snapshot still references it).
+- `Drive.create(size_mib, base_url=None, auth_token=None)` — creates a
+  new empty persistent drive, returns its id.
+- `Drive.list(base_url=None, auth_token=None)` — lists drives, including
+  every current holder and whether each is read-only.
+- `Drive.delete(id, base_url=None, auth_token=None)` — permanently
+  removes a drive and its backing file (refused with 409 while anything
+  references it). Attach one via
+  `Sandbox.create(drives=[DriveAttachment(id=..., read_only=False)])` —
+  a drive attached read-only may be shared by many sandboxes at once,
+  read-write needs exclusive access.
+- `Pool.create(id, image_id=None, vcpu_count=None, mem_size_mib=None, warm_count=0, max_count=None, base_url=None, auth_token=None)`
+  — configures a pre-warmed pool under a caller-given `id` (409 if
+  already taken). `warm_count` is how many resumable snapshots to keep
+  ready; `max_count` caps total live instances of this pool's profile
+  (omitted means unbounded) — a create at the ceiling with nothing warm
+  queues for up to 30s instead of exceeding it or rejecting outright.
+- `Pool.list(base_url=None, auth_token=None)` — lists configured pools,
+  including `warm_ready` (how many are actually ready right now).
+- `Pool.delete(id, base_url=None, auth_token=None)` — removes a pool's
+  configuration and destroys whatever it currently has warm. There's no
+  `Pool.claim()` — claiming is entirely transparent: a plain
+  `Sandbox.create()` matching a configured pool's image/resources
+  resumes a warm instance instead of cold-booting.
 
 This mirrors the [JS/TS SDK](https://www.npmjs.com/package/sandkiln)
-exactly — same daemon, same operations, Python-idiomatic naming
+closely — same daemon, same operations, Python-idiomatic naming
 (`run_command` not `runCommand`, snake_case fields).
 
 ## Status
 
-This SDK matches the daemon's current HTTP API exactly — no more, no
-less. Still open: publishing to PyPI, streamed command output, and
-attaching persistent drives at create time (supported by the daemon and
-CLI, not yet exposed here); see the
-[roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md).
+Published, and matches the daemon's current HTTP API closely, not
+completely. Two daemon features have no wrapper here yet, available
+only via the [JS/TS SDK](https://www.npmjs.com/package/sandkiln) or the
+`kiln` CLI: streamed background exec (following a long-running
+command's live output) and interactive `pty` sessions. See the
+[roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md)
+for what's next.
 
 ## License
 

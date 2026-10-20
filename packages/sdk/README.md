@@ -35,6 +35,13 @@ const running = await Sandbox.list({ tags: { env: "ci" } });
 await sandbox.stop();
 ```
 
+`Sandbox` also has `chmod`/`chown`/`mkdir`/`rename`/`copy`/`symlink`/`readlink`/`truncate`/`listDir`
+for the rest of the filesystem surface, `pty()` for an interactive shell,
+`previewUrl()`/`tunnel()` for reaching a dev server either direction, and
+`execStream()`/`attachLogs()`/`listExecStreams()` for a long-running
+command's live output — see [API](#api) below. `Drive` and `Pool` are
+separate namespaces for persistent drives and pre-warmed snapshot pools.
+
 ## Configuration
 
 - **Daemon URL**: pass `baseUrl` to `Sandbox.create()`/`Sandbox.list()`,
@@ -71,9 +78,44 @@ await sandbox.stop();
 - `sandbox.readFile(path)` — returns file contents as `Uint8Array`.
 - `sandbox.writeFile(path, content)` — `content` is a `string` or
   `Uint8Array`.
+- `sandbox.chmod(path, mode)`, `sandbox.chown(path, uid, gid)`,
+  `sandbox.mkdir(path, options?)` (`{ parents?: true }`),
+  `sandbox.rename(from, to)`, `sandbox.copy(from, to)`,
+  `sandbox.symlink(target, linkPath)`, `sandbox.readlink(path)`,
+  `sandbox.truncate(path, size)`, `sandbox.listDir(path)` (returns
+  entries with real `isDir`/`isSymlink`/`size`/`mode`/`mtime`
+  metadata) — the full filesystem operation set, over the same vsock
+  channel `runCommand` uses.
+- `sandbox.pty(options?)` — opens a live, interactive shell session and
+  returns a native `WebSocket` (Node.js ≥22 or a browser, no added
+  dependency). `options.cols`/`options.rows` size the terminal once, at
+  open time.
 - `sandbox.previewUrl(port, options?)` — the URL a browser can open
   directly to reach a server listening on `port` inside this sandbox,
   proxied through the daemon.
+- `sandbox.tunnel(guestPort, options)` — the reverse of `previewUrl`:
+  exposes a service running on **this machine** to code inside the
+  sandbox. `options.localPort` (required), `options.localHost` (default
+  `127.0.0.1`). Node-only. Returns a `TunnelHandle` with `.tunnelId` and
+  `.close()`.
+- `sandbox.execStream(command, args?)` — starts a command in the
+  background, returns a session id immediately, for a long-running
+  command you want to watch live instead of waiting on with
+  `runCommand`.
+- `sandbox.attachLogs(sessionId)` — returns a `WebSocket` that replays
+  everything captured so far for that session, then live-tails new
+  output — callable any number of times, including after the process
+  has finished.
+- `sandbox.listExecStreams()` — lists every streamed session tracked
+  against this sandbox, running or finished.
+- `sandbox.mount(options)` — mounts an S3-compatible bucket at
+  `options.mountPath` via `rclone mount`; ordinary `readFile()`/
+  `writeFile()` calls against that path then read/write through to the
+  bucket. Needs the optional FUSE-capable rootfs setup described in
+  `SELF_HOSTING.md`.
+- `sandbox.listMounts()` — lists every remote-storage mount currently
+  active in the sandbox.
+- `sandbox.unmount(mountId)` — tears down one mount.
 - `sandbox.stop(options?)` — stops the sandbox. By default
   (`options.keep` omitted or `true`) this *preserves* its state as a
   resumable snapshot, same as `snapshot()`, and returns
@@ -108,15 +150,38 @@ await sandbox.stop();
 - `Image.list(options?)` / `Image.delete(id, options?)` — list registered
   images, or delete one (refused with 409 while any live sandbox,
   in-flight boot, or held snapshot still references it).
+- `Drive.create(sizeMib, options?)` — creates a new empty persistent
+  drive, returns its id.
+- `Drive.list(options?)` — lists drives, including every current holder
+  (`attachedTo`) and whether each is read-only.
+- `Drive.delete(id, options?)` — permanently removes a drive and its
+  backing file (refused with 409 while anything references it). Attach
+  one to a sandbox via `Sandbox.create({ drives: [{ id, readOnly? }] })`
+  — a drive attached read-only may be shared by many sandboxes at once,
+  read-write needs exclusive access.
+- `Pool.create(id, options?)` — configures a pre-warmed pool under a
+  caller-given `id` (409 if already taken). `options.imageId`/
+  `options.vcpuCount`/`options.memSizeMib` define which creates can
+  match it; `options.warmCount` (default `0`) is how many resumable
+  snapshots to keep ready.
+- `Pool.list(options?)` — lists configured pools, including `warmReady`
+  (how many are actually ready right now).
+- `Pool.delete(id, options?)` — removes a pool's configuration and
+  destroys whatever it currently has warm. There's no `Pool.claim()` —
+  claiming is entirely transparent: a plain `Sandbox.create()` matching
+  a configured pool's image/resources resumes a warm instance instead of
+  cold-booting.
 
 ## Status
 
 Published and real. This SDK matches the daemon's current HTTP API
-exactly — no more, no less. Remote storage mounts, snapshot history /
-time-travel restore, and per-sandbox egress policy are supported by the
-daemon and CLI but not yet exposed here; see the [roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md)
-in the main repository for what's next. A [Python equivalent](https://pypi.org/project/sandkiln/) mirrors this
-exactly.
+closely, not completely — snapshot lineage queries and time-travel
+restore are supported by the daemon (and in some cases the CLI) but
+have no wrapper here yet; see the
+[roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md)
+in the main repository for what's next. A [Python equivalent](https://pypi.org/project/sandkiln/)
+mirrors this closely too, with its own small gap list (see that
+package's README).
 
 ## License
 
