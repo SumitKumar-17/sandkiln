@@ -1001,6 +1001,27 @@ outbound HTTP both still work.
     sitting on the critical path, 5.5% of a create, for a write whose own
     doc comment already calls it best-effort — **since fixed**, immediately
     below.
+  - **Still unfixed as of this writing (re-confirmed, not assumed —
+    `clone_rootfs`'s destination in `routes_sandbox.rs` is still a flat
+    `std::env::temp_dir().join(...)` call), and the single most
+    load-bearing open item in this whole section**: the rootfs clone is
+    74% of a cold create per the profiling pass below, and every number
+    gathered so far is consistent with it *never* having actually
+    reflinked on any of this project's test runs, CoW-capable filesystem
+    or not — the real win is still sitting there unclaimed. Concretely,
+    next: (1) make the clone destination configurable
+    (`SANDKILN_ROOTFS_CLONE_DIR` or similar), defaulting to the same
+    directory as `SANDKILN_BASE_ROOTFS` so `--reflink=auto` has an actual
+    chance to reflink instead of a guaranteed cross-filesystem fallback;
+    (2) stop failing silently when it doesn't — surface whether a given
+    create actually got a reflink or fell back to a full copy, e.g. a
+    `create_phase_duration_ms{phase="rootfs_clone"}` outlier is
+    indistinguishable today from "this host just has a slow disk" when
+    the real cause is "this host silently never reflinks." Re-run the
+    exact XFS-loopback experiment above with the destination fixed before
+    touching anything else, since the previous attempt is now known to
+    have been invalidated by this same bug rather than by XFS not
+    helping. See also the filesystem-architecture idea below.
   - **Done: the sqlite write.** `sandkiln-store` opened its database with
     sqlite's defaults (`journal_mode=DELETE`, `synchronous=FULL`), which
     fsyncs twice per write — once for the rollback journal, once for the
@@ -1428,11 +1449,45 @@ as the GPU-passthrough note above) rather than left as a silent gap:
   small extension of `snapshot`/`resume`/`fork` — those stay path-based
   and single-lineage; this would be a different persistence model
   layered alongside them, not a replacement.
+- **A dedicated rootfs/CoW crate, explicit block-level dirty tracking
+  instead of an implicit filesystem reflink.** Prompted by a public
+  write-up of another sandbox platform's VM filesystem work, read for
+  this entry — not reused code or an architecture copy, just the
+  observation that they hit the same class of problem this project
+  already has, and solved it with an explicit mechanism instead of
+  leaning on a filesystem feature that fails silently (see the
+  still-open `clone_rootfs` item above: `cp --reflink=auto` either
+  reflinks or quietly falls back to a full copy, and today nothing
+  tells you which one just happened). Their actual approach — lazily
+  fetching a sparse ext4 image's blocks on demand from remote blob
+  storage across a fleet, lower in the stack than any filesystem —
+  solves a distribution problem sandkiln doesn't have: one self-hosted
+  daemon with its base image already resident on local disk has no
+  "fetch an image's blocks from a remote region" step to make lazy.
+  What *would* transfer: a small crate that owns rootfs provisioning as
+  a first-class concern (today it's a couple of free functions split
+  across `routes_sandbox.rs` and `vmm::image`) and tracks per-sandbox
+  writes against the base image with an explicit dirty bitmap over a
+  sparse file, the same shape Firecracker's own diff-snapshots already
+  use for guest memory — rather than hoping the host filesystem's own
+  CoW does the equivalent for disk. That would make "did this clone
+  actually share blocks with its parent" an explicit, checkable fact
+  instead of a silent filesystem-dependent maybe, and it's the same
+  bookkeeping a cheaper, smaller rootfs snapshot (today's snapshot-take
+  is 309.6–335.0ms, full memory *and* disk each time, per the
+  Benchmarking section above) would need anyway. Real scope, stated
+  plainly: a new crate, a new on-disk format, and a migration story for
+  every existing snapshot — not a quick win, and strictly smaller than
+  the two items above (it strengthens the existing path-based
+  snapshot/resume/fork model rather than replacing it), but a more
+  concrete, nearer-term direction than either.
 
-Both are plausible future directions for this project specifically
+All three are plausible future directions for this project specifically
 because it's a personal project without a fixed roadmap deadline, not
-because either is a small lift — treat this section as "worth doing
-eventually if there's appetite," not "next."
+because any of them is a small lift — treat this section as "worth doing
+eventually if there's appetite," not "next." The `clone_rootfs`
+configurable-destination fix earlier in the Benchmarking section is the
+actually-next, much smaller step that sits in front of all of this.
 
 ## Documentation and examples
 
