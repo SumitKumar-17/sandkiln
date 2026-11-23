@@ -202,7 +202,7 @@ There are three layers, and they do not mix.
 2. **Codec errors** are `CodecError`, an alias for `serde_json::Error`. A malformed body or an unknown `cmd` tag is a decode failure, not a panic. Both the host client and the guest agent convert it at their own boundary: the host maps it to `io::ErrorKind::InvalidData` (`to_io_err` in `vsock_client.rs`), and the guest answers a bad request with `Response::Error { message: "bad request: ..." }` and keeps the connection open for the next frame.
 3. **Operation errors** are data, not errors in the Rust sense. `Response::Error { message }` is a successful protocol exchange whose content is "the operation failed". The host's call returns `Ok(Response::Error { .. })`, and the daemon decides how to surface it.
 
-The separation matters for failure paths (root `AGENTS.md` section 7). A guest that rejects a request must not look like a dead guest. Only layers 1 and 2 indicate a broken connection; layer 3 is normal traffic.
+The separation matters for failure paths (root `AGENTS.md` section 7). A guest that rejects a request must not look like a dead guest. Only layers 1 and 2 indicate a broken connection; layer 3 is normal traffic. One consequence for the host: a transport error after a request was fully written does not say whether the guest ran it, which is why `sandkiln-vmm` tracks that fact separately and never retries such a call (see the [vmm tour](/engineering/13-crate-vmm)).
 
 ## How the pieces compose
 
@@ -230,7 +230,7 @@ sequenceDiagram
 
 ## Test strategy
 
-`cargo test -p sandkiln-protocol` runs 39 tests, all pure and instant: 7 in `framing.rs`, 4 in `lib.rs`, and 28 in `messages.rs`. There is no I/O beyond in-memory buffers.
+`cargo test -p sandkiln-protocol` (re-run 2026-11-24) runs 39 tests, all pure and instant: 7 in `framing.rs`, 4 in `lib.rs`, and 28 in `messages.rs`. There is no I/O beyond in-memory buffers.
 
 **Framing tests** target the failure modes of a length-prefixed format. A payload containing `\n`, a NUL and high bytes round-trips (`roundtrips_bytes_that_look_like_frame_boundaries`), which is the argument for length prefixing over newline delimiting, expressed as a test. An empty payload round-trips. `write_message_prefixes_exact_little_endian_length` pins the byte layout. `read_message_rejects_oversized_length_prefix` sends `MAX_MESSAGE_LEN + 1` and asserts `InvalidData`. Truncated input and a missing length prefix both fail with `UnexpectedEof` rather than hanging or panicking.
 
@@ -257,13 +257,13 @@ What is not tested here is behaviour that needs a live guest. The crate's `AGENT
 
 | Consumer | What it uses |
 | --- | --- |
-| `sandkiln-vmm` `vsock_client` | `encode_request`, `decode_response`, `write_message`, `read_message`, the handshake encoders, `ExecStreamEvent` decoding by callers |
+| `sandkiln-vmm` `vsock_client` | `encode_request`, `decode_response`, `write_message`, `read_message`, the handshake encoders, `ExecStreamEvent` decoding by callers; `call` also reports, through its own `CallError`, whether the full request frame was written |
 | `sandkiln-vmm` `tunnel` | `read_message`, `decode_tunnel_open`, `TUNNEL_PORT` |
 | `sandkiln-vmm` `Vm` | `AGENT_PORT`, `PTY_PORT`, `EXEC_STREAM_PORT`, `Request`, `Response` |
 | `sandkiln-guest-agent` | `decode_request`, `encode_response`, all handshake decoders, `encode_exec_stream_event`, `encode_tunnel_open`, all four ports |
-| `sandkiln-daemon` | `Request`/`Response` to build and read agent calls, plus `read_message` and `decode_exec_stream_event` in the streamed-exec log pump |
+| `sandkiln-daemon` | `Request`/`Response` to build and read agent calls (`http/routes/exec.rs`, `fs.rs`, `mounts.rs`), plus `read_message` and `decode_exec_stream_event` in the streamed-exec log pump (`http/routes/logs.rs`) |
 
-The daemon depends on the protocol crate directly, as well as through `vmm`, because its routes build `Request` values and pattern-match `Response` variants. On the host, `vsock_client` owns the request/response and handshake codec calls. The one place the daemon touches framing itself is its streamed-exec log pump, which reads `ExecStreamEvent` frames off a stream that `Vm::open_exec_stream` handed back.
+The daemon depends on the protocol crate directly, as well as through `vmm`, because its routes build `Request` values and pattern-match `Response` variants. On the host, `vsock_client` owns the request/response and handshake codec calls. The one place the daemon touches framing itself is its streamed-exec log pump (`core/crates/daemon/src/http/routes/logs.rs:176`), which reads `ExecStreamEvent` frames off a stream that `Vm::open_exec_stream` handed back.
 
 Because host and guest link the same definitions, a message change is a lockstep change. There is no version negotiation: the crate's `AGENTS.md` says plainly that both `guest-agent` and `vmm`/`daemon` must be rebuilt and redeployed together, and that a new `Request` variant needs both sides' `match` statements updated. Rust's exhaustive matching helps here only if both sides are actually rebuilt, so the guest agent has to be baked into a fresh rootfs image whenever the protocol changes.
 

@@ -8,7 +8,7 @@ updated: 2026-11-24
 
 `sandkiln-store` answers one question: did this sandbox exist, and how did it end? It does not answer "can I get it back". That distinction is the whole reason the crate is small, and the first thing its documentation says.
 
-A live sandbox owns a real OS process, a Firecracker child with an open API socket and an open vsock connection. None of that has a serializable form, and no code in this project re-adopts an orphaned Firecracker process after a daemon restart. The daemon's in-memory sandbox map therefore dies with the daemon, and `GET /sandboxes` goes blank. What survives a restart as a working sandbox is a snapshot, which has its own durability story. This crate fills the gap between the two: a durable, queryable record of every sandbox that was ever created, with when, what tags and name, and how its life ended.
+A live sandbox owns a real OS process, a Firecracker child with an open API socket and an open vsock connection. None of that has a serializable form, and no code in this project re-adopts an orphaned Firecracker process after a daemon restart. The daemon's in-memory sandbox map therefore dies with the daemon, and `GET /sandboxes` goes blank. What survives a restart as a working sandbox is a snapshot, which has its own durability story. An orderly shutdown (`SIGTERM` or `SIGINT`) turns every live sandbox into a snapshot before the daemon exits, so a planned restart loses nothing; a `SIGKILL` or crash still leaves orphaned processes, and those are exactly the rows this crate marks `OrphanedByRestart`. This crate fills the gap between the two: a durable, queryable record of every sandbox that was ever created, with when, what tags and name, and how its life ended.
 
 This is the crate-level tour. The docs-site page [SQLite: the history store](https://sandkiln.mintlify.site/internals/sqlite-history-store) explains the pragma choice for a general reader and shows a live request; this post covers the Rust surface, invariants, tests and boundaries. Read the [system overview](/engineering/01-system-overview) first if the daemon's role is new to you.
 
@@ -138,7 +138,7 @@ There is no transition out of an ended state, and no code path attempts one. `ma
 
 ## Error model
 
-Everything surfaces `rusqlite::Error`. There is no wrapper enum, because the daemon treats every failure from this crate the same way: log a warning and carry on. The one place the crate builds its own error is `open`, where `create_dir_all` failure is translated into `SQLITE_CANTOPEN` with the directory path and OS error in the message, so a bad `SANDKILN_HISTORY_DB_PATH` produces a readable startup failure.
+Everything surfaces `rusqlite::Error`. There is no wrapper enum, because the daemon treats every failure from this crate the same way: log a warning and carry on. The one place the crate builds its own error is `open`, where `create_dir_all` failure is translated into `SQLITE_CANTOPEN` with the directory path and OS error in the message, so a bad `history_db_path` setting (environment variable `SANDKILN_HISTORY_DB_PATH`, TOML key `history_db_path`, default `~/sandkiln-tools/history.db`; see [config, SDKs and CLI](/engineering/10-config-sdks-and-cli)) produces a readable startup failure.
 
 Two choices are worth naming. `row_to_record` parses `tags_json` with `unwrap_or_default()`, so a corrupt tags column yields an empty map rather than failing the whole listing. A bad row degrades; it does not poison a read of the other rows. And `record_created` uses `.expect` on tag serialisation, which cannot fail for a `String` to `String` map; a panic there would be a genuine bug rather than a runtime condition. Mutex poisoning is not handled: every method locks with `.unwrap()`, so a panic while a thread holds the connection would make later calls panic too. For a store with no code that panics under the lock, that is an accepted simplification.
 
@@ -150,11 +150,11 @@ if let Err(e) = state.history.record_created(&id, request.name.as_deref(), &requ
 }
 ```
 
-(In the daemon's cold-create path; the same pattern wraps the `record_ended` calls.) The VM has already booted by the time history is written, so failing the request would waste a real running sandbox for a bookkeeping error. That tolerance is the reason loosening `synchronous` to `NORMAL` was a reasonable choice rather than a compromise: the write was never allowed to block correctness, only to cost time.
+(`core/crates/daemon/src/http/routes/sandbox.rs:409`, in `create_sandbox_cold`; the same pattern wraps the `record_ended` calls.) The VM has already booted by the time history is written, so failing the request would waste a real running sandbox for a bookkeeping error. That tolerance is the reason loosening `synchronous` to `NORMAL` was a reasonable choice rather than a compromise: the write was never allowed to block correctness, only to cost time.
 
 ## How neighbours consume it
 
-The daemon is the only consumer. `AppState` owns one `HistoryStore`, opened once at startup from `SANDKILN_HISTORY_DB_PATH` (default `~/sandkiln-tools/history.db`). The wiring is five call sites and one read endpoint.
+The daemon is the only consumer. `AppState` owns one `HistoryStore` (`core/crates/daemon/src/state.rs:76`), opened once at startup from the `history_db_path` setting (`core/crates/daemon/src/main.rs:117`). The wiring is five call sites and one read endpoint.
 
 ```mermaid
 flowchart LR
@@ -166,10 +166,10 @@ flowchart LR
     S -->|"list with HistoryFilter"| H["GET /sandboxes/history"]
 ```
 
-- **Created.** `record_created` fires from the cold-create path (`create_sandbox_cold`) and from the pool-claim path, each only after the boot or resume has succeeded. A failed boot never appears in history, matching `GET /sandboxes` only ever listing sandboxes that exist.
-- **Ended.** `record_ended` fires from the shared destroy path with `Destroyed`, and from `snapshot_and_stop` with `Snapshotted` plus the new snapshot id. Because the idle reaper and `DELETE` both go through those shared functions, no lifecycle exit path can forget to record.
-- **Orphaned.** The startup sweep runs in `main`, before the HTTP listener binds, alongside snapshot reconciliation, so no request can observe a stale "live" row.
-- **Read.** `sandbox_history` parses `?live_only=` and `?limit=` into a `HistoryFilter`, runs `list` inside `spawn_blocking` (the store is synchronous), and maps each `HistoryRecord` into a response body.
+- **Created.** `record_created` fires from the cold-create path (`create_sandbox_cold`, `http/routes/sandbox.rs:409`) and from the pool-claim path (`lifecycle/pool_claim.rs:241`), each only after the boot or resume has succeeded. A failed boot never appears in history, matching `GET /sandboxes` only ever listing sandboxes that exist.
+- **Ended.** `record_ended` fires from the shared destroy path (`destroy_sandbox_by_id`, `http/routes/sandbox.rs:743`) with `Destroyed`, and from `snapshot_and_stop` (`http/routes/snapshot.rs:258`) with `Snapshotted` plus the new snapshot id. The idle reaper, `DELETE`, the pool replenisher and the orderly-shutdown drain (`lifecycle/shutdown.rs`) all go through those shared functions, so no lifecycle exit path can forget to record. A graceful shutdown therefore writes `Snapshotted` (or `Destroyed` for a jailed sandbox that cannot be snapshotted) for every live sandbox, and the orphan sweep below only ever finds rows left by a crash or `SIGKILL`.
+- **Orphaned.** The startup sweep runs in `main` (`core/crates/daemon/src/main.rs:126`), before the HTTP listener binds, alongside snapshot reconciliation, so no request can observe a stale "live" row.
+- **Read.** `sandbox_history` (`http/routes/sandbox.rs:548`) parses `?live_only=` and `?limit=` into a `HistoryFilter`, runs `list` inside `spawn_blocking` (the store is synchronous), and maps each `HistoryRecord` into a response body.
 
 There is no write endpoint. Every write is a side effect of an existing lifecycle operation, which keeps the history honest: it cannot be edited through the API. A search of the SDK and CLI packages finds no reference to the history endpoint; only the docs-site API reference documents it, so today it is an HTTP-level feature.
 
