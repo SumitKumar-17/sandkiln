@@ -32,7 +32,6 @@ use std::fs;
 use std::io;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::SystemTime;
 
 /// Byte offset of the ext2/3/4 superblock from the start of the
@@ -109,21 +108,9 @@ impl ImageStore {
             return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("image already exists: {id}")));
         }
 
-        // Same `cp --reflink=auto` approach as `routes_sandbox::clone_rootfs`
-        // — an instant copy-on-write clone on a filesystem that supports it
-        // (XFS, Btrfs), an ordinary copy elsewhere (ext4).
-        let status = Command::new("cp").arg("--reflink=auto").arg(source).arg(&dest).status();
-        let status = match status {
-            Ok(status) => status,
-            Err(e) => {
-                let _ = fs::remove_file(&dest);
-                return Err(e);
-            }
-        };
-        if !status.success() {
-            let _ = fs::remove_file(&dest);
-            return Err(io::Error::other(format!("cp --reflink=auto {source:?} {dest:?} failed: {status}")));
-        }
+        // Registered images are cloned with the same reflink-or-copy
+        // primitive as per-sandbox rootfs files (`crate::rootfs`).
+        crate::rootfs::clone_file(source, &dest)?;
 
         let dest_size = fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
         if dest_size != source_metadata.len() {

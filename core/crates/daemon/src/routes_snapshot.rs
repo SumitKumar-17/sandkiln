@@ -368,7 +368,7 @@ fn cleanup_old_snapshot_dir(old_snapshot_dir: Option<&std::path::Path>) {
 /// checkpoint whose `state.snap` still describes the shared file as of
 /// the moment it was taken).
 ///
-/// Pure filesystem/process work (clone shells out to `cp`), run on a
+/// Pure filesystem/process work (the rootfs clone is a reflink or byte copy), run on a
 /// blocking thread by the caller. `old_snapshot_dir` is removed only
 /// after both files are moved out of it; on any failure, whatever was
 /// already created is cleaned up and `old_snapshot_dir` is left intact
@@ -378,9 +378,10 @@ fn retire_snapshot_files(
     new_id: &str,
     snapshot: &Snapshot,
     old_snapshot_dir: Option<&std::path::Path>,
+    metrics: &crate::metrics::Metrics,
 ) -> io::Result<(PathBuf, RetiredSnapshot)> {
-    let new_rootfs_path = std::env::temp_dir().join(format!("sandkiln-rootfs-{new_id}.ext4"));
-    crate::routes_sandbox::clone_rootfs(&snapshot.rootfs_path, &new_rootfs_path)?;
+    let new_rootfs_path = crate::storage::rootfs_path(new_id);
+    crate::routes_sandbox::clone_rootfs(&snapshot.rootfs_path, &new_rootfs_path, metrics)?;
 
     let dest_dir = crate::snapshot_history::retired_dir(&snapshot.id);
     let cleanup_partial = |extra: &std::path::Path| {
@@ -496,9 +497,10 @@ pub(crate) async fn resume_snapshot_by_id(
     let (snapshot, retire_result) = spawn_blocking_in_current_span("retire-checkpoint task panicked", {
         let new_id = new_id.clone();
         let old_snapshot_dir = old_snapshot_dir.clone();
+        let state = state.clone();
         move || {
             let result = if retain_history {
-                retire_snapshot_files(&new_id, &snapshot, old_snapshot_dir.as_deref()).map(Some)
+                retire_snapshot_files(&new_id, &snapshot, old_snapshot_dir.as_deref(), &state.metrics).map(Some)
             } else {
                 Ok(None)
             };
@@ -649,11 +651,12 @@ pub async fn fork_snapshot(
     // see module doc comment for the sequential-corruption bug this
     // closes. Fatal on failure (unlike resume's best-effort retention):
     // a shared rootfs would be silently unsafe, not merely degraded.
-    let new_rootfs_path = std::env::temp_dir().join(format!("sandkiln-rootfs-{new_id}.ext4"));
+    let new_rootfs_path = crate::storage::rootfs_path(&new_id);
     if let Err(e) = spawn_blocking_in_current_span("fork rootfs clone task panicked", {
         let source_rootfs_path = source_rootfs_path.clone();
         let new_rootfs_path = new_rootfs_path.clone();
-        move || crate::routes_sandbox::clone_rootfs(&source_rootfs_path, &new_rootfs_path)
+        let state = state.clone();
+        move || crate::routes_sandbox::clone_rootfs(&source_rootfs_path, &new_rootfs_path, &state.metrics)
     })
     .await
     {

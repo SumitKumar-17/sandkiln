@@ -146,11 +146,12 @@ pub(crate) async fn restore_snapshot_history_by_id(state: Arc<AppState>, id: Str
     };
 
     let new_id = Uuid::new_v4().to_string();
-    let new_rootfs_path = std::env::temp_dir().join(format!("sandkiln-rootfs-{new_id}.ext4"));
+    let new_rootfs_path = crate::storage::rootfs_path(&new_id);
     spawn_blocking_in_current_span("restore rootfs clone task panicked", {
         let source = retired.rootfs_path.clone();
         let dest = new_rootfs_path.clone();
-        move || crate::routes_sandbox::clone_rootfs(&source, &dest)
+        let state = state.clone();
+        move || crate::routes_sandbox::clone_rootfs(&source, &dest, &state.metrics)
     })
     .await
     .map_err(AppError::from)?;

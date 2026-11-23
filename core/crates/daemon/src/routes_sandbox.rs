@@ -258,7 +258,7 @@ async fn create_sandbox_cold(
     let id = Uuid::new_v4().to_string();
     // Guest-reachable via Firecracker's own MMDS (see VmConfig::metadata).
     let metadata = serde_json::json!({ "id": id, "name": &request.name, "tags": &request.tags });
-    let rootfs_path = std::env::temp_dir().join(format!("sandkiln-rootfs-{id}.ext4"));
+    let rootfs_path = crate::storage::rootfs_path(&id);
     let attached_drives: Vec<AttachedDrive> =
         request.drives.iter().map(|d| AttachedDrive { drive_id: d.id.clone(), read_only: d.read_only }).collect();
     // Prefixed to stay distinct from the reserved "rootfs" id. Firecracker
@@ -292,7 +292,7 @@ async fn create_sandbox_cold(
             // no end-to-end win — see ROADMAP.md's Benchmarking section.
             let setup_started = Instant::now();
             let ((copy_result, copy_elapsed), (lease_result, lease_elapsed)) = std::thread::scope(|scope| {
-                let copy_handle = scope.spawn(|| span.in_scope(|| timed(|| clone_rootfs(&base_rootfs_source, &rootfs_path))));
+                let copy_handle = scope.spawn(|| span.in_scope(|| timed(|| clone_rootfs(&base_rootfs_source, &rootfs_path, &state.metrics))));
                 let lease_handle = scope.spawn(|| span.in_scope(|| timed(|| state.network.lease())));
                 (copy_handle.join().expect("rootfs copy thread panicked"), lease_handle.join().expect("lease thread panicked"))
             });
@@ -788,18 +788,20 @@ fn first_duplicate<'a>(mut items: impl Iterator<Item = &'a str>) -> Option<&'a s
     items.find(|item| !seen.insert(*item))
 }
 
-/// `cp --reflink=auto` instead of `std::fs::copy`: an instant CoW clone
-/// on a filesystem that supports it (XFS, Btrfs); on ext4 (this dev box)
-/// it's just an ordinary copy. `pub(crate)`: also used by
+/// Clones a rootfs for a new mutating sandbox via
+/// `sandkiln_vmm::rootfs::clone_file` (reflink where the filesystem allows,
+/// else a byte copy) and records which method ran. `pub(crate)`: also used by
 /// `routes_snapshot`'s history-retaining resume and
-/// `routes_snapshot_history`'s restore, for the same reason — handing a
-/// *shared* rootfs to a new mutating sandbox would corrupt whatever else
-/// depends on that file staying unchanged.
-pub(crate) fn clone_rootfs(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-    let status = std::process::Command::new("cp").arg("--reflink=auto").arg(src).arg(dst).status()?;
-    if !status.success() {
-        return Err(std::io::Error::other(format!("cp --reflink=auto {src:?} {dst:?} failed: {status}")));
-    }
+/// `routes_snapshot_history`'s restore — handing a *shared* rootfs to a new
+/// mutating sandbox would corrupt whatever else depends on that file.
+pub(crate) fn clone_rootfs(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+    metrics: &crate::metrics::Metrics,
+) -> std::io::Result<()> {
+    let method = sandkiln_vmm::rootfs::clone_file(src, dst)?;
+    metrics.record_rootfs_clone(method);
+    tracing::debug!(method = method.as_str(), ?src, ?dst, "rootfs cloned");
     Ok(())
 }
 
@@ -929,7 +931,7 @@ mod tests {
         let dst = dir.join("dst.bin");
         std::fs::write(&src, b"some rootfs bytes").unwrap();
 
-        clone_rootfs(&src, &dst).unwrap();
+        clone_rootfs(&src, &dst, &crate::metrics::Metrics::new()).unwrap();
         assert_eq!(std::fs::read(&dst).unwrap(), b"some rootfs bytes");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -939,7 +941,7 @@ mod tests {
     fn clone_rootfs_fails_cleanly_for_a_missing_source() {
         let dir = std::env::temp_dir().join(format!("sandkiln-clone-rootfs-missing-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let result = clone_rootfs(&dir.join("does-not-exist.bin"), &dir.join("dst.bin"));
+        let result = clone_rootfs(&dir.join("does-not-exist.bin"), &dir.join("dst.bin"), &crate::metrics::Metrics::new());
         assert!(result.is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }

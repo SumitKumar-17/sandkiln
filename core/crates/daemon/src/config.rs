@@ -46,6 +46,13 @@ pub struct Config {
     /// Persistent drives' home. Not `std::env::temp_dir()` — that's
     /// per-sandbox rootfs copies, deleted on stop; drives outlive that.
     pub drives_dir: PathBuf,
+    /// Durable daemon state (snapshots, retired checkpoints). Not the OS
+    /// temp dir: a tmp cleaner would silently destroy "durable" snapshots.
+    pub state_dir: PathBuf,
+    /// Per-sandbox writable rootfs files. Put this on the same reflink-capable
+    /// filesystem (XFS/Btrfs) as the base image to make clones instant; the
+    /// `rootfs_clone_total{method}` metric shows whether that worked.
+    pub rootfs_dir: PathBuf,
     /// Registered images' home (`sandkiln_vmm::image::ImageStore`,
     /// `routes_images`) — a named rootfs `POST /sandboxes` can boot from
     /// instead of `base_rootfs_path`. Own directory, not `drives_dir`:
@@ -156,6 +163,8 @@ impl Config {
         }
         let archive_timeout = parse_timeout_secs_env("SANDKILN_ARCHIVE_TIMEOUT_SECS");
 
+        let state_dir = expand_home(&env_or("SANDKILN_STATE_DIR", "~/sandkiln-tools/state"));
+
         Self {
             listen_addr: env_or("SANDKILN_LISTEN_ADDR", "127.0.0.1:7777"),
             firecracker_bin: expand_home(&env_or("SANDKILN_FIRECRACKER_BIN", "~/sandkiln-tools/bin/firecracker")),
@@ -174,6 +183,8 @@ impl Config {
             tap_pool_size: env_or("SANDKILN_TAP_POOL_SIZE", "32").parse().expect("SANDKILN_TAP_POOL_SIZE must be a number"),
             auth_token: std::env::var("SANDKILN_AUTH_TOKEN").ok(),
             drives_dir: expand_home(&env_or("SANDKILN_DRIVES_DIR", "~/sandkiln-tools/drives")),
+            state_dir: state_dir.clone(),
+            rootfs_dir: std::env::var("SANDKILN_ROOTFS_DIR").map(|v| expand_home(&v)).unwrap_or_else(|_| state_dir.join("rootfs")),
             history_db_path: expand_home(&env_or("SANDKILN_HISTORY_DB_PATH", "~/sandkiln-tools/history.db")),
             images_dir: expand_home(&env_or("SANDKILN_IMAGES_DIR", "~/sandkiln-tools/images-registered")),
             idle_timeout,

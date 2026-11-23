@@ -158,12 +158,10 @@ impl Snapshot {
     }
 }
 
-/// Per-snapshot directories live under the daemon's temp dir, alongside
-/// the loose `sandkiln-rootfs-*.ext4` files `create_sandbox` writes there
-/// — same "OS temp dir, daemon-prefixed" convention, no new storage
-/// location invented.
+/// Per-snapshot directories live under the daemon's state directory
+/// (`storage::snapshots_root`), never the OS temp dir.
 pub fn snapshots_root() -> PathBuf {
-    std::env::temp_dir().join("sandkiln-snapshots")
+    crate::storage::snapshots_root()
 }
 
 /// Where one snapshot's state, memory, and metadata files live.

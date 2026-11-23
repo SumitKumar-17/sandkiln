@@ -3,6 +3,7 @@ name = "sandkiln-store"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 # "bundled" compiles sqlite from source as part of this crate rather than

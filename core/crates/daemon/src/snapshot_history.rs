@@ -150,7 +150,7 @@ impl RetiredSnapshot {
 /// lease-holding `Snapshot` — mixing in lease-free checkpoints there would
 /// break that assumption for no benefit.
 pub fn retired_root() -> PathBuf {
-    std::env::temp_dir().join("sandkiln-snapshot-history")
+    crate::storage::retired_root()
 }
 
 /// Where one retired checkpoint's state, memory, and metadata files live.

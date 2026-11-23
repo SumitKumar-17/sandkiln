@@ -27,6 +27,7 @@ mod sandbox;
 mod snapshot;
 mod snapshot_history;
 mod state;
+mod storage;
 mod tracing_util;
 
 use axum::middleware;
@@ -61,6 +62,10 @@ async fn async_main() {
     let config = Config::from_env();
     init_tracing(config.log_format);
     let listen_addr = config.listen_addr.clone();
+
+    storage::init(storage::StorageLayout::new(&config.state_dir, &config.rootfs_dir))
+        .expect("create the state/rootfs directories (SANDKILN_STATE_DIR, SANDKILN_ROOTFS_DIR)");
+    tracing::info!(state_dir = %config.state_dir.display(), rootfs_dir = %config.rootfs_dir.display(), "daemon storage ready");
 
     let uplink = match config.uplink_iface.clone() {
         Some(iface) => iface,
