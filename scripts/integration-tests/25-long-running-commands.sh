@@ -41,7 +41,10 @@ else
   elapsed_ms=$(( ($(date +%s%N) - started) / 1000000 ))
   assert_status "snapshot the sandbox" 200 "$status"
   SNAP_LONG="$(extract snapshot_id < "$WORKDIR/resp.json")"
-  if [ "$elapsed_ms" -lt 3000 ]; then
+  # The bug cost 6.5s+ on an idle box (the doomed guest sync); a snapshot writes the
+  # whole guest memory, so under the suite's 4-way parallelism a healthy one can
+  # take ~4s. 5.5s separates the two; the idle-box figure is 0.56s.
+  if [ "$elapsed_ms" -lt 5500 ]; then
     pass "snapshot request took ${elapsed_ms}ms (was ~6800ms when it waited on a doomed guest sync)"
   else
     fail "snapshot request took ${elapsed_ms}ms: stopping the paused VM is waiting on a guest sync again"

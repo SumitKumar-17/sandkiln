@@ -188,8 +188,11 @@ nothing under `snapshots/` or `state` knows about HTTP. A new endpoint is a new 
   `resume_snapshot_by_id`'s `retain_history: bool` defaults to retiring
   (not deleting) the checkpoint — falls back to delete-and-reuse as a
   loud warning, not a fatal error, if retiring fails after the VM already
-  resumed. `fork_snapshot()` gives every fork its own private rootfs
-  clone (fixes a real sequential-corruption bug, found live).
+  resumed. `fork_snapshot()` clones the rootfs BEFORE resuming and resumes onto the
+  clone via `ResumeConfig::rootfs_override`, so the snapshot's own disk is never
+  written (a resumed VM otherwise writes the host path baked into the snapshot:
+  a real corruption bug, regression test topic 26). Retain-history resume and
+  history restore do the same; `retained_checkpoints_max` caps retired checkpoints.
 - **`http/routes/metrics.rs`** — unauthenticated like `/healthz` (operational
   data, not sandbox data).
 - **`http/routes/preview.rs`** — reverse-proxies to

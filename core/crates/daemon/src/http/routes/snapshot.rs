@@ -19,31 +19,24 @@
 //!   from one exact prepared state.
 //!
 //! **Forking is not true concurrent VM forking.** `Vm::resume`'s
-//! `/snapshot/load` reopens the *exact* rootfs path and (if networked)
-//! tap device baked into the snapshot's own state — guest IP/MAC are
-//! frozen into the memory image itself (`Vm::resume`'s doc comment).
-//! Firecracker has no way to redirect a resumed VM's drive to a
-//! different backing file, so two live descendants of one snapshot would
-//! mean two processes writing the same rootfs file (corruption) and two
-//! guests presenting the same IP/MAC on the bridge (a collision neither
-//! guest can resolve, since reassigning needs in-guest cooperation this
-//! project's agent doesn't have). `Snapshot::forked_into` rules both out:
-//! at most one live descendant of a snapshot at a time, via `/fork` or
-//! (pre-consumption) `/resume`. True concurrent forking would need
-//! either a verified per-fork rootfs mechanism from Firecracker or a
-//! from-scratch live-memory-clone approach — neither exists here.
+//! `/snapshot/load` reopens the tap device baked into the snapshot's own
+//! state, and guest IP/MAC are frozen into the memory image itself, so two live
+//! descendants of one snapshot would present the same IP/MAC on the bridge (a
+//! collision neither guest can resolve without in-guest cooperation this
+//! project's agent does not have). `Snapshot::forked_into` rules that out: at
+//! most one live descendant of a snapshot at a time, via `/fork` or
+//! (pre-consumption) `/resume`.
 //!
-//! **A fork does get its own private rootfs clone**, though — fixes a
-//! real *sequential* corruption bug found while building time-travel
-//! restore (same class: before this, a fork shared its source's rootfs
-//! file directly, with only the tap/lease exclusive via `forked_into`).
-//! Fork, mutate the shared file, stop the fork, then resume the original
-//! directly: `Vm::resume` loads memory state describing the pre-fork
-//! rootfs, against a file now carrying the fork's mutations.
-//! `routes::sandbox::clone_rootfs` closes this the same way history
-//! retention does — the fork gets an independent copy, the source
-//! snapshot's file is never touched by anything but its own eventual
-//! resume/fork.
+//! **Disks are different: every fork gets its own.** A snapshot records its
+//! rootfs by host path, so a VM resumed without a drive override writes straight
+//! into the snapshot's own disk, and the next resume reads a filesystem that no
+//! longer matches the memory it was captured with (reproduced as ext4
+//! `Bad message`). A fork, a retain-history resume and a history restore
+//! therefore clone the disk BEFORE resuming and pass the clone as
+//! `ResumeConfig::rootfs_override` (Firecracker `PATCH /drives/rootfs` after a
+//! paused load); the snapshot's original disk is never written. Only a consuming
+//! resume, which retires the snapshot, uses its disk in place. Regression
+//! coverage: `scripts/integration-tests/26-snapshot-disk-isolation.sh`.
 
 use crate::http::error::AppError;
 use crate::sandbox::Sandbox;
