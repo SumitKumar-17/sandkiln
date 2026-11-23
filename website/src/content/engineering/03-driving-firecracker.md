@@ -223,7 +223,7 @@ pub fn update_metadata(&self, metadata: &serde_json::Value) -> io::Result<()> {
 
 ## Resume shares the same machinery
 
-`Vm::resume` (`vm/snapshot.rs:68`) uses the same console log helper, `connect_api_with_retry` and cleanup-on-failure pattern, but replaces the whole PUT sequence with one `PUT /snapshot/load` carrying `resume_vm: true` and a `vsock_override` that gives the new process a fresh socket path. The devices come out of the snapshot. It also starts the tunnel listener, non-fatally. Because the tap device and rootfs path are baked into the snapshot by name and path, the caller must hand back exactly the lease and file it had.
+`Vm::resume` (`vm/snapshot.rs:68`) uses the same console log helper, `connect_api_with_retry` and cleanup-on-failure pattern, but replaces the whole PUT sequence with a `PUT /snapshot/load` carrying a `vsock_override` that gives the new process a fresh socket path. The devices come out of the snapshot. It also starts the tunnel listener, non-fatally. The snapshot records the tap device and rootfs by name and path, so the caller must hand back exactly the lease it had. The rootfs is different: a snapshot's recorded disk path is the snapshot's own file, and a VM resumed onto it writes to it. When `ResumeConfig::rootfs_override` is set, `resume` therefore loads with `resume_vm: false`, repoints the disk with `PATCH /drives/rootfs {drive_id, path_on_host}`, then sends `PATCH /vm {state: Resumed}`; without an override it loads with `resume_vm: true` in one call. See [Snapshot disk corruption](/engineering/27-correctness-snapshot-disk-corruption).
 
 ## Timing and what is measured
 
