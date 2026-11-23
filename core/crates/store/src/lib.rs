@@ -7,11 +7,12 @@
 //! life: a live `Sandbox` owns a real OS process (a `sandkiln_vmm::Vm`'s
 //! `Child` handle, open API/vsock sockets) that has no serializable
 //! representation and no re-adoption mechanism if the daemon restarts —
-//! today a daemon shutdown of any kind (kill, crash, `systemctl
-//! restart`) orphans every live sandbox's Firecracker process
-//! unconditionally, confirmed via `scripts/sandkilnd-ctl.sh`'s own
-//! best-effort orphan-cleanup step and `SELF_HOSTING.md`'s
-//! troubleshooting section. A `Snapshot` (see `sandkiln-daemon::snapshot`)
+//! an *unclean* daemon exit (SIGKILL, crash, power loss) orphans
+//! every live sandbox's Firecracker process unconditionally, confirmed via
+//! `scripts/sandkilnd-ctl.sh`'s own best-effort orphan-cleanup step and
+//! `SELF_HOSTING.md`'s troubleshooting section. An orderly stop
+//! (SIGTERM/SIGINT) snapshots live sandboxes first instead, so those survive
+//! a restart as snapshots. A `Snapshot` (see `sandkiln-daemon::snapshot`)
 //! is the only thing that actually resumes into a working sandbox after
 //! a restart, and it already has its own durability story (atomic-write
 //! JSON + directory-scan reconciliation at startup) — this crate doesn't

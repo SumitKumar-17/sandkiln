@@ -121,14 +121,15 @@ impl Drop for PoolClaimGuard {
 /// correctly-identified live sandbox — the "claim" half of pre-warmed
 /// pools, called once `resolve_pool_claim` finds `PoolClaim::Warm`.
 ///
-/// Runs a real post-resume health check (`exec true`) first: resuming has
-/// a real, non-rare failure mode found live building this feature — a
-/// resumed guest kernel can panic early in boot (divide-by-zero trap,
-/// confirmed via Firecracker's console log), killing the process shortly
-/// after. Measured at a **1-in-3 to 2-in-3** failure rate across clean
-/// isolated resumes on this dev box; `08-snapshots.sh`'s own integration
-/// check never caught it because one resume isn't enough attempts to
-/// reliably hit it. A failed check is treated as "the warm snapshot was
+/// Runs a real post-resume health check (`exec true`) first, because a
+/// resumed guest kernel can still panic right after restore (seen as
+/// `Kernel panic - not syncing: Attempted to kill the idle task!` in
+/// Firecracker's console log), which kills the process. When this feature
+/// was built that happened to **1 in 3 to 2 in 3** resumes; re-measured on
+/// 2026-11-24 it is rare: 0 of 160 resume cycles in isolated and 4-way
+/// parallel loops, and 2 to 3 of ~320 checks in the full parallel
+/// integration suite. Root cause still unknown (ROADMAP.md, finding 20), so
+/// the check stays. A failed check is treated as "the warm snapshot was
 /// bad": clean up and fall through to a normal cold create (see caller),
 /// never hand back a corpse id. `destroy_unhealthy_claim` uses
 /// `Vm::force_stop` so this fallback doesn't pay a second timeout.

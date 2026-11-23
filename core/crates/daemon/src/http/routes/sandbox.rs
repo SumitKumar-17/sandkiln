@@ -188,7 +188,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
     if request.drives.is_empty() && request.rate_limit.is_none() {
         let key = crate::lifecycle::pool::PoolKey { image_id: request.image_id.clone(), vcpu_count, mem_size_mib };
         // Bounded retry: a warm claim failing its post-resume health
-        // check (measured up to ~2-in-3 resumes — not rare) releases its
+        // check (historically up to 2 in 3 resumes, rare now: see `claim_from_pool`) releases its
         // slot via `PoolClaimGuard`'s drop, and re-resolving immediately
         // is what keeps the fallback cold-create still counted against
         // `max_count` instead of silently exceeding it. Bounded only as
