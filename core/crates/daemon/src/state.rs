@@ -1,10 +1,10 @@
 use crate::config::Config;
 use crate::metrics::Metrics;
-use crate::pool::Pool;
-use crate::routes_preview::PreviewClient;
+use crate::lifecycle::pool::Pool;
+use crate::http::routes::preview::PreviewClient;
 use crate::sandbox::Sandbox;
-use crate::snapshot::Snapshot;
-use crate::snapshot_history::RetiredSnapshot;
+use crate::snapshots::held::Snapshot;
+use crate::snapshots::retired::RetiredSnapshot;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use sandkiln_store::HistoryStore;
@@ -27,7 +27,7 @@ pub struct AttachedDrive {
 }
 
 /// One remote object-store mount active inside a sandbox — see
-/// `crate::routes_mounts`. No credentials here: they're written straight
+/// `crate::http::routes::mounts`. No credentials here: they're written straight
 /// into the guest (a passwd file, never a command-line arg `ps aux`
 /// could see) and never touch daemon state, so nothing secret is at risk
 /// from persisting or logging this struct.
@@ -48,12 +48,12 @@ pub struct AppState {
     pub drives: DriveStore,
     pub images: ImageStore,
     /// `Some` iff `config.jailer` is `Some` — uid/gid pairs leased per
-    /// jailed boot (`routes_sandbox::create_sandbox`), released on stop.
+    /// jailed boot (`routes::sandbox::create_sandbox`), released on stop.
     pub jailer_ids: Option<JailerIdPool>,
     pub sandboxes: Mutex<HashMap<String, Sandbox>>,
     pub snapshots: Mutex<HashMap<String, Snapshot>>,
     /// Retired checkpoints ("time-travel restore", see
-    /// `crate::snapshot_history`). A separate map, not a flag on
+    /// `crate::snapshots::retired`). A separate map, not a flag on
     /// `Snapshot`: a retired checkpoint holds no live `Lease` at all,
     /// structurally unlike every `snapshots` entry.
     pub retired_snapshots: Mutex<HashMap<String, RetiredSnapshot>>,
@@ -75,11 +75,11 @@ pub struct AppState {
     /// `sandboxes`/`snapshots`; see that crate's own doc comment.
     pub history: HistoryStore,
     /// Configured pre-warmed pools, keyed by caller-given id. In-memory
-    /// only, unlike `snapshots` — see `crate::pool`.
+    /// only, unlike `snapshots` — see `crate::lifecycle::pool`.
     pub pools: Mutex<HashMap<String, Pool>>,
     /// Tap devices with a restore in flight. Closes a race
     /// `tap_device_holder` alone can't: two different retired checkpoints
-    /// in one lineage share a frozen tap/IP/MAC (`crate::snapshot_history`),
+    /// in one lineage share a frozen tap/IP/MAC (`crate::snapshots::retired`),
     /// so two concurrent restores could both pass a plain liveness check
     /// and then race `NetworkManager::reserve`, which doesn't itself
     /// detect double-reservation (it's built for the startup-reconcile
@@ -98,7 +98,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// `snapshots` comes from `crate::snapshot::reconcile` against disk,
+    /// `snapshots` comes from `crate::snapshots::held::reconcile` against disk,
     /// passed in rather than started empty so a restart doesn't orphan
     /// durable snapshots (see `main.rs`).
     pub fn new(
@@ -254,7 +254,7 @@ impl AppState {
     /// Claims `tap_device` for an in-flight restore: `true` = won, `false`
     /// = another restore already holds it, caller must refuse. Pair with
     /// `release_pending_tap_restore`, ideally via an RAII guard
-    /// (`routes_snapshot_history::PendingTapRestoreGuard`) so every exit
+    /// (`routes::snapshot_history::PendingTapRestoreGuard`) so every exit
     /// path releases it.
     pub fn try_reserve_pending_tap_restore(&self, tap_device: &str) -> bool {
         self.pending_tap_restores.lock().unwrap().insert(tap_device.to_string())
@@ -285,7 +285,7 @@ impl AppState {
 
     /// Claims a pending reference on `image_id` for a boot's duration —
     /// see `pending_image_boots`. Pair with `release_pending_image_boot`,
-    /// ideally via an RAII guard (`routes_sandbox::ImagePendingBootGuard`)
+    /// ideally via an RAII guard (`routes::sandbox::ImagePendingBootGuard`)
     /// so every exit path releases it.
     pub fn reserve_pending_image_boot(&self, image_id: &str) {
         *self.pending_image_boots.lock().unwrap().entry(image_id.to_string()).or_insert(0) += 1;
@@ -469,6 +469,7 @@ mod tests {
             tap_pool_size: 0,
             auth_token: None,
             drives_dir: dir.join("drives"),
+            origins: Default::default(),
             state_dir: dir.join("state"),
             rootfs_dir: dir.join("rootfs"),
             images_dir: dir.join("images"),
@@ -622,6 +623,7 @@ mod tests {
                 tap_pool_size: 0,
                 auth_token: None,
                 drives_dir: dir.join("drives"),
+                origins: Default::default(),
                 state_dir: dir.join("state"),
                 rootfs_dir: dir.join("rootfs"),
                 images_dir: dir.join("images"),

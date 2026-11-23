@@ -15,7 +15,7 @@
 //! reaches the guest — the guest is running untrusted/AI-generated code
 //! and must never see this API's credential.
 
-use crate::error::AppError;
+use crate::http::error::AppError;
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, HeaderName, Uri};

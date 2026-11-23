@@ -17,12 +17,12 @@ pub struct Sandbox {
     /// releases it. Every other sandbox owns its lease outright.
     pub network: Option<Lease>,
     /// Always this sandbox's own private rootfs clone (fork/restore each
-    /// get a fresh one via `routes_sandbox::clone_rootfs`, never the
+    /// get a fresh one via `routes::sandbox::clone_rootfs`, never the
     /// source's file directly), so `destroy_sandbox_by_id` can always
     /// remove it unconditionally. Forking once shared the source's rootfs
     /// file directly — a real corruption bug (fork, mutate, stop, resume
     /// original: memory disagreed with disk), caught live. See
-    /// `routes_snapshot::fork_snapshot`.
+    /// `routes::snapshot::fork_snapshot`.
     pub rootfs_path: PathBuf,
     /// Drives attached at creation, with read-only/write mode. Not
     /// touched on stop (drives outlive the sandbox) — removal from
@@ -40,7 +40,7 @@ pub struct Sandbox {
     pub jail_id: Option<u32>,
     pub tags: HashMap<String, String>,
     pub created_at: SystemTime,
-    /// Updated on every exec/read/write (`routes_exec::call_agent`),
+    /// Updated on every exec/read/write (`routes::exec::call_agent`),
     /// read by `idle_reaper`. A `Mutex` since `Sandbox` lives behind
     /// `AppState::sandboxes`'s one shared-map lock.
     pub last_activity: Mutex<Instant>,
@@ -58,12 +58,12 @@ pub struct Sandbox {
     /// session" note.
     pub name: Option<String>,
     /// Open `GET /sandboxes/:id/pty` sessions, checked/incremented under
-    /// `AppState::sandboxes`'s lock (`routes_pty::MAX_PTY_SESSIONS_PER_SANDBOX`),
+    /// `AppState::sandboxes`'s lock (`routes::pty::MAX_PTY_SESSIONS_PER_SANDBOX`),
     /// decremented via an RAII guard on session end. `Arc` because the
     /// guard can outlive this `Sandbox`'s reachability through the map.
     pub pty_session_count: Arc<AtomicU32>,
     /// Set when this sandbox counts against a pool's `max_count` (warm
-    /// claim or cold-create under headroom — see `crate::pool`). Released
+    /// claim or cold-create under headroom — see `crate::lifecycle::pool`). Released
     /// on stop by whichever path removes it. **Not** carried onto the
     /// resulting `Snapshot` — a later resume/fork is a fresh creation
     /// event, matched against whatever pool applies then.
@@ -76,7 +76,7 @@ pub struct Sandbox {
     pub egress: Option<EgressPolicy>,
     /// Baked in at create time as the base layer under each
     /// exec/exec-stream call's own `env` (call wins on conflict — see
-    /// `routes_exec::resolve_env`). Unlike `egress`, no external resource
+    /// `routes::exec::resolve_env`). Unlike `egress`, no external resource
     /// to re-apply, so it carries through resume **and** fork identically.
     pub env: HashMap<String, String>,
     /// Lineage pointer, carried onto `Snapshot::parent_snapshot_id` on a
@@ -86,14 +86,14 @@ pub struct Sandbox {
     /// resumed sandbox's lineage a dead end, caught live
     /// (`ROADMAP.md`'s "Snapshot lineage").
     pub parent_snapshot_id: Option<String>,
-    /// Active remote-storage mounts (`crate::routes_mounts`). Never
+    /// Active remote-storage mounts (`crate::http::routes::mounts`). Never
     /// re-applied on resume/fork/restore — a mount is a live guest FUSE
     /// process, already captured whole by Firecracker's own snapshot.
     /// Exists purely so `GET /sandboxes/:id/mounts` can list without a
     /// live guest round-trip.
     pub mounts: Vec<Mount>,
     /// Streamed background exec sessions (`kiln logs -f`, see
-    /// `crate::routes_logs`). Not carried across resume/fork/restore,
+    /// `crate::http::routes::logs`). Not carried across resume/fork/restore,
     /// same as `pty_session_count` — always empty on a fresh `Sandbox`.
     pub log_sessions: Mutex<HashMap<String, Arc<crate::log_session::LogSession>>>,
 }

@@ -7,7 +7,7 @@
 //! helper below — everything on both sides is just forwarding one
 //! request to the guest agent over vsock and reporting its response.
 
-use crate::error::AppError;
+use crate::http::error::AppError;
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
 use axum::extract::{Path, State};

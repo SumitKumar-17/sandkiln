@@ -5,17 +5,17 @@
 //! seam — data transfer vs. filesystem structure — and together they'd
 //! have pushed that file well past this crate's usual size range. Every
 //! handler here is the same shape: forward one request to the guest
-//! agent via `routes_exec::call_agent`, map its response.
+//! agent via `routes::exec::call_agent`, map its response.
 //!
 //! None of these validate `path` before forwarding it — same as
-//! `routes_exec::read_file`/`write_file` already don't. The guest agent
+//! `routes::exec::read_file`/`write_file` already don't. The guest agent
 //! is a deliberately "dumb executor" (see its own `AGENTS.md`); a path
 //! is scoped to whatever it resolves to *inside that one microVM's own
 //! filesystem*, not the real host, so there's nothing to jail against
 //! from here that KVM/Firecracker's own isolation doesn't already cover.
 
-use crate::error::AppError;
-use crate::routes_exec::call_agent;
+use crate::http::error::AppError;
+use crate::http::routes::exec::call_agent;
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;

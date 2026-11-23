@@ -1,10 +1,10 @@
 //! Background task keeping every configured pool topped up toward its
-//! `warm_count` — the other half of `crate::pool`. Same fixed-interval
-//! tick-loop shape as `crate::idle_reaper`.
+//! `warm_count` — the other half of `crate::lifecycle::pool`. Same fixed-interval
+//! tick-loop shape as `crate::lifecycle::idle_reaper`.
 
-use crate::pool::PoolConfig;
-use crate::routes_sandbox::{create_sandbox_core, CreateSandboxRequest};
-use crate::routes_snapshot::{delete_snapshot_by_id, snapshot_and_stop, SnapshotStopError};
+use crate::lifecycle::pool::PoolConfig;
+use crate::http::routes::sandbox::{create_sandbox_core, CreateSandboxRequest};
+use crate::http::routes::snapshot::{delete_snapshot_by_id, snapshot_and_stop, SnapshotStopError};
 use crate::state::AppState;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -52,7 +52,7 @@ async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) {
         rate_limit: None,
         // Neither egress nor env is baked into a warm-boot instance -- the
         // claimer's own values (if any) are applied fresh at claim time
-        // instead, see `routes_sandbox::claim_from_pool`.
+        // instead, see `routes::sandbox::claim_from_pool`.
         egress: None,
         env: HashMap::new(),
     };

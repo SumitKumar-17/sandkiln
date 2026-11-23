@@ -11,7 +11,7 @@
 //! whatever privileges the guest agent itself runs as, same trust model
 //! as `exec`.
 
-use crate::error::AppError;
+use crate::http::error::AppError;
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};

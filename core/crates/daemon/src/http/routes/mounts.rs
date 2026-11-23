@@ -52,8 +52,8 @@
 //! semantics don't have that hazard — so there's nothing here mirroring
 //! `AppState::drive_holders`.
 
-use crate::error::AppError;
-use crate::routes_exec::call_agent;
+use crate::http::error::AppError;
+use crate::http::routes::exec::call_agent;
 use crate::state::{AppState, Mount};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -299,7 +299,7 @@ pub async fn list_mounts(State(state): State<Arc<AppState>>, Path(id): Path<Stri
 /// call itself succeeds — a stuck FUSE mount (e.g. "device busy") is a
 /// loud warning, not a failed request, the same "best-effort past this
 /// point" treatment this project already gives other guest-side cleanup
-/// that a caller can't retry into working (see `routes_sandbox::
+/// that a caller can't retry into working (see `routes::sandbox::
 /// destroy_unhealthy_claim`'s neighboring reasoning for `force_stop`).
 #[tracing::instrument(skip(state), fields(sandbox_id = %id, mount_id = %mount_id))]
 pub async fn delete_mount(

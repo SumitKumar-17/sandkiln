@@ -15,9 +15,9 @@
 //!   idempotent, side-effect-aware operation look like an ordinary
 //!   non-idempotent create with a modifier.
 
-use crate::error::AppError;
-use crate::routes_sandbox::{create_sandbox_core, CreateSandboxRequest};
-use crate::routes_snapshot::resume_snapshot_by_id;
+use crate::http::error::AppError;
+use crate::http::routes::sandbox::{create_sandbox_core, CreateSandboxRequest};
+use crate::http::routes::snapshot::resume_snapshot_by_id;
 use crate::state::{AppState, NameResolution};
 use axum::extract::{Path, State};
 use axum::Json;
@@ -76,15 +76,15 @@ pub struct GetOrCreateSandboxRequest {
     #[serde(default)]
     tags: HashMap<String, String>,
     #[serde(default)]
-    drives: Vec<crate::routes_drives::DriveAttachment>,
+    drives: Vec<crate::http::routes::drives::DriveAttachment>,
     #[serde(default)]
     vcpu_count: Option<u8>,
     #[serde(default)]
     mem_size_mib: Option<u32>,
     #[serde(default)]
-    rate_limit: Option<crate::routes_sandbox::RateLimitRequest>,
+    rate_limit: Option<crate::http::routes::sandbox::RateLimitRequest>,
     #[serde(default)]
-    egress: Option<crate::routes_sandbox::EgressPolicyRequest>,
+    egress: Option<crate::http::routes::sandbox::EgressPolicyRequest>,
     #[serde(default)]
     env: HashMap<String, String>,
 }

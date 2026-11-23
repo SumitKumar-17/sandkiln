@@ -3,11 +3,11 @@
 //! lookup/get-or-create lives in `routes_sandbox_name` (crosses into
 //! snapshot territory, needs the per-name lock).
 
-use crate::error::AppError;
+use crate::http::error::AppError;
 use crate::metrics::CreatePhase;
-use crate::pool_claim::{claim_from_pool, resolve_pool_claim, MAX_POOL_CLAIM_ATTEMPTS, PoolClaim, PoolClaimGuard};
-use crate::routes_drives::DriveAttachment;
-use crate::routes_snapshot::{snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
+use crate::lifecycle::pool_claim::{claim_from_pool, resolve_pool_claim, MAX_POOL_CLAIM_ATTEMPTS, PoolClaim, PoolClaimGuard};
+use crate::http::routes::drives::DriveAttachment;
+use crate::http::routes::snapshot::{snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
 use crate::sandbox::Sandbox;
 use crate::state::{can_attach_read_only, describe_drive_holders, AppState, AttachedDrive};
 use crate::tracing_util::spawn_blocking_in_current_span;
@@ -62,7 +62,7 @@ pub struct CreateSandboxRequest {
     pub(crate) egress: Option<EgressPolicyRequest>,
     /// Baked in for the sandbox's lifetime; base layer under every
     /// `exec`/`exec-stream` call's own `env` (call wins on conflict —
-    /// see `routes_exec::resolve_env`). Persists through
+    /// see `routes::exec::resolve_env`). Persists through
     /// snapshot/resume/fork like `tags`.
     #[serde(default)]
     pub(crate) env: HashMap<String, String>,
@@ -133,7 +133,7 @@ pub async fn create_sandbox(
     // check below. See `AppState::lock_name`.
     let _name_guard = match &request.name {
         Some(name) => {
-            crate::routes_sandbox_name::validate_name(name).map_err(AppError::BadRequest)?;
+            crate::http::routes::sandbox_name::validate_name(name).map_err(AppError::BadRequest)?;
             let guard = state.lock_name(name).await;
             if let Some(holder) = state.name_holder(name) {
                 return Err(AppError::Conflict(format!("name '{name}' is already used by {holder}")));
@@ -148,7 +148,7 @@ pub async fn create_sandbox(
 }
 
 /// Shared boot mechanics for `create_sandbox` and
-/// `routes_sandbox_name::get_or_create_sandbox`'s create-fresh path.
+/// `routes::sandbox_name::get_or_create_sandbox`'s create-fresh path.
 /// Doesn't check name uniqueness — both callers already did, under the
 /// same `lock_name` guard still held here.
 pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSandboxRequest) -> Result<String, AppError> {
@@ -183,10 +183,10 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
 
     // `drives`/`rate_limit` are baked into a VM at boot time; a warm
     // snapshot was booted with neither, so either present here means
-    // this can never match a pool (see `crate::pool`) — falls through
+    // this can never match a pool (see `crate::lifecycle::pool`) — falls through
     // to cold-create and never queues either, for the same reason.
     if request.drives.is_empty() && request.rate_limit.is_none() {
-        let key = crate::pool::PoolKey { image_id: request.image_id.clone(), vcpu_count, mem_size_mib };
+        let key = crate::lifecycle::pool::PoolKey { image_id: request.image_id.clone(), vcpu_count, mem_size_mib };
         // Bounded retry: a warm claim failing its post-resume health
         // check (measured up to ~2-in-3 resumes — not rare) releases its
         // slot via `PoolClaimGuard`'s drop, and re-resolving immediately

@@ -2,12 +2,12 @@
 //! configured pre-warmed pool — split out of `routes_sandbox.rs` (claiming
 //! is a distinct concern from configuring/replenishing, same reasoning as
 //! `pool_replenisher.rs`'s own split, even with no HTTP route of its own:
-//! `routes_sandbox::create_sandbox_core` is the only caller). See
-//! `crate::pool` for the feature's overall shape.
+//! `routes::sandbox::create_sandbox_core` is the only caller). See
+//! `crate::lifecycle::pool` for the feature's overall shape.
 
-use crate::error::AppError;
-use crate::routes_sandbox::CreateSandboxRequest;
-use crate::routes_snapshot::resume_snapshot_by_id;
+use crate::http::error::AppError;
+use crate::http::routes::sandbox::CreateSandboxRequest;
+use crate::http::routes::snapshot::resume_snapshot_by_id;
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
 use std::sync::Arc;
@@ -47,10 +47,10 @@ pub(crate) enum PoolClaim {
 
 /// Resolves against every configured pool, waiting (up to
 /// `POOL_QUEUE_TIMEOUT`) if a matching pool is at `max_count` with
-/// nothing warm — `crate::pool`'s queueing half. Never holds
+/// nothing warm — `crate::lifecycle::pool`'s queueing half. Never holds
 /// `AppState::pools`'s lock across an await: lock, decide (or clone the
 /// pool's `Notify`), unlock, optionally await, loop with fresh state.
-pub(crate) async fn resolve_pool_claim(state: &Arc<AppState>, key: &crate::pool::PoolKey) -> Result<PoolClaim, AppError> {
+pub(crate) async fn resolve_pool_claim(state: &Arc<AppState>, key: &crate::lifecycle::pool::PoolKey) -> Result<PoolClaim, AppError> {
     let deadline = Instant::now() + POOL_QUEUE_TIMEOUT;
     loop {
         let notify = {

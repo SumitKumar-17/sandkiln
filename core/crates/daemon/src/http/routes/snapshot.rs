@@ -9,9 +9,9 @@
 //! - `POST /snapshots/:id/resume` **consumes the `Snapshot` record** —
 //!   removed from `state.snapshots`, the new sandbox owns the network
 //!   lease outright. By default does **not** consume the underlying
-//!   checkpoint data (see `crate::snapshot_history`, "time-travel
+//!   checkpoint data (see `crate::snapshots::retired`, "time-travel
 //!   restore"): the resumed sandbox gets a fresh rootfs clone
-//!   (`routes_sandbox::clone_rootfs`), and the original files move into
+//!   (`routes::sandbox::clone_rootfs`), and the original files move into
 //!   a *retired*, still-restorable checkpoint. `?retain_history=false`
 //!   opts back into the original fully-destructive behavior.
 //! - `POST /snapshots/:id/fork` does **not** consume it — stays around
@@ -40,15 +40,15 @@
 //! Fork, mutate the shared file, stop the fork, then resume the original
 //! directly: `Vm::resume` loads memory state describing the pre-fork
 //! rootfs, against a file now carrying the fork's mutations.
-//! `routes_sandbox::clone_rootfs` closes this the same way history
+//! `routes::sandbox::clone_rootfs` closes this the same way history
 //! retention does — the fork gets an independent copy, the source
 //! snapshot's file is never touched by anything but its own eventual
 //! resume/fork.
 
-use crate::error::AppError;
+use crate::http::error::AppError;
 use crate::sandbox::Sandbox;
-use crate::snapshot::{snapshot_dir, Snapshot};
-use crate::snapshot_history::RetiredSnapshot;
+use crate::snapshots::held::{snapshot_dir, Snapshot};
+use crate::snapshots::retired::RetiredSnapshot;
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
 use axum::extract::{Path, Query, State};
@@ -82,7 +82,7 @@ pub struct SnapshotSandboxResponse {
 /// transient) reasons `check_snapshottable` refuses. Split from
 /// `SnapshotStopError` so each caller reacts differently:
 /// `snapshot_sandbox` turns either into an error, while
-/// `routes_sandbox::stop_sandbox_by_id` treats `ForkedFrom` as harmless
+/// `routes::sandbox::stop_sandbox_by_id` treats `ForkedFrom` as harmless
 /// and only `Jailed` as a real conflict.
 pub(crate) enum SnapshotBlocked {
     /// Firecracker's snapshot state bakes in the in-jail paths a jailed
@@ -157,7 +157,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or(SnapshotStopError::NotFound)?;
     // Pool membership ends here regardless of outcome — a later
     // resume/fork is a fresh creation event, not tied back to this pool
-    // (see `crate::pool`).
+    // (see `crate::lifecycle::pool`).
     if let Some(pool_id) = &sandbox.source_pool_id {
         if let Some(pool) = state.pools.lock().unwrap().get_mut(pool_id) {
             pool.record_release();
@@ -361,7 +361,7 @@ fn cleanup_old_snapshot_dir(old_snapshot_dir: Option<&std::path::Path>) {
     }
 }
 
-/// Retires `snapshot` into `crate::snapshot_history` instead of
+/// Retires `snapshot` into `crate::snapshots::retired` instead of
 /// discarding it, returning the path the *new* sandbox should use as its
 /// rootfs — a fresh private clone, never the original file (continued
 /// use of the new sandbox would otherwise retroactively corrupt a
@@ -381,9 +381,9 @@ fn retire_snapshot_files(
     metrics: &crate::metrics::Metrics,
 ) -> io::Result<(PathBuf, RetiredSnapshot)> {
     let new_rootfs_path = crate::storage::rootfs_path(new_id);
-    crate::routes_sandbox::clone_rootfs(&snapshot.rootfs_path, &new_rootfs_path, metrics)?;
+    crate::http::routes::sandbox::clone_rootfs(&snapshot.rootfs_path, &new_rootfs_path, metrics)?;
 
-    let dest_dir = crate::snapshot_history::retired_dir(&snapshot.id);
+    let dest_dir = crate::snapshots::retired::retired_dir(&snapshot.id);
     let cleanup_partial = |extra: &std::path::Path| {
         let _ = std::fs::remove_file(&new_rootfs_path);
         let _ = std::fs::remove_file(extra);
@@ -394,13 +394,13 @@ fn retire_snapshot_files(
         let _ = std::fs::remove_file(&new_rootfs_path);
         return Err(e);
     }
-    let new_state = crate::snapshot::state_path(&dest_dir);
-    let new_mem = crate::snapshot::mem_path(&dest_dir);
-    if let Err(e) = crate::snapshot::move_file(&snapshot.snapshot_path, &new_state) {
+    let new_state = crate::snapshots::held::state_path(&dest_dir);
+    let new_mem = crate::snapshots::held::mem_path(&dest_dir);
+    if let Err(e) = crate::snapshots::held::move_file(&snapshot.snapshot_path, &new_state) {
         cleanup_partial(&new_state);
         return Err(e);
     }
-    if let Err(e) = crate::snapshot::move_file(&snapshot.mem_file_path, &new_mem) {
+    if let Err(e) = crate::snapshots::held::move_file(&snapshot.mem_file_path, &new_mem) {
         // `state.snap` already moved — rolling back could fail for the
         // same reason this branch was hit. Leaving it in `dest_dir` is
         // safe: a future `reconcile()` sees a directory missing
@@ -451,7 +451,7 @@ fn retire_snapshot_files(
 /// back so the caller can retry.
 ///
 /// `retain_history` controls the *checkpoint data* once the resume has
-/// succeeded (see `crate::snapshot_history`, "time-travel restore"):
+/// succeeded (see `crate::snapshots::retired`, "time-travel restore"):
 /// - `true` (default): checkpoint is *retired*, restorable later via
 ///   `POST /snapshots/history/:id/restore`; new sandbox gets a private
 ///   rootfs clone. A failure partway through retiring is a loud warning,
@@ -583,7 +583,7 @@ pub(crate) async fn resume_snapshot_by_id(
     Ok(new_id)
 }
 
-/// Mirrors `routes_sandbox::parse_keep`'s shape exactly.
+/// Mirrors `routes::sandbox::parse_keep`'s shape exactly.
 fn parse_retain_history(params: &HashMap<String, String>) -> Result<bool, String> {
     match params.get("retain_history").map(String::as_str) {
         None | Some("true") => Ok(true),
@@ -656,7 +656,7 @@ pub async fn fork_snapshot(
         let source_rootfs_path = source_rootfs_path.clone();
         let new_rootfs_path = new_rootfs_path.clone();
         let state = state.clone();
-        move || crate::routes_sandbox::clone_rootfs(&source_rootfs_path, &new_rootfs_path, &state.metrics)
+        move || crate::http::routes::sandbox::clone_rootfs(&source_rootfs_path, &new_rootfs_path, &state.metrics)
     })
     .await
     {
@@ -760,7 +760,7 @@ pub async fn delete_snapshot(State(state): State<Arc<AppState>>, Path(id): Path<
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// The actual teardown, shared by `delete_snapshot` and `crate::pool`'s
+/// The actual teardown, shared by `delete_snapshot` and `crate::lifecycle::pool`'s
 /// pool-deletion path (tearing down whatever a pool still has warm) —
 /// same `_by_id` split as `resume_snapshot_by_id`/`stop_sandbox_by_id`.
 pub(crate) async fn delete_snapshot_by_id(state: Arc<AppState>, id: String) -> Result<(), AppError> {
@@ -802,16 +802,16 @@ pub(crate) enum ArchiveError {
 }
 
 /// Moves an already-held, unforked snapshot's files to `archive_root`
-/// via `crate::snapshot::move_snapshot_files`. Only called from
+/// via `crate::snapshots::held::move_snapshot_files`. Only called from
 /// `idle_reaper`'s archive pass today — no on-demand archive route yet
-/// (deliberately deferred, same precedent as `crate::pool`'s narrower
+/// (deliberately deferred, same precedent as `crate::lifecycle::pool`'s narrower
 /// first slice).
 ///
 /// Removed from `AppState::snapshots` for the duration of the move (same
 /// reasoning as delete/resume: nothing else should touch it mid-move)
 /// and **always** reinserted after, success or failure — a failed
 /// archive must never lose track of it. See
-/// `crate::snapshot::move_snapshot_files` for why a failure can leave a
+/// `crate::snapshots::held::move_snapshot_files` for why a failure can leave a
 /// genuinely mixed set of old/new paths, reinserted as-is for later
 /// inspection rather than guessed at.
 pub(crate) async fn archive_snapshot_by_id(state: Arc<AppState>, id: String, archive_root: PathBuf) -> Result<(), ArchiveError> {
@@ -830,10 +830,10 @@ pub(crate) async fn archive_snapshot_by_id(state: Arc<AppState>, id: String, arc
     // false-alarm warning for a healthy, successfully-archived snapshot.
     let old_dir = snapshot.snapshot_path.parent().map(|p| p.to_path_buf());
 
-    let dest_dir = crate::snapshot::archive_snapshot_dir(&archive_root, &id);
+    let dest_dir = crate::snapshots::held::archive_snapshot_dir(&archive_root, &id);
     let (snapshot, result) = spawn_blocking_in_current_span("archive snapshot task panicked", move || {
         let mut snapshot = snapshot;
-        let result = crate::snapshot::move_snapshot_files(&mut snapshot, &dest_dir).and_then(|()| {
+        let result = crate::snapshots::held::move_snapshot_files(&mut snapshot, &dest_dir).and_then(|()| {
             snapshot.archived_at = Some(std::time::SystemTime::now());
             snapshot.persist(&dest_dir)
         });

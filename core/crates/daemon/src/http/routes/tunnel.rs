@@ -27,7 +27,7 @@
 //! `packages/python/src/sandkiln/tunnel.py` (or their sync/async
 //! equivalents) if changing it here.
 
-use crate::error::AppError;
+use crate::http::error::AppError;
 use crate::state::AppState;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};

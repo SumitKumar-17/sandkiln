@@ -3,7 +3,7 @@
 //! `GET .../exec-stream/:session_id/logs` (WebSocket) attaches to one —
 //! `kiln logs -f`'s mechanism.
 //!
-//! Not a streaming variant of `routes_exec::exec` (which blocks for one
+//! Not a streaming variant of `routes::exec::exec` (which blocks for one
 //! request's lifetime, one final blob) — this returns immediately with a
 //! session id; the command keeps running and its output keeps being
 //! captured into a [`crate::log_session::LogSession`] regardless of
@@ -23,7 +23,7 @@
 //! like `routes_pty` needs — each session owns its own independent vsock
 //! connection and child process, nothing to contend over.
 
-use crate::error::AppError;
+use crate::http::error::AppError;
 use crate::log_session::{LogEvent, LogSession};
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
@@ -44,7 +44,7 @@ pub struct StartExecStreamRequest {
     args: Vec<String>,
     /// Merged on top of the sandbox's own create-time `env` (this wins on
     /// a key conflict) -- same shape and reasoning as
-    /// `routes_exec::ExecRequestBody::env`.
+    /// `routes::exec::ExecRequestBody::env`.
     #[serde(default)]
     env: std::collections::HashMap<String, String>,
 }
@@ -169,7 +169,7 @@ pub async fn attach_logs(
 /// connection drops, appending each chunk into `session` — what makes
 /// output available for replay/live-tail regardless of whether anyone's
 /// attached. Blocking task (`std::os::unix::net::UnixStream`, not
-/// tokio's), same reasoning as `routes_exec::call_agent`.
+/// tokio's), same reasoning as `routes::exec::call_agent`.
 fn pump_exec_stream(mut stream: std::os::unix::net::UnixStream, session: Arc<LogSession>) {
     use base64::Engine;
     loop {

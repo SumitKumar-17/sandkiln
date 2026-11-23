@@ -1,5 +1,5 @@
 //! `LogSession`: daemon-side state for one streamed background exec
-//! session (`kiln logs -f` — see `crate::routes_logs` for the full
+//! session (`kiln logs -f` — see `crate::http::routes::logs` for the full
 //! design). Own file, not part of `routes_logs.rs`: pure state a
 //! background pump task mutates and any number of WebSocket clients read
 //! concurrently, no HTTP/axum concern — same state/surface seam as
@@ -77,7 +77,7 @@ impl LogSession {
     /// Appends one chunk of (already stream-merged) output. A no-op past
     /// `finish()` in practice, since nothing calls this again once the
     /// pump task has already sent an `Exit` and returned — not enforced
-    /// here, just how `routes_logs::pump_exec_stream` actually drives it.
+    /// here, just how `routes::logs::pump_exec_stream` actually drives it.
     pub fn append(&self, data: &[u8]) {
         let mut inner = self.inner.lock().unwrap();
         inner.buffer.extend(data.iter().copied());

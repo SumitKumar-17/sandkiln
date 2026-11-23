@@ -9,7 +9,7 @@
 //! the drive's backing file. `DELETE /drives/:id` is for permanently
 //! destroying a drive, and refuses to do so while it's still attached.
 
-use crate::error::AppError;
+use crate::http::error::AppError;
 use crate::state::{describe_drive_holders, AppState};
 use crate::tracing_util::spawn_blocking_in_current_span;
 use axum::extract::{Path, State};

@@ -1,38 +1,14 @@
-mod auth;
 mod config;
-mod error;
-mod idle_reaper;
+mod http;
+mod lifecycle;
 mod log_session;
 mod metrics;
-mod pool;
-mod pool_claim;
-mod pool_replenisher;
-mod request_id;
-mod routes_drives;
-mod routes_exec;
-mod routes_fs;
-mod routes_images;
-mod routes_logs;
-mod routes_metrics;
-mod routes_mounts;
-mod routes_pool;
-mod routes_preview;
-mod routes_pty;
-mod routes_sandbox;
-mod routes_sandbox_name;
-mod routes_snapshot;
-mod routes_snapshot_history;
-mod routes_tunnel;
 mod sandbox;
-mod snapshot;
-mod snapshot_history;
+mod snapshots;
 mod state;
 mod storage;
 mod tracing_util;
 
-use axum::middleware;
-use axum::routing::{any, delete, get, post};
-use axum::Router;
 use config::{Config, LogFormat};
 use sandkiln_store::HistoryStore;
 use sandkiln_vmm::drive::DriveStore;
@@ -40,7 +16,6 @@ use sandkiln_vmm::image::ImageStore;
 use sandkiln_vmm::network::{self, NetworkManager};
 use state::AppState;
 use std::sync::Arc;
-use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 /// Not `#[tokio::main]`: the ambient-capability raise below has to happen
@@ -49,18 +24,57 @@ use tracing_subscriber::EnvFilter;
 /// `#[tokio::main]` starts the runtime as part of macro-generated code
 /// that runs before this function body does.
 fn main() {
+    use config::cli::{self, Command};
+    let cli = match cli::parse(std::env::args().skip(1)) {
+        Ok(cli) => cli,
+        Err(e) => {
+            eprintln!("sandkilnd: {e}");
+            std::process::exit(2);
+        }
+    };
+    match cli.command {
+        Command::Help => return print!("{}", cli::USAGE),
+        Command::Version => return println!("sandkilnd {}", env!("CARGO_PKG_VERSION")),
+        Command::ConfigReference => return print!("{}", config::reference_markdown()),
+        Command::Run | Command::CheckConfig | Command::PrintConfig => {}
+    }
+    let loaded = match Config::load(cli.config_file.as_deref()) {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            eprint!("sandkilnd: {e}");
+            std::process::exit(2);
+        }
+    };
+    match cli.command {
+        Command::PrintConfig => return print!("{}", loaded.config.render_effective(loaded.file.as_deref())),
+        Command::CheckConfig => {
+            for w in &loaded.warnings {
+                eprintln!("warning: {w}");
+            }
+            return println!("configuration OK ({})", loaded.file.as_deref().map_or("environment and defaults".into(), |p| p.display().to_string()));
+        }
+        _ => {}
+    }
+
     raise_net_admin_ambient();
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("build tokio runtime")
-        .block_on(async_main());
+        .block_on(async_main(loaded));
 }
 
-async fn async_main() {
-    let config = Config::from_env();
+async fn async_main(loaded: config::Loaded) {
+    let config = loaded.config;
     init_tracing(config.log_format);
+    match &loaded.file {
+        Some(path) => tracing::info!(config_file = %path.display(), "loaded configuration file"),
+        None => tracing::info!("no configuration file; using environment and defaults"),
+    }
+    for warning in &loaded.warnings {
+        tracing::warn!("{warning}");
+    }
     let listen_addr = config.listen_addr.clone();
 
     storage::init(storage::StorageLayout::new(&config.state_dir, &config.rootfs_dir))
@@ -90,14 +104,14 @@ async fn async_main() {
     // `net_manager`'s free pool (via `NetworkManager::reserve`, called
     // from `reconcile`) before any live `POST /sandboxes` request can
     // race it for the same tap.
-    let reconciled_snapshots = snapshot::reconcile(&net_manager, &config.archive_dir);
+    let reconciled_snapshots = snapshots::held::reconcile(&net_manager, &config.archive_dir);
     tracing::info!(count = reconciled_snapshots.len(), "reconciled snapshots from disk");
 
     // Order relative to `reconciled_snapshots` above doesn't matter --
     // unlike that call, this never touches `net_manager` at all (a
     // retired checkpoint holds no live lease to reclaim, see
     // `snapshot_history`'s module doc comment).
-    let reconciled_retired = snapshot_history::reconcile();
+    let reconciled_retired = snapshots::retired::reconcile();
     tracing::info!(count = reconciled_retired.len(), "reconciled retired snapshot checkpoints from disk");
 
     let history = HistoryStore::open(&config.history_db_path)
@@ -158,100 +172,10 @@ async fn async_main() {
     // `pool_replenisher`'s identical reasoning below) for why a tick with
     // nothing configured at all is a cheap no-op scan, not worth gating
     // behind whether any of the three timeouts are actually set.
-    tokio::spawn(idle_reaper::run(state.clone(), idle_timeout, auto_suspend_timeout, archive_timeout, archive_dir));
-    tokio::spawn(pool_replenisher::run(state.clone()));
+    tokio::spawn(lifecycle::idle_reaper::run(state.clone(), idle_timeout, auto_suspend_timeout, archive_timeout, archive_dir));
+    tokio::spawn(lifecycle::pool_replenisher::run(state.clone()));
 
-    let sandbox_routes = Router::new()
-        .route("/sandboxes", post(routes_sandbox::create_sandbox).get(routes_sandbox::list_sandboxes))
-        .route("/sandboxes/history", get(routes_sandbox::sandbox_history))
-        .route("/sandboxes/get-or-create", post(routes_sandbox_name::get_or_create_sandbox))
-        .route("/sandboxes/by-name/:name", get(routes_sandbox_name::get_sandbox_by_name))
-        .route("/sandboxes/:id", delete(routes_sandbox::stop_sandbox))
-        .route("/sandboxes/:id/exec", post(routes_exec::exec))
-        .route("/sandboxes/:id/read-file", post(routes_exec::read_file))
-        .route("/sandboxes/:id/write-file", post(routes_exec::write_file))
-        .route("/sandboxes/:id/chmod", post(routes_fs::chmod))
-        .route("/sandboxes/:id/chown", post(routes_fs::chown))
-        .route("/sandboxes/:id/mkdir", post(routes_fs::mkdir))
-        .route("/sandboxes/:id/rename", post(routes_fs::rename))
-        .route("/sandboxes/:id/copy", post(routes_fs::copy))
-        .route("/sandboxes/:id/symlink", post(routes_fs::symlink))
-        .route("/sandboxes/:id/readlink", post(routes_fs::readlink))
-        .route("/sandboxes/:id/truncate", post(routes_fs::truncate))
-        .route("/sandboxes/:id/list-dir", post(routes_fs::list_dir))
-        .route("/sandboxes/:id/exec-stream", post(routes_logs::start_exec_stream).get(routes_logs::list_exec_streams))
-        .merge(routes_mounts::router())
-        .merge(routes_tunnel::router())
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
-
-    // Its own router, guarded by `auth::require_preview_token` rather than
-    // `auth::require_bearer_token` — for the same reason `preview_routes`
-    // below is: neither a browser's nor Node's native `WebSocket`
-    // constructor can set a custom `Authorization` header, so every
-    // WebSocket-upgrading endpoint (PTY, and streamed exec-stream logs)
-    // needs the same `?token=` query-parameter fallback preview URLs
-    // already use.
-    let websocket_routes = Router::new()
-        .route("/sandboxes/:id/pty", get(routes_pty::pty_session))
-        .route("/sandboxes/:id/exec-stream/:session_id/logs", get(routes_logs::attach_logs))
-        .merge(routes_tunnel::ws_router())
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_preview_token));
-
-    let drive_routes = Router::new()
-        .route("/drives", post(routes_drives::create_drive).get(routes_drives::list_drives))
-        .route("/drives/:id", delete(routes_drives::delete_drive))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
-
-    let image_routes = Router::new()
-        .route("/images", post(routes_images::create_image).get(routes_images::list_images))
-        .route("/images/:id", delete(routes_images::delete_image))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
-
-    let pool_routes = Router::new()
-        .route("/pools", post(routes_pool::create_pool).get(routes_pool::list_pools))
-        .route("/pools/:id", delete(routes_pool::delete_pool))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
-
-    let snapshot_routes = routes_snapshot::router()
-        .merge(routes_snapshot_history::router())
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer_token));
-
-    // Its own router, guarded by `auth::require_preview_token` rather than
-    // `auth::require_bearer_token` — see that middleware's doc comment for
-    // why a preview URL needs different auth handling than the rest of the
-    // `/sandboxes*` API.
-    let preview_routes = Router::new()
-        .route("/sandboxes/:id/preview/:port", any(routes_preview::preview_root))
-        // `*path` only matches when there's at least one character after
-        // the trailing `/` — a bare trailing slash with nothing after it
-        // (exactly what `previewUrl()`'s default `path: "/"` produces in
-        // every SDK) matches neither this route nor the bare one above
-        // without this third explicit registration. Found live: every
-        // preview request with the SDKs' own default path 404'd.
-        .route("/sandboxes/:id/preview/:port/", any(routes_preview::preview_root))
-        .route("/sandboxes/:id/preview/:port/*path", any(routes_preview::preview_path))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_preview_token));
-
-    let app = Router::new()
-        .route("/healthz", get(|| async { "ok" }))
-        .route("/metrics", get(routes_metrics::metrics))
-        .merge(sandbox_routes)
-        .merge(drive_routes)
-        .merge(image_routes)
-        .merge(pool_routes)
-        .merge(snapshot_routes)
-        .merge(preview_routes)
-        .merge(websocket_routes)
-        .layer(TraceLayer::new_for_http())
-        // Outermost: wraps everything above, including `TraceLayer`, so a
-        // caller-supplied or freshly generated request id is already
-        // established as the active span before any per-request logging
-        // happens, and `TraceLayer`'s own request-complete log line ends
-        // up correlated too. See `request_id`'s module doc for how that
-        // correlation then survives into `sandkiln-vmm` calls made from
-        // inside `spawn_blocking` (`tracing_util::spawn_blocking_in_current_span`).
-        .layer(middleware::from_fn(request_id::correlate))
-        .with_state(state);
+    let app = http::build_router(state);
 
     if !auth_enabled {
         tracing::warn!("SANDKILN_AUTH_TOKEN not set — the daemon's API is unauthenticated");

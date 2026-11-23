@@ -21,7 +21,7 @@ use tokio::sync::Notify;
 
 /// A configured pool's identity and target size. `vcpu_count`/
 /// `mem_size_mib` are resolved concrete values (see
-/// `routes_pool::create_pool`), not the request-style `Option<T>`
+/// `routes::pool::create_pool`), not the request-style `Option<T>`
 /// override shape — so matching a request against a pool is plain
 /// `PoolKey` equality, no daemon-default threading needed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,7 +63,7 @@ pub struct Pool {
     /// sandbox stays live.
     claimed: u32,
     /// Woken when a slot might have freed (`push_warm`/`record_release`),
-    /// so a queued claim (`routes_sandbox::create_sandbox_core`) re-checks
+    /// so a queued claim (`routes::sandbox::create_sandbox_core`) re-checks
     /// instead of polling. `notify_waiters`, not `notify_one`: every
     /// waiter re-evaluates the real condition on wake, so an extra wakeup
     /// is just a harmless re-check — standard `Notify`-as-condvar.
@@ -102,7 +102,7 @@ impl Pool {
     }
 
     /// Pops one ready warm snapshot id, if any — resuming it is the
-    /// caller's job (`routes_sandbox::create_sandbox_core`); this only
+    /// caller's job (`routes::sandbox::create_sandbox_core`); this only
     /// manages the queue, kept testable without a real `AppState`.
     pub fn take_warm(&mut self) -> Option<String> {
         self.warm.pop_front()
@@ -118,7 +118,7 @@ impl Pool {
     /// claim can't over-commit past `max_count` in the race window before
     /// the `Sandbox` is inserted. Pair with `record_release` on any exit
     /// path that doesn't end in a tracked `Sandbox` (failed resume/boot/
-    /// health check) — see `routes_sandbox::PoolClaimGuard`.
+    /// health check) — see `routes::sandbox::PoolClaimGuard`.
     pub fn record_claim(&mut self) {
         self.claimed += 1;
     }

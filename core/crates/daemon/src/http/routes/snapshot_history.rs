@@ -1,11 +1,11 @@
 //! `GET /snapshots/history` and `POST /snapshots/history/:id/restore` —
 //! the caller-facing half of "time-travel restore." See
-//! `crate::snapshot_history`'s doc comment for the full design (why a
+//! `crate::snapshots::retired`'s doc comment for the full design (why a
 //! retired checkpoint holds no live lease, what makes retiring safe).
 
-use crate::error::AppError;
+use crate::http::error::AppError;
 use crate::sandbox::Sandbox;
-use crate::snapshot_history::RetiredSnapshot;
+use crate::snapshots::retired::RetiredSnapshot;
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
 use axum::extract::{Path, Query, State};
@@ -44,7 +44,7 @@ pub struct ListSnapshotHistoryResponse {
     checkpoints: Vec<RetiredSnapshotSummary>,
 }
 
-/// Same two filters as `routes_snapshot::list_snapshots`.
+/// Same two filters as `routes::snapshot::list_snapshots`.
 pub async fn list_snapshot_history(
     State(state): State<Arc<AppState>>,
     Query(query): Query<HashMap<String, String>>,
@@ -79,7 +79,7 @@ pub struct RestoreSnapshotHistoryResponse {
 
 /// RAII for `try_reserve_pending_tap_restore`/`release_pending_tap_restore`
 /// — releases on drop, covering every exit path. Mirrors
-/// `routes_sandbox::PendingImageBootGuard`.
+/// `routes::sandbox::PendingImageBootGuard`.
 struct PendingTapRestoreGuard {
     state: Arc<AppState>,
     tap_device: String,
@@ -151,12 +151,12 @@ pub(crate) async fn restore_snapshot_history_by_id(state: Arc<AppState>, id: Str
         let source = retired.rootfs_path.clone();
         let dest = new_rootfs_path.clone();
         let state = state.clone();
-        move || crate::routes_sandbox::clone_rootfs(&source, &dest, &state.metrics)
+        move || crate::http::routes::sandbox::clone_rootfs(&source, &dest, &state.metrics)
     })
     .await
     .map_err(AppError::from)?;
 
-    let result = crate::routes_snapshot::resume_vm(&state, retired.snapshot_path.clone(), retired.mem_file_path.clone()).await;
+    let result = crate::http::routes::snapshot::resume_vm(&state, retired.snapshot_path.clone(), retired.mem_file_path.clone()).await;
     let vm = match result {
         Ok(vm) => vm,
         Err(e) => {
@@ -192,7 +192,7 @@ pub(crate) async fn restore_snapshot_history_by_id(state: Arc<AppState>, id: Str
         // Carried straight over, not re-applied -- a mount is a live
         // guest-side FUSE process, restored along with everything else
         // in the checkpoint's memory image. See
-        // `crate::routes_mounts`'s module doc comment.
+        // `crate::http::routes::mounts`'s module doc comment.
         mounts: retired.mounts.clone(),
         log_sessions: Default::default(),
     };

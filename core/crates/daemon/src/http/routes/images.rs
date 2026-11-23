@@ -17,7 +17,7 @@
 //! boots fine but never answers `exec` because the agent was never
 //! injected.
 
-use crate::error::AppError;
+use crate::http::error::AppError;
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
 use axum::extract::{Path, State};
@@ -132,7 +132,7 @@ pub async fn list_images(State(state): State<Arc<AppState>>) -> Result<Json<List
 /// Refuses while any live sandbox or held snapshot still references this
 /// image (`AppState::image_holder`, which also covers a boot currently in
 /// flight from it — see `pending_image_boots`'s doc comment on `AppState`)
-/// — the same "can't delete what's in use" pattern `routes_drives::delete_drive`
+/// — the same "can't delete what's in use" pattern `routes::drives::delete_drive`
 /// establishes via `AppState::drive_holder`.
 #[tracing::instrument(skip(state))]
 pub async fn delete_image(

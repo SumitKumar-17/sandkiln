@@ -36,7 +36,7 @@ fn token_matches(header_value: Option<&str>, expected: &str) -> bool {
 /// navigation, or an `<iframe src=...>` embedding a sandbox's dev server),
 /// neither of which can attach a custom `Authorization` header, so this
 /// additionally accepts the token via the reserved `?token=` query
-/// parameter `routes_preview::find_token_param` reads. Still a no-op when
+/// parameter `routes::preview::find_token_param` reads. Still a no-op when
 /// `SANDKILN_AUTH_TOKEN` is unset, same as `require_bearer_token`.
 pub async fn require_preview_token(
     State(state): State<Arc<AppState>>,
@@ -48,7 +48,7 @@ pub async fn require_preview_token(
     };
 
     let header_value = req.headers().get(header::AUTHORIZATION).and_then(|value| value.to_str().ok());
-    let query_token = req.uri().query().and_then(crate::routes_preview::find_token_param);
+    let query_token = req.uri().query().and_then(crate::http::routes::preview::find_token_param);
     if preview_token_matches(header_value, query_token, expected) {
         Ok(next.run(req).await)
     } else {
