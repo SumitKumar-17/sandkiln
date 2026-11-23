@@ -5,3 +5,4 @@ pub mod idle_reaper;
 pub mod pool;
 pub mod pool_claim;
 pub mod pool_replenisher;
+pub mod shutdown;

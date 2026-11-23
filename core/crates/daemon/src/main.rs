@@ -175,14 +175,30 @@ async fn async_main(loaded: config::Loaded) {
     tokio::spawn(lifecycle::idle_reaper::run(state.clone(), idle_timeout, auto_suspend_timeout, archive_timeout, archive_dir));
     tokio::spawn(lifecycle::pool_replenisher::run(state.clone()));
 
-    let app = http::build_router(state);
+    let app = http::build_router(state.clone());
 
     if !auth_enabled {
         tracing::warn!("SANDKILN_AUTH_TOKEN not set — the daemon's API is unauthenticated");
     }
     tracing::info!(%listen_addr, "sandkiln daemon starting");
     let listener = tokio::net::TcpListener::bind(&listen_addr).await.expect("bind listen address");
-    axum::serve(listener, app).await.expect("server error");
+    // Stop accepting on a signal, give in-flight requests a grace period, then
+    // snapshot every live sandbox so a restart does not strand them.
+    let stop_accepting = Arc::new(tokio::sync::Notify::new());
+    let server = axum::serve(listener, app).with_graceful_shutdown({
+        let stop_accepting = stop_accepting.clone();
+        async move { stop_accepting.notified().await }
+    });
+    tokio::select! {
+        result = server => result.expect("server error"),
+        _ = async {
+            lifecycle::shutdown::signal().await;
+            stop_accepting.notify_one();
+            tokio::time::sleep(lifecycle::shutdown::REQUEST_GRACE).await;
+        } => tracing::warn!("in-flight requests did not finish within the grace period"),
+    }
+    lifecycle::shutdown::drain_sandboxes(state).await;
+    tracing::info!("shutdown complete");
 }
 
 /// `.json()` and the default pretty layer are different builder types, so
