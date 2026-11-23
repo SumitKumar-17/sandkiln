@@ -60,9 +60,9 @@ flowchart TD
     A[POST /sandboxes] --> B{matching pool with a warm snapshot, no drives, no custom rate_limit?}
     B -- no --> C[cold create: clone rootfs, lease tap, Vm::boot]
     B -- yes --> D[resume warm snapshot]
-    D --> E[update_metadata: PUT /mmds/config then PUT /mmds]
-    E --> F[health check: exec true]
-    F -- ok --> G[return sandbox]
+    D --> F[health check: exec true]
+    F -- ok --> E[update_metadata: PUT /mmds/config then PUT /mmds, retried, non-fatal]
+    E --> G[return sandbox]
     F -- failed --> H[Vm::force_stop]
     H --> C
     C --> G
@@ -72,7 +72,7 @@ flowchart TD
 
 A resumed guest kernel can panic early in boot. The serial console log showed a divide-by-zero in the console driver's init path, after which the Firecracker process exits. In isolated single-claim runs the failure rate was roughly 1 in 3 to 2 in 3 resumes. The root cause is unconfirmed; clock-source drift between snapshot and restore is a hypothesis only. The regular snapshot integration check passes because it resumes once per run.
 
-Every pool claim therefore runs `exec true` against the resumed sandbox before returning it. On failure the sandbox is torn down with `Vm::force_stop`, which skips the pre-kill `sync` (a dead guest cannot answer it, and waiting cost a second 5s timeout: about 10.3s down to about 5.4s), and the request falls back to a cold create. The caller always receives a working sandbox, slower on the unlucky path.
+Every pool claim therefore runs `exec true` against the resumed sandbox before returning it; only then is the metadata refreshed. On failure the sandbox is torn down with `Vm::force_stop`, which skips the pre-kill `sync` (a dead guest cannot answer it, and waiting cost a second 5s timeout: about 10.3s down to about 5.4s), and the request falls back to a cold create. The caller always receives a working sandbox, slower on the unlucky path.
 
 Two related constraints in the resume path:
 
