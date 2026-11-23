@@ -5,10 +5,10 @@ import { ticks, markStyle, type Measurement } from "../lib/scale";
 // rounded midpoints: a range is published as a range, because the prettier
 // single number in the middle of it was never actually measured.
 const readout: Measurement[] = [
-  { label: "cold boot", lo: 12.6, hi: 14.0, value: "12.6–14.0", unit: "ms", source: "criterion, spawn to InstanceStart, 2026-11-23" },
+  { label: "ready for first command", lo: 214.5, hi: 214.5, value: "214", unit: "ms", source: "create to first exec, mean of 20 cold sandboxes" },
   { label: "exec round-trip", lo: 0.242, hi: 0.248, value: "242–248", unit: "µs", source: "criterion, over an open vsock" },
   { label: "resume from snapshot", lo: 3.7, hi: 4.0, value: "3.7–4.0", unit: "ms", source: "criterion, 2026-11-23" },
-  { label: "full create", lo: 17.9, hi: 17.9, value: "17.9", unit: "ms", source: "mean of 20 cold creates, reflinked rootfs" },
+  { label: "create returns", lo: 16.4, hi: 16.4, value: "16.4", unit: "ms", source: "mean of 20 cold creates, reflinked rootfs" },
 ];
 
 const consoleLines = [
