@@ -89,7 +89,7 @@ pub struct AppState {
     pending_tap_restores: Mutex<std::collections::HashSet<String>>,
     /// One entry per tunnel between `POST /sandboxes/:id/tunnel`
     /// (register) and the matching `GET .../tunnel/:tunnel_id/ws`
-    /// (take) — see `routes_tunnel.rs`. The receiving half of
+    /// (take) — see `http/routes/tunnel.rs`. The receiving half of
     /// `sandkiln_vmm::tunnel::register`'s channel; removed the moment a
     /// WebSocket takes it, so a second WS attempt on the same tunnel_id
     /// gets a clear `409` instead of silently racing the first for

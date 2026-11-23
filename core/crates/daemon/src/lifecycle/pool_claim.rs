@@ -1,7 +1,7 @@
 //! Resolving and executing a `POST /sandboxes` request against a
-//! configured pre-warmed pool — split out of `routes_sandbox.rs` (claiming
+//! configured pre-warmed pool — split out of `http/routes/sandbox.rs` (claiming
 //! is a distinct concern from configuring/replenishing, same reasoning as
-//! `pool_replenisher.rs`'s own split, even with no HTTP route of its own:
+//! `lifecycle/pool_replenisher.rs`'s own split, even with no HTTP route of its own:
 //! `routes::sandbox::create_sandbox_core` is the only caller). See
 //! `crate::lifecycle::pool` for the feature's overall shape.
 

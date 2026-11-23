@@ -1,6 +1,6 @@
 //! Exec and whole-file read/write against a running sandbox. Filesystem
 //! metadata/structure operations (chmod, chown, mkdir, rename, copy,
-//! symlink, readlink, truncate, directory listing) live in `routes_fs`
+//! symlink, readlink, truncate, directory listing) live in `routes::fs`
 //! instead — a real seam (data transfer vs. filesystem structure), split
 //! out once this file would otherwise have grown well past the ~300-line
 //! range adding all of them here. Both files share the `call_agent`
@@ -118,7 +118,7 @@ pub async fn write_file(
 
 /// Shared by every route that just forwards one request to the guest
 /// agent and reports its response — exec/read/write here and every
-/// `routes_fs` handler all fit this shape.
+/// `routes::fs` handler all fit this shape.
 pub(crate) async fn call_agent(state: Arc<AppState>, id: String, request: Request) -> Result<AgentResponse, AppError> {
     // Copy the endpoint out and release the sandbox map's lock *before* the
     // call: a user command can run for minutes, and holding the daemon-wide

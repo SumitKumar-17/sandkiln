@@ -133,7 +133,7 @@ impl HistoryStore {
     /// Benchmarking section), a real cost for a store this code already
     /// treats as best-effort (`record_created`'s caller only warns on
     /// error, never fails the request over it — see
-    /// `routes_sandbox.rs`). WAL mode fsyncs the write-ahead log, not the
+    /// `http/routes/sandbox.rs`). WAL mode fsyncs the write-ahead log, not the
     /// main database file, on every write, and `synchronous=NORMAL`
     /// (safe specifically in WAL mode, unlike in the default rollback
     /// journal mode) only syncs at WAL checkpoints instead of every

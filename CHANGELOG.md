@@ -12,6 +12,38 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Daemon & core — 2026-11-24
+
+### Fixed
+- A command silent for more than 3 seconds returned an error after ~6.5s **and
+  ran twice**: the 3s control-plane vsock timeout applied to user commands and
+  the retry re-sent an already-delivered request. Requests are now retried only
+  if they never reached the guest, and user commands use the new
+  `exec_timeout_secs` (default 600), returning `504` on expiry.
+- One slow command no longer freezes every other sandbox operation (the
+  daemon-wide sandbox lock was held across the guest call).
+- Snapshot requests dropped from 6.8s to 0.56s: stopping the paused VM no
+  longer waits on a guest `sync` that cannot be answered.
+- The create path now unwinds the rootfs clone and network lease on every
+  failure.
+- Bearer-token comparison is constant time.
+
+### Added
+- Orderly shutdown: `SIGTERM`/`SIGINT` snapshots every live sandbox before the
+  daemon exits (no leaked Firecracker processes; resumable after restart).
+  `scripts/restart-test.sh`.
+- `sandkiln.toml` config file under env vars, `sandkilnd --check-config`,
+  `--print-config`, `--config-reference`; `sandkiln.example.toml`.
+- `exec_timeout_secs` setting. Integration topic 25 (long-running commands).
+- Website: an Engineering section of 24+ posts with diagrams.
+
+### Changed
+- Daemon source reorganised into `http/routes`, `lifecycle`, `snapshots` and
+  `config` modules. `scripts/setup.sh` writes `sandkiln.toml`; `sandkilnd-ctl.sh`
+  validates config before starting; `preflight-check.sh` reads the daemon's
+  effective config and checks the base image and `rootfs_dir` share a reflink
+  filesystem. `scripts/remote.sh sync` now prunes deleted files.
+
 ## Daemon & core — 2026-11-23
 
 ### Changed

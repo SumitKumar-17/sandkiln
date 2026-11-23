@@ -1,7 +1,7 @@
 //! HTTP handlers for registered images: named, daemon-tracked ext4 rootfs
 //! files a `POST /sandboxes` request can boot from instead of the
 //! `SANDKILN_BASE_ROOTFS` default. Own file for the same reason
-//! `routes_drives.rs` is.
+//! `http/routes/drives.rs` is.
 //!
 //! `POST /images` takes a host filesystem path, not a file upload —
 //! accepting an arbitrary multi-gigabyte upload over HTTP is a distinct,

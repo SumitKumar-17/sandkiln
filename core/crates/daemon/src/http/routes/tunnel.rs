@@ -1,6 +1,6 @@
 //! Local tunnel: exposes a service on the *caller's own machine* to code
 //! running inside a sandbox — the reverse of dev-server preview
-//! (`routes_preview.rs`), which exposes a service inside the sandbox
+//! (`http/routes/preview.rs`), which exposes a service inside the sandbox
 //! outward. `POST /sandboxes/:id/tunnel` tells the guest agent to start
 //! listening on a guest port; `GET .../tunnel/:tunnel_id/ws` is the
 //! WebSocket the SDK/CLI caller holds open for the tunnel's whole life,
@@ -54,7 +54,7 @@ pub fn router() -> Router<Arc<AppState>> {
 }
 
 /// The WebSocket route needs `auth::require_preview_token` instead, same
-/// reason as `routes_pty.rs`/`routes_logs.rs`'s own WebSocket routes:
+/// reason as `http/routes/pty.rs`/`http/routes/logs.rs`'s own WebSocket routes:
 /// neither a browser's nor Node's native `WebSocket` constructor can set
 /// a custom `Authorization` header, so this needs the `?token=` fallback
 /// too, even though (unlike PTY/preview) the thing opening it is always

@@ -7,10 +7,10 @@ import Footer from "../components/Footer.astro";
 // Ranges are published as ranges; a dash means the run did not record that
 // figure, not that it was zero.
 const metrics = [
-  { label: "Cold boot", value: "10.5–10.9", unit: "ms", ctx: "Process spawn to InstanceStart acknowledged — was 32.3–33.1ms before fixing a 20ms fixed-sleep poll below" },
-  { label: "Exec round-trip", value: "220–250", unit: "µs", ctx: "Over an already-open vsock connection" },
-  { label: "Resume from snapshot", value: "6.5–7.7", unit: "ms", ctx: "Was 25.5–26.2ms — shares the same fixed socket wait" },
-  { label: "Snapshot take", value: "309.6–335.0", unit: "ms", ctx: "Pause plus a full synchronous write of guest memory. The most load-sensitive figure here; re-runs on a busier box have read 550-900ms." },
+  { label: "Cold boot", value: "12.6–14.0", unit: "ms", ctx: "Process spawn to InstanceStart acknowledged. Re-measured 2026-11-23 on kernel 6.8 (earlier run: 10.5–10.9ms; before the 20ms fixed-sleep fix below: 32.3–33.1ms). Directional: one shared box." },
+  { label: "Exec round-trip", value: "242–248", unit: "µs", ctx: "Over an already-open vsock connection. Re-measured 2026-11-23 (earlier run: 220–250µs)." },
+  { label: "Resume from snapshot", value: "3.7–4.0", unit: "ms", ctx: "Re-measured 2026-11-23 (earlier run: 6.5–7.7ms; was 25.5–26.2ms before the fixed-sleep fix, which shares the same socket wait)." },
+  { label: "Snapshot take", value: "485–727", unit: "ms", ctx: "Pause plus a full synchronous write of guest memory. Re-measured 2026-11-23 (earlier run: 309.6–335.0ms). The criterion figure excludes stopping the VM; the HTTP request itself used to take 6.8s because stopping a paused VM waited on a guest sync, now 0.56s. The most load-sensitive figure here; re-runs on a busier box have read 550-900ms." },
 ];
 
 const phases = [

@@ -78,7 +78,7 @@ pub struct Snapshot {
     /// for why a walkable pointer, not a fuller ancestry tree, is the
     /// deliberately narrow first slice.
     pub parent_snapshot_id: Option<String>,
-    /// Carried over from `Sandbox::mounts` — see `routes_mounts`. No
+    /// Carried over from `Sandbox::mounts` — see `routes::mounts`. No
     /// credentials here, and nothing to re-apply on resume/fork: a mount
     /// is a live guest FUSE process, already captured in the snapshotted
     /// memory image.
@@ -169,7 +169,7 @@ pub fn snapshot_dir(snapshot_id: &str) -> PathBuf {
     snapshots_root().join(snapshot_id)
 }
 
-// Shared with `snapshot_history.rs` (`pub(crate)`) -- a retired checkpoint
+// Shared with `snapshots/retired.rs` (`pub(crate)`) -- a retired checkpoint
 // uses this same three-filename directory-layout convention, not a
 // snapshot-specific one.
 pub(crate) fn meta_path(dir: &Path) -> PathBuf {
@@ -235,7 +235,7 @@ pub(crate) fn move_snapshot_files(snapshot: &mut Snapshot, dest_dir: &Path) -> i
     Ok(())
 }
 
-// `pub(crate)`: `snapshot_history.rs`'s own retire/restore file movement
+// `pub(crate)`: `snapshots/retired.rs`'s own retire/restore file movement
 // reuses this rather than re-implementing the same rename-with-cross-
 // filesystem-fallback dance a second time.
 pub(crate) fn move_file(src: &Path, dst: &Path) -> io::Result<()> {

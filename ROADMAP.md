@@ -32,6 +32,16 @@ run, not re-proven this session.
 | 7 | JS tooling lags (typescript 5.9 vs 7, tsup 8 vs 9). Low risk. | Open, low. |
 | 9 | Snapshots, documented as durable, lived in the OS temp dir. | Fixed: `SANDKILN_STATE_DIR`. |
 | 10 | `18-pool` integration check "deleting the pool cleaned up its own warm snapshot" failed once under full-suite concurrency (passes 4/4 in isolation); post-resume `vsock ... Connection refused` seen in pool-claim health checks. | Open: likely a resume-readiness race, investigate. |
+| 11 | **Any command silent for more than 3s returned an error after ~6.5s and ran twice.** The 3s control-plane vsock timeout applied to user commands, and `Vm::call` retried after the request had already been delivered. Reproduced: `echo run >> f; sleep 4` left `run` twice. | **Fixed**: `CallError{request_sent}`, retries only unsent requests, `exec_timeout_secs` (default 600) with a 504. Regression: integration topic 25. |
+| 12 | `call_agent` held the daemon-wide `sandboxes` mutex for the entire vsock call, so one slow command froze every sandbox operation. | **Fixed**: `AgentEndpoint` copied out, lock released first. `GET /sandboxes` now answers in 7ms during a running command. |
+| 13 | Snapshot requests took 6.8s: `snapshot_and_stop` called `Vm::stop()` on a paused VM, whose pre-kill `sync` can never be answered. The criterion bench excluded it, hiding it. | **Fixed**: `force_stop()`. 6.8s to 0.56s (12x). |
+| 14 | Create path leaked on failure: lease if the clone failed, rootfs file if the lease/boot/egress failed (violated AGENTS.md section 7). | **Fixed**: both-halves unwind plus the `OwnedFile` scope guard. |
+| 15 | Bearer token compared with `==`. | **Fixed**: constant-time comparison. |
+| 16 | No graceful shutdown: SIGTERM left every Firecracker process running (leaked memory and taps) and lost the sandboxes. | **Fixed**: SIGTERM snapshots every live sandbox (0.75s for 3), 0 processes leaked, resumable after restart. `scripts/restart-test.sh`. |
+| 17 | 30 env vars read ad hoc with `panic!`/`expect`, defaults duplicated in `preflight-check.sh`, no config file. | **Fixed**: one settings registry, `sandkiln.toml` layer, `--check-config`/`--print-config`/`--config-reference`, scripts read the daemon's effective config. |
+| 18 | `remote.sh sync` (tar) never deleted renamed or removed files, so a refactor left duplicate modules on the box. | **Fixed**: pruned rsync over code directories. |
+| 19 | Daemon `src/` was 36 flat files, `main.rs` held the whole router. | **Fixed**: `http/routes`, `lifecycle`, `snapshots`, `config` module directories. |
+| 20 | In the full 4-way-parallel integration suite, 2-3 of ~320 checks fail because a freshly resumed guest kernel panics (`Attempted to kill the idle task!`, ~20ms after restore) and its Firecracker exits. 160/160 resume and re-snapshot cycles were clean in isolated and 4-way-parallel loops, and every topic subset passes, so a specific concurrent condition is needed. Same family as the pool-claim health-check fallback. | **Open**: root cause not found. Next: capture a failing snapshot's `state.snap`/`mem.bin` and the host load at the time; test with a CPU template; test Firecracker/kernel versions. |
 | 8 | Remote box holds stale copies (`docs/architecture`, worktrees); production data to preserve: `~/sandkiln-tools/history.db`, images, registered images. | Do not delete; documented here. |
 
 **Plan, in order**
@@ -45,7 +55,9 @@ run, not re-proven this session.
    dashboard of sandboxes, pools, drives, history).
 5. Website, docs, packaging and launch pass once the core is re-verified.
 
-**Status.** Step 1 done: daemon up on the dev box, integration suite 314/315 (finding 10), baseline cold create 187ms on ext4. Step 2 done (finding 4). Next: finding 10, then step 3.
+**Re-measured 2026-11-23** (criterion, this box, kernel 6.8, directional, one shared machine): cold boot 12.6-14.0ms (earlier published 10.5-10.9ms), exec round trip 242-248us (220-250), snapshot take 485-727ms (309.6-335.0), resume from snapshot 3.7-4.0ms (6.5-7.7). Cold `POST /sandboxes` mean over 20: 187.5ms on ext4 with a full-copy clone, 18.4ms with a reflinked rootfs. The snapshot HTTP request itself: 6.8s before finding 13, 0.56s after.
+
+**Status.** Live suite 319/321 (finding 20 is the remainder), 341 unit tests, clippy clean. Done: findings 1-19. Next, in order: (1) root-cause finding 20; (2) snapshot-take cost (310-727ms, full memory every time): measure sandkiln's own overhead, then Diff snapshots; (3) make reflink the default for production setups (preflight now warns when the base image and `rootfs_dir` do not share a reflink filesystem); (4) admin tooling: `kiln doctor`/`kiln status` and a dashboard over `/metrics` and the history API; (5) an MCP server so agents can drive sandboxes directly (every comparable platform offers one); (6) a per-request exec timeout and killing the guest process on expiry (today the process keeps running after a 504); (7) the 24-post engineering section on the website is the reference for how each subsystem works, keep it in step with code.
 
 ## What works today
 

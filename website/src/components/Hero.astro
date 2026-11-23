@@ -5,9 +5,9 @@ import { ticks, markStyle, type Measurement } from "../lib/scale";
 // rounded midpoints: a range is published as a range, because the prettier
 // single number in the middle of it was never actually measured.
 const readout: Measurement[] = [
-  { label: "cold boot", lo: 10.5, hi: 10.9, value: "10.5–10.9", unit: "ms", source: "criterion, spawn to InstanceStart" },
-  { label: "exec round-trip", lo: 0.22, hi: 0.25, value: "220–250", unit: "µs", source: "criterion, over an open vsock" },
-  { label: "resume from snapshot", lo: 6.5, hi: 7.7, value: "6.5–7.7", unit: "ms", source: "criterion" },
+  { label: "cold boot", lo: 12.6, hi: 14.0, value: "12.6–14.0", unit: "ms", source: "criterion, spawn to InstanceStart, 2026-11-23" },
+  { label: "exec round-trip", lo: 0.242, hi: 0.248, value: "242–248", unit: "µs", source: "criterion, over an open vsock" },
+  { label: "resume from snapshot", lo: 3.7, hi: 4.0, value: "3.7–4.0", unit: "ms", source: "criterion, 2026-11-23" },
   { label: "full create", lo: 17.9, hi: 17.9, value: "17.9", unit: "ms", source: "mean of 20 cold creates, reflinked rootfs" },
 ];
 
@@ -58,7 +58,7 @@ const consoleLines = [
       <div class="tty hero-console">
         <div class="tty-head">
           <span>guest console — ttyS0</span>
-          <span class="live">10.5–10.9ms to InstanceStart</span>
+          <span class="live">12.6–14.0ms to InstanceStart</span>
         </div>
         <pre>{consoleLines.map((l, i) => <div class={`cl ${l.c}`} style={`--d:${(i * 0.09).toFixed(2)}s`}>{l.t || " "}</div>)}</pre>
       </div>

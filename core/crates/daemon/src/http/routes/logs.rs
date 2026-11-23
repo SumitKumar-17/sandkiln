@@ -20,7 +20,7 @@
 //! Doesn't survive a daemon restart or the sandbox stopping (in-memory,
 //! tied to one `Sandbox` value, same scope as
 //! `Sandbox::pty_session_count`). No holder-tracking or concurrency cap
-//! like `routes_pty` needs — each session owns its own independent vsock
+//! like `routes::pty` needs — each session owns its own independent vsock
 //! connection and child process, nothing to contend over.
 
 use crate::http::error::AppError;
@@ -248,7 +248,7 @@ async fn stream_logs(ws: WebSocket, session: Arc<LogSession>) {
             }
             // Detects the client disconnecting (or any other message
             // from them, which this endpoint has nothing to do with —
-            // it's output-only, not interactive like `routes_pty`) so
+            // it's output-only, not interactive like `routes::pty`) so
             // this task doesn't outlive a client that's already gone.
             msg = ws_stream.next() => {
                 if msg.is_none() {

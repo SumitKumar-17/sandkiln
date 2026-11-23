@@ -52,7 +52,7 @@ pub enum EgressMode {
 
 /// One sandbox's egress policy. `allow_cidrs`/`deny_cidrs` are already
 /// validated (`validate_cidr`) at the API boundary
-/// (`routes_sandbox::CreateSandboxRequest`), not here.
+/// (`routes::sandbox::CreateSandboxRequest`), not here.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EgressPolicy {
     pub mode: EgressMode,

@@ -65,7 +65,7 @@ pub struct Config {
     /// `rootfs_clone_total{method}` metric shows whether that worked.
     pub rootfs_dir: PathBuf,
     /// Registered images' home (`sandkiln_vmm::image::ImageStore`,
-    /// `routes_images`) — a named rootfs `POST /sandboxes` can boot from
+    /// `routes::images`) — a named rootfs `POST /sandboxes` can boot from
     /// instead of `base_rootfs_path`. Own directory, not `drives_dir`:
     /// different resource kinds sharing a storage shape would otherwise
     /// collide on `<id>.ext4` across the two id namespaces.

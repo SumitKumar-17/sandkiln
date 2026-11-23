@@ -1,6 +1,6 @@
 //! Sandbox lifecycle: create, list, stop. Exec/file ops live in
-//! `routes_exec` (shares `call_agent`, unrelated to lifecycle). Name
-//! lookup/get-or-create lives in `routes_sandbox_name` (crosses into
+//! `routes::exec` (shares `call_agent`, unrelated to lifecycle). Name
+//! lookup/get-or-create lives in `routes::sandbox_name` (crosses into
 //! snapshot territory, needs the per-name lock).
 
 use crate::http::error::AppError;
@@ -28,7 +28,7 @@ use uuid::Uuid;
 #[derive(Deserialize, Default)]
 pub struct CreateSandboxRequest {
     /// Unique among live sandboxes + held snapshots when claimed (`409`
-    /// otherwise). Optional. See `Sandbox::name`, `routes_sandbox_name`.
+    /// otherwise). Optional. See `Sandbox::name`, `routes::sandbox_name`.
     #[serde(default)]
     pub(crate) name: Option<String>,
     #[serde(default)]
@@ -811,8 +811,8 @@ fn first_duplicate<'a>(mut items: impl Iterator<Item = &'a str>) -> Option<&'a s
 /// Clones a rootfs for a new mutating sandbox via
 /// `sandkiln_vmm::rootfs::clone_file` (reflink where the filesystem allows,
 /// else a byte copy) and records which method ran. `pub(crate)`: also used by
-/// `routes_snapshot`'s history-retaining resume and
-/// `routes_snapshot_history`'s restore — handing a *shared* rootfs to a new
+/// `routes::snapshot`'s history-retaining resume and
+/// `routes::snapshot_history`'s restore — handing a *shared* rootfs to a new
 /// mutating sandbox would corrupt whatever else depends on that file.
 pub(crate) fn clone_rootfs(
     src: &std::path::Path,

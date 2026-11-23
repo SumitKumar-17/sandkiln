@@ -16,7 +16,7 @@
 //! out to need no new wire protocol at all: this module orchestrates the
 //! whole thing purely with requests `sandkiln-protocol` already has —
 //! `Mkdir`, `WriteFile`, `Chmod`, `Exec` — the same primitives
-//! `routes_fs.rs`/`routes_exec.rs` already expose directly to callers,
+//! `http/routes/fs.rs`/`http/routes/exec.rs` already expose directly to callers,
 //! just chained together here into one clean daemon-side operation.
 //!
 //! **Credentials never touch a command-line argument.** rclone (like
@@ -111,8 +111,8 @@ pub struct ListMountsResponse {
 }
 
 /// Basic input sanity, not a security boundary — this project's existing
-/// filesystem-op handlers (`routes_exec`/`routes_fs`) deliberately do no
-/// path validation of their own either (see `routes_fs.rs`'s own module
+/// filesystem-op handlers (`routes::exec`/`routes::fs`) deliberately do no
+/// path validation of their own either (see `http/routes/fs.rs`'s own module
 /// doc comment for why that's a consistency choice), and `mount_path`
 /// here is no different: it's a path inside the guest's own root-owned
 /// space, not a host path.
@@ -180,7 +180,7 @@ fn config_path_for(mount_id: &str) -> String {
 }
 
 /// `Mkdir`/`WriteFile`/`Chmod` all report success as a bare
-/// `Response::Ok`, not `Response::Exec` — mirrors `routes_fs.rs`'s own
+/// `Response::Ok`, not `Response::Exec` — mirrors `http/routes/fs.rs`'s own
 /// private `ok_or_bad_request`, which isn't reusable from here.
 fn expect_ok(response: AgentResponse) -> Result<(), AppError> {
     match response {

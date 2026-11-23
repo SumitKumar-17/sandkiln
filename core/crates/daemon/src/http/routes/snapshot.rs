@@ -730,7 +730,7 @@ pub async fn fork_snapshot(
     Ok(Json(ForkSnapshotResponse { id: new_id }))
 }
 
-// `pub(crate)`: also used by `routes_snapshot_history`'s restore path —
+// `pub(crate)`: also used by `routes::snapshot_history`'s restore path —
 // loading a VM from state.snap/mem.bin is identical whether those files
 // belong to a live `Snapshot` or a dormant `RetiredSnapshot`.
 pub(crate) async fn resume_vm(state: &Arc<AppState>, snapshot_path: PathBuf, mem_file_path: PathBuf) -> std::io::Result<Vm> {

@@ -116,7 +116,7 @@ impl Vm {
         );
         // Always spawns directly, never jailed — jailer only covers
         // `Vm::boot`. A jailed sandbox's snapshot bakes in in-jail paths
-        // that would need relinking into a fresh chroot; `routes_snapshot`
+        // that would need relinking into a fresh chroot; `routes::snapshot`
         // refuses to attempt this yet rather than half-support it.
         //
         // Non-fatal like egress re-apply on resume/fork, and for the same

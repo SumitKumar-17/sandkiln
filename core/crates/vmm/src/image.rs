@@ -25,7 +25,7 @@
 //! confirmation `scripts/preflight-check.sh --root-checks` already gives
 //! for `SANDKILN_BASE_ROOTFS` needs to run that script (now also accepting
 //! `--rootfs-image <path>` to check an arbitrary candidate file) out of
-//! band, before registering, with real root. See `routes_images::register`
+//! band, before registering, with real root. See `routes::images::register`
 //! on the daemon side for how this is surfaced back to the caller.
 
 use std::fs;
