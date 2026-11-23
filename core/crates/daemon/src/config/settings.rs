@@ -45,6 +45,12 @@ pub const SETTINGS: &[Setting] = &[
         "server",
         "Longest a single `exec`, file or filesystem request may wait for the guest's reply. On expiry the caller gets a 504; the process keeps running in the guest.",
     ),
+    s(
+        "kernel_args",
+        None,
+        "vm",
+        "Extra guest kernel command-line arguments, appended after sandkiln's own. Quieting kernel boot logging (the serial console is emulated) shortens time to first command.",
+    ),
     s("firecracker_bin", Some("~/sandkiln-tools/bin/firecracker"), "vm", "Path to the Firecracker binary."),
     s("kernel_path", Some("~/sandkiln-tools/images/vmlinux-5.10.223"), "vm", "Guest kernel image (vmlinux)."),
     s("base_rootfs", Some("~/sandkiln-tools/images/ubuntu-22.04.ext4"), "vm", "Default base rootfs image sandboxes boot from."),

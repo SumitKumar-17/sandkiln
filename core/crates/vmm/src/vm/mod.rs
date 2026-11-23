@@ -80,6 +80,12 @@ pub struct VmConfig {
     pub rootfs_path: PathBuf,
     pub vcpu_count: u8,
     pub mem_size_mib: u32,
+    /// Appended to the guest kernel command line after sandkiln's own
+    /// arguments (`console=ttyS0 reboot=k panic=1 pci=off`, plus `ip=` when
+    /// networked). Empty = nothing extra. The serial console is emulated, so
+    /// kernel boot logging is a large share of guest boot time: see
+    /// `kernel_args` in the daemon config.
+    pub extra_boot_args: String,
     pub network: Option<NetworkConfig>,
     /// Extra (non-root) drives, e.g. persistent drives. Empty for a
     /// rootfs-only VM.

@@ -45,6 +45,7 @@ impl BenchConfig {
             rootfs_path,
             vcpu_count: self.vcpu_count,
             mem_size_mib: self.mem_size_mib,
+            extra_boot_args: env_or("SANDKILN_BENCH_KERNEL_ARGS", ""),
             network: None,
             extra_drives: Vec::new(),
             jail: None,

@@ -221,15 +221,44 @@ fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result
     Ok(BootPhases { socket_wait, api_config, instance_start, per_put: per_put.join(" ") })
 }
 
+/// Arguments every sandbox kernel boots with, after the fixed
+/// `console=ttyS0 reboot=k panic=1 pci=off` base.
+///
+/// * `quiet`: the serial console is an emulated 16550 UART, so each byte the
+///   kernel logs is a VM exit. Dropping boot logging below warnings saved
+///   about 90ms to first command. Warnings, errors and panics still print.
+/// * `loop.max_loop=1`: the loop driver otherwise pre-creates its default set
+///   of devices at init, measured at 124ms (`initcall_debug`), about 60% of the
+///   guest kernel's boot. Loop devices are still created on demand, verified by
+///   mounting three loop images in a guest.
+///
+/// Measured end to end (create to first successful exec, 15 cold sandboxes each,
+/// 2026-11-24): 441ms without these, 237ms with them. See the optimization
+/// post on guest boot time.
+const DEFAULT_KERNEL_ARGS: &str = "quiet loop.max_loop=1";
+
+/// The full guest kernel command line: fixed base, `DEFAULT_KERNEL_ARGS`,
+/// `ip=` when networked, then the operator's `extra_boot_args` last so a later
+/// argument can override an earlier one (e.g. `loglevel=7` to see boot logs).
+fn kernel_command_line(config: &VmConfig) -> String {
+    let mut args = format!("console=ttyS0 reboot=k panic=1 pci=off {DEFAULT_KERNEL_ARGS}");
+    if let Some(net) = &config.network {
+        args.push_str(&format!(" ip={}::{}:255.255.255.0::eth0:off", net.guest_ip, net.gateway_ip));
+    }
+    let extra = config.extra_boot_args.trim();
+    if !extra.is_empty() {
+        args.push(' ');
+        args.push_str(extra);
+    }
+    args
+}
+
 /// Every pre-`InstanceStart` configuration PUT, in the order Firecracker
 /// requires them, as `(path, body)` pairs.
 fn configuration_requests(config: &VmConfig, target: &BootTarget) -> io::Result<Vec<(String, serde_json::Value)>> {
     let mut requests: Vec<(String, serde_json::Value)> = Vec::new();
 
-    let mut boot_args = "console=ttyS0 reboot=k panic=1 pci=off".to_string();
-    if let Some(net) = &config.network {
-        boot_args.push_str(&format!(" ip={}::{}:255.255.255.0::eth0:off", net.guest_ip, net.gateway_ip));
-    }
+    let boot_args = kernel_command_line(config);
 
     requests.push((
         "/boot-source".to_string(),
@@ -308,5 +337,49 @@ fn insert_rate_limiter(body: &mut serde_json::Value, key: &str, rate_limit: &Opt
     if let Some(rl) = rate_limit {
         let value = serde_json::to_value(rl).expect("RateLimiter always serializes");
         body.as_object_mut().expect("body is always a JSON object").insert(key.to_string(), value);
+    }
+}
+
+#[cfg(test)]
+mod kernel_args_tests {
+    use super::*;
+    use crate::vm::NetworkConfig;
+    use std::path::PathBuf;
+
+    fn config(network: Option<NetworkConfig>, extra: &str) -> VmConfig {
+        VmConfig {
+            firecracker_bin: PathBuf::new(),
+            kernel_path: PathBuf::new(),
+            rootfs_path: PathBuf::new(),
+            vcpu_count: 1,
+            mem_size_mib: 128,
+            extra_boot_args: extra.to_string(),
+            network,
+            extra_drives: vec![],
+            jail: None,
+            rate_limit: None,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn defaults_include_the_boot_time_tuning_and_the_fixed_base() {
+        let line = kernel_command_line(&config(None, ""));
+        assert!(line.starts_with("console=ttyS0 reboot=k panic=1 pci=off"));
+        assert!(line.contains("quiet") && line.contains("loop.max_loop=1"));
+        assert!(!line.contains("ip="), "no ip= without a network");
+    }
+
+    #[test]
+    fn network_adds_a_static_ip_and_extra_args_come_last() {
+        let net = NetworkConfig {
+            tap_device: "sktap0".into(),
+            guest_ip: "172.16.0.8".parse().unwrap(),
+            gateway_ip: "172.16.0.1".parse().unwrap(),
+            guest_mac: "AA:FC:00:00:08:08".into(),
+        };
+        let line = kernel_command_line(&config(Some(net), "  loglevel=7 "));
+        assert!(line.contains(" ip=172.16.0.8::172.16.0.1:255.255.255.0::eth0:off"));
+        assert!(line.ends_with(" loglevel=7"), "operator args must win by coming last: {line}");
     }
 }

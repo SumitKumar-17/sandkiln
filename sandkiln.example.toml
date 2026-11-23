@@ -29,6 +29,9 @@
 
 # ---- vm ----
 
+# Extra guest kernel command-line arguments, appended after sandkiln's own. Quieting kernel boot logging (the serial console is emulated) shortens time to first command.
+# kernel_args = "quiet"
+
 # Path to the Firecracker binary.
 # firecracker_bin = "~/sandkiln-tools/bin/firecracker"
 

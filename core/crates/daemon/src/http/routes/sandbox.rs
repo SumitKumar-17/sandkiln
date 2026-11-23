@@ -360,6 +360,7 @@ async fn create_sandbox_cold(
                 rootfs_path,
                 vcpu_count,
                 mem_size_mib,
+                extra_boot_args: state.config.kernel_args.clone(),
                 network: Some(lease.config.clone()),
                 extra_drives,
                 jail,
