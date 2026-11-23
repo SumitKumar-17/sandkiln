@@ -23,7 +23,7 @@ The daemon's configuration is one registry, one resolver and one error type, in 
 
 | File | Role |
 | --- | --- |
-| `settings.rs` | `SETTINGS`: the registry. One `Setting` per key (31 of them) with its default, group, doc string and a `secret` flag |
+| `settings.rs` | `SETTINGS`: the registry. One `Setting` per key (32 of them) with its default, group, doc string and a `secret` flag |
 | `source.rs` | `Resolver`: looks a key up, remembers where each value came from, accumulates errors; `parse_file` for the TOML body |
 | `mod.rs` | `Config` (the typed result), `Config::load`, `Config::resolve`, `ConfigError`, `discover_file`, `render_effective` |
 | `cli.rs` | The `sandkilnd` flags |
@@ -41,6 +41,12 @@ flowchart LR
   C --> A[async_main]
   X -->|exit 2, every problem listed| T[terminal]
 ```
+
+### The `kernel_args` setting
+
+`kernel_args` (group `vm`, environment variable `SANDKILN_KERNEL_ARGS`, default empty) holds extra guest kernel command-line arguments. The registry doc string reads "Extra guest kernel command-line arguments, appended after sandkiln's own. Quieting kernel boot logging (the serial console is emulated) shortens time to first command." The daemon stores it as `Config::kernel_args` (`core/crates/daemon/src/config/mod.rs:130`) and passes it to every boot as `VmConfig::extra_boot_args` (`core/crates/daemon/src/http/routes/sandbox.rs:363`).
+
+The value is appended after sandkiln's own defaults, `quiet loop.max_loop=1`, so it wins on a conflict. Setting `kernel_args = "loglevel=7"` brings the boot logs back in the console log. See [Guest boot time](/engineering/28-opt-guest-boot-time) for what the defaults cost and save.
 
 ### Precedence and failure behavior
 

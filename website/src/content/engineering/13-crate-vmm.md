@@ -53,6 +53,8 @@ The crate is about 3,000 lines across 13 source files. The split follows the roo
 
 ### The boot path
 
+The guest kernel command line is built by `kernel_command_line()` (`core/crates/vmm/src/vm/boot.rs:243`): the fixed base `console=ttyS0 reboot=k panic=1 pci=off`, `DEFAULT_KERNEL_ARGS = "quiet loop.max_loop=1"` (`boot.rs:238`), `ip=` when networked, then `VmConfig::extra_boot_args` (`vm/mod.rs:88`) last so operators can override. Two unit tests in `kernel_args_tests` (`boot.rs:344`) cover the ordering. The defaults cut time to first command from 413 ms to 214.5 ms; see [Guest boot time](/engineering/28-opt-guest-boot-time).
+
 `Vm::boot` allocates an id from a process-wide `AtomicU64`, derives a console log path from it, runs the boot, and annotates any failure with that log path. The mechanics live in `boot.rs`, where the direct and jailed paths converge early. Both produce a `BootTarget` holding the child process and the paths Firecracker must be told about, so the configuration sequence never branches on jail versus direct.
 
 ```mermaid
