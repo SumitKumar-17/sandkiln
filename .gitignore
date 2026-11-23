@@ -42,3 +42,7 @@ pass.txt
 # Local credentials -- never commit or sync to the dev box
 password.txt
 pass.txt
+
+# Local daemon config (setup.sh writes it; may hold an auth token)
+/sandkiln.toml
+.env.sandkiln-setup*

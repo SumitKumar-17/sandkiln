@@ -1,6 +1,6 @@
 ---
 interface Props {
-  active?: "home" | "architecture" | "performance" | "roadmap";
+  active?: "home" | "architecture" | "engineering" | "performance" | "roadmap";
 }
 const { active } = Astro.props as Props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -10,6 +10,7 @@ const DOCS_URL = "https://sandkiln.mintlify.site/";
 
 const nav = [
   { label: "Architecture", path: "architecture", key: "architecture" },
+  { label: "Engineering", path: "engineering", key: "engineering" },
   { label: "Performance", path: "performance", key: "performance" },
   { label: "Roadmap", path: "roadmap", key: "roadmap" },
 ];

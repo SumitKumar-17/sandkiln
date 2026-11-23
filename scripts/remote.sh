@@ -22,19 +22,28 @@ LOCAL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # cargo.
 REMOTE_ENV_PRELUDE='[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"; export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"'
 
+# Source directories whose deleted/renamed files must also disappear on the
+# box: a plain tar extract only ever adds, so after a refactor that moves a
+# file the old copy stays behind and the build sees both (duplicate modules).
+# Pruning is limited to these code directories; build output, local env files
+# and benchmark history live elsewhere or are excluded and so are never touched.
+PRUNED_DIRS=(core/crates scripts packages website/src docs-site images examples)
+
 sync() {
   ssh "$REMOTE_HOST" "mkdir -p $REMOTE_DIR"
-  tar -C "$LOCAL_DIR" -czf - \
-    --exclude='.git' \
-    --exclude='target' \
-    --exclude='node_modules' \
-    --exclude='dist' \
-    --exclude='images/build' \
-    --exclude='password.txt' \
-    --exclude='pass.txt' \
-    --exclude='.env*' \
-    --exclude='.claude' \
-    . | ssh "$REMOTE_HOST" "mkdir -p $REMOTE_DIR && tar -C $REMOTE_DIR -xzf -"
+  local excludes=(
+    --exclude='.git' --exclude='target' --exclude='node_modules' --exclude='dist'
+    --exclude='password.txt' --exclude='pass.txt'
+    --exclude='.env*' --exclude='.claude' --exclude='.astro' --exclude='.vercel'
+    --exclude='bench-results' --exclude='/build' --exclude='__pycache__'
+    --exclude='*.egg-info' --exclude='.venv' --exclude='*.tsbuildinfo'
+  )
+  rsync -az "${excludes[@]}" -e ssh "$LOCAL_DIR/" "$REMOTE_HOST:$REMOTE_DIR/"
+  local dir
+  for dir in "${PRUNED_DIRS[@]}"; do
+    [ -d "$LOCAL_DIR/$dir" ] || continue
+    rsync -az --delete "${excludes[@]}" -e ssh "$LOCAL_DIR/$dir/" "$REMOTE_HOST:$REMOTE_DIR/$dir/"
+  done
 }
 
 case "${1:-}" in

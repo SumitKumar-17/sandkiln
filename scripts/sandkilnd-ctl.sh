@@ -44,11 +44,29 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CORE_DIR="$REPO_ROOT/core"
 DAEMON_BIN="$CORE_DIR/target/release/sandkilnd"
 
-[ -f "$REPO_ROOT/.env.sandkiln-setup" ] && source "$REPO_ROOT/.env.sandkiln-setup"
+source "$SCRIPT_DIR/lib/daemon-config.sh"
+
+# Configuration: sandkiln.toml (or $SANDKILN_CONFIG) is the primary source and
+# SANDKILN_* env vars override it. A legacy .env.sandkiln-setup from an older
+# setup.sh is only honoured when there is no TOML file, because env vars would
+# otherwise silently shadow the file.
+CONFIG_FILE="$(find_config_file)"
+CONFIG_ARGS=()
+if [ -n "$CONFIG_FILE" ]; then
+  CONFIG_ARGS=(--config "$CONFIG_FILE")
+elif [ -f "$REPO_ROOT/.env.sandkiln-setup" ]; then
+  source "$REPO_ROOT/.env.sandkiln-setup"
+fi
 
 PID_FILE="${SANDKILN_CTL_PID_FILE:-/tmp/sandkiln-daemon.pid}"
 LOG_FILE="${SANDKILN_CTL_LOG_FILE:-/tmp/sandkiln-daemon.log}"
-HEALTH_URL="http://${SANDKILN_LISTEN_ADDR:-127.0.0.1:7777}/healthz"
+# Resolved from the daemon's effective config when a binary exists, so a
+# listen_addr set in the file is honoured, not just the env var.
+health_url() {
+  load_daemon_config "$DAEMON_BIN" "$CONFIG_FILE" 2>/dev/null
+  echo "http://$(cfg listen_addr "${SANDKILN_LISTEN_ADDR:-127.0.0.1:7777}")/healthz"
+}
+HEALTH_URL="$(health_url)"
 
 # ---------------------------------------------------------------------------
 running_pid() {
@@ -128,8 +146,16 @@ cmd_start() {
     fi
   fi
 
+  # Fail fast with the real error on stderr, rather than a daemon that dies
+  # a moment later with only a log line to explain it.
+  if ! "$DAEMON_BIN" "${CONFIG_ARGS[@]}" --check-config; then
+    echo "configuration is invalid — not starting" >&2
+    exit 1
+  fi
+  HEALTH_URL="$(health_url)"
+
   echo "==> starting sandkilnd (log: $LOG_FILE)"
-  nohup "$DAEMON_BIN" >"$LOG_FILE" 2>&1 < /dev/null &
+  nohup "$DAEMON_BIN" "${CONFIG_ARGS[@]}" >"$LOG_FILE" 2>&1 < /dev/null &
   local pid=$!
   disown "$pid" 2>/dev/null || true
   echo "$pid" > "$PID_FILE"

@@ -12,6 +12,31 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Daemon & core — 2026-11-23
+
+### Changed
+- Per-sandbox rootfs clones now use a native `FICLONE` reflink
+  (`sandkiln_vmm::rootfs`) instead of spawning `cp --reflink=auto`, and
+  report whether a reflink or a full copy happened
+  (`rootfs_clone_total{method}` on `/metrics`). On an XFS reflink volume a
+  cold create fell from ~187ms to ~18ms (clone 128ms to 0.08ms).
+- Snapshots and retired checkpoints moved from the OS temp dir to
+  `SANDKILN_STATE_DIR` (default `~/sandkiln-tools/state`); rootfs copies to
+  `SANDKILN_ROOTFS_DIR`. Snapshots left in the old temp location by earlier
+  versions are not migrated.
+- Guest DNS forwarder now installs as a systemd service with
+  `--bind-dynamic`, fixing a start-order failure and loss after reboot.
+
+### Fixed
+- RUSTSEC-2026-0459 (bundled SQLite) via `rusqlite` 0.43; `tokio`/`rustix`
+  bumped past unsound-API advisories. `Cargo.lock` is now committed.
+- `scripts/remote.sh sync` no longer copies local credential files to the
+  dev box.
+
+### Added
+- `scripts/host-setup/create-reflink-volume.sh`;
+  `SANDKILN_INTEGRATION_TEST_ONLY` topic filter for the integration suite.
+
 ## Daemon & core — 2026-10-07
 
 Covers every daemon/`sandkiln-vmm`/`sandkiln-guest-agent`/`sandkiln-protocol`

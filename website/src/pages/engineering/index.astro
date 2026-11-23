@@ -1,0 +1,60 @@
+---
+import { getCollection } from "astro:content";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Header from "../../components/Header.astro";
+import Footer from "../../components/Footer.astro";
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const posts = (await getCollection("engineering")).sort((a, b) => a.data.order - b.data.order);
+---
+
+<BaseLayout title="Engineering — sandkiln" description="How sandkiln is built: one deep write-up per subsystem, with the structure, the invariants and the code.">
+  <Header active="engineering" />
+  <main>
+    <section class="page-hero">
+      <div class="shell">
+        <h1>
+          <span class="l">How it's built,</span>
+          <span class="l"><span class="flare">subsystem by subsystem</span>.</span>
+        </h1>
+        <p class="lede prose">
+          Each post explains one part of the system the way you would want it explained before
+          changing it: the crate and module boundaries, the types and their invariants, the
+          sequence of steps, what happens when a step fails, and why it is shaped that way.
+        </p>
+      </div>
+    </section>
+
+    <section class="band band-ruled">
+      <div class="shell">
+        <ol class="post-list">
+          {posts.map((post) => (
+            <li>
+              <a href={`${base}/engineering/${post.id}/`}>
+                <span class="post-num">{String(post.data.order).padStart(2, "0")}</span>
+                <span class="post-body">
+                  <span class="post-title">{post.data.title}</span>
+                  <span class="post-summary">{post.data.summary}</span>
+                  <span class="post-tags">{post.data.tags.join(" · ")}</span>
+                </span>
+              </a>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+  </main>
+  <Footer />
+</BaseLayout>
+
+<style>
+  .post-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule-strong); }
+  .post-list li { border-bottom: 1px solid var(--rule); }
+  .post-list a { display: grid; grid-template-columns: 3.5rem 1fr; gap: var(--s-4); padding-block: var(--s-5); text-decoration: none; color: inherit; }
+  .post-num { color: var(--flare); font-weight: 600; }
+  .post-body { display: grid; gap: var(--s-2); max-width: 72ch; }
+  .post-title { font-weight: 600; font-size: 1.15rem; color: var(--ink); }
+  .post-summary { color: var(--ink-2); }
+  .post-tags { font-size: var(--t-micro); color: var(--ink-3); }
+  .post-list a:hover .post-title { color: var(--flare); }
+</style>

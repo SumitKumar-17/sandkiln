@@ -26,10 +26,12 @@ run, not re-proven this session.
 | 1 | RUSTSEC-2026-0459: bundled SQLite in `rusqlite 0.32` has a CVE. Also unsound-API advisories on `tokio` 1.53.1 and `rustix`. | Fixed: rusqlite 0.43, tokio 1.54, rustix bumped. Tests pass. Re-run `cargo audit` in CI. |
 | 2 | `Cargo.lock` was gitignored although the workspace ships binaries, so builds were not reproducible. | Fixed: committed. |
 | 3 | `scripts/remote.sh sync` tarred the whole tree, so any local credential file was copied to the shared dev box. `password.txt` was not gitignored. | Fixed: excluded from sync, gitignored. A stale `pass.txt` plaintext file still sits in the remote repo dir; delete it and rotate the password. |
-| 4 | `clone_rootfs` always copies into `temp_dir()`, so `cp --reflink=auto` can never reflink across filesystems; whether a clone reflinked is invisible. 74% of a create is this copy. | Open, top priority. See "Further latency investigation". |
+| 4 | `clone_rootfs` always copies into `temp_dir()`, so `cp --reflink=auto` can never reflink across filesystems; whether a clone reflinked is invisible. 74% of a create is this copy. | **Fixed and measured**: native `FICLONE` clone, configurable `SANDKILN_ROOTFS_DIR`, `rootfs_clone_total{method}` metric. XFS reflink volume: cold create 187ms to 17.9ms (clone 127.9ms to 0.08ms, 31 reflinks / 0 copies). The hypothesis in "Benchmarking" is confirmed. Still needs a decision on making reflink the default for production setups. |
 | 5 | Snapshot-take is 310-990ms (full memory and disk each time). | Open: Diff snapshots, dirty-tracked rootfs. |
 | 6 | Large files mixing concerns: `routes_sandbox.rs` 946, `routes_snapshot.rs` 931, `snapshot.rs` 897, `state.rs` 834 lines. | Open: split per AGENTS.md section 2. |
 | 7 | JS tooling lags (typescript 5.9 vs 7, tsup 8 vs 9). Low risk. | Open, low. |
+| 9 | Snapshots, documented as durable, lived in the OS temp dir. | Fixed: `SANDKILN_STATE_DIR`. |
+| 10 | `18-pool` integration check "deleting the pool cleaned up its own warm snapshot" failed once under full-suite concurrency (passes 4/4 in isolation); post-resume `vsock ... Connection refused` seen in pool-claim health checks. | Open: likely a resume-readiness race, investigate. |
 | 8 | Remote box holds stale copies (`docs/architecture`, worktrees); production data to preserve: `~/sandkiln-tools/history.db`, images, registered images. | Do not delete; documented here. |
 
 **Plan, in order**
@@ -43,7 +45,7 @@ run, not re-proven this session.
    dashboard of sandboxes, pools, drives, history).
 5. Website, docs, packaging and launch pass once the core is re-verified.
 
-**Next session starts at step 1.**
+**Status.** Step 1 done: daemon up on the dev box, integration suite 314/315 (finding 10), baseline cold create 187ms on ext4. Step 2 done (finding 4). Next: finding 10, then step 3.
 
 ## What works today
 

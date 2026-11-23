@@ -23,7 +23,7 @@ const phases = [
 // creates, one at a time, nothing else on the box. Percentages are share
 // of the post-fix ~144ms mean create.
 const createPhases = [
-  { phase: "rootfs clone (cp --reflink=auto)", share: "74.0%" },
+  { phase: "rootfs clone, full copy on ext4 (reflink: 0.4%)", share: "74.0%" },
   { phase: "Vm::boot total", share: "20.3%" },
   { phase: "— wait for the API socket (fixed below; was 12.0%)", share: "0.5%" },
   { phase: "— InstanceStart", share: "7.1%" },
@@ -161,13 +161,31 @@ const createPhases = [
               the same code path.
             </p>
             <p>
-              <span class="term">The correction, stated plainly.</span> The CoW filesystem test was
-              real and its numbers stand — only the explanation attached to them was wrong. The
-              leading replacement, <b>not yet re-verified</b>: the per-sandbox clone always lands in{" "}
-              <code>std::env::temp_dir()</code> regardless of where the base image lives, so the
-              earlier test's clone could never have actually reflinked even though the base image sat
-              on XFS. A device-mapper layer would have hit the identical wall for the identical
-              reason and remains not planned. See{" "}
+              <span class="term">The correction, then the verification.</span> The CoW filesystem
+              test was real and its numbers stand; only the explanation attached to them was wrong.
+              The per-sandbox clone always landed in <code>std::env::temp_dir()</code> regardless of
+              where the base image lived, so it could never have reflinked. That is now fixed and
+              re-measured: the clone is a native <code>FICLONE</code> reflink into a configurable
+              directory on the same filesystem as the base image, and the daemon reports which
+              method ran as <code>rootfs_clone_total</code>. Same box, same 300 MiB image, 20
+              sequential cold creates each:
+            </p>
+            <div class="scroller">
+              <table class="datatable">
+                <thead>
+                  <tr><th>mean per create</th><th>ext4, full copy</th><th>XFS, reflink</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>rootfs clone</td><td>127.90ms</td><td>0.08ms</td></tr>
+                  <tr><td>network lease</td><td>3.47ms</td><td>3.08ms</td></tr>
+                  <tr><td>VM boot</td><td>14.87ms</td><td>14.35ms</td></tr>
+                  <tr><td><b>total create</b></td><td><b>187.48ms</b></td><td><b>17.88ms</b></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              A <b>10x</b> cut to every cold create, from the one change the profile pointed at. A
+              device-mapper layer would have gained nothing here, and remains not planned. See{" "}
               <a href="https://sandkiln.mintlify.site/architecture/engineering-notebook">the engineering notebook</a>{" "}
               for the full story, including this project's own mistake in reaching the wrong
               conclusion the first time.

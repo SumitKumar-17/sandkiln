@@ -8,7 +8,7 @@ const readout: Measurement[] = [
   { label: "cold boot", lo: 10.5, hi: 10.9, value: "10.5–10.9", unit: "ms", source: "criterion, spawn to InstanceStart" },
   { label: "exec round-trip", lo: 0.22, hi: 0.25, value: "220–250", unit: "µs", source: "criterion, over an open vsock" },
   { label: "resume from snapshot", lo: 6.5, hi: 7.7, value: "6.5–7.7", unit: "ms", source: "criterion" },
-  { label: "full create", lo: 144, hi: 144, value: "144", unit: "ms", source: "mean of 20 isolated cold creates" },
+  { label: "full create", lo: 17.9, hi: 17.9, value: "17.9", unit: "ms", source: "mean of 20 cold creates, reflinked rootfs" },
 ];
 
 const consoleLines = [

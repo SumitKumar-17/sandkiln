@@ -40,6 +40,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # If scripts/setup.sh has been run, fill in from its generated env file —
 # only for variables not already exported, so explicit overrides still win.
 [ -f "$SCRIPT_DIR/../.env.sandkiln-setup" ] && source "$SCRIPT_DIR/../.env.sandkiln-setup"
+source "$SCRIPT_DIR/lib/daemon-config.sh"
 
 DAEMON_BIN=""
 ROOT_CHECKS=0
@@ -69,18 +70,30 @@ expand_home() {
 }
 
 # ---------------------------------------------------------------------------
-# Same defaults as core/crates/daemon/src/config.rs::Config::from_env —
-# keep these in sync with that file if its defaults ever change.
+# Effective configuration comes from the daemon itself (`--print-config`), so
+# this script cannot drift from the real defaults, and it sees values from
+# sandkiln.toml as well as the environment. The literals below are only the
+# fallback for when no daemon binary has been built yet.
 # ---------------------------------------------------------------------------
-LISTEN_ADDR="${SANDKILN_LISTEN_ADDR:-127.0.0.1:7777}"
-FIRECRACKER_BIN="$(expand_home "${SANDKILN_FIRECRACKER_BIN:-~/sandkiln-tools/bin/firecracker}")"
-KERNEL_PATH="$(expand_home "${SANDKILN_KERNEL_PATH:-~/sandkiln-tools/images/vmlinux-5.10.223}")"
-BASE_ROOTFS="$(expand_home "${SANDKILN_BASE_ROOTFS:-~/sandkiln-tools/images/ubuntu-22.04.ext4}")"
-BRIDGE_NAME="${SANDKILN_BRIDGE_NAME:-sktapbr0}"
-TAP_POOL_PREFIX="${SANDKILN_TAP_POOL_PREFIX:-sktap}"
-TAP_POOL_SIZE="${SANDKILN_TAP_POOL_SIZE:-32}"
-DRIVES_DIR="$(expand_home "${SANDKILN_DRIVES_DIR:-~/sandkiln-tools/drives}")"
+_probe_bin="$DAEMON_BIN"
+[ -z "$_probe_bin" ] && _probe_bin="$SCRIPT_DIR/../core/target/release/sandkilnd"
+CONFIG_FILE="$(find_config_file)"
+if load_daemon_config "$_probe_bin" "$CONFIG_FILE"; then
+  CONFIG_SOURCE="daemon --print-config${CONFIG_FILE:+ ($CONFIG_FILE)}"
+else
+  CONFIG_SOURCE="built-in fallbacks (no usable daemon binary yet)"
+fi
+LISTEN_ADDR="$(cfg listen_addr "${SANDKILN_LISTEN_ADDR:-127.0.0.1:7777}")"
+FIRECRACKER_BIN="$(expand_home "$(cfg firecracker_bin "${SANDKILN_FIRECRACKER_BIN:-~/sandkiln-tools/bin/firecracker}")")"
+KERNEL_PATH="$(expand_home "$(cfg kernel_path "${SANDKILN_KERNEL_PATH:-~/sandkiln-tools/images/vmlinux-5.10.223}")")"
+BASE_ROOTFS="$(expand_home "$(cfg base_rootfs "${SANDKILN_BASE_ROOTFS:-~/sandkiln-tools/images/ubuntu-22.04.ext4}")")"
+BRIDGE_NAME="$(cfg bridge_name "${SANDKILN_BRIDGE_NAME:-sktapbr0}")"
+TAP_POOL_PREFIX="$(cfg tap_pool_prefix "${SANDKILN_TAP_POOL_PREFIX:-sktap}")"
+TAP_POOL_SIZE="$(cfg tap_pool_size "${SANDKILN_TAP_POOL_SIZE:-32}")"
+DRIVES_DIR="$(expand_home "$(cfg drives_dir "${SANDKILN_DRIVES_DIR:-~/sandkiln-tools/drives}")")"
 AUTH_TOKEN="${SANDKILN_AUTH_TOKEN:-}"
+# The effective token is redacted in --print-config; presence is what matters.
+[ -z "$AUTH_TOKEN" ] && [ -n "${DAEMON_CFG[auth_token]:-}" ] && AUTH_TOKEN="(from config file)"
 
 # When --rootfs-image is given, the "images" section's guest-agent-baked-in
 # check runs against that candidate file instead of SANDKILN_BASE_ROOTFS —
@@ -94,7 +107,7 @@ else
 fi
 
 echo "sandkiln preflight check"
-echo "(reading the same SANDKILN_* env vars and defaults the daemon itself uses)"
+echo "(configuration read from: $CONFIG_SOURCE)"
 
 # ---------------------------------------------------------------------------
 section "host"

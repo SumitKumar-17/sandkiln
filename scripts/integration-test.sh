@@ -35,6 +35,9 @@
 #   with jailer enabled via, so this only runs those checks when they can
 #   actually pass.
 #
+#   SANDKILN_INTEGRATION_TEST_ONLY=<substring>[,<substring>...] runs only the
+#   topic files whose name contains one of them, e.g. =18-pool.
+#
 #   SANDKILN_INTEGRATION_TEST_PARALLELISM (default 4) caps how many topic
 #   files run at once. Each topic mostly runs sandboxes one at a time, but
 #   they all draw from the same physical tap-device pool (32 by default,
@@ -162,6 +165,14 @@ run_topic() {
 # before starting the next once the cap is hit.
 running=0
 for topic in "$SCRIPT_DIR"/integration-tests/*.sh; do
+  # SANDKILN_INTEGRATION_TEST_ONLY=18-pool runs just topics whose filename
+  # contains that substring (comma-separated list allowed).
+  if [ -n "${SANDKILN_INTEGRATION_TEST_ONLY:-}" ]; then
+    matched=0
+    IFS=',' read -ra _only <<< "$SANDKILN_INTEGRATION_TEST_ONLY"
+    for pat in "${_only[@]}"; do [[ "$(basename "$topic")" == *"$pat"* ]] && matched=1; done
+    [ "$matched" -eq 1 ] || continue
+  fi
   run_topic "$topic" &
   running=$((running + 1))
   if [ "$running" -ge "$PARALLELISM" ]; then

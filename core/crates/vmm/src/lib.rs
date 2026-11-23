@@ -6,6 +6,7 @@ mod firecracker_api;
 pub mod image;
 pub mod jailer;
 pub mod network;
+pub mod rootfs;
 pub mod tunnel;
 pub mod vm;
 pub mod vsock_client;

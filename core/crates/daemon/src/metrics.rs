@@ -11,6 +11,8 @@ use std::sync::Mutex;
 
 pub struct Metrics {
     sandboxes_created_total: AtomicU64,
+    rootfs_clones_reflink: AtomicU64,
+    rootfs_clones_copy: AtomicU64,
     boot_duration_ms: Histogram,
     exec_latency_ms: Histogram,
     /// Indexed by `CreatePhase as usize`, parallel to `CreatePhase::ALL`.
@@ -76,6 +78,8 @@ impl Metrics {
     pub fn new() -> Self {
         Self {
             sandboxes_created_total: AtomicU64::new(0),
+            rootfs_clones_reflink: AtomicU64::new(0),
+            rootfs_clones_copy: AtomicU64::new(0),
             // Real cold boots measure ~30ms (see ROADMAP.md's benchmarking
             // numbers) — bucketed comfortably below and above that so a
             // regression shows up as a bucket shift, not just a mean.
@@ -101,6 +105,14 @@ impl Metrics {
         self.sandboxes_created_total.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_rootfs_clone(&self, method: sandkiln_vmm::rootfs::CloneMethod) {
+        use sandkiln_vmm::rootfs::CloneMethod::*;
+        match method {
+            Reflink => self.rootfs_clones_reflink.fetch_add(1, Ordering::Relaxed),
+            Copy => self.rootfs_clones_copy.fetch_add(1, Ordering::Relaxed),
+        };
+    }
+
     pub fn record_boot_duration_ms(&self, ms: f64) {
         self.boot_duration_ms.observe(ms);
     }
@@ -124,6 +136,11 @@ impl Metrics {
         out.push_str("# HELP sandboxes_created_total Total number of sandboxes created since the daemon started.\n");
         out.push_str("# TYPE sandboxes_created_total counter\n");
         out.push_str(&format!("sandboxes_created_total {}\n", self.sandboxes_created_total.load(Ordering::Relaxed)));
+
+        out.push_str("# HELP rootfs_clone_total Rootfs clones by method: reflink (instant CoW) or copy (full byte copy).\n");
+        out.push_str("# TYPE rootfs_clone_total counter\n");
+        out.push_str(&format!("rootfs_clone_total{{method=\"reflink\"}} {}\n", self.rootfs_clones_reflink.load(Ordering::Relaxed)));
+        out.push_str(&format!("rootfs_clone_total{{method=\"copy\"}} {}\n", self.rootfs_clones_copy.load(Ordering::Relaxed)));
 
         out.push_str("# HELP sandboxes_active Number of sandboxes currently tracked by the daemon.\n");
         out.push_str("# TYPE sandboxes_active gauge\n");
@@ -237,6 +254,10 @@ mod tests {
             "# HELP sandboxes_created_total Total number of sandboxes created since the daemon started.\n\
              # TYPE sandboxes_created_total counter\n\
              sandboxes_created_total 0\n\
+             # HELP rootfs_clone_total Rootfs clones by method: reflink (instant CoW) or copy (full byte copy).\n\
+             # TYPE rootfs_clone_total counter\n\
+             rootfs_clone_total{method=\"reflink\"} 0\n\
+             rootfs_clone_total{method=\"copy\"} 0\n\
              # HELP sandboxes_active Number of sandboxes currently tracked by the daemon.\n\
              # TYPE sandboxes_active gauge\n\
              sandboxes_active 0\n\
@@ -263,6 +284,18 @@ mod tests {
              exec_latency_ms_count 0\n",
         );
         assert!(rest.is_some(), "unexpected rendering of the pre-create-phase metrics:\n{rendered}");
+    }
+
+    #[test]
+    fn rootfs_clone_counts_are_split_by_method() {
+        use sandkiln_vmm::rootfs::CloneMethod;
+        let metrics = Metrics::new();
+        metrics.record_rootfs_clone(CloneMethod::Reflink);
+        metrics.record_rootfs_clone(CloneMethod::Copy);
+        metrics.record_rootfs_clone(CloneMethod::Copy);
+        let text = metrics.render(0);
+        assert!(text.contains("rootfs_clone_total{method=\"reflink\"} 1\n"), "{text}");
+        assert!(text.contains("rootfs_clone_total{method=\"copy\"} 2\n"), "{text}");
     }
 
     #[test]
