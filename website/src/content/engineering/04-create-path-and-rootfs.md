@@ -8,7 +8,7 @@ updated: 2026-11-24
 
 A cold `POST /sandboxes` is the one operation every other feature is built on. A snapshot, a fork and a pool slot all start life as one. This post describes how that request is implemented: the phases it is split into, which of them run concurrently, how the per-sandbox rootfs is produced, what the metrics report, and what is released when a step fails.
 
-The daemon-side code lives in the sandbox routes module of `sandkiln-daemon` (the function `create_sandbox_cold`), the clone primitive in `core/crates/vmm/src/rootfs.rs`, and the VM boot sequence in `core/crates/vmm/src/vm/boot.rs`. The daemon only parses, validates and sequences. Anything that touches Firecracker or the filesystem layout of a VM lives in `sandkiln-vmm`.
+The daemon-side code lives in `core/crates/daemon/src/http/routes/sandbox.rs` (the function `create_sandbox_cold`, line 230), the on-disk layout and the `OwnedFile` scope guard in `core/crates/daemon/src/storage.rs`, the clone primitive in `core/crates/vmm/src/rootfs.rs`, and the VM boot sequence in `core/crates/vmm/src/vm/boot.rs`. The daemon only parses, validates and sequences. Anything that touches Firecracker or the filesystem layout of a VM lives in `sandkiln-vmm`.
 
 ## Entry points and what they decide
 
@@ -46,6 +46,7 @@ sequenceDiagram
     opt request has egress
         B->>B: egress::apply(guest_ip, tap, uplink, policy)
     end
+    B->>B: OwnedFile.keep(), rootfs now owned by the sandbox
     B-->>H: (Vm, Lease, jail_id)
     H->>H: history.record_created (best effort)
     H->>S: insert Sandbox, record phase metrics
@@ -54,10 +55,10 @@ sequenceDiagram
 
 ### Reservations before the slow work
 
-Two RAII guards are created before anything slow happens.
+Two RAII guards are created before anything slow happens. A third, `OwnedFile`, is armed later and is covered under failure unwinding.
 
-- `PoolClaimGuard` holds a reserved `max_count` slot when the pool logic handed back a `ColdSlot`. It releases the slot on drop and is only disarmed by `commit()` once the `Sandbox` is in the map.
-- `PendingImageBootGuard` marks that an image is about to be read by this boot. A concurrent `DELETE /images/:id` checks the same marker, which closes the window in which the delete could remove the file the clone is reading. The guard releases on every exit path, including an early `?` and a panic unwind.
+- `PoolClaimGuard` (`core/crates/daemon/src/lifecycle/pool_claim.rs:91`) holds a reserved `max_count` slot when the pool logic handed back a `ColdSlot`. It releases the slot on drop and is only disarmed by `commit()` once the `Sandbox` is in the map.
+- `PendingImageBootGuard` (`http/routes/sandbox.rs:106`) marks that an image is about to be read by this boot. A concurrent `DELETE /images/:id` checks the same marker, which closes the window in which the delete could remove the file the clone is reading. The guard releases on every exit path, including an early `?` and a panic unwind.
 
 The base rootfs is the registered image's path when `image_id` is set and the daemon default (`base_rootfs_path`) otherwise. The sandbox id is a fresh UUID, generated here because it names the rootfs file, goes into the MMDS metadata, and keys the later map entry.
 
@@ -137,7 +138,7 @@ match err.raw_os_error() {
 }
 ```
 
-This is `core/crates/vmm/src/rootfs.rs:56-70`, with `FICLONE` defined at line 16 as `_IOW(0x94, 9, int)`. A reflink makes the destination share the source's data extents, copy on write, so the cost is metadata only and no data moves. The ioctl only works when both files are on the same filesystem and that filesystem implements it (XFS with reflink enabled, Btrfs). On ext4 it fails with `EOPNOTSUPP`, and across mount points it fails with `EXDEV`. The five errnos in the match mean "this combination cannot reflink", and they fall back to `io::copy`. Any other errno (an I/O error, `ENOSPC`, a permissions failure) is a real failure and is returned.
+This is `core/crates/vmm/src/rootfs.rs:56-70`, with `FICLONE` defined at line 16 (the request number `_IOW(0x94, 9, int)`, written as the constant `0x4004_9409`). A reflink makes the destination share the source's data extents, copy on write, so the cost is metadata only and no data moves. The ioctl only works when both files are on the same filesystem and that filesystem implements it (XFS with reflink enabled, Btrfs). On ext4 it fails with `EOPNOTSUPP`, and across mount points it fails with `EXDEV`. The five errnos in the match mean "this combination cannot reflink", and they fall back to `io::copy`. Any other errno (an I/O error, `ENOSPC`, a permissions failure) is a real failure and is returned.
 
 ```mermaid
 flowchart TD
@@ -173,17 +174,17 @@ metrics.record_rootfs_clone(method);
 
 A reflink is a property of two files on one filesystem, not of a directory or a mount option on its own. So the question "will this clone be instant" is answered by where the destination file lands relative to the base image, not by how fast the disk is.
 
-That is why the destination is configurable and why the layout is explicit. The daemon's storage module holds a process-wide `StorageLayout` with a `rootfs_dir`, a `snapshots_root` and a `retired_root`, initialised once in `main` before anything touches disk. A test layout falls back to a temporary directory. `rootfs_path(id)` is pure path arithmetic.
+That is why the destination is configurable and why the layout is explicit. The daemon's `storage.rs` holds a process-wide `StorageLayout` with a `rootfs_dir`, a `snapshots_root` and a `retired_root`, initialised once at startup before anything touches disk. A test layout falls back to a temporary directory. `rootfs_path(id)` is pure path arithmetic.
 
 ```text
-SANDKILN_STATE_DIR   (default ~/sandkiln-tools/state)
+state_dir   (SANDKILN_STATE_DIR, default ~/sandkiln-tools/state)
   snapshots/             held snapshots, one directory per id
   snapshot-history/      retired checkpoints (see the snapshot post)
-SANDKILN_ROOTFS_DIR      (default <state dir>/rootfs)
+rootfs_dir  (SANDKILN_ROOTFS_DIR, default <state dir>/rootfs)
   sandkiln-rootfs-<sandbox id>.ext4     one per live sandbox
 ```
 
-Per-sandbox rootfs files are kept in their own directory, separate from snapshot state, because the two have opposite placement needs. Snapshot state is documented as durable across restarts, which an OS temp directory cannot promise. The rootfs directory is the one an operator puts on the same reflink-capable filesystem as the base image. `scripts/host-setup/create-reflink-volume.sh` builds an XFS loopback volume for hosts whose main filesystem is ext4, copies the base image in, and prints the two environment variables to set (`SANDKILN_BASE_ROOTFS` and `SANDKILN_ROOTFS_DIR`). Loop mounts do not persist across reboots, so the script is re-run to remount.
+Per-sandbox rootfs files are kept in their own directory, separate from snapshot state, because the two have opposite placement needs. Snapshot state is documented as durable across restarts, which an OS temp directory cannot promise. The rootfs directory is the one an operator puts on the same reflink-capable filesystem as the base image. `scripts/host-setup/create-reflink-volume.sh` builds an XFS loopback volume for hosts whose main filesystem is ext4, copies the base image in, and prints the two settings to use (`base_rootfs` and `rootfs_dir`, or their `SANDKILN_BASE_ROOTFS` and `SANDKILN_ROOTFS_DIR` environment variables; the resolution order is env, then `sandkiln.toml`, then default). Loop mounts do not persist across reboots, so the script is re-run to remount.
 
 Every path that gives a new mutating sandbox its own file (cold create, history-retaining resume, fork, restore) goes through the same wrapper; see the [snapshot post](/engineering/06-snapshots-resume-fork).
 
@@ -194,9 +195,10 @@ The destination directory used to be the OS temp directory, which made reflink s
 | Rootfs placement | Total | Rootfs clone | VM boot | Network lease |
 | --- | --- | --- | --- | --- |
 | Full byte copy, ext4 | 187.5 ms | 127.9 ms | 14.9 ms | 3.5 ms |
-| Reflink, same XFS filesystem as the base image | 17.9 ms | 0.08 ms | not itemised here | not itemised here |
+| Reflink, same XFS filesystem as the base image (earlier run) | 17.9 ms | 0.08 ms | not itemised here | not itemised here |
+| Reflink, same XFS filesystem (bench-report, 2026-11-23) | 18.4 ms | 0.084 ms | 13.4 ms | 3.1 ms |
 
-These are directional numbers from one shared development box, taken from the repository's roadmap and not a controlled benchmark. The useful part is the shape: on the copy path the clone is the majority of the request, and on the reflink path it effectively disappears. That is the evidence behind making the directory configurable and the method a metric, and it is why the clone counters exist. Whether reflink should be the default for production setups is still an open item.
+These are directional numbers from one shared development box, taken from the repository's roadmap and not a controlled benchmark. The later reflink row is the mean of 20 cold creates from `scripts/bench-report.sh`; the two reflink rows are close, which is as much as a shared box can say, and neither is authoritative. The useful part is the shape: on the copy path the clone is the majority of the request, and on the reflink path it effectively disappears. That is the evidence behind making the directory configurable and the method a metric, and it is why the clone counters exist. Whether reflink should be the default for production setups is still an open item.
 
 ## Observability of the path
 
@@ -216,25 +218,26 @@ The setup phases are recorded before the `?` that propagates their errors, so a 
 
 The reason the phases are measured individually at all is a single finding: an early profile showed the API-socket wait in `Vm::boot` taking 20.11 ms on every boot, the signature of one quantized `sleep(20ms)`, and replacing it with a connect-with-backoff took it to about 0.7 ms. A total latency number would never have shown that. `scripts/dev-tools/profile-cold-create.sh` drives sequential cold creates and prints one client-observed line per create, to be read alongside the debug events. `scripts/bench-report.sh` is the repeatable version: it reads `/metrics`, diffs against the previous run, and also tracks first-exec latency (below).
 
-For the VM boot step in isolation, the criterion figures are 10.5 to 10.9 ms cold boot and 220 to 250 microseconds per exec (criterion, earlier measurement, being re-verified).
+For the VM boot step in isolation, the criterion figures on the dev box (kernel 6.8, 2026-11-23) are 12.6 to 14.0 ms cold boot and 242 to 248 microseconds per exec round trip. The earlier run recorded 10.5 to 10.9 ms and 220 to 250 microseconds. Both are directional, from one shared box, and neither is authoritative.
 
 ## Failure unwinding
 
-The create path allocates in this order: pool slot, image-boot reservation, rootfs file, network lease, jail id (if the jailer is enabled), Firecracker process, egress chain. The rule from the project standard is that every intermediate failure leaves the system valid. This is what each step actually does.
+The create path allocates in this order: pool slot, image-boot reservation, rootfs file and network lease (concurrently), jail id (if the jailer is enabled), Firecracker process, egress chain. The rule from the project standard is that every intermediate failure leaves the system valid. This is what each step does.
 
 ```mermaid
 flowchart TD
     S[create_sandbox_cold] --> G1[pool slot reserved, image boot reserved]
     G1 --> T{setup join}
-    T -- clone failed --> F1[clone_file removed its partial dst, error returned]
-    T -- lease failed --> F2[lease restored its own octet and tap, error returned]
-    T -- both ok --> J[lease jail id if enabled]
-    J -- jail pool empty --> F3[network release, error]
+    T -- clone failed --> F1[release the lease if it succeeded, return clone error]
+    T -- lease failed --> F2[remove the rootfs clone if it succeeded, return lease error]
+    T -- both ok --> O[OwnedFile guard armed on the rootfs clone]
+    O --> J[lease jail id if enabled]
+    J -- jail pool empty --> F3[network release, error, guard deletes rootfs]
     J --> B[Vm::boot]
-    B -- fails --> F4[network release, jail id release, boot unwound kill and wait and sockets and chroot]
+    B -- fails --> F4[network release, jail id release, boot unwound, guard deletes rootfs]
     B -- ok --> E{egress requested}
-    E -- apply fails --> F5[vm.stop, network release, jail id release]
-    E -- ok --> C[insert Sandbox, commit pool guard]
+    E -- apply fails --> F5[vm.stop, network release, jail id release, guard deletes rootfs]
+    E -- ok --> K[OwnedFile.keep, sandbox inserted, pool guard committed]
     F1 --> D[guards drop: pool slot and image reservation released]
     F2 --> D
     F3 --> D
@@ -245,28 +248,28 @@ flowchart TD
 The details, step by step:
 
 - **Rootfs clone.** `clone_file` removes its own partial destination on any error, so the clone step is self-cleaning.
-- **Lease inside `NetworkManager::lease`.** The function pops an IP octet and then a tap. If no tap is free it pushes the octet back before returning an error. If the bridge attach fails it pushes both back. A failed lease therefore never shrinks the pools (`core/crates/vmm/src/network.rs:112-138`).
+- **The setup join.** The clone and the lease ran concurrently, so either can succeed while the other fails. The closure matches on both results together (`http/routes/sandbox.rs:311-329`): if the clone succeeded it removes the file, if the lease succeeded it releases it, and then it returns whichever error occurred. A failed clone therefore no longer strands a lease, and a failed lease no longer strands a rootfs file.
+- **`OwnedFile`.** Once both halves succeed, the closure wraps the rootfs path in `storage::OwnedFile` (`core/crates/daemon/src/storage.rs:74-103`), a scope guard whose `Drop` deletes the file unless `keep()` was called. Every early return between the clone and the sandbox existing (jail id exhausted, `Vm::boot` failing, egress failing) deletes the multi-hundred-MiB clone without each branch having to remember to. `keep()` is called only on the success path, immediately before the `Vm` and lease are handed back. Unit tests cover deleted-on-drop, kept-after-`keep()` and a file that is already gone.
+- **Lease inside `NetworkManager::lease`.** The function pops an IP octet and then a tap. If no tap is free it pushes the octet back before returning an error. If the bridge attach fails it pushes both back. A failed lease therefore never shrinks the pools (`core/crates/vmm/src/network.rs:112`).
 - **Jail id.** It is an in-memory pop. If it fails, the network lease is released before the error is returned.
 - **`Vm::boot`.** If any configuration request fails, the vmm boot function kills the child, waits on it, removes the API and vsock sockets and removes the half-built jail directory if there is one (`core/crates/vmm/src/vm/boot.rs:65-80`). The guest console log path is appended to the error so a pre-vsock kernel panic is diagnosable. In the daemon, a failed boot releases the lease and the jail id.
 - **Egress.** A policy that fails to apply is treated like a failed boot, not a warning, so a sandbox is never left silently unrestricted: the VM is stopped, the lease and jail id are released, and the error is returned. This is the opposite choice from resume and fork, where the one-way operation has already succeeded and the failure is logged loudly instead.
 - **Guards.** `PoolClaimGuard` and `PendingImageBootGuard` release on drop regardless of which return path was taken.
 - **History.** A history-store write failure is a warning only. The VM is already running and the record is best effort.
 
-### What this path does not clean up today
+### What still is not cleaned up
 
-Two ownership gaps exist in the cold path as written and are worth stating plainly.
+Ownership is now explicit for the resources the create closure acquires, but two things remain outside it. Both are the same limit: they need a process that is still alive to run any cleanup.
 
-- The boot closure does not remove the per-sandbox rootfs file when `Vm::boot` or egress apply fails after the clone succeeded, and it does not remove it when the lease step fails after a successful clone. The file is named by a UUID that is never reused, so nothing is corrupted, but it stays in the rootfs directory until an operator removes it.
-- If the clone fails while the lease succeeds, the closure returns on `copy_result?` before the lease is released. `Lease` has no `Drop`, by design (release is an explicit, consuming call), so that lease is not returned to the pool.
-
-The daemon performs no startup sweep of orphaned rootfs files either. These are the kind of cleanup obligations the standard says to fix at the root rather than patch around. A natural shape is a small guard type owning the rootfs path and the lease together, released on drop unless committed, mirroring `PoolClaimGuard`.
+- A daemon crash or `SIGKILL` between the clone and `keep()` leaves the rootfs file on disk, and a crash after boot leaves the Firecracker process running. Drop-based guards cannot run in a process that is gone. An orderly `SIGTERM` is different: the shutdown path snapshots or destroys every live sandbox (see the [system overview](/engineering/01-system-overview)).
+- The daemon performs no startup sweep of rootfs files that no snapshot or sandbox owns. The file name carries a UUID that is never reused, so a stranded file corrupts nothing, but it occupies disk until an operator removes it. A sweep at startup, mirroring how snapshots are reconciled from the filesystem, is the natural fix and is not built.
 
 ## The first-exec gap
 
 `POST /sandboxes` returns 200 when `Vm::boot` returns, that is, when Firecracker accepted `InstanceStart`. It does not wait for the guest agent to answer. The guest kernel and userspace still have to come up and the agent has to bind its vsock port.
 
-`Vm::call` absorbs that race on the caller's side: it retries the vsock connect with a 1 ms to 20 ms backoff for up to five seconds. In the repository's measurements, the first real exec after a cold create costs roughly 420 to 460 ms end to end, while later execs on the same sandbox cost a few milliseconds. A resumed sandbox, whose agent is already running inside the restored memory image, answers its first exec in roughly 4 to 18 ms. Those figures are measured by `scripts/bench-report.sh` as `first_exec_client` (cold) and `first_exec_resumed`.
+`Vm::call` absorbs that race on the caller's side: `retry_while` retries a failed vsock connect with a 1 ms to 20 ms backoff for up to five seconds, and never retries a request that was already written (see the [protocol post](/engineering/02-vsock-protocol-and-guest-agent)). In the repository's measurements, the first real exec after a cold create costs roughly 420 to 460 ms end to end, while later execs on the same sandbox cost a few milliseconds. A resumed sandbox, whose agent is already running inside the restored memory image, answers its first exec in roughly 4 to 18 ms. Those figures are measured by `scripts/bench-report.sh` as `first_exec_client` (cold) and `first_exec_resumed`.
 
-The consequence is that the request's own latency (17.9 ms on the reflink path) is not the number that matters for "how long until my code runs". The first caller silently pays the agent's start-up time and it shows up as "exec is slow".
+The consequence is that the request's own latency (17.9 to 18.4 ms on the reflink path) is not the number that matters for "how long until my code runs". The first caller silently pays the agent's start-up time and it shows up as "exec is slow".
 
 There are two obvious designs and neither is chosen yet. Making the create wait for an agent readiness probe makes the response honest and the first exec fast, but adds hundreds of milliseconds to every create, including ones from callers who do not need the agent immediately. Keeping the fast return and documenting the gap leaves the cost with the first caller. The pre-warmed pool sidesteps the problem for the common profile, because a claim resumes an already-warm agent, but cold creates with drives or rate limits still pay it. It remains an open product question, tracked as a measurement so any change is visible.

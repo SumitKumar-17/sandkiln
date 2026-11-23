@@ -8,20 +8,18 @@ updated: 2026-11-24
 
 A pre-warmed pool is a bounded supply of already-booted, already-snapshotted microVMs that a plain `POST /sandboxes` can resume instead of paying a cold boot. The mechanism is small, but it sits at the intersection of the snapshot store, the sandbox table and the create path, and each has its own invariants. This post describes how the pieces fit together. The user-facing description and the latency numbers live in the docs page [Internals: pre-warmed pools](https://sandkiln.mintlify.site/internals/pre-warmed-pools); this post is about code structure.
 
-A note on references: the daemon crate is being reorganized, so daemon code is cited by concept and item name (`Pool`, `PoolClaimGuard`, `claim_from_pool`) rather than by file path. Items in `sandkiln-vmm` carry `path:line` references.
-
 ## The four pieces
 
-The feature is split into four daemon modules, each with one concern.
+The feature is split into four daemon files, each with one concern. Three live under `core/crates/daemon/src/lifecycle/` and the HTTP surface under `http/routes/`.
 
-| Module | Concern | Async? |
+| File | Concern | Async? |
 | --- | --- | --- |
-| `pool` | Pure state: `PoolConfig`, `PoolKey`, `Pool` (warm queue, claimed counter, `Notify`) | No |
-| `pool_replenisher` | Background tick loop that tops pools up | Yes, a spawned task |
-| `pool_claim` | `resolve_pool_claim`, `PoolClaimGuard`, `claim_from_pool` | Yes |
-| `routes_pool` | HTTP create, list and delete of pool *configuration* | Yes |
+| `lifecycle/pool.rs` | Pure state: `PoolConfig`, `PoolKey`, `Pool` (warm queue, claimed counter, `Notify`) | No |
+| `lifecycle/pool_replenisher.rs` | Background tick loop that tops pools up | Yes, a spawned task |
+| `lifecycle/pool_claim.rs` | `resolve_pool_claim`, `PoolClaimGuard`, `claim_from_pool` | Yes |
+| `http/routes/pool.rs` | HTTP create, list and delete of pool *configuration* | Yes |
 
-`pool` has no dependency on `AppState`. That is deliberate: every transition (`push_warm`, `take_warm`, `record_claim`, `record_release`, `needs_replenish`) is a plain method on a struct, which is why the module carries a dozen unit tests that run under `cargo test --workspace` with no KVM. Everything that needs a real VM (resume, boot, snapshot) lives in the modules around it and is exercised by the `18-pool.sh` topic of the integration suite.
+`lifecycle/pool.rs` has no dependency on `AppState`. That is deliberate: every transition (`push_warm`, `take_warm`, `record_claim`, `record_release`, `needs_replenish`) is a plain method on a struct, which is why the module carries a dozen unit tests that run under `cargo test --workspace` with no KVM. Everything that needs a real VM (resume, boot, snapshot) lives in the modules around it and is exercised by the `18-pool.sh` topic of the integration suite.
 
 ```mermaid
 flowchart LR
@@ -52,7 +50,7 @@ pub struct PoolConfig {
 }
 ```
 
-(`PoolConfig`, in the daemon's `pool` module.)
+(`PoolConfig`, `core/crates/daemon/src/lifecycle/pool.rs:28`.)
 
 Two numbers shape behavior, and they mean different things:
 
@@ -73,10 +71,10 @@ A request that carries `drives`, or any `rate_limit`, never matches a pool. Both
 
 ```rust
 if request.drives.is_empty() && request.rate_limit.is_none() {
-    let key = crate::pool::PoolKey { image_id: request.image_id.clone(), vcpu_count, mem_size_mib };
+    let key = crate::lifecycle::pool::PoolKey { image_id: request.image_id.clone(), vcpu_count, mem_size_mib };
 ```
 
-(From `create_sandbox_core`, in the daemon's `routes_sandbox`.)
+(From `create_sandbox_core`, `core/crates/daemon/src/http/routes/sandbox.rs:154`.)
 
 Such a request also never *queues* on a pool. If it did, it could wait up to 30 seconds for a slot it could never legitimately use. It goes straight to a cold create.
 
@@ -84,7 +82,7 @@ Egress policy is different. It does not disqualify a claim, because it is host-s
 
 ## The replenisher
 
-`pool_replenisher::run` is a fixed-interval loop, spawned unconditionally from `main`:
+`pool_replenisher::run` (`lifecycle/pool_replenisher.rs`) is a fixed-interval loop, spawned unconditionally from `main.rs`:
 
 ```rust
 const CHECK_INTERVAL: Duration = Duration::from_secs(2);
@@ -97,7 +95,7 @@ pub async fn run(state: Arc<AppState>) {
 }
 ```
 
-(From `pool_replenisher`.)
+(From `lifecycle/pool_replenisher.rs`.)
 
 An idle tick with no pools configured is one empty lock-and-filter. The interval is a constant, not an environment variable.
 
@@ -106,7 +104,7 @@ Each tick, `replenish_once` takes the `AppState::pools` lock, collects clones of
 Producing one warm slot reuses the ordinary lifecycle operations rather than a pool-specific boot path:
 
 1. `create_sandbox_core` with a placeholder request: no name, a single tag `sandkiln.pool=<pool id>`, the pool's resolved vCPU and memory, its image, no drives, no rate limit, no egress, no env. This is a full normal create, so it goes through the same lease, rootfs clone and boot sequence.
-2. `snapshot_and_stop`, the same function that `DELETE /sandboxes/:id` and the idle reaper use. It returns a snapshot id that is now a normal entry in `AppState::snapshots`.
+2. `snapshot_and_stop` (`http/routes/snapshot.rs`), the same function that `DELETE /sandboxes/:id`, the idle reaper and orderly shutdown use. It returns a snapshot id that is now a normal entry in `AppState::snapshots`.
 3. Under the `pools` lock again, `push_warm(snapshot_id)`.
 
 There is no separate "warm" artifact type. A warm slot is just a snapshot id in the pool's `VecDeque<String>`. That keeps ownership simple: the snapshot lives in the snapshot table and on disk, and the pool holds a reference to it. The snapshot mechanics themselves are covered in the snapshots, resume and fork post (06).
@@ -122,7 +120,7 @@ fn effective_warm_target(&self) -> u32 {
 }
 ```
 
-(From `Pool`, in `pool`.)
+(From `Pool`, `lifecycle/pool.rs:88`.)
 
 With `max_count: 3` and one claimed instance, only two slots of headroom exist, so the target is `min(warm_count, 2)`. `saturating_sub` matters: a race can leave `claimed` above `max_count`, and an unchecked subtraction there would panic in a debug build or wrap in release.
 
@@ -165,7 +163,7 @@ let notify = {
 };
 ```
 
-(From `resolve_pool_claim`, in `pool_claim`.)
+(From `resolve_pool_claim`, `lifecycle/pool_claim.rs:53`.)
 
 There are three outcomes:
 
@@ -202,7 +200,7 @@ impl Drop for PoolClaimGuard {
 }
 ```
 
-(From `PoolClaimGuard`, in `pool_claim`.)
+(From `PoolClaimGuard`, `lifecycle/pool_claim.rs:91`.)
 
 The guard is created right after `resolve_pool_claim` returns a slot, and `commit()` is called only when a live `Sandbox` durably owns the slot. From then on the slot is released by the stop paths: `destroy_sandbox_by_id` and `snapshot_and_stop` both check `Sandbox::source_pool_id` and call `record_release` on the matching pool, which also wakes queued waiters.
 
@@ -243,9 +241,9 @@ sequenceDiagram
 
 **1. Resume.** It calls `resume_snapshot_by_id(state, snapshot_id, true)`, the same function behind the snapshot resume endpoint. The `true` is `retain_history`: the consumed checkpoint is retired into the snapshot history rather than deleted. The code comment explains why: from inside the claim there is no way to tell "the pool's own warm checkpoint" from any other, so both are kept.
 
-**2. Health check.** It runs `Request::Exec { command: "true", .. }` through `sandbox.vm.call`, inside `spawn_blocking_in_current_span` because it is blocking vsock I/O. This exists because a resumed guest kernel can panic early after restore. In isolated tests on the dev box it happened in roughly one in three to two in three resumes. The root cause is unconfirmed (drift between restored CPU or timer state and timing-sensitive kernel init, with TSC drift in particular, is a hypothesis, not a finding), but the failure is real, so a resume is untrusted until the guest agent answers.
+**2. Health check.** It runs `Request::Exec { command: "true", .. }` through `sandbox.vm.call`, inside `spawn_blocking_in_current_span` because it is blocking vsock I/O. This exists because a resumed guest kernel can panic shortly after restore, and the process then exits. The failure was first seen building this feature, at a rate the code comment records as one in three to two in three resumes, with a divide-by-zero trap in the console log. Later loops are much cleaner: 160 of 160 resume and re-snapshot cycles were clean in isolated and 4-way-parallel runs. What still shows up is a different panic ("Attempted to kill the idle task!", about 20ms after restore) that appears only in the full parallel integration suite (see the known limitation below). The root cause of either is unconfirmed, so a resume is untrusted until the guest agent answers. The code comments in `pool_claim.rs` and `create_sandbox_core` still quote the older rate, and I did not re-measure it.
 
-**3. Teardown on failure.** A failed check calls `destroy_unhealthy_claim`, which removes the sandbox from the table, releases the network lease, deletes the rootfs clone, and stops the VM with `Vm::force_stop`:
+**3. Teardown on failure.** A failed check calls `destroy_unhealthy_claim`, (`lifecycle/pool_claim.rs:252`), which removes the sandbox from the table, releases the network lease, deletes the rootfs clone, and stops the VM with `Vm::force_stop`:
 
 ```rust
 /// Like `stop`, but skips the "sync before kill" call, for a VM
@@ -255,7 +253,7 @@ pub fn force_stop(self) -> io::Result<()> {
 }
 ```
 
-(`sandkiln-vmm`, `core/crates/vmm/src/vm/mod.rs:207`.)
+(`sandkiln-vmm`, `core/crates/vmm/src/vm/mod.rs:244`.)
 
 `stop` first asks the guest to `sync` so unflushed writes to attached drives are not lost, and that call has its own timeout budget (the source comment says about 5 seconds). For a VM the health check just proved is not answering, the sync cannot succeed and would only burn that budget before the kill. `force_stop` goes straight to the kill and socket cleanup. The slot guard is not committed, so the slot is released on return.
 
@@ -275,7 +273,7 @@ pub fn update_metadata(&self, metadata: &serde_json::Value) -> io::Result<()> {
 }
 ```
 
-(`sandkiln-vmm`, `core/crates/vmm/src/vm/mod.rs:193`.) What MMDS is and why the guest reads identity from it is covered in [Internals: MMDS](https://sandkiln.mintlify.site/internals/mmds).
+(`sandkiln-vmm`, `core/crates/vmm/src/vm/mod.rs:230`.) What MMDS is and why the guest reads identity from it is covered in [Internals: MMDS](https://sandkiln.mintlify.site/internals/mmds).
 
 Because `PUT /mmds/config` can be rejected just after a resume even when the resume fully succeeded, the daemon wraps the call in a bounded retry: `UPDATE_METADATA_MAX_ATTEMPTS` is 10, with `UPDATE_METADATA_RETRY_DELAY` of 300 ms between attempts, so about 3 seconds in total. The loop runs inside `spawn_blocking`, which is why it can use `std::thread::sleep` without stalling the runtime. It takes the sandbox-table lock per attempt, so the lock is never held through a sleep.
 
@@ -294,8 +292,8 @@ The cost of an unlucky resume is visible to the caller only as latency. The call
 Pool *configuration* lives only in `AppState::pools`, an in-memory `Mutex<HashMap<String, Pool>>`. Pools are inserted only by the create handler, and nothing reads them back at startup. The consequences follow directly:
 
 - After a daemon restart there are no pools. `GET /pools` is empty until an operator re-creates them.
-- The warm *snapshots* are on disk like any snapshot. `snapshot::reconcile` rebuilds `AppState::snapshots` from the filesystem at startup, so they come back as ordinary snapshots, but no code re-links them to a pool. They are not lost, and they are not claimable either: they sit in the snapshot list until deleted.
-- A live sandbox claimed from a pool does not survive a restart (see the daemon internals post), so the `claimed` counter would have nothing meaningful to restore.
+- The warm *snapshots* are on disk like any snapshot. `reconcile` in `snapshots/held.rs` rebuilds `AppState::snapshots` from the filesystem at startup, so they come back as ordinary snapshots, but no code re-links them to a pool. They are not lost, and they are not claimable either: they sit in the snapshot list until deleted.
+- A sandbox claimed from a pool is snapshotted by orderly shutdown like any other live sandbox (see the daemon internals post), and `snapshot_and_stop` ends its pool membership, so after a restart it is an ordinary snapshot and the `claimed` counter would have nothing meaningful to restore. After a `SIGKILL` or crash it is simply gone.
 
 Persisting pool config was not built: re-issuing a `POST /pools` at startup is cheap, and a persisted design would first have to say what `claimed` means once every live sandbox has been orphaned. It is a deferred feature, not an implied one.
 
@@ -308,11 +306,16 @@ The deletion path shows the ownership model. `delete_pool` removes the `Pool` fr
 | `AppState::pools` (warm queue, claimed counter) | `std::sync::Mutex` | Never |
 | `Pool::notify` | `Arc<Notify>`, cloned out of the lock | Awaited with the lock released |
 | `AppState::sandboxes` during the MMDS retry | `std::sync::Mutex`, taken per attempt | Never (inside `spawn_blocking`) |
+| `AppState::sandboxes` during the health check | `std::sync::Mutex`, held for the one control-plane `Vm::call` (3s reply bound) | No, but it is a blocking call under the lock, unlike user exec, which copies out an `AgentEndpoint` and releases the lock first |
 
 Three kinds of caller touch a pool: HTTP handlers (`resolve_pool_claim`, create, delete), the replenisher, and the stop paths calling `record_release`. All of them use short critical sections on one mutex, and the only cross-task signaling is the `Notify`. No code path holds the `pools` lock while acquiring another lock.
 
 ## Testing
 
-The pure logic in `pool` has unit tests for FIFO ordering, key inequality across image and resource differences, `max_count` blocking and release, saturating release, and the effective warm target arithmetic including a `claimed` above `max_count`. Those run in the 303-test `cargo test --workspace` pass.
+The pure logic in `pool` has unit tests for FIFO ordering, key inequality across image and resource differences, `max_count` blocking and release, saturating release, and the effective warm target arithmetic including a `claimed` above `max_count`. Those run in the `cargo test --workspace` pass (340 tests across the crates as of 2026-11-24, 222 of them in the daemon).
 
-The integration suite (315 checks in total) covers live behavior in `18-pool.sh`: a real background replenishment, a claim from the warm pool, MMDS reflecting the claimer's name (polled on the guest side), a second claim at `max_count` queueing, and the queued claim waking promptly once a slot frees. `SANDKILN_INTEGRATION_TEST_ONLY=pool` runs just that topic. The topic polls for real replenishment rather than sleeping a fixed time, because it runs concurrently with other topics that compete for host resources.
+The integration suite (about 320 checks in total across 25 topics) covers live behavior in `18-pool.sh`: a real background replenishment, a claim from the warm pool, MMDS reflecting the claimer's name (polled on the guest side), a second claim at `max_count` queueing, and the queued claim waking promptly once a slot frees. `SANDKILN_INTEGRATION_TEST_ONLY=pool` runs just that topic. The topic polls for real replenishment rather than sleeping a fixed time, because it runs concurrently with other topics that compete for host resources.
+
+## Known limitation: resume panics under concurrent load
+
+In the full integration suite run 4-way parallel, 2 or 3 of about 320 checks fail because a freshly resumed guest kernel panics ("Attempted to kill the idle task!", about 20ms after restore) and its Firecracker process exits. 160 of 160 resume and re-snapshot cycles were clean in isolated and 4-way-parallel loops, so the failure needs some specific concurrent condition, and the root cause has not been found. The post-resume health check above is what contains it for pools: a claim that hits it tears the VM down and retries, up to three attempts, then cold-creates. Nothing else resumes through a check, so a plain snapshot resume or fork can hand back a sandbox that is already dead.

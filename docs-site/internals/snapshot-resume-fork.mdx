@@ -41,7 +41,7 @@ flowchart LR
 
 Resume consumes the snapshot record outright (a second resume `404`s); fork only locks it to at most one live descendant at a time, released once that fork is stopped — both set `parent_snapshot_id`, which is how a lineage like `Snapshot 2 → Sandbox B → Snapshot 1` stays queryable in either direction without a dedicated tree-shaped endpoint.
 
-`Vm::pause`/`Vm::snapshot`/`Vm::resume` (`core/crates/vmm/src/vm/snapshot.rs`) are thin wrappers over Firecracker's own `/vm` (state: Paused) and `/snapshot/create` API calls, nothing more than that at the hypervisor layer. Everything about *which* files, *whose* lease, and *what happens after* is the daemon's own design, in `core/crates/daemon/src/routes_snapshot.rs` and `snapshot.rs`.
+`Vm::pause`/`Vm::snapshot`/`Vm::resume` (`core/crates/vmm/src/vm/snapshot.rs`) are thin wrappers over Firecracker's own `/vm` (state: Paused) and `/snapshot/create` API calls, nothing more than that at the hypervisor layer. Everything about *which* files, *whose* lease, and *what happens after* is the daemon's own design, in `http/routes/snapshot.rs` and `snapshots/held.rs` under `core/crates/daemon/src`.
 
 **Resume** (`resume_snapshot_by_id`) builds a brand-new `Sandbox` record that owns a fresh rootfs clone and its original network lease outright: structurally identical to a cold `POST /sandboxes` in everything except how the VM itself boots. The snapshot record is consumed, so a second resume of the same id returns `404`.
 

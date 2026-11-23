@@ -18,14 +18,14 @@ The long-form architecture write-ups live on the project website, one post per s
 | [Persistence and history](https://sandkiln.vercel.app/engineering/09-persistence-and-history/) | The sqlite store, orphan reconciliation |
 | [Config, SDKs and CLI](https://sandkiln.vercel.app/engineering/10-config-sdks-and-cli/) | Client design and how a change propagates |
 
-On this site, the measured-latency write-ups are [Startup latency and the pre-warmed pool](/architecture/startup-latency) and [The vsock timeout that could hang a stop](/architecture/bug-hunt-vsock-timeout). Per-mechanism pages with captured requests are under [Internals](/internals/vsock-wire-protocol).
+On this site, the measured-latency write-ups are [Startup latency and the pre-warmed pool](/architecture/startup-latency) and [Bounded vsock calls](/architecture/bug-hunt-vsock-timeout). Per-mechanism pages with captured requests are under [Internals](/internals/vsock-wire-protocol).
 
 ## Open issues
 
 Status as of 2026-11-23. The authoritative list is `ROADMAP.md`.
 
-- **Resumed guests sometimes panic early in boot.** Measured at 1 in 3 to 2 in 3 isolated resumes; root cause unconfirmed. Mitigated by the post-resume health check. See [Startup latency](/architecture/startup-latency#resume-failure-and-the-health-check).
+- **Resumed guests sometimes panic early in boot.** Measured at 1 in 3 to 2 in 3 isolated resumes earlier; in the full parallel integration suite 2 to 3 of about 320 checks still fail this way, while 160 of 160 isolated resume cycles were clean. Root cause not found. Mitigated by the post-resume health check. See [Startup latency](/architecture/startup-latency#resume-failure-and-the-health-check).
 - **`POST /sandboxes` returns before the guest agent answers.** Whether `create` should block until the agent responds is undecided. See [Startup latency](/architecture/startup-latency#create-returns-before-the-sandbox-is-usable).
-- **Snapshot-take costs 310-990ms** (full memory and disk each time).
+- **Snapshot-take costs 485-727ms** (criterion, 2026-11-23; guest memory written in full each time). Diff snapshots are planned, not implemented.
 - **Retired checkpoints have no automatic expiry.** `DELETE /snapshots/history/:id` reclaims them manually.
 - **Jailer mode is opt-in and not proven on real hardware.** See [Jailer and privilege model](/internals/jailer-privilege-model).

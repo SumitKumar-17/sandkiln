@@ -8,7 +8,7 @@ updated: 2026-11-24
 
 A pre-warmed pool trades idle capacity for startup latency: the daemon boots, snapshots and stops a few sandboxes ahead of time, and a plain `POST /sandboxes` resumes one instead of cold-booting. The mechanism is described in another post in this series. This one is about the evidence: what was measured, what that measurement does and does not support, and where the honest answer is "we do not know".
 
-Daemon code is cited by item name (`claim_from_pool`, `resolve_pool_claim`, `PoolClaimGuard`) because that tree is being reorganized. Items in `sandkiln-vmm` carry `path:line` references. Every number below comes from `ROADMAP.md`, `CHANGELOG.md`, the docs-site startup-latency page, or a commit message, and each is labelled with how it was obtained.
+Code is cited with `path:line` references, verified against the current tree: the claim logic lives in `core/crates/daemon/src/lifecycle/pool_claim.rs`, the background filler in `core/crates/daemon/src/lifecycle/pool_replenisher.rs`, and the pool state in `core/crates/daemon/src/lifecycle/pool.rs`. Every number below comes from `ROADMAP.md`, `CHANGELOG.md`, the docs-site startup-latency page, or a commit message, and each is labelled with how it was obtained.
 
 ## Problem and how it was found
 
@@ -34,7 +34,7 @@ scripts/bench-report.sh 20 http://127.0.0.1:7777
 
 A cold sandbox's first real `exec` measured about 420 to 460ms. Every later `exec` on the same sandbox measured about 3 to 5ms. The first `exec` after a resume measured about 4 to 18ms. The ratio is roughly 25 to 100 times, "confirmed repeatedly, not a one-off", in the roadmap's words.
 
-Third, the resume has a failure mode. A resumed guest kernel can panic early in boot (the serial console showed a divide-by-zero in the console driver's init path) and the Firecracker process then exits. Across several clean, isolated, sequential single-claim runs, the failure rate ranged from roughly 1 in 3 to 2 in 3 resumes. This surfaced only because a pool resumes far more often than the single resume in the integration suite's snapshot topic, which therefore passes every run.
+Third, the resume has a failure mode, described under "Known limitation" below. A resumed guest kernel can panic early after restore and the Firecracker process then exits. In the first recording the serial console showed a divide-by-zero in the console driver's init path. Across several clean, isolated, sequential single-claim runs, the failure rate ranged from roughly 1 in 3 to 2 in 3 resumes. This surfaced only because a pool resumes far more often than the single resume in the integration suite's snapshot topic, which therefore passes every run.
 
 ## Root cause
 
@@ -66,7 +66,7 @@ flowchart TD
 
 ## The change
 
-The change is the feature itself, introduced in commit `6718ae9` ("daemon+vmm+sdk+cli: pre-warmed snapshot pools for faster sandbox creates") and refined by `f6c74d1` and the `max_count` commit. In the daemon, four items carry it: `resolve_pool_claim` decides what a request gets, `PoolClaimGuard` releases a reserved slot on drop unless committed, `claim_from_pool` resumes and verifies, and the background `replenish_one` keeps pools topped up on a 2 second tick. The vmm side adds `Vm::force_stop` (`core/crates/vmm/src/vm/mod.rs:207`) and `Vm::update_metadata`.
+The change is the feature itself, introduced in commit `6718ae9` ("daemon+vmm+sdk+cli: pre-warmed snapshot pools for faster sandbox creates") and refined by `f6c74d1` and the `max_count` commit. In the daemon, four items carry it: `resolve_pool_claim` (`pool_claim.rs:53`) decides what a request gets, `PoolClaimGuard` (`pool_claim.rs:91`) releases a reserved slot on drop unless committed, `claim_from_pool` (`pool_claim.rs:140`) resumes and verifies, and the background `replenish_one` (`pool_replenisher.rs:44`) keeps pools topped up on a 2 second tick. The vmm side adds `Vm::force_stop` (`core/crates/vmm/src/vm/mod.rs:244`) and `Vm::update_metadata`.
 
 The health check is the part that matters for latency honesty. Every warm claim runs a real `exec true` against the resumed sandbox before returning it:
 
@@ -78,9 +78,9 @@ sandbox.vm.call(&sandkiln_protocol::Request::Exec {
 })
 ```
 
-If it fails, the sandbox is torn down by `destroy_unhealthy_claim` and the request falls through to a cold create, so a caller never receives a dead sandbox id. The teardown uses `Vm::force_stop` rather than `Vm::stop`, which skips the pre-kill `sync` (`core/crates/vmm/src/vm/mod.rs:199` and `:207`). The reason is in the doc comment on `force_stop`: a VM already known dead cannot answer `sync`, so waiting would spend a second timeout for nothing. That is the subject of another post in this series; here it matters because it is a 10.3 second versus 5.4 second difference on the path a pool takes one resume in three or more of the time.
+If it fails (`pool_claim.rs:167`), the sandbox is torn down by `destroy_unhealthy_claim` (`pool_claim.rs:252`) and the request falls through to a cold create, so a caller never receives a dead sandbox id. The teardown uses `Vm::force_stop` rather than `Vm::stop`, which skips the pre-kill `sync` (`core/crates/vmm/src/vm/mod.rs:236` and `:244`). The reason is in the doc comment on `force_stop`: a VM already known dead cannot answer `sync`, so waiting would spend a second timeout for nothing. That is the same reasoning that later made `snapshot_and_stop` use `force_stop` too ([Snapshot stop: 6.8s to 0.56s](/engineering/25-opt-snapshot-stop-force-stop)). Here it matters because it is a 10.3 second versus 5.4 second difference on the path a pool takes one resume in three or more of the time.
 
-The replenisher builds each warm entry from the same machinery as a user request. It runs `create_sandbox_core` for a placeholder sandbox, then `snapshot_and_stop`, then `push_warm` on the pool. Each tick fills at most one slot per due pool, so a large `warm_count` fills gradually instead of spiking boot load.
+The replenisher builds each warm entry from the same machinery as a user request. It runs `create_sandbox_core` (`core/crates/daemon/src/http/routes/sandbox.rs:154`) for a placeholder sandbox, then `snapshot_and_stop` (`http/routes/snapshot.rs`), then `push_warm` (`pool.rs:99`) on the pool. Each tick fills at most one slot per due pool, so a large `warm_count` fills gradually instead of spiking boot load.
 
 ```mermaid
 stateDiagram-v2
@@ -98,7 +98,7 @@ stateDiagram-v2
 
 Two scoping decisions are part of the change and affect what the numbers apply to. A request with `drives` or a custom `rate_limit` never matches a pool, because both are baked into a VM at boot and a warm snapshot has neither. And pool configuration is held in memory only: a daemon restart forgets it, and a snapshot already warm at that moment can be orphaned with no pool left to claim or clean it up. The roadmap lists this as a known, unsolved edge.
 
-`max_count` caps warm plus claimed instances. A request that matches a pool at its ceiling with nothing warm queues on a per-pool `tokio::sync::Notify`, woken on every replenish and every instance stop, for up to 30 seconds, then returns `503`. `resolve_pool_claim` never holds the pools lock across an await: it locks, decides or clones the `Notify`, unlocks, optionally waits, and loops with fresh state. A bug found by live testing is part of that history: before a bounded retry (`MAX_POOL_CLAIM_ATTEMPTS`, 3) was added, a failed warm claim fell through to an unattributed cold create, so a `max_count` pool under a bad run of resumes could run more live instances than its ceiling. It was caught because `GET /pools` showed `claimed` as `0` right after a claim that the log showed had failed its check.
+`max_count` caps warm plus claimed instances. A request that matches a pool at its ceiling with nothing warm queues on a per-pool `tokio::sync::Notify`, woken on every replenish and every instance stop, for up to 30 seconds, then returns `503`. `resolve_pool_claim` never holds the pools lock across an await: it locks, decides or clones the `Notify`, unlocks, optionally waits, and loops with fresh state. Before a bounded retry (`MAX_POOL_CLAIM_ATTEMPTS`, 3, at `pool_claim.rs:26`) was added, a failed warm claim fell through to an unattributed cold create, so a `max_count` pool could run more live instances than its ceiling.
 
 ## Result
 
@@ -118,9 +118,9 @@ What was measured, with its source and the caveat that applies:
 
 The two first-`exec` figures are the strongest result. The `create()` figures are the weakest, and the roadmap says so.
 
-Here is the part that is arithmetic rather than measurement, and it should be read as such. Take a clean claim at roughly 100ms and a failed claim at about 5.4s for the failed attempt plus roughly 0.17s for the cold create it falls back to. If the failure rate is one in three, a single-attempt mean `create()` latency is about (2/3 x 0.1) + (1/3 x 5.6), or 1.9 seconds. At two in three it is about (1/3 x 0.1) + (2/3 x 5.6), or 3.8 seconds. Both are far above a plain cold create's roughly 0.17 seconds. The code retries a failed warm claim up to three times against the pool, which changes the distribution and which I did not model, but each failed attempt still costs about 5.4 seconds of health-check budget. So at the failure rates the roadmap recorded, the pool's mean `create()` latency on this box was likely worse than not having a pool. The pool wins only in the clean case, and even there only by 0 to 90ms on `create()`.
+Here is the part that is arithmetic rather than measurement, and it should be read as such. Take a clean claim at roughly 100ms and a failed claim at about 5.4s for the failed attempt plus roughly 0.17s for the cold create it falls back to. If the failure rate is one in three, a single-attempt mean `create()` latency is about (2/3 x 0.1) + (1/3 x 5.6), or 1.9 seconds. At two in three it is about (1/3 x 0.1) + (2/3 x 5.6), or 3.8 seconds. Both are far above a plain cold create's roughly 0.17 seconds. The code retries a failed warm claim up to three times, which I did not model, but each failed attempt still costs about 5.4 seconds. So at the failure rates the roadmap recorded, the pool's mean `create()` latency on this box was likely worse than not having a pool. The pool wins only in the clean case, and even there only by 0 to 90ms on `create()`.
 
-I could not find a re-measurement of the resume failure rate after the early recording. The open integration finding 10 ("post-resume `vsock ... Connection refused` seen in pool-claim health checks") suggests a related race still exists in at least some conditions. Whether the panic rate is the same today is not established by anything in the repository.
+The early 1 in 3 to 2 in 3 figure has not been reproduced since. The re-measurement described under "Known limitation" below found a much lower rate, and a different panic message, which is why the figure above should be read as a recording from one earlier state of the box and the guest kernel, not as a current rate.
 
 The cost of an unlucky claim, as the code orders it and using the durations recorded above, is a sequence of waits rather than one:
 
@@ -146,16 +146,22 @@ Measured costs:
 
 Costs that follow from the structure but were not benchmarked:
 
-- Each warm entry is a full sandbox that was cold-booted and then snapshotted. Snapshot-take alone was recorded at 485 to 727ms on 2026-11-24 (criterion, this box, kernel 6.8), against 310 to 335ms in earlier runs on an earlier kernel and load state; neither set is authoritative, and the analysis is in another post in this series. The replenisher pays that, plus the cold create, once per warm slot, in the background.
-- A held snapshot keeps a `mem.bin` file the size of the guest's configured RAM, a rootfs clone, and the tap device and IP from the original lease (the resume has to reuse the exact lease it was snapshotted with). With the dev box's 8-tap pool, that is a hard ceiling on how many warm entries plus live sandboxes can coexist. I did not measure the disk or tap cost of a pool at scale; it is read from the design.
-- A resumed VM's MMDS store comes back uninitialized, so `Vm::update_metadata` redoes the full `PUT /mmds/config` plus `PUT /mmds` sequence, retried up to 10 times at 300ms intervals (`UPDATE_METADATA_MAX_ATTEMPTS`, about 3 seconds). The retry exists because a metadata call right after a resume can spuriously fail under load; why is unconfirmed. If it exhausts, the failure is non-fatal and the sandbox is returned with stale MMDS content.
-- A pool warm entry's guest has been running since before the claim, so its clock, entropy and any in-guest state are from snapshot time. That is a property of snapshot resume generally, not something this project has a mitigation for; I did not find the repository addressing it, so I make no claim about its severity.
+- Each warm entry is a full sandbox that was cold-booted and then snapshotted. Snapshot-take alone was recorded at 485 to 727ms on 2026-11-23 (criterion, this box, kernel 6.8), against 310 to 335ms in earlier runs on an earlier kernel and load state; both sets are directional and neither is authoritative, and the analysis is in [another post](/engineering/23-opt-snapshot-cost-analysis). That figure excludes the stop. Through the HTTP path the same step used to take 6.8 seconds because the stop waited on a guest `sync` a paused VM cannot answer; it now takes 0.56 seconds. The replenisher pays that, plus the cold create, once per warm slot, in the background.
+- A held snapshot keeps a `mem.bin` file the size of the guest's configured RAM, a rootfs clone, and the tap device and IP from the original lease (the resume has to reuse the exact lease it was snapshotted with). With the dev box's 8-tap pool, that is a hard ceiling on how many warm entries plus live sandboxes can coexist.
+- A resumed VM's MMDS store comes back uninitialized, so `Vm::update_metadata` redoes the full `PUT /mmds/config` plus `PUT /mmds` sequence, retried up to 10 times at 300ms intervals (`UPDATE_METADATA_MAX_ATTEMPTS`, about 3 seconds). The retry exists because a metadata call right after a resume can spuriously fail under load.
 
 Risks that are explicit in the code:
 
 - In-memory configuration. A restart loses every pool, and `Pool.create` has to be called again.
 - The unattributed edge. Three consecutive bad resumes in one request still fall through to an unattributed cold create, which can exceed `max_count`. The roadmap calls this "an accepted, rare residual edge case".
 - A sandbox with `drives` or `rate_limit` gets no benefit.
+- The post-resume health check still runs while holding the daemon's `sandboxes` mutex (`pool_claim.rs:153` to `:159`): it takes the lock, then calls `Vm::call` inside it, bounded at about 3 seconds per attempt and about 5 seconds in total. Ordinary exec no longer does this (see [Long-running exec](/engineering/26-correctness-long-running-exec)), but a failing claim can still stall other sandbox operations for that long. I read this in the code and did not time it.
+
+## Known limitation
+
+A freshly resumed guest can still die, and the cause is not found. In the full integration suite run four topics at a time (about 320 checks), 2 to 3 checks fail per run because a resumed guest kernel panics with `Attempted to kill the idle task!` about 20ms after restore and its Firecracker process exits. In isolation it does not reproduce: 160 of 160 resume and re-snapshot cycles were clean, in isolated loops and in four-way parallel loops, so it needs a specific concurrent condition that has not been identified. It was observed on 2026-11-24; I have no evidence it shares a cause with the earlier divide-by-zero panic.
+
+What protects callers is the post-resume health check above. A pool claim that lands on a dead guest fails the `exec true`, is torn down with `force_stop`, and falls back, so no caller receives a dead sandbox id. What it does not protect is a plain `POST /snapshots/{id}/resume` or a fork, which has no such check. I have not determined which paths the failing integration checks took. The cost to a pool user is the fallback latency in the table above whenever it triggers.
 
 ## How to reproduce
 
@@ -181,4 +187,4 @@ SANDKILN_INTEGRATION_TEST_ONLY=18-pool scripts/integration-test.sh
 
 To measure the failure rate yourself, run the example repeatedly and count the fallbacks. The daemon log line `pool-claimed sandbox failed its post-resume health check` appears once per failed claim. Treat any rate you get as a measurement of your own host's kernel, KVM and CPU combination, not a general property of Firecracker.
 
-What this case study does not establish: the current resume failure rate, the memory and disk cost of a pool at scale, and whether the 25 to 100 times figure holds for guests that run something heavier than the default image's agent. The first-`exec` comparison was taken against the default base image only.
+What this case study does not establish: the memory and disk cost of a pool at scale, and whether the 25 to 100 times figure holds for guests heavier than the default image.

@@ -19,7 +19,8 @@ Everything the daemon does inside a sandbox, running a command, reading a file, 
 | Streamed exec | `core/crates/guest-agent/src/exec_stream.rs` | Framed stdout/stderr events then `Exit` |
 | PTY | `core/crates/guest-agent/src/pty.rs` | `forkpty`, then raw byte passthrough |
 | Tunnel listener | `core/crates/guest-agent/src/tunnel.rs` | Guest TCP listener that dials the host |
-| Host client | `core/crates/vmm/src/vsock_client.rs` | `call`, `open_pty`, `open_exec_stream` |
+| Host client | `core/crates/vmm/src/vsock_client.rs` | `call` (returns `CallError`), `open_pty`, `open_exec_stream` |
+| Host call wrapper | `core/crates/vmm/src/vm/mod.rs` | `Vm::call`, `Vm::call_with_timeout`, `AgentEndpoint`, `retry_while` |
 | Tunnel acceptor | `core/crates/vmm/src/tunnel.rs` | Host listener for guest-initiated connections |
 
 The protocol crate is the only thing the host and guest binaries share. It depends on `serde` and `serde_json` and nothing else, and it has no idea what a vsock is. That is intentional: both binaries link the same message definitions, so the two sides cannot drift, and the crate stays small enough to read as a contract.
@@ -101,7 +102,7 @@ flowchart LR
 
 (`core/crates/protocol/src/lib.rs:14,22,30,55`.) Separate ports instead of new `Request` variants are the central design choice. A PTY is a long-lived bidirectional byte stream and a streamed exec is a long-lived stream of structured events; neither fits request/response. Giving each shape its own port means the listener for each can use the simplest possible loop, and no connection ever has to switch protocols halfway through based on a message it must first parse.
 
-The agent's own `main` shows the consequence. The `AGENT_PORT` loop handles each connection inline on one thread; the PTY and exec-stream listeners spawn a thread per accepted connection, because a session blocks for as long as its shell or command lives (`core/crates/guest-agent/src/main.rs:19-30,40-42,56-58`). The inline loop is why a slow `Exec` on port 5000 would delay every other port-5000 request: a command that must run for a long time belongs on the streaming port.
+The agent's own `main` shows the consequence. The `AGENT_PORT` loop handles each connection inline on one thread; the PTY and exec-stream listeners spawn a thread per accepted connection, because a session blocks for as long as its shell or command lives (`core/crates/guest-agent/src/main.rs:19-30,40-42,56-58`). The inline loop is why a slow `Exec` on port 5000 delays every other port-5000 request to that guest, including the daemon's own control-plane calls (health checks, `sync`, tunnel setup), which are bounded at 3 seconds and would time out behind it. A command that must run for a long time, or that must not block anything else, belongs on the streaming port.
 
 Concurrent-session caps live on the host, in the daemon, not in the agent. The daemon already manages each session's WebSocket lifecycle and can count sessions with no cross-connection state needed in the guest.
 
@@ -117,52 +118,101 @@ sequenceDiagram
     participant GA as guest handle_connection
     participant H as handler::handle
 
-    VM->>VC: Request::Exec
-    VC->>FC: connect UDS, set 3s read and write timeouts
+    VM->>VC: Request::Exec and response_timeout
+    VC->>FC: connect UDS, 3s connect and write bound
     VC->>FC: CONNECT 5000
     FC-->>VC: OK assigned-port
     VC->>GA: write_message(encode_request)
     GA->>H: decode_request, handle
     H-->>GA: Response::Exec stdout stderr exit_code
+    Note over VC: request is now sent, read bound becomes response_timeout
     GA-->>VC: write_message(encode_response)
-    VC-->>VM: decode_response
+    VC-->>VM: decode_response or CallError
 ```
 
 The host side is short enough to quote:
 
 ```rust
-let mut stream = UnixStream::connect(uds_path)?;
-stream.set_read_timeout(Some(IO_TIMEOUT))?;
-stream.set_write_timeout(Some(IO_TIMEOUT))?;
-connect_handshake(&mut stream, guest_port)?;
+let unsent = |error: io::Error| CallError { error, request_sent: false };
+let mut stream = UnixStream::connect(uds_path).map_err(unsent)?;
+stream.set_read_timeout(Some(IO_TIMEOUT)).map_err(unsent)?;
+stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(unsent)?;
+connect_handshake(&mut stream, guest_port).map_err(unsent)?;
 
-let payload = encode_request(request).map_err(to_io_err)?;
-write_message(&mut stream, &payload)?;
+let payload = encode_request(request).map_err(|e| unsent(to_io_err(e)))?;
+write_message(&mut stream, &payload).map_err(unsent)?;
+
+let sent = |error: io::Error| CallError { error, request_sent: true };
+stream.set_read_timeout(response_timeout).map_err(sent)?;
+let raw = read_message(&mut stream).map_err(sent)?;
 ```
 
-(`core/crates/vmm/src/vsock_client.rs:28-34`.) `connect_handshake` writes `CONNECT {port}` and requires the reply to start with `OK ` (`vsock_client.rs:86-99`); anything else becomes `ConnectionRefused`, which matters for the retry logic below.
+(`core/crates/vmm/src/vsock_client.rs:51-65`, abridged.) `connect_handshake` writes `CONNECT {port}` and requires the reply to start with `OK ` (`vsock_client.rs:115`); anything else becomes `ConnectionRefused`, which is an unsent failure and therefore safe to retry, as described below.
 
 On the guest, `handle_connection` loops reading frames until the peer disconnects. A frame that fails to decode produces `Response::Error`; a failure to serialise a response, or a failed write, ends the connection (`guest-agent/src/main.rs:64-82`). There is no error recovery inside a connection by design: after a bad frame the stream position is unknowable, so resynchronising would be guessing.
 
 Each handler in `handler.rs` is a thin wrapper over `std::process::Command` or `std::fs`, with one raw `libc::chown` because std has no equivalent. `Exec` uses `Command::output()`, converting stdout and stderr with `from_utf8_lossy` and mapping a signal-killed process to exit code `-1` (`handler.rs:31-40`). The handlers do no path validation. The guest agent is the wrong layer for it: a path only ever names something inside that one VM's filesystem.
 
-## The 3-second I/O timeout
+## Two bounds, and knowing whether the request was sent
 
 ```rust
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
+const CONTROL_PLANE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 ```
 
-(`core/crates/vmm/src/vsock_client.rs:22`.) Without it, a blocking read on a vsock stream has no upper bound. The failure that motivated it was concrete: when a VM's vCPUs are paused for a snapshot, Firecracker's host Unix socket still accepts a connection, but the guest cannot reply. A `read` on that connection waits forever, and a stop that first tried to `sync` the guest hung with it. The doc comment on the constant records this ("a paused VM, vCPUs halted, is the case that surfaced this").
+(`core/crates/vmm/src/vsock_client.rs:22`, `core/crates/vmm/src/vm/mod.rs:105`.) Without a bound, a blocking read on a vsock stream has no upper limit. The failure that motivated one was concrete: when a VM's vCPUs are paused for a snapshot, Firecracker's host Unix socket still accepts a connection, but the guest cannot reply, so a `read` waits forever. The doc comment on `IO_TIMEOUT` records this ("a paused VM, vCPUs halted, is the case that surfaced this").
 
-The important design point is where the bound has to live. `Vm::call` already retries with backoff until a deadline, but that loop only bounds the time between attempts; an attempt that never returns is invisible to it. So the timeout is set on the socket itself, on both read and write, before the handshake, which means the handshake read and the response read are each bounded.
+The first version of the fix was one constant applied to everything, and that was wrong in a way that took a live audit to find. A request/response call has two very different kinds of waiting. Connecting, handshaking and writing the request should always be quick. Waiting for the reply lasts as long as the work does: a control-plane request (a `sync`, a health check, tunnel setup) is answered in milliseconds or never, but a user command is legitimately silent for as long as it runs. Applying the 3 second bound to both meant any command that stayed quiet for more than 3 seconds failed after roughly 6.5 seconds and, worse, ran twice, because the retry loop could not tell that the first attempt had already been accepted. The design that replaced it separates the two concerns.
 
-The choice of 3 seconds is a trade between two failure costs. Too short and a healthy but momentarily busy guest, for instance one just resumed from a snapshot, fails spuriously. Too long and every failure against a dead guest is slow; the repo records that a failed post-resume health check used to pay two 5 s retry timeouts back to back (about 10.3 s) before `force_stop` was added to skip the sync (about 5.4 s). The value is a constant, not configuration, because no caller has a different correct answer.
+### CallError says whether the guest could have seen the request
 
-One consequence follows directly from the code and is worth stating plainly. Because the read timeout also covers the response read, an `Exec` on port 5000 that produces no response within 3 seconds fails with a timeout on the host. Request/response `Exec` is therefore for short commands; long-running work goes through the streamed exec port, which clears the timeout after its handshake. And `Vm::call` wraps `vsock_client::call` in `retry_with_backoff` (`vm/mod.rs:140-144`, 5 s deadline, 1 ms to 20 ms backoff), which retries on any `io::Error` without distinguishing a failed connect from a failure after the request was sent. That retry exists to absorb the agent's startup race right after `InstanceStart`, and it is why the first real exec on a cold sandbox is slower than later ones.
+`vsock_client::call` takes a `response_timeout: Option<Duration>` and returns `Result<Response, CallError>`:
+
+```rust
+pub struct CallError {
+    pub error: io::Error,
+    /// The full request frame was written to the guest. Do not retry.
+    pub request_sent: bool,
+}
+```
+
+(`vsock_client.rs:30-34`.) Every failure up to and including the request write is tagged `request_sent: false`; everything after the frame is written (the response read, the decode) is `request_sent: true`. A write that fails part-way still counts as unsent, because the agent discards an incomplete frame without executing it. Connect, handshake and write always use `IO_TIMEOUT`; only the reply wait uses `response_timeout`, where `None` waits indefinitely.
+
+### retry_while never re-sends an accepted request
+
+The retry exists to absorb the agent's startup race right after `InstanceStart`: the first connect can be refused for a few milliseconds. `retry_while` (`vm/mod.rs:321`) is the loop for it, with a 5 second deadline and 1 ms to 20 ms exponential backoff:
+
+```rust
+match attempt() {
+    Ok(v) => return Ok(v),
+    Err(e) if e.request_sent || Instant::now() >= deadline => return Err(e),
+    Err(_) => { /* sleep, double the interval up to the cap */ }
+}
+```
+
+A refused connect is retried; a request that reached the guest is returned immediately, whatever went wrong afterwards. Idempotency is not something the protocol can assume, since `Exec` is an arbitrary command, so the retry decision has to come from the one layer that knows how far the request got. The PTY and exec-stream openers differ: they carry only a handshake before anything runs, and still use the plain `retry_with_backoff`.
+
+### Vm::call, Vm::call_with_timeout and AgentEndpoint
+
+Three entry points sit above `vsock_client::call`, all in `core/crates/vmm/src/vm/mod.rs`:
+
+| Entry point | Reply bound | Used for |
+| --- | --- | --- |
+| `Vm::call` (`:170`) | `CONTROL_PLANE_RESPONSE_TIMEOUT`, 3 s | control plane: the pre-stop `sync`, pool health checks, tunnel setup |
+| `Vm::call_with_timeout` (`:178`) | caller's choice, `None` waits forever | anything whose duration is not the vmm's to guess |
+| `AgentEndpoint::call_with_timeout` (`:128`) | caller's choice | user commands from the daemon |
+
+`AgentEndpoint` is an owned, cloneable handle (`vm_id` and the vsock socket path) obtained from `Vm::agent_endpoint()`. It exists for a lock reason, not a vsock one. The daemon keeps its live sandboxes in one `Mutex<HashMap>`, and the old `call_agent` held that lock across the whole vsock call, so a single slow command froze every other sandbox operation, even `GET /sandboxes`. Now `call_agent` (`core/crates/daemon/src/http/routes/exec.rs:122`) copies the endpoint out, touches the activity timestamp, drops the lock, and only then calls. If the VM is stopped in the meantime the call simply fails, since the endpoint holds no reference to the `Vm`.
+
+### The two bounds at the HTTP boundary
+
+The daemon passes `Some(exec_timeout)` for exec, file and filesystem requests, where `exec_timeout_secs` is a config setting with a default of 600 (`core/crates/daemon/src/config/settings.rs:43`, read at `exec.rs:132`). The 3 second control-plane bound is a different, deliberately unconfigurable number for the vmm's own housekeeping. When the longer bound expires, `agent_call_error` (`exec.rs:146`) maps a `WouldBlock` or `TimedOut` error to HTTP 504 rather than 500: the sandbox is fine, the command has just not finished. The message says the command may still be running in the guest, because nothing kills it. Commands that need to outlive the bound, or stream partial output, use the streamed exec port.
+
+The 3 second values remain constants because no caller has a different correct answer. Too short and a healthy but momentarily busy guest (one just resumed from a snapshot, say) fails spuriously; too long and every probe of a dead guest is slow. The repo records that a failed post-resume health check used to pay two 5 s retry timeouts back to back (about 10.3 s) before `Vm::force_stop` skipped the sync (about 5.4 s). The same insight fixed snapshots: `snapshot_and_stop` used `Vm::stop`, which first tries a guest `sync` that a paused VM can never answer, so every snapshot paid about 6 seconds waiting for it; it now calls `force_stop` (`core/crates/daemon/src/http/routes/snapshot.rs:188`), and an end-to-end snapshot dropped from 6.8 s to 0.56 s. The regression test for all three behaviours (a 4 second silent command succeeds and runs once, another request is not queued behind it, snapshot latency stays low) is `scripts/integration-tests/25-long-running-commands.sh`.
 
 ## Long-lived sessions: PTY and streamed exec
 
-`open_pty` and `open_exec_stream` perform the same sequence as `call`, with the timeouts applied only to the handshake, and then explicitly cleared:
+`open_pty` and `open_exec_stream` perform the same connect-and-handshake sequence as `call`, with the timeouts applied only to the handshake, and then explicitly cleared:
 
 ```rust
 write_message(&mut stream, &payload)?;
@@ -172,7 +222,7 @@ stream.set_write_timeout(None)?;
 Ok(stream)
 ```
 
-(`vsock_client.rs:52-57`.) A shell that sits idle between keystrokes is not a hung connection, so a session cannot reuse the request/response bound. The bound still protects the part that can hang before the session exists.
+(`vsock_client.rs:80-86`.) A shell that sits idle between keystrokes is not a hung connection, so a session cannot reuse the request/response bound. The bound still protects the part that can hang before the session exists.
 
 ### PTY
 
@@ -270,7 +320,7 @@ The handshake on the guest-initiated connection is application-level, layered ov
 
 ## What this design costs
 
-- Every `call` opens a new connection and performs a handshake. This is simple and stateless, at the price of per-call overhead. The criterion benchmark for an exec round trip on an already-open vsock connection recorded 220 to 250 microseconds (criterion, earlier measurement, being re-verified), which says the steady-state cost of the protocol itself is small; the first exec on a cold sandbox is far slower (the vmm notes record roughly 420 to 460 ms, against 4 to 18 ms on a resumed one) because it includes waiting for the guest to come up, not because of framing.
-- The single-threaded port-5000 loop serialises request/response calls into one guest. Concurrency needs go to the other ports.
+- Every `call` opens a new connection and performs a handshake. This is simple and stateless, at the price of per-call overhead. The criterion benchmark for an exec round trip recorded 242 to 248 microseconds on the dev box (kernel 6.8, 2026-11-23; an earlier run recorded 220 to 250 microseconds; both directional, one shared box), which says the steady-state cost of the protocol itself is small; the first exec on a cold sandbox is far slower (the vmm notes record roughly 420 to 460 ms, against 4 to 18 ms on a resumed one) because it includes waiting for the guest to come up, not because of framing.
+- The single-threaded port-5000 loop serialises request/response calls into one guest. With long commands now allowed on that port, one slow `exec` also delays the daemon's own 3 second control-plane calls to that guest. Concurrency needs go to the other ports.
 
 Next: [driving Firecracker](/engineering/03-driving-firecracker), the host-side process that creates the VM these connections go to.
