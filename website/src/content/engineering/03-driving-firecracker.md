@@ -6,7 +6,7 @@ tags: ["firecracker", "vmm", "jailer", "boot", "lifecycle"]
 updated: 2026-11-24
 ---
 
-A Firecracker microVM is a process. It starts with no configuration, exposes an HTTP API on a Unix socket, and begins running a guest only when told `InstanceStart`. The host-side `sandkiln-vmm` crate turns that into a Rust type, `Vm`, with a small public surface: `boot`, `call`, `open_pty`, `open_exec_stream`, `update_metadata`, `stop` and `force_stop` (plus `pause`, `snapshot` and `resume` in a submodule). This post walks through how that works, from process spawn to teardown. It builds on the [system overview](/engineering/01-system-overview), and the connections `Vm::call` makes are described in the [vsock protocol post](/engineering/02-vsock-protocol-and-guest-agent).
+A Firecracker microVM is a process. It starts with no configuration, exposes an HTTP API on a Unix socket, and begins running a guest only when told `InstanceStart`. The host-side `sandkiln-vmm` crate turns that into a Rust type, `Vm`, with a small public surface: `boot`, `call`, `call_with_timeout`, `agent_endpoint`, `open_pty`, `open_exec_stream`, `update_metadata`, `stop` and `force_stop` (plus `pause`, `snapshot` and `resume` in a submodule). This post walks through how that works, from process spawn to teardown. It builds on the [system overview](/engineering/01-system-overview), and the connections `Vm::call` and `Vm::call_with_timeout` make, including their bounds and retry rule, are described in the [vsock protocol post](/engineering/02-vsock-protocol-and-guest-agent).
 
 ## Module structure
 
@@ -39,9 +39,11 @@ pub struct Vm {
 }
 ```
 
-(`vm/mod.rs:103-111`.) The invariants are simple. `child` is the Firecracker process (a jailed boot execs Firecracker in place, so the same `Child` becomes it). `api_socket` and `vsock_socket` are always real host paths, jailed or not. `jail_instance_dir` is `Some` only for a jailed boot and is the root of everything jailer created. `id` comes from a process-wide `AtomicU64` counter (`vm/mod.rs:28`), and the same number names the sockets, the console log and the jail, so every artifact of one VM is traceable to one integer in logs.
+(`vm/mod.rs:107-113`.) The invariants are simple. `child` is the Firecracker process (a jailed boot execs Firecracker in place, so the same `Child` becomes it). `api_socket` and `vsock_socket` are always real host paths, jailed or not. `jail_instance_dir` is `Some` only for a jailed boot and is the root of everything jailer created. `id` comes from a process-wide `AtomicU64` counter (`vm/mod.rs:28`), and the same number names the sockets, the console log and the jail, so every artifact of one VM is traceable to one integer in logs.
 
 Ownership is by value. `stop` and `force_stop` take `self`, so a stopped VM cannot be used again. `Vm` has no `Drop` implementation, so a handle dropped without being stopped does not kill its process; teardown is always an explicit call, and the daemon's sandbox record is the one place that owns each `Vm`.
+
+The one thing deliberately not tied to that ownership is the ability to call the guest. `Vm::agent_endpoint()` returns an `AgentEndpoint`, a cloneable value holding only the VM id and the vsock socket path (`vm/mod.rs:122-186`). The daemon copies one out of its sandbox map, releases the map's lock, and then makes a call that may last minutes, so a long command never freezes unrelated sandboxes. An endpoint outliving its VM is harmless: the call just fails to connect. The protocol post covers [why the retry rule and the two reply bounds live here](/engineering/02-vsock-protocol-and-guest-agent).
 
 ## The Firecracker API client
 
@@ -60,7 +62,7 @@ let request = format!(
 );
 ```
 
-(`core/crates/vmm/src/firecracker_api.rs:36-45`.) One `ApiClient` wraps one `BufReader<UnixStream>` and is reused for every call of a boot, so the whole configuration sequence runs over one connection. New Firecracker endpoints follow the `put`/`patch` pattern. Callers check status with `put_checked`, which turns any non-2xx into an `io::Error` carrying the path, status and body (`vm/mod.rs:239-248`).
+(`core/crates/vmm/src/firecracker_api.rs:36-45`.) One `ApiClient` wraps one `BufReader<UnixStream>` and is reused for every call of a boot, so the whole configuration sequence runs over one connection. New Firecracker endpoints follow the `put`/`patch` pattern. Callers check status with `put_checked`, which turns any non-2xx into an `io::Error` carrying the path, status and body (`vm/mod.rs:276-285`).
 
 What it does not do is also deliberate. It does not parse chunked responses and it sets no socket timeouts; it relies on Firecracker answering its own local socket promptly. It is a small tool for one peer, not a general client.
 
@@ -90,7 +92,7 @@ sequenceDiagram
     V-->>D: Vm
 ```
 
-1. **Allocate an id and a log path.** `Vm::boot` takes the next id and derives `/tmp/sandkiln-fc-<id>.log` (`vm/mod.rs:117-119,253-255`).
+1. **Allocate an id and a log path.** `Vm::boot` takes the next id and derives `/tmp/sandkiln-fc-<id>.log` (`vm/mod.rs:145-148,290-292`).
 2. **Spawn.** Either `spawn_direct` or `spawn_jailed`, covered below. Both return a `BootTarget`, a struct holding the child plus the paths the rest of the sequence needs, so the configuration step never branches on jailed versus direct. Only the paths differ.
 3. **Connect to the API socket**, with retry.
 4. **Issue the configuration PUTs** in order.
@@ -109,9 +111,9 @@ fn connect_api_with_retry(path: &Path, timeout: Duration) -> io::Result<ApiClien
 }
 ```
 
-(`vm/mod.rs:311-315`.) The tempting alternative is to poll for the socket file to exist, then connect. That has a race: a Unix socket's file appears at `bind()`, and the socket only accepts connections after `listen()`. A file-existence check can win the gap between the two and the following connect gets `ECONNREFUSED`. Polling the connect itself has no such window, because success means the peer is actually accepting. That is also what makes polling this fast safe: a refused connect is cheap and carries no side effect.
+(`vm/mod.rs:370-374`.) The tempting alternative is to poll for the socket file to exist, then connect. That has a race: a Unix socket's file appears at `bind()`, and the socket only accepts connections after `listen()`. A file-existence check can win the gap between the two and the following connect gets `ECONNREFUSED`. Polling the connect itself has no such window, because success means the peer is actually accepting. That is also what makes polling this fast safe: a refused connect is cheap and carries no side effect.
 
-`retry_with_backoff` is shared with the vsock calls, which have the same shape of problem (is the other side listening yet). It loops: attempt; on success return; on failure past the deadline return the last error; otherwise sleep the current interval and double it, capped at the maximum (`vm/mod.rs:282-300`). Boot uses a 2 second overall timeout. Three unit tests cover it with real Unix sockets: a path nothing ever binds must fail as `TimedOut` after at least the timeout (a backoff bug that exits early would otherwise look like a clean fast failure), an already-listening socket connects, and a socket that appears 40 ms late is waited for.
+`retry_with_backoff` is shared with the PTY and exec-stream openers, which have the same shape of problem (is the other side listening yet). The request/response path uses a sibling, `retry_while`, that additionally refuses to retry once a request has been written to the guest; see the [protocol post](/engineering/02-vsock-protocol-and-guest-agent). It loops: attempt; on success return; on failure past the deadline return the last error; otherwise sleep the current interval and double it, capped at the maximum (`vm/mod.rs:341-360`). Boot uses a 2 second overall timeout. Three unit tests cover it with real Unix sockets: a path nothing ever binds must fail as `TimedOut` after at least the timeout (a backoff bug that exits early would otherwise look like a clean fast failure), an already-listening socket connects, and a socket that appears 40 ms late is waited for.
 
 ### The configuration PUT sequence
 
@@ -176,7 +178,7 @@ Why jailer at all, rather than doing the chroot in the daemon? `chroot(2)`, `set
 
 ## Console log capture
 
-Firecracker's stdout carries the guest's serial console (the kernel boots with `console=ttyS0`). `console_log_stdio` creates `/tmp/sandkiln-fc-<id>.log` and returns two `Stdio` handles from one file and its `try_clone`, so stdout and stderr interleave into the same file like `2>&1` (`vm/mod.rs:260-264`). Discarding it would hide the one piece of evidence available when a guest panics before vsock comes up. `annotate_with_console_log` appends the path to a boot or resume failure so an operator knows where to look. The file is not deleted by `stop`.
+Firecracker's stdout carries the guest's serial console (the kernel boots with `console=ttyS0`). `console_log_stdio` creates `/tmp/sandkiln-fc-<id>.log` and returns two `Stdio` handles from one file and its `try_clone`, so stdout and stderr interleave into the same file like `2>&1` (`vm/mod.rs:297-303`). Discarding it would hide the one piece of evidence available when a guest panics before vsock comes up. `annotate_with_console_log` appends the path to a boot or resume failure so an operator knows where to look. The file is not deleted by `stop`.
 
 ## Stopping a VM
 
@@ -190,14 +192,16 @@ stateDiagram-v2
     CleaningUp --> [*]: sockets, tunnel socket, jail dir removed
 ```
 
-`stop` and `force_stop` both call `stop_inner(sync_first)` (`vm/mod.rs:199-236`):
+`stop` and `force_stop` both call `stop_inner(sync_first)` (`vm/mod.rs:236-274`):
 
-1. **Sync, only for `stop`.** A bare `SIGKILL` loses unflushed guest page-cache writes to attached drives, so `stop` first runs `sync` in the guest through `Vm::call`. Rootfs copies do not care, since they are discarded. This step is best-effort: if the guest is unreachable it logs a warning and proceeds to the kill.
+1. **Sync, only for `stop`.** A bare `SIGKILL` loses unflushed guest page-cache writes to attached drives, so `stop` first runs `sync` in the guest through `Vm::call`, the control-plane call with its 3 second reply bound. Rootfs copies do not care, since they are discarded. This step is best-effort: if the guest is unreachable it logs a warning and proceeds to the kill.
 2. **Kill and reap.** `child.kill()` then `child.wait()`, so no zombie is left.
 3. **Remove sockets.** The API and vsock socket files, and the tunnel's `_5003` socket via `tunnel::cleanup`.
 4. **Remove the jail.** `remove_dir_all` on the instance directory if jailed, which removes the whole tree jailer created, not just the chroot.
 
-`force_stop` skips step 1, for a VM already known dead. It exists because of a measured cost: a failed post-resume health check used to pay the sync's own retry timeout on top of the health check's, around 10.3 s total against about 5.4 s after (from the vmm crate notes). The point of a separate method, rather than a boolean argument at every call site, is that the "I know this VM is dead" decision belongs to the caller that has the evidence.
+`force_stop` skips step 1, for a VM where a sync can only fail or is pointless. It has two callers, both with evidence. The pool claim path uses it for a VM that failed its post-resume health check: that check had already paid its own timeout, and the sync would pay another, around 10.3 s total against about 5.4 s after (from the vmm crate notes). The snapshot path uses it after `pause` and `snapshot`: the VM's vCPUs are halted, so a guest `sync` can never be answered and used to cost every snapshot its full timeout and retry window, about 6 seconds of a 6.8 second snapshot-and-stop (`daemon/src/http/routes/snapshot.rs:188`); with `force_stop` it measures 0.56 s. The point of a separate method, rather than a boolean argument at every call site, is that the decision "there is nothing to flush or nobody to answer" belongs to the caller that has the evidence.
+
+Orderly daemon shutdown reaches this code too. On SIGTERM the daemon snapshots every live sandbox concurrently, which ends in `force_stop` per VM, and destroys the jailed ones that cannot be snapshotted; see the [system overview](/engineering/01-system-overview). A SIGKILL or crash of the daemon bypasses all of it and orphans the Firecracker processes, because `Vm` has no `Drop`.
 
 Each step discards its error and continues. A stop that fails halfway and returns early would leave more state than one that does every cleanup it can.
 
@@ -215,16 +219,16 @@ pub fn update_metadata(&self, metadata: &serde_json::Value) -> io::Result<()> {
 }
 ```
 
-(`vm/mod.rs:193-197`.) It repeats the full config PUT and the content PUT instead of a bare `PATCH`, because a resumed VM's MMDS store comes back uninitialised even though it was configured before the snapshot, and `PATCH` alone fails against it. See [the MMDS page](https://sandkiln.mintlify.site/internals/mmds).
+(`vm/mod.rs:230-234`.) It repeats the full config PUT and the content PUT instead of a bare `PATCH`, because a resumed VM's MMDS store comes back uninitialised even though it was configured before the snapshot, and `PATCH` alone fails against it. See [the MMDS page](https://sandkiln.mintlify.site/internals/mmds).
 
 ## Resume shares the same machinery
 
-`Vm::resume` (`vm/snapshot.rs:68-131`) uses the same console log helper, `connect_api_with_retry` and cleanup-on-failure pattern, but replaces the whole PUT sequence with one `PUT /snapshot/load` carrying `resume_vm: true` and a `vsock_override` that gives the new process a fresh socket path. The devices come out of the snapshot. It also starts the tunnel listener, non-fatally. Because the tap device and rootfs path are baked into the snapshot by name and path, the caller must hand back exactly the lease and file it had.
+`Vm::resume` (`vm/snapshot.rs:68`) uses the same console log helper, `connect_api_with_retry` and cleanup-on-failure pattern, but replaces the whole PUT sequence with one `PUT /snapshot/load` carrying `resume_vm: true` and a `vsock_override` that gives the new process a fresh socket path. The devices come out of the snapshot. It also starts the tunnel listener, non-fatally. Because the tap device and rootfs path are baked into the snapshot by name and path, the caller must hand back exactly the lease and file it had.
 
 ## Timing and what is measured
 
-The criterion benchmarks recorded a cold boot of 10.5 to 10.9 ms (criterion, earlier measurement, being re-verified), against 32 to 33 ms before the socket-wait fix. In a full cold `POST /sandboxes`, the daemon-side numbers put VM boot at 14.9 ms of a 187.5 ms mean when the rootfs was a byte copy on ext4 (clone 127.9 ms, network lease 3.5 ms), and the whole create at 17.9 ms with a reflinked rootfs. In other words, driving Firecracker is no longer where create time goes; the design effort that remains here is correctness of the failure and teardown paths.
+The criterion benchmarks (dev box, kernel 6.8, 2026-11-23) recorded a cold boot of 12.6 to 14.0 ms; an earlier run recorded 10.5 to 10.9 ms, and both sit well under the 32 to 33 ms measured before the socket-wait fix. Snapshot take is 485 to 727 ms (earlier 310 to 335 ms) and resume from a snapshot 3.7 to 4.0 ms. Both runs are directional, on one shared box, and neither is authoritative. In a full cold `POST /sandboxes`, the daemon-side numbers put VM boot at 14.9 ms of a 187.5 ms mean when the rootfs was a byte copy on ext4 (clone 127.9 ms, network lease 3.5 ms). With a reflinked rootfs the whole create was 17.9 ms earlier and, in the 2026-11-23 bench-report run of 20 creates, a mean of 18.4 ms (clone 0.084 ms, lease 3.1 ms, boot 13.4 ms). In other words, driving Firecracker is no longer where create time goes; the design effort that remains here is correctness of the failure and teardown paths.
 
 ## Testing
 
-`cargo test --workspace` covers the pure parts without KVM: `build_jailer_args`, `cgroup_limits`, the jail-path helpers, the connect-retry timeout and late-listener cases, and console log helpers, with jailer tests using real temporary directories and hard links. What it cannot cover is real Firecracker behaviour, so boot, stop and resume are verified on the dev box against a running daemon; a local build proves nothing about them.
+`cargo test --workspace` covers the pure parts without KVM: `build_jailer_args`, `cgroup_limits`, the jail-path helpers, the connect-retry timeout and late-listener cases, and console log helpers, with jailer tests using real temporary directories and hard links. What it cannot cover is real Firecracker behaviour, so boot, stop and resume are verified on the dev box against a running daemon; a local build proves nothing about them. `scripts/integration-tests/25-long-running-commands.sh` covers the call path and the snapshot stop latency end to end.
