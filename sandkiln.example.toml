@@ -21,6 +21,9 @@
 # How long a dev-server preview request waits before a 504.
 # preview_timeout_secs = 30
 
+# Longest a single exec, file or filesystem request may wait for the guest's reply. On expiry the caller gets a 504; the process keeps running in the guest.
+# exec_timeout_secs = 600
+
 # Bearer token required on the REST API. Unset disables auth entirely: fine for localhost, never beyond.
 # auth_token = "change-me"
 

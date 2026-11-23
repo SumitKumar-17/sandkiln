@@ -100,6 +100,10 @@ pub struct VmConfig {
     pub metadata: Option<serde_json::Value>,
 }
 
+/// How long a control-plane request (sync, health checks, tunnel setup) may
+/// wait for the guest's reply. Short on purpose: a paused guest never answers.
+const CONTROL_PLANE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
+
 pub struct Vm {
     id: u64,
     child: Child,
@@ -108,6 +112,30 @@ pub struct Vm {
     /// `Some(<chroot_base>/<exec>/<id>)` for a jailed boot, removed
     /// wholesale on `stop()`; `None` for a direct boot.
     jail_instance_dir: Option<PathBuf>,
+}
+
+/// Owned handle for request/response calls to one VM's guest agent. Holds
+/// no reference to the `Vm`, so it stays valid to call after the lock that
+/// guarded the VM is released (and simply fails if the VM has since been
+/// stopped).
+#[derive(Clone, Debug)]
+pub struct AgentEndpoint {
+    vm_id: u64,
+    vsock_socket: PathBuf,
+}
+
+impl AgentEndpoint {
+    pub fn call_with_timeout(&self, request: &Request, response_timeout: Option<Duration>) -> io::Result<Response> {
+        let started = Instant::now();
+        let result = retry_while(Duration::from_secs(5), Duration::from_millis(1), Duration::from_millis(20), || {
+            vsock_client::call(&self.vsock_socket, AGENT_PORT, request, response_timeout)
+        });
+        match &result {
+            Ok(_) => tracing::debug!(vm_id = self.vm_id, elapsed_ms = started.elapsed().as_millis(), "vsock call ok"),
+            Err(e) => tracing::warn!(vm_id = self.vm_id, error = %e.error, request_sent = e.request_sent, "vsock call failed"),
+        }
+        result.map_err(io::Error::from)
+    }
 }
 
 impl Vm {
@@ -134,19 +162,28 @@ impl Vm {
         self.jail_instance_dir.is_some()
     }
 
-    /// Sends a request to the guest agent over vsock and waits for its
-    /// response. The agent isn't guaranteed to be listening the instant
-    /// InstanceStart returns — this retries briefly to absorb that.
+    /// Control-plane call: sends a request to the guest agent and waits at
+    /// most a few seconds for the reply. The agent isn't guaranteed to be
+    /// listening the instant InstanceStart returns, so connecting is retried
+    /// briefly; a request that was already sent is never re-sent. For user
+    /// commands, which can run for minutes, use [`Vm::call_with_timeout`].
     pub fn call(&self, request: &Request) -> io::Result<Response> {
-        let started = Instant::now();
-        let result = retry_with_backoff(Duration::from_secs(5), Duration::from_millis(1), Duration::from_millis(20), || {
-            vsock_client::call(&self.vsock_socket, AGENT_PORT, request)
-        });
-        match &result {
-            Ok(_) => tracing::debug!(vm_id = self.id, elapsed_ms = started.elapsed().as_millis(), "vsock call ok"),
-            Err(e) => tracing::warn!(vm_id = self.id, error = %e, "vsock call failed"),
-        }
-        result
+        self.call_with_timeout(request, Some(CONTROL_PLANE_RESPONSE_TIMEOUT))
+    }
+
+    /// Like [`Vm::call`] with a caller-chosen bound on the reply (`None`
+    /// waits indefinitely). Only failures where the request never reached
+    /// the guest are retried (see `vsock_client::CallError`): re-sending one
+    /// that did would run a command twice.
+    pub fn call_with_timeout(&self, request: &Request, response_timeout: Option<Duration>) -> io::Result<Response> {
+        self.agent_endpoint().call_with_timeout(request, response_timeout)
+    }
+
+    /// A cheap, owned handle for calling this VM's guest agent. Lets a
+    /// caller copy it out of a shared map, release the map's lock, and only
+    /// then make a call that may take minutes (a user command).
+    pub fn agent_endpoint(&self) -> AgentEndpoint {
+        AgentEndpoint { vm_id: self.id, vsock_socket: self.vsock_socket.clone() }
     }
 
     /// Opens an interactive PTY session sized `cols`x`rows` — unlike
@@ -279,6 +316,28 @@ pub(crate) fn annotate_with_console_log(err: io::Error, log_path: &Path) -> io::
 /// ~20.1ms on every boot before this fix (ROADMAP.md Benchmarking); the
 /// vsock one was the same bug, just conditional on actually racing the
 /// agent's startup, which is why it went unnoticed longer.
+/// Like [`retry_with_backoff`], but a failure that reports the request was
+/// already sent is returned immediately instead of retried.
+fn retry_while<T>(
+    timeout: Duration,
+    initial_interval: Duration,
+    max_interval: Duration,
+    mut attempt: impl FnMut() -> Result<T, vsock_client::CallError>,
+) -> Result<T, vsock_client::CallError> {
+    let deadline = Instant::now() + timeout;
+    let mut interval = initial_interval;
+    loop {
+        match attempt() {
+            Ok(v) => return Ok(v),
+            Err(e) if e.request_sent || Instant::now() >= deadline => return Err(e),
+            Err(_) => {
+                std::thread::sleep(interval);
+                interval = (interval * 2).min(max_interval);
+            }
+        }
+    }
+}
+
 fn retry_with_backoff<T>(
     timeout: Duration,
     initial_interval: Duration,

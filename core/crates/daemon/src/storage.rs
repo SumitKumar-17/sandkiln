@@ -71,6 +71,35 @@ pub fn retired_root() -> PathBuf {
     layout().retired_root.clone()
 }
 
+/// A file that is deleted on drop unless [`OwnedFile::keep`] is called.
+///
+/// Scope guard for a per-sandbox rootfs between "cloned" and "handed to a live
+/// `Sandbox`": every early return in between (boot failure, egress failure,
+/// a failed lease) must not leave a multi-hundred-MiB orphan on disk.
+pub struct OwnedFile {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl OwnedFile {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    /// Ownership moved elsewhere: do not delete on drop.
+    pub fn keep(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for OwnedFile {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +126,26 @@ mod tests {
     #[test]
     fn rootfs_path_is_keyed_by_sandbox_id() {
         assert!(rootfs_path("abc").to_string_lossy().ends_with("sandkiln-rootfs-abc.ext4"));
+    }
+
+    #[test]
+    fn owned_file_is_deleted_on_drop_unless_kept() {
+        let dir = std::env::temp_dir().join(format!("sandkiln-ownedfile-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (gone, kept) = (dir.join("gone"), dir.join("kept"));
+        std::fs::write(&gone, b"x").unwrap();
+        std::fs::write(&kept, b"x").unwrap();
+        drop(OwnedFile::new(gone.clone()));
+        let mut k = OwnedFile::new(kept.clone());
+        k.keep();
+        drop(k);
+        assert!(!gone.exists());
+        assert!(kept.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn owned_file_tolerates_an_already_missing_file() {
+        drop(OwnedFile::new(PathBuf::from("/nonexistent/sandkiln-never-created")));
     }
 }

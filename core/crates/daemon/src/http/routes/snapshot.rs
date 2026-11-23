@@ -181,8 +181,11 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
             std::fs::create_dir_all(&dir)?;
             let outcome = vm.pause().and_then(|_| vm.snapshot(&mem_file_path, &snapshot_path));
             // Either way this VM is done — a paused VM that failed to
-            // snapshot can't be handed back as still-running.
-            let _ = vm.stop();
+            // snapshot can't be handed back as still-running. `force_stop`,
+            // not `stop`: stop() first sends a guest `sync`, which a paused
+            // guest can never answer, so it only added a ~6s timeout to every
+            // snapshot (6.8s measured end to end, ~0.5s of real work).
+            let _ = vm.force_stop();
             outcome
         }
     })

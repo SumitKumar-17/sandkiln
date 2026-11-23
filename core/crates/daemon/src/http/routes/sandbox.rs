@@ -308,8 +308,27 @@ async fn create_sandbox_cold(
                 setup_join_us = setup_elapsed.as_micros(),
                 "cold create setup phases"
             );
-            copy_result?;
-            let lease = lease_result?;
+            // The two halves ran concurrently, so either can succeed while the
+            // other fails: unwind whichever one holds a resource.
+            let lease = match (copy_result, lease_result) {
+                (Ok(()), Ok(lease)) => lease,
+                (copy, lease) => {
+                    if copy.is_ok() {
+                        let _ = std::fs::remove_file(&rootfs_path);
+                    }
+                    let lease_err = match lease {
+                        Ok(lease) => {
+                            let _ = state.network.release(lease);
+                            None
+                        }
+                        Err(e) => Some(e),
+                    };
+                    return Err(copy.err().or(lease_err).expect("one half failed"));
+                }
+            };
+            // From here until the VM is booted, every early return removes the
+            // rootfs clone; `keep()` below hands it to the live sandbox.
+            let mut rootfs_guard = crate::storage::OwnedFile::new(rootfs_path.clone());
 
             // Third resource besides rootfs/lease: an in-memory pool pop,
             // leased last (nothing to overlap it with), released
@@ -367,6 +386,7 @@ async fn create_sandbox_cold(
                             return Err(e);
                         }
                     }
+                    rootfs_guard.keep();
                     Ok((vm, lease, jail_id))
                 }
                 Err(e) => {

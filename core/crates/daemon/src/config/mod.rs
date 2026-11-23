@@ -121,6 +121,11 @@ pub struct Config {
     /// Generous relative to `exec` — a dev server can be slow to
     /// first-compile (webpack/vite cold start).
     pub preview_timeout: Duration,
+    /// Bound on one request/response call to the guest agent (exec and the
+    /// file operations). Replaces what used to be a 3s control-plane bound
+    /// applied to user commands, which broke anything that stayed silent
+    /// longer than that.
+    pub exec_timeout: Duration,
     /// `None` (default, `SANDKILN_JAILER_ENABLED` unset/falsy) keeps
     /// direct Firecracker spawn. See `JailerHostConfig`.
     pub jailer: Option<JailerHostConfig>,
@@ -251,6 +256,10 @@ impl Config {
                 Ipv4Addr::UNSPECIFIED
             }
         };
+        let exec_timeout_secs: u64 = r.number("exec_timeout_secs");
+        if exec_timeout_secs == 0 {
+            r.error("exec_timeout_secs must be at least 1".to_string());
+        }
         let state_dir = r.path("state_dir");
         let rootfs_dir = r.opt_path("rootfs_dir").unwrap_or_else(|| state_dir.join("rootfs"));
 
@@ -295,6 +304,7 @@ impl Config {
             archive_dir: r.path("archive_dir"),
             log_format: LogFormat::parse(r.opt_string("log_format").as_deref()),
             preview_timeout: Duration::from_secs(r.number("preview_timeout_secs")),
+            exec_timeout: Duration::from_secs(exec_timeout_secs),
             jailer,
             origins: Default::default(),
         };
@@ -328,6 +338,7 @@ impl Config {
             "auth_token" => self.auth_token.clone(),
             "log_format" => Some(format!("{:?}", self.log_format).to_lowercase()),
             "preview_timeout_secs" => Some(self.preview_timeout.as_secs().to_string()),
+            "exec_timeout_secs" => Some(self.exec_timeout.as_secs().to_string()),
             "firecracker_bin" => p(&self.firecracker_bin),
             "kernel_path" => p(&self.kernel_path),
             "base_rootfs" => p(&self.base_rootfs_path),

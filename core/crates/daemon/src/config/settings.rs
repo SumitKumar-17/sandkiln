@@ -39,6 +39,12 @@ pub const SETTINGS: &[Setting] = &[
     },
     s("log_format", Some("pretty"), "server", "`pretty` for terminals, `json` for one JSON object per log line."),
     s("preview_timeout_secs", Some("30"), "server", "How long a dev-server preview request waits before a 504."),
+    s(
+        "exec_timeout_secs",
+        Some("600"),
+        "server",
+        "Longest a single `exec`, file or filesystem request may wait for the guest's reply. On expiry the caller gets a 504; the process keeps running in the guest.",
+    ),
     s("firecracker_bin", Some("~/sandkiln-tools/bin/firecracker"), "vm", "Path to the Firecracker binary."),
     s("kernel_path", Some("~/sandkiln-tools/images/vmlinux-5.10.223"), "vm", "Guest kernel image (vmlinux)."),
     s("base_rootfs", Some("~/sandkiln-tools/images/ubuntu-22.04.ext4"), "vm", "Default base rootfs image sandboxes boot from."),

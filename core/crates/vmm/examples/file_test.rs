@@ -23,7 +23,7 @@ fn main() -> ExitCode {
     let content_base64 = base64::engine::general_purpose::STANDARD.encode(content);
 
     let write = Request::WriteFile { path: path.clone(), content_base64 };
-    match vsock_client::call(&uds_path, guest_port, &write) {
+    match vsock_client::call(&uds_path, guest_port, &write, Some(std::time::Duration::from_secs(10))) {
         Ok(Response::Ok) => println!("write ok"),
         other => {
             eprintln!("write failed: {other:?}");
@@ -32,7 +32,7 @@ fn main() -> ExitCode {
     }
 
     let read = Request::ReadFile { path: path.clone() };
-    match vsock_client::call(&uds_path, guest_port, &read) {
+    match vsock_client::call(&uds_path, guest_port, &read, Some(std::time::Duration::from_secs(10))) {
         Ok(Response::File { content_base64 }) => {
             let bytes = base64::engine::general_purpose::STANDARD.decode(&content_base64).unwrap();
             let text = String::from_utf8_lossy(&bytes);
@@ -50,7 +50,7 @@ fn main() -> ExitCode {
 
     let parent = Path::new(&path).parent().unwrap_or(Path::new("/")).to_string_lossy().into_owned();
     let list = Request::ListDir { path: parent };
-    match vsock_client::call(&uds_path, guest_port, &list) {
+    match vsock_client::call(&uds_path, guest_port, &list, Some(std::time::Duration::from_secs(10))) {
         Ok(Response::Dir { entries }) => {
             println!("dir listing has {} entries", entries.len());
             ExitCode::SUCCESS
