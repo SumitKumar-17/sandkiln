@@ -21,11 +21,11 @@ console.log(result.stdout.trim(), result.exitCode);
 await sandbox.stop(); // preserved as a resumable snapshot by default
 ```
 
-`Sandbox.create()`, `list()`, and every instance method reuse the `baseUrl`/`authToken` you pass in, or fall back to the `SANDKILN_DAEMON_URL`/`SANDKILN_AUTH_TOKEN` environment variables — see [Auth](/concepts/auth).
+`Sandbox.create()`, `list()`, and every instance method reuse the `baseUrl`/`authToken` you pass in, or fall back to the `SANDKILN_DAEMON_URL`/`SANDKILN_AUTH_TOKEN` environment variables: see [Auth](/concepts/auth).
 
 ## A failed command doesn't reject the promise
 
-`runCommand` reports whatever the command actually did — exit code and `stderr` included — it doesn't throw just because the exit code was non-zero. Check `result.exitCode` the same way a shell script checks `$?`:
+`runCommand` reports whatever the command actually did: exit code and `stderr` included: it doesn't throw just because the exit code was non-zero. Check `result.exitCode` the same way a shell script checks `$?`:
 
 ```ts
 const failed = await sandbox.runCommand("cat", ["/does/not/exist"]);
@@ -33,7 +33,7 @@ console.log("exit code:", failed.exitCode, "stderr:", failed.stderr.trim());
 // exit code: 1 stderr: cat: /does/not/exist: No such file or directory
 ```
 
-`SandkilnApiError` is reserved for the request itself failing — a bad sandbox id, an unreachable daemon, a validation error. Calling any method after `stop()` (without `resume()`-ing it first) is the everyday way to see one:
+`SandkilnApiError` is reserved for the request itself failing: a bad sandbox id, an unreachable daemon, a validation error. Calling any method after `stop()` (without `resume()`-ing it first) is the everyday way to see one:
 
 ```ts
 import { SandkilnApiError } from "sandkiln";

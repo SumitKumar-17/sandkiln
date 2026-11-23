@@ -1,26 +1,30 @@
 ---
 title: sandkiln docs
-description: Docs for sandkiln — a compute primitive for safely running untrusted or AI-generated code in hardware-isolated Firecracker microVMs.
+description: Docs for sandkiln, a runtime for running untrusted or AI-generated code in hardware-isolated Firecracker microVMs.
 ---
 
-Pick a starting point. Five ways into the same docs, by what you already know you need.
+sandkiln runs each sandbox as a Firecracker microVM with its own kernel, filesystem and network interface. You run the `sandkilnd` daemon on a Linux host with KVM and drive it from the JS/TS SDK, the Python SDK, the `kiln` CLI or plain HTTP.
 
-<CardGroup cols={1}>
-  <Card title="New here" href="/getting-started/introduction">
-    [Introduction](/getting-started/introduction) → [Self-hosting quickstart](/getting-started/self-hosting) → your language: [JS/TS](/getting-started/js), [Python](/getting-started/python), [CLI](/getting-started/cli).
+## Start here
+
+1. [Self-hosting quickstart](/getting-started/self-hosting): a running daemon in two commands.
+2. Your first sandbox: [JS/TS](/getting-started/js), [Python](/getting-started/python) or [CLI](/getting-started/cli).
+
+## Then
+
+<CardGroup cols={2}>
+  <Card title="Core concepts" href="/concepts/sandbox-lifecycle">
+    Lifecycle, snapshots, named sandboxes, drives, images, networking, auth, preview.
   </Card>
-  <Card title="Understand a capability" href="/concepts/sandbox-lifecycle">
-    [Core Concepts](/concepts/sandbox-lifecycle) — lifecycle, snapshots, naming, drives, images, networking, auth, preview.
+  <Card title="Guides" href="/guides/run-untrusted-code">
+    Task-oriented recipes with real code.
   </Card>
-  <Card title="Have a specific task" href="/guides/run-untrusted-code">
-    [Guides](/guides/run-untrusted-code) — task-oriented, real-code recipes.
+  <Card title="Reference" href="/api-reference/http-api/overview">
+    HTTP API, JS/TS SDK, Python SDK, CLI.
   </Card>
-  <Card title="Need exact signatures" href="/api-reference/http-api/overview">
-    [Reference](/api-reference/http-api/overview) — daemon HTTP API, JS/TS SDK, Python SDK, CLI.
-  </Card>
-  <Card title="Curious how it's built" href="/internals/vsock-wire-protocol">
-    [Internals](/internals/vsock-wire-protocol) — one page per mechanism (vsock, the jailer, snapshots, sqlite, rate limiting, and ten more), each with a real request/response captured from the live daemon. Or the shorter [Architecture](/architecture/overview) tour first, if you want the map before the terrain.
+  <Card title="Internals" href="/internals/vsock-wire-protocol">
+    One page per mechanism, each with a request captured from a live daemon. Start with the [architecture overview](/architecture/overview).
   </Card>
 </CardGroup>
 
-Have an idea or found something wrong? Email [sumitkanpur2005@gmail.com](mailto:sumitkanpur2005@gmail.com).
+Found a mistake or have an idea? Email [sumitkanpur2005@gmail.com](mailto:sumitkanpur2005@gmail.com).
