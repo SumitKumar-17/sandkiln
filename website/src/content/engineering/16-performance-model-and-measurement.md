@@ -58,9 +58,11 @@ Published boot numbers have moved, and both sets are real:
 | When | Cold boot | Exec round trip | Snapshot take | Notes |
 | --- | --- | --- | --- | --- |
 | Earlier published runs (ROADMAP.md Benchmarking) | 10.5 to 10.9 ms | 220 to 250 us | about 322 ms (309.6 to 335.0 ms) | earlier kernel and box load |
-| Re-measured 2026-11-24 (criterion, kernel 6.8) | 12.6 to 14.0 ms | 242 to 248 us | 485 to 727 ms | same box, different load state |
+| Re-measured 2026-11-23 (criterion, kernel 6.8) | 12.6 to 14.0 ms | 242 to 248 us | 485 to 727 ms | same box, different load state |
 
-Neither row is authoritative. Cold boot differs by a couple of milliseconds, which fits a different kernel and a different background load. The snapshot take difference is larger, and ROADMAP.md already explains why: `snapshot_take` writes the guest's whole memory to disk synchronously, and on a box that is also somebody's working desktop it is far more exposed to disk contention than the other benches. An earlier note in the same document records 552.7 ms from a 20-iteration report run and 560 to 915 ms in isolation, with criterion's own significance test reporting no detected change. The right reading is a load-dependent range, not a single figure.
+Resume from snapshot was re-measured in the same criterion run at 3.7 to 4.0 ms. The reflink create has the same old-and-new pairing: a mean of 17.9 ms in the first reflink run and 18.4 ms in the re-measurement (20 sequential cold creates through `scripts/bench-report.sh`, rootfs on a reflink filesystem), itemized further down.
+
+Both rows are directional, one shared box each time, and neither is authoritative. Cold boot differs by a couple of milliseconds, which fits a different kernel and a different background load. The snapshot take difference is larger, and ROADMAP.md already explains why: `snapshot_take` writes the guest's whole memory to disk synchronously, and on a box that is also somebody's working desktop it is far more exposed to disk contention than the other benches. The right reading is a load-dependent range, not a single figure.
 
 ## `/metrics`: the daemon's own breakdown
 
@@ -121,7 +123,7 @@ Those two are the reason the performance story for pre-warmed pools is told in t
 
 `scripts/load-test.sh [concurrency] [iterations] [base-url]` runs N workers each doing create, exec and delete cycles and reports min, max, mean and p95 per phase. It is written with `curl -w` timing and `sort`/`awk` on purpose, since each cycle is stateful and concurrent in a way a repeat-one-command tool does not fit.
 
-The load test answers a different question than the report. It shows how latency degrades when cycles overlap, and it can show a pathology the sequential tools cannot. It says nothing about why. The recorded run (4 workers, 5 cycles, 0 errors) read a `create` mean of 369 ms before the API-socket fix and 211 ms after, with the p95 essentially unchanged near 580 ms and overall throughput flat at around 5.4 to 5.6 cycles per second. That flat throughput is a useful lesson: a phase can get cheaper without the cycle getting cheaper, because the cycle also contains exec and delete.
+The load test answers a different question than the report. It shows how latency degrades when cycles overlap, and it can show a pathology the sequential tools cannot. It says nothing about why. The recorded run (4 workers, 5 cycles, 0 errors) read a `create` mean of 369 ms before the API-socket fix and 211 ms after, with the p95 essentially unchanged near 580 ms and overall throughput flat at around 5.4 to 5.6 cycles per second.
 
 ## `profile-cold-create.sh` and the debug events
 
@@ -133,7 +135,7 @@ scripts/dev-tools/profile-cold-create.sh 20
 scripts/sandkilnd-ctl.sh logs
 ```
 
-The filter target is the binary name `sandkilnd`, not the package name `sandkiln-daemon`. Using the package name silently matches nothing, which is an easy way to lose an hour. (The header comment inside `profile-cold-create.sh` still suggests `sandkiln_daemon=debug`. The ROADMAP note and the `Cargo.toml` binary name say `sandkilnd`, so trust those.)
+The filter target is the binary name `sandkilnd`, not the package name `sandkiln-daemon`. Using the package name silently matches nothing, which is an easy way to lose an hour.
 
 These are the events to read, and what each carries:
 
@@ -167,16 +169,16 @@ flowchart TD
 
 The same structure has had very different weights at different times. The table keeps each run's date and conditions, because they are not interchangeable.
 
-| Phase | 2026-09-14, ext4, original profile | 2026-11-23, ext4, byte copy | 2026-11-23, XFS reflink |
-| --- | --- | --- | --- |
-| rootfs clone | 124.09 ms (74.0%) | 127.9 ms | 0.08 ms |
-| network lease (concurrent) | 4.36 ms | 3.5 ms | not recorded |
-| `Vm::boot` total | 34.00 ms | 14.9 ms | not recorded |
-| of which socket wait | 20.11 ms | not recorded | not recorded |
-| of which seven PUTs | 1.61 ms | not recorded | not recorded |
-| of which `InstanceStart` | 11.87 ms | not recorded | not recorded |
-| history sqlite write | 9.24 ms | not recorded | not recorded |
-| **create total** | **167.65 ms** | **187.5 ms** | **17.9 ms** |
+| Phase | 2026-09-14, ext4, original profile | 2026-11-23, ext4, byte copy | 2026-11-23, XFS reflink, first run | 2026-11-23, XFS reflink, re-measured (kernel 6.8) |
+| --- | --- | --- | --- | --- |
+| rootfs clone | 124.09 ms (74.0%) | 127.9 ms | 0.08 ms | 0.084 ms |
+| network lease (concurrent) | 4.36 ms | 3.5 ms | not recorded | 3.1 ms |
+| `Vm::boot` total | 34.00 ms | 14.9 ms | not recorded | 13.4 ms |
+| of which socket wait | 20.11 ms | not recorded | not recorded | not recorded |
+| of which seven PUTs | 1.61 ms | not recorded | not recorded | not recorded |
+| of which `InstanceStart` | 11.87 ms | not recorded | not recorded | not recorded |
+| history sqlite write | 9.24 ms | not recorded | not recorded | not recorded |
+| **create total** | **167.65 ms** | **187.5 ms** | **17.9 ms** | **18.4 ms** |
 
 Three observations follow, and one caution.
 
@@ -184,9 +186,9 @@ First, the original profile is a complete breakdown. The listed phases summed to
 
 Second, the later table columns were measured after fixes that came from this profile: the socket-wait sleep removed (boot fell from 34.00 to about 11.3 ms in the runs made right after that change, and criterion later read 12.6 to 14.0 ms on a different kernel), and the history write moved to WAL. Those are the subject of their own posts: [the socket wait](/engineering/18-opt-boot-socket-wait) and [the history store](/engineering/19-opt-history-store-wal).
 
-Third, on the reflink filesystem the critical path becomes "network lease plus boot", since the clone is no longer the slower branch of the concurrent pair. The run itself did not record boot or lease for the reflink case, so that statement is a structural inference and not a measurement.
+Third, on the reflink filesystem the critical path becomes "network lease plus boot", since the clone is no longer the slower branch of the concurrent pair. The first reflink run did not record boot or lease, so for a while that was only a structural inference. The re-measurement supports it: lease 3.1 ms (the slower branch, against a 0.084 ms clone) plus boot 13.4 ms is about 16.5 ms of the 18.4 ms total. The remaining roughly 1.9 ms is arithmetic, not an itemized measurement, and presumably covers the history write and the map insert. The 17.9 and 18.4 ms means differ by 0.5 ms, inside this box's noise.
 
-The caution is on the arithmetic. The drop from 187.5 ms to 17.9 ms is about 169.6 ms, but the clone alone only accounts for about 127.8 ms of it. The remaining roughly 42 ms was not itemized in the 2026-11-23 runs, because the per-phase numbers recorded for the reflink run cover only the clone. A plausible reading is that a 300 MiB byte copy also costs the rest of the path through disk contention and dirty-page writeback, but that is a hypothesis, not a result, and the next measurement should record all phases for both configurations. The 187.5 ms ext4 figure is also higher than the 167.65 ms one from September even though boot became faster in between, so the two ext4 columns are evidence of box-state drift, not of a regression.
+The caution is on the arithmetic. The drop from 187.5 ms to 17.9 ms is about 169.6 ms, but the clone alone only accounts for about 127.8 ms of it. The remaining roughly 42 ms was not itemized in the first 2026-11-23 runs. A plausible reading is that a 300 MiB byte copy also costs the rest of the path through disk contention and dirty-page writeback, but that is a hypothesis, not a result, and the next measurement should record all phases for both configurations. The 187.5 ms ext4 figure is also higher than the 167.65 ms one from September even though boot became faster in between, so the two ext4 columns are evidence of box-state drift, not of a regression.
 
 ## How to read these numbers
 
@@ -194,9 +196,8 @@ A short list of rules, each of which has been learned from a specific mistake.
 
 - **Name the tool.** "Boot is 12 ms" (criterion, VMM only) and "create is 18 ms" (HTTP, full path) are both true on the same day and describe different things.
 - **Look for the quantization signature.** A phase that reads the same value on every sample is a sleep or a timeout, not work. The socket wait measured 20.04 to 20.18 ms across twenty boots. Real work has spread.
-- **Prefer a complete breakdown to a clever one.** If the phases do not add up to the total, the unaccounted part is where the next surprise lives.
 - **Count to "usable", not to "returned".** `create()` returning and the guest agent answering are different events, with a gap on the order of 420 to 460 ms for a cold sandbox. `first_exec_client` is the measurement that sees it.
-- **Expose the method, not just the time.** A clone that falls back to a byte copy is invisible in a latency number. `rootfs_clone_total{method}` makes it visible.
+- **Time the operation the caller invokes, end to end.** The criterion `snapshot_take` bench times only `pause` plus `snapshot`; the daemon's snapshot request also stops the VM afterwards. The bench read a fraction of a second while the HTTP request took 6.8 seconds, because the stop was outside the timed region and was waiting on a reply a paused guest cannot give. See [Snapshot stop: 6.8s to 0.56s](/engineering/25-opt-snapshot-stop-force-stop).
 - **Expect noise.** One shared desktop-class box, small samples, one create at a time. Phase shares were consistent enough to act on, and absolute totals moved by a few percent run to run. Disk-heavy phases such as snapshot take move far more than that.
 
 ## How to reproduce
