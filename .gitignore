@@ -39,3 +39,7 @@ pass.txt
 .claude/
 .vercel
 .env*
+
+# Local credentials -- never commit or sync to the dev box
+password.txt
+pass.txt
