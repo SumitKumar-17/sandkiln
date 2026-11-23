@@ -15,6 +15,10 @@ The vsock client set no read or write timeout. A single blocked `read` therefore
 
 `core/crates/vmm/src/vsock_client.rs` sets `IO_TIMEOUT` (3 seconds) as both read and write timeout on every stream it opens. It is applied unconditionally rather than special-cased for the snapshot path, so any unresponsive guest (paused, crash-looped, kernel-panicked) and any future caller gets the same bounded worst case. Streaming calls (PTY, streamed exec) clear the read timeout after the handshake, since they legitimately idle.
 
+## Consequence for long commands
+
+Request/response `exec` goes through `Vm::call`, which uses `vsock_client::call`, so its response read has the same 3-second bound, and `Vm::call` retries on any I/O error for up to 5 seconds. Read from the code only (not tested against a live VM): a plain `exec` that produces no response within 3 seconds fails on the host side. Use streamed exec (`kiln sandbox exec-stream`, `open_exec_stream`), which clears the timeout after its handshake, for anything long-running.
+
 ## What to do differently
 
 - Put timeouts at the transport layer, not in each caller.
