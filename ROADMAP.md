@@ -61,7 +61,7 @@ run, not re-proven this session.
 
 **Re-measured 2026-11-23** (criterion, this box, kernel 6.8, directional, one shared machine): cold boot 12.6-14.0ms (earlier published 10.5-10.9ms), exec round trip 242-248us (220-250), snapshot take 485-727ms (309.6-335.0), resume from snapshot 3.7-4.0ms (6.5-7.7). Cold `POST /sandboxes` mean over 20: 187.5ms on ext4 with a full-copy clone, 18.4ms with a reflinked rootfs. The snapshot HTTP request itself: 6.8s before finding 13, 0.56s after.
 
-**Status (2026-11-24, end of session).** Findings 1-19 and 21-23 are fixed; 20 is open. Live suite 334 of 335 and 333 of 335 on the last two full runs (the misses: the finding 20 pool flake, and a timing bound under 4-way load that is now loosened). 346 unit tests, clippy clean. Also fixed late: unbounded retired checkpoints filled the dev box disk to 100% (finding 24, `retained_checkpoints_max`, default 8). Boot, snapshot, create and resume numbers above are current.
+**Status (2026-11-24, end of session).** Findings 1-19 and 21-23 are fixed; 20 is open. Live suite 334 of 335 and 333 of 335 on the last two full runs (the misses: the finding 20 pool flake, and a timing bound under 4-way load that is now loosened). 345 unit tests, clippy clean. Also fixed late: unbounded retired checkpoints filled the dev box disk to 100% (finding 24, `retained_checkpoints_max`, default 8). Boot, snapshot, create and resume numbers above are current.
 
 **Resume here, in this order:**
 1. Re-run the full suite twice and record the result; if `18-pool` still fails intermittently, root-cause finding 20 (capture a failing `state.snap`/`mem.bin`, host load, try a CPU template; note finding 21's disk bug was a separate cause and may have contributed to old resume failures).
