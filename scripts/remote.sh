@@ -30,6 +30,10 @@ sync() {
     --exclude='node_modules' \
     --exclude='dist' \
     --exclude='images/build' \
+    --exclude='password.txt' \
+    --exclude='pass.txt' \
+    --exclude='.env*' \
+    --exclude='.claude' \
     . | ssh "$REMOTE_HOST" "mkdir -p $REMOTE_DIR && tar -C $REMOTE_DIR -xzf -"
 }
 

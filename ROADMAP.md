@@ -4,6 +4,47 @@ This is a working plan, not a spec — it gets rewritten as we learn things.
 Every milestone below ends with something concretely proven on real
 hardware, not just code that compiles.
 
+## Redevelopment audit (2026-11-23)
+
+Resuming after a long gap. State verified on the dev box (Intel i9-13900K,
+32 threads, 62 GiB, ext4 only, kernel 6.8, Firecracker v1.16.1, `/dev/kvm`
+present), not assumed from the sections below.
+
+**Baseline.** `cargo test --workspace`: 303 passing, 0 failing.
+`cargo clippy --workspace --all-targets`: clean. Code size: daemon 9.4k
+lines, vmm 3.2k, guest-agent 0.7k, protocol 0.7k, store 0.4k. The live
+daemon API suite (`scripts/integration-test.sh`) is **not yet re-run**: the
+box rebooted since the last session, so the bridge, tap pool and DNS proxy
+are gone (preflight fails only on the missing tap pool, which needs real
+root). Everything claimed under "What works today" is as of the last live
+run, not re-proven this session.
+
+**Findings, with status**
+
+| # | Finding | Status |
+|---|---------|--------|
+| 1 | RUSTSEC-2026-0459: bundled SQLite in `rusqlite 0.32` has a CVE. Also unsound-API advisories on `tokio` 1.53.1 and `rustix`. | Fixed: rusqlite 0.43, tokio 1.54, rustix bumped. Tests pass. Re-run `cargo audit` in CI. |
+| 2 | `Cargo.lock` was gitignored although the workspace ships binaries, so builds were not reproducible. | Fixed: committed. |
+| 3 | `scripts/remote.sh sync` tarred the whole tree, so any local credential file was copied to the shared dev box. `password.txt` was not gitignored. | Fixed: excluded from sync, gitignored. A stale `pass.txt` plaintext file still sits in the remote repo dir; delete it and rotate the password. |
+| 4 | `clone_rootfs` always copies into `temp_dir()`, so `cp --reflink=auto` can never reflink across filesystems; whether a clone reflinked is invisible. 74% of a create is this copy. | Open, top priority. See "Further latency investigation". |
+| 5 | Snapshot-take is 310-990ms (full memory and disk each time). | Open: Diff snapshots, dirty-tracked rootfs. |
+| 6 | Large files mixing concerns: `routes_sandbox.rs` 946, `routes_snapshot.rs` 931, `snapshot.rs` 897, `state.rs` 834 lines. | Open: split per AGENTS.md section 2. |
+| 7 | JS tooling lags (typescript 5.9 vs 7, tsup 8 vs 9). Low risk. | Open, low. |
+| 8 | Remote box holds stale copies (`docs/architecture`, worktrees); production data to preserve: `~/sandkiln-tools/history.db`, images, registered images. | Do not delete; documented here. |
+
+**Plan, in order**
+
+1. Re-establish the live environment (tap pool, DNS proxy, grant caps), run
+   the full integration suite, record the real baseline numbers.
+2. Fix finding 4 (configurable clone destination plus reflink-vs-copy
+   reporting), then re-measure with an XFS or btrfs loopback.
+3. Snapshot cost: measure sandkiln's overhead, then evaluate Diff snapshots.
+4. Split the oversized daemon files; add admin tooling (CLI status/doctor,
+   dashboard of sandboxes, pools, drives, history).
+5. Website, docs, packaging and launch pass once the core is re-verified.
+
+**Next session starts at step 1.**
+
 ## What works today
 
 - A Firecracker microVM boots under real KVM in ~11ms (was ~32ms until a
