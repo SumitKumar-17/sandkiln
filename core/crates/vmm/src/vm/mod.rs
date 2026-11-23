@@ -131,6 +131,11 @@ pub struct AgentEndpoint {
 }
 
 impl AgentEndpoint {
+    /// Control-plane call: bounded by `CONTROL_PLANE_RESPONSE_TIMEOUT`.
+    pub fn call(&self, request: &Request) -> io::Result<Response> {
+        self.call_with_timeout(request, Some(CONTROL_PLANE_RESPONSE_TIMEOUT))
+    }
+
     pub fn call_with_timeout(&self, request: &Request, response_timeout: Option<Duration>) -> io::Result<Response> {
         let started = Instant::now();
         let result = retry_while(Duration::from_secs(5), Duration::from_millis(1), Duration::from_millis(20), || {
@@ -174,7 +179,7 @@ impl Vm {
     /// briefly; a request that was already sent is never re-sent. For user
     /// commands, which can run for minutes, use [`Vm::call_with_timeout`].
     pub fn call(&self, request: &Request) -> io::Result<Response> {
-        self.call_with_timeout(request, Some(CONTROL_PLANE_RESPONSE_TIMEOUT))
+        self.agent_endpoint().call(request)
     }
 
     /// Like [`Vm::call`] with a caller-chosen bound on the reply (`None`

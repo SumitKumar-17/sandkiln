@@ -137,6 +137,14 @@ impl AppState {
     /// with each attachment's read-only flag. Empty means unheld. Checked
     /// before attaching elsewhere (`can_attach_read_only` allows stacking
     /// read-only holders) or deleting (never fine while non-empty).
+    /// Copies a sandbox's guest-agent endpoint out of the map so the caller can
+    /// release the daemon-wide `sandboxes` lock *before* making a call that can
+    /// block (a dead guest costs up to ~5s of retries). Never call
+    /// `sandbox.vm.call(..)` while holding the lock.
+    pub fn agent_endpoint(&self, id: &str) -> Option<sandkiln_vmm::vm::AgentEndpoint> {
+        self.sandboxes.lock().unwrap().get(id).map(|s| s.vm.agent_endpoint())
+    }
+
     pub fn drive_holders(&self, drive_id: &str) -> Vec<DriveHold> {
         let mut holders: Vec<DriveHold> = self
             .sandboxes

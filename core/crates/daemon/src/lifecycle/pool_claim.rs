@@ -150,18 +150,16 @@ pub(crate) async fn claim_from_pool(
     // snapshots of this sandbox" apart from here, so both get kept.
     let id = resume_snapshot_by_id(state.clone(), snapshot_id, true).await?;
 
-    let health_check = spawn_blocking_in_current_span("pool claim health check task panicked", {
-        let state = state.clone();
-        let id = id.clone();
-        move || {
-            let sandboxes = state.sandboxes.lock().unwrap();
-            let sandbox = sandboxes.get(&id).expect("resume_snapshot_by_id above just inserted this id");
-            sandbox.vm.call(&sandkiln_protocol::Request::Exec {
-                command: "true".to_string(),
-                args: vec![],
-                env: std::collections::HashMap::new(),
-            })
-        }
+    // Endpoint copied out first: a crashed resumed guest makes this call block
+    // for seconds, and holding the daemon-wide sandbox lock across it froze
+    // every other request (measured: GET /sandboxes took 4.9s).
+    let endpoint = state.agent_endpoint(&id).expect("resume_snapshot_by_id above just inserted this id");
+    let health_check = spawn_blocking_in_current_span("pool claim health check task panicked", move || {
+        endpoint.call(&sandkiln_protocol::Request::Exec {
+            command: "true".to_string(),
+            args: vec![],
+            env: std::collections::HashMap::new(),
+        })
     })
     .await;
 
