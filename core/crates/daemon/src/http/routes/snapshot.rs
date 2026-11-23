@@ -365,53 +365,38 @@ fn cleanup_old_snapshot_dir(old_snapshot_dir: Option<&std::path::Path>) {
 }
 
 /// Retires `snapshot` into `crate::snapshots::retired` instead of
-/// discarding it, returning the path the *new* sandbox should use as its
-/// rootfs — a fresh private clone, never the original file (continued
-/// use of the new sandbox would otherwise retroactively corrupt a
-/// checkpoint whose `state.snap` still describes the shared file as of
-/// the moment it was taken).
+/// discarding it: moves `state.snap`/`mem.bin` into the retired directory and
+/// records the checkpoint. The checkpoint keeps the snapshot's *original*
+/// rootfs, which must stay pristine because its `state.snap` describes that
+/// file as of the moment it was taken. The caller therefore resumes the new
+/// sandbox onto a private clone (`resume_vm`'s `rootfs_override`) *before*
+/// calling this.
 ///
-/// Pure filesystem/process work (the rootfs clone is a reflink or byte copy), run on a
-/// blocking thread by the caller. `old_snapshot_dir` is removed only
+/// Pure filesystem work, run on a blocking thread by the caller.
+/// `old_snapshot_dir` is removed only
 /// after both files are moved out of it; on any failure, whatever was
 /// already created is cleaned up and `old_snapshot_dir` is left intact
 /// so a caller falling back to the original destructive behavior still
 /// finds a complete snapshot directory to remove.
-fn retire_snapshot_files(
-    new_id: &str,
-    snapshot: &Snapshot,
-    old_snapshot_dir: Option<&std::path::Path>,
-    metrics: &crate::metrics::Metrics,
-) -> io::Result<(PathBuf, RetiredSnapshot)> {
-    let new_rootfs_path = crate::storage::rootfs_path(new_id);
-    crate::http::routes::sandbox::clone_rootfs(&snapshot.rootfs_path, &new_rootfs_path, metrics)?;
-
+fn retire_snapshot_files(snapshot: &Snapshot, old_snapshot_dir: Option<&std::path::Path>) -> io::Result<RetiredSnapshot> {
     let dest_dir = crate::snapshots::retired::retired_dir(&snapshot.id);
     let cleanup_partial = |extra: &std::path::Path| {
-        let _ = std::fs::remove_file(&new_rootfs_path);
         let _ = std::fs::remove_file(extra);
         let _ = std::fs::remove_dir_all(&dest_dir);
     };
 
-    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
-        let _ = std::fs::remove_file(&new_rootfs_path);
-        return Err(e);
-    }
+    std::fs::create_dir_all(&dest_dir)?;
     let new_state = crate::snapshots::held::state_path(&dest_dir);
     let new_mem = crate::snapshots::held::mem_path(&dest_dir);
     if let Err(e) = crate::snapshots::held::move_file(&snapshot.snapshot_path, &new_state) {
         cleanup_partial(&new_state);
         return Err(e);
     }
-    if let Err(e) = crate::snapshots::held::move_file(&snapshot.mem_file_path, &new_mem) {
-        // `state.snap` already moved — rolling back could fail for the
-        // same reason this branch was hit. Leaving it in `dest_dir` is
-        // safe: a future `reconcile()` sees a directory missing
-        // `mem.bin` and skips it with a warning, same as any other
-        // crashed-mid-write case.
-        let _ = std::fs::remove_file(&new_rootfs_path);
-        return Err(e);
-    }
+    // `state.snap` already moved. Rolling back could fail for the same reason
+    // this does, so it stays in `dest_dir`: a future `reconcile()` sees a
+    // directory missing `mem.bin` and skips it with a warning, like any other
+    // crashed-mid-write case.
+    crate::snapshots::held::move_file(&snapshot.mem_file_path, &new_mem)?;
 
     let retired = RetiredSnapshot {
         id: snapshot.id.clone(),
@@ -444,7 +429,7 @@ fn retire_snapshot_files(
     }
 
     cleanup_old_snapshot_dir(old_snapshot_dir);
-    Ok((new_rootfs_path, retired))
+    Ok(retired)
 }
 
 /// Consumes a held snapshot's *record* and boots a new sandbox from it —
@@ -484,11 +469,44 @@ pub(crate) async fn resume_snapshot_by_id(
     // snapshot's files live under `Config::archive_dir` instead, and
     // cleaning the wrong directory would leak the real files forever.
     let old_snapshot_dir = snapshot.snapshot_path.parent().map(|p| p.to_path_buf());
-    let result = resume_vm(&state, snapshot.snapshot_path.clone(), snapshot.mem_file_path.clone()).await;
+    // Retaining history means the checkpoint must stay pristine, so the new
+    // sandbox runs on its own clone, made BEFORE it resumes and handed over as
+    // `rootfs_override` (the snapshot records its disk by host path, so a VM
+    // resumed without an override writes into the checkpoint's own disk).
+    // Without retention the snapshot is consumed and the VM uses its disk in
+    // place. A clone failure degrades to that destructive mode rather than
+    // failing the caller's resume.
+    let mut retain_history = retain_history;
+    let mut private_rootfs: Option<PathBuf> = None;
+    if retain_history {
+        let dest = crate::storage::rootfs_path(&new_id);
+        let cloned = spawn_blocking_in_current_span("resume rootfs clone task panicked", {
+            let source = snapshot.rootfs_path.clone();
+            let dest = dest.clone();
+            let state = state.clone();
+            move || crate::http::routes::sandbox::clone_rootfs(&source, &dest, &state.metrics)
+        })
+        .await;
+        match cloned {
+            Ok(()) => private_rootfs = Some(dest),
+            Err(e) => {
+                tracing::warn!(
+                    snapshot_id = %snapshot_id, error = %e,
+                    "could not clone the rootfs to retain history for this resume; resuming destructively instead"
+                );
+                retain_history = false;
+            }
+        }
+    }
+
+    let result = resume_vm(&state, snapshot.snapshot_path.clone(), snapshot.mem_file_path.clone(), private_rootfs.clone()).await;
 
     let vm = match result {
         Ok(vm) => vm,
         Err(e) => {
+            if let Some(clone) = &private_rootfs {
+                let _ = std::fs::remove_file(clone);
+            }
             state.snapshots.lock().unwrap().insert(snapshot_id, snapshot);
             return Err(AppError::from(e));
         }
@@ -498,12 +516,10 @@ pub(crate) async fn resume_snapshot_by_id(
     // happens to the checkpoint *data* and must never turn this success
     // into a failure response.
     let (snapshot, retire_result) = spawn_blocking_in_current_span("retire-checkpoint task panicked", {
-        let new_id = new_id.clone();
         let old_snapshot_dir = old_snapshot_dir.clone();
-        let state = state.clone();
         move || {
             let result = if retain_history {
-                retire_snapshot_files(&new_id, &snapshot, old_snapshot_dir.as_deref(), &state.metrics).map(Some)
+                retire_snapshot_files(&snapshot, old_snapshot_dir.as_deref()).map(Some)
             } else {
                 Ok(None)
             };
@@ -512,24 +528,30 @@ pub(crate) async fn resume_snapshot_by_id(
     })
     .await;
 
-    let rootfs_path = match retire_result {
-        Ok(Some((new_rootfs_path, retired))) => {
+    let rootfs_path = match (retire_result, private_rootfs) {
+        (Ok(Some(retired)), Some(clone)) => {
             state.retired_snapshots.lock().unwrap().insert(retired.id.clone(), retired);
-            new_rootfs_path
+            clone
         }
-        Ok(None) => {
+        // Not retaining: the snapshot was consumed, the VM runs on its disk.
+        (Ok(None), _) => {
             cleanup_old_snapshot_dir(old_snapshot_dir.as_deref());
             snapshot.rootfs_path.clone()
         }
-        Err(e) => {
+        // Retiring failed after the VM resumed on its private clone: no
+        // restorable checkpoint exists for this resume, and the original disk
+        // is now unreferenced, so remove it rather than leak it.
+        (Err(e), Some(clone)) => {
             tracing::warn!(
                 snapshot_id = %snapshot_id, error = %e,
                 "failed to retain history for this resume — falling back to the original, fully \
                  destructive behavior for this one resume (no restorable checkpoint will exist for it)"
             );
             cleanup_old_snapshot_dir(old_snapshot_dir.as_deref());
-            snapshot.rootfs_path.clone()
+            let _ = std::fs::remove_file(&snapshot.rootfs_path);
+            clone
         }
+        (Ok(Some(_)), None) | (Err(_), None) => unreachable!("history is only retained when a private rootfs clone exists"),
     };
 
     // Captured before `snapshot.network`/`snapshot.egress` move into the
@@ -638,23 +660,18 @@ pub async fn fork_snapshot(
         (snapshot.snapshot_path.clone(), snapshot.mem_file_path.clone(), snapshot.rootfs_path.clone())
     };
 
-    let result = resume_vm(&state, snapshot_path, mem_file_path).await;
-
-    let vm = match result {
-        Ok(vm) => vm,
-        Err(e) => {
-            if let Some(snapshot) = state.snapshots.lock().unwrap().get_mut(&snapshot_id) {
-                snapshot.forked_into = None;
-            }
-            return Err(AppError::from(e));
+    // The fork gets its own disk, cloned BEFORE it resumes and handed to it as
+    // `rootfs_override`. The snapshot records its rootfs by host path, so
+    // without this the fork would write straight into the snapshot's disk and
+    // the next fork or resume of the same snapshot would read a corrupted
+    // filesystem (reproduced: ext4 `Bad message`). Fatal on failure: a shared
+    // rootfs is silently unsafe, not merely degraded.
+    let new_rootfs_path = crate::storage::rootfs_path(&new_id);
+    let release_fork = |state: &Arc<AppState>| {
+        if let Some(snapshot) = state.snapshots.lock().unwrap().get_mut(&snapshot_id) {
+            snapshot.forked_into = None;
         }
     };
-
-    // Own private rootfs clone rather than sharing the source's file —
-    // see module doc comment for the sequential-corruption bug this
-    // closes. Fatal on failure (unlike resume's best-effort retention):
-    // a shared rootfs would be silently unsafe, not merely degraded.
-    let new_rootfs_path = crate::storage::rootfs_path(&new_id);
     if let Err(e) = spawn_blocking_in_current_span("fork rootfs clone task panicked", {
         let source_rootfs_path = source_rootfs_path.clone();
         let new_rootfs_path = new_rootfs_path.clone();
@@ -663,12 +680,19 @@ pub async fn fork_snapshot(
     })
     .await
     {
-        let _ = vm.stop();
-        if let Some(snapshot) = state.snapshots.lock().unwrap().get_mut(&snapshot_id) {
-            snapshot.forked_into = None;
-        }
+        release_fork(&state);
         return Err(AppError::from(e));
     }
+    let mut rootfs_guard = crate::storage::OwnedFile::new(new_rootfs_path.clone());
+
+    let vm = match resume_vm(&state, snapshot_path, mem_file_path, Some(new_rootfs_path.clone())).await {
+        Ok(vm) => vm,
+        Err(e) => {
+            release_fork(&state);
+            return Err(AppError::from(e));
+        }
+    };
+    rootfs_guard.keep();
 
     let (sandbox, egress, guest_ip, tap_device) = {
         let snapshots = state.snapshots.lock().unwrap();
@@ -733,10 +757,27 @@ pub async fn fork_snapshot(
 // `pub(crate)`: also used by `routes::snapshot_history`'s restore path —
 // loading a VM from state.snap/mem.bin is identical whether those files
 // belong to a live `Snapshot` or a dormant `RetiredSnapshot`.
-pub(crate) async fn resume_vm(state: &Arc<AppState>, snapshot_path: PathBuf, mem_file_path: PathBuf) -> std::io::Result<Vm> {
+///
+/// `rootfs_override` is the disk the resumed VM will write to. Pass a private
+/// clone (made *before* this call) for anything that must leave the snapshot
+/// reusable: a fork, a restorable checkpoint, a history restore. `None` makes
+/// the VM write into the snapshot's own disk, which is only correct when the
+/// snapshot is being consumed. Without this, a resumed VM silently corrupts
+/// the snapshot it came from (see `ResumeConfig::rootfs_override`).
+pub(crate) async fn resume_vm(
+    state: &Arc<AppState>,
+    snapshot_path: PathBuf,
+    mem_file_path: PathBuf,
+    rootfs_override: Option<PathBuf>,
+) -> std::io::Result<Vm> {
     let state = state.clone();
     spawn_blocking_in_current_span("resume task panicked", move || {
-        Vm::resume(&ResumeConfig { firecracker_bin: state.config.firecracker_bin.clone(), snapshot_path, mem_file_path })
+        Vm::resume(&ResumeConfig {
+            firecracker_bin: state.config.firecracker_bin.clone(),
+            snapshot_path,
+            mem_file_path,
+            rootfs_override,
+        })
     })
     .await
 }

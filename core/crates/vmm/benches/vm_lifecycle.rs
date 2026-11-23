@@ -236,6 +236,7 @@ fn bench_resume(c: &mut Criterion) {
                     firecracker_bin: config.firecracker_bin.clone(),
                     snapshot_path: snapshot_path.clone(),
                     mem_file_path: mem_path.clone(),
+                    rootfs_override: None,
                 };
 
                 let started = Instant::now();
