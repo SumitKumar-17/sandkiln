@@ -8,7 +8,7 @@ updated: 2026-11-24
 
 This is a case study of an optimization that was implemented correctly, measured once, recorded as a large win, and later shown to be unable to account for that win. The change itself is still in the code and still harmless. The interesting part is the gap between what the change did and what the number attributed to it said, because that gap is how a project ends up optimizing the wrong thing.
 
-The code in question is the cold-create path: `create_sandbox_cold` in the daemon. Per the repository's convention, daemon code is cited by item name rather than file path, because that tree is being reorganized. Code in `sandkiln-vmm` carries `path:line` references.
+The code in question is the cold-create path: `create_sandbox_cold` at `core/crates/daemon/src/http/routes/sandbox.rs:230`. Code in both the daemon and `sandkiln-vmm` is cited with `path:line` references, verified against the current tree.
 
 ## Problem and how it was found
 
@@ -58,7 +58,7 @@ Commit `a735ffa` ("Isolate sandboxes from each other on the shared bridge, paral
 2. Ran the clone and the lease concurrently in `std::thread::scope`, joining both before continuing.
 3. Added bridge port isolation to the tap attach step, which is the commit's headline change and unrelated to latency.
 
-The concurrent form, as it exists in the current `create_sandbox_cold` (trimmed to the load-bearing lines, instrumentation kept):
+The concurrent form, as it exists in the current `create_sandbox_cold` (`sandbox.rs:294`, trimmed to the load-bearing lines, instrumentation kept):
 
 ```rust
 let ((copy_result, copy_elapsed), (lease_result, lease_elapsed)) = std::thread::scope(|scope| {
@@ -74,7 +74,9 @@ Three details are worth noting because they are what makes this safe rather than
 
 `std::thread::scope` guarantees both threads finish before the closure returns, so neither borrows data that outlives it and neither can be left running after a failure. The two results are only inspected after both have joined, so a failure in one never leaves the other's resource orphaned without being observed.
 
-The failure handling is where the concurrent form differs from the serial one, and it is not as tidy as the join suggests. `Lease` has no `Drop` implementation, so a lease must be handed back through `NetworkManager::release` (`core/crates/vmm/src/network.rs:140`). In the concurrent form both results are collected before either is checked, so there is a window the serial code did not have: if the clone fails after the lease succeeded, `copy_result?` returns early and the `lease_result` value, which holds a tap device and an IP, is dropped without `release` being called. Reading the code, nothing later returns it to the pool. In the serial original the copy ran first and returned before any lease was taken, so that leak could not happen. The mirror case, a lease failure after a successful clone, leaves the cloned rootfs file on disk, which the serial code also did. I found this by reading `create_sandbox_cold`, not by running a fault injection, so treat it as a verified reading and an untested defect.
+The failure handling is where the concurrent form differs from the serial one. `Lease` has no `Drop` implementation, so a lease must be handed back through `NetworkManager::release` (`core/crates/vmm/src/network.rs:140`). In the concurrent form both results are collected before either is checked, so there is a window the serial code did not have: one half can succeed while the other fails. When this post was first written, the code returned early with `copy_result?` and a successful lease was dropped without `release`, leaking a tap device and an IP for the daemon's lifetime; the mirror case left the cloned rootfs on disk. That was found by reading the code, not by fault injection, and it has since been fixed (commit `cc5573f`).
+
+The current form matches on both results together (`sandbox.rs:312`). If either half failed, it removes the clone when the clone succeeded, releases the lease when the lease succeeded, and returns whichever error occurred. A second guard covers the rest of the path. Right after the join, the clone is wrapped in `storage::OwnedFile` (`core/crates/daemon/src/storage.rs:79`), a scope guard that deletes the file on drop unless `keep()` is called. The create path calls `rootfs_guard.keep()` (`sandbox.rs:389`) only once the VM has booted, so a jailer-id failure, a boot failure or an egress failure each return early and the guard removes the multi-hundred-MiB clone without per-site cleanup code. The guard has two unit tests, one that a dropped file is deleted unless kept, and one that dropping an already-missing file is harmless. There is no unit test that forces the clone-fails-after-lease combination, because it needs a failing clone and a real lease; the unwinding is covered by reading the match arms.
 
 Each branch is wrapped in `span.in_scope` so the tracing span of the originating request follows the work onto the worker threads. That is bookkeeping for the request-id correlation described elsewhere, not part of the optimization.
 
@@ -129,7 +131,7 @@ What was measured later, with per-phase instrumentation, on 20 sequential create
 
 The setup join measured 124.26ms against the clone's own 124.09ms, so the lease added about 0.17ms to the critical path. In other words, the join waited on the clone, almost exactly.
 
-Then the reflink fix landed. With `SANDKILN_ROOTFS_DIR` on the same XFS reflink volume as the base image, the clone fell from 127.9ms to 0.08ms and the cold create from 187ms to 17.9ms (2026-11-23, 20 sequential creates, 31 reflinks and 0 copies). The concurrency was not what mattered. The reflink was.
+Then the reflink fix landed. With `SANDKILN_ROOTFS_DIR` on the same XFS reflink volume as the base image, the clone fell from 127.9ms to 0.08ms and the cold create from 187ms to 17.9ms (2026-11-23, 20 sequential creates, 31 reflinks and 0 copies). A re-measurement on 2026-11-23 (criterion on kernel 6.8, then 20 sequential creates with a reflink rootfs) read a create mean of 18.4ms: clone 0.084ms, lease 3.1ms, boot 13.4ms. Both figures are directional, from one shared box. With the clone at 0.084ms the lease is the longer arm of the pair, so the overlap now hides about 0.08ms. The concurrency was not what mattered. The reflink was.
 
 The recorded 369ms to 211ms pair crosses a commit that changed several things at once, which is why the movement cannot be assigned to any one of them:
 
@@ -164,8 +166,8 @@ That last claim deserves scrutiny now that the clone is cheap. With a reflink cl
 
 Risks that remain:
 
-- The failure-path gap described in "The change": a clone failure after a successful lease leaks a tap and an IP for the daemon's lifetime, and a lease failure after a successful clone leaves a rootfs file behind. The fix is small (release the lease, or remove the clone, in whichever arm succeeded before returning the other's error), and it needs a test that forces a clone failure. Nothing implemented here fixes it.
-- Thread-per-phase concurrency is a pattern that invites more of itself. Each additional independent step is a candidate for a third arm, and each arm adds another success-but-sibling-failed combination to unwind. The jailer id lease in the same function is deliberately left serial, with a comment that there is nothing to overlap it with.
+- The failure-path gap described in "The change" is closed: whichever arm succeeded is unwound before the other's error is returned, and `OwnedFile` removes the clone on every later early return. What remains is test coverage: the `OwnedFile` guard is unit tested, but the clone-fails-after-lease combination has no test that forces it.
+- Thread-per-phase concurrency is a pattern that invites more of itself. Each additional independent step is a candidate for a third arm, and each arm adds another success-but-sibling-failed combination to unwind. The match that unwinds two arms is already the kind of code that gets harder to read with a third. The jailer id lease in the same function is deliberately left serial, with a comment that there is nothing to overlap it with.
 - The larger risk is epistemic. A recorded win with no controlled comparison became part of the project's story, and it directly supported a later wrong conclusion that a CoW filesystem would not help. The roadmap kept the wrong entry in place with a correction attached, on the reasoning that the measurements were right and only the explanation was guesswork. That is the practice worth keeping.
 
 ## How to reproduce

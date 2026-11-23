@@ -28,7 +28,19 @@ pub async fn require_bearer_token(
 /// directly testable without constructing a full `AppState`/`Request`.
 /// `header_value` is the raw `Authorization` header value, if present.
 fn token_matches(header_value: Option<&str>, expected: &str) -> bool {
-    header_value.and_then(|value| value.strip_prefix("Bearer ")) == Some(expected)
+    header_value.and_then(|value| value.strip_prefix("Bearer ")).is_some_and(|provided| constant_time_eq(provided, expected))
+}
+
+/// Compares secrets without an early exit on the first differing byte, so
+/// response timing does not reveal how much of a guessed token was right.
+/// Runs over the longer input; only the length itself can leak.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut diff = a.len() ^ b.len();
+    for i in 0..a.len().max(b.len()) {
+        diff |= usize::from(a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0));
+    }
+    diff == 0
 }
 
 /// Guards `/sandboxes/:id/preview/*` — deliberately not `require_bearer_token`
@@ -59,7 +71,7 @@ pub async fn require_preview_token(
 /// Pure version of `require_preview_token`'s check, mirroring
 /// `token_matches` above.
 fn preview_token_matches(header_value: Option<&str>, query_token: Option<&str>, expected: &str) -> bool {
-    token_matches(header_value, expected) || query_token == Some(expected)
+    token_matches(header_value, expected) || query_token.is_some_and(|t| constant_time_eq(t, expected))
 }
 
 #[cfg(test)]
@@ -116,5 +128,15 @@ mod tests {
     #[test]
     fn preview_token_rejects_when_neither_is_present() {
         assert!(!preview_token_matches(None, None, "secret123"));
+    }
+
+    #[test]
+    fn constant_time_eq_agrees_with_plain_equality() {
+        assert!(constant_time_eq("", ""));
+        assert!(constant_time_eq("abc", "abc"));
+        assert!(!constant_time_eq("abc", "abd"));
+        assert!(!constant_time_eq("abc", "abcd"));
+        assert!(!constant_time_eq("abcd", "abc"));
+        assert!(!constant_time_eq("", "a"));
     }
 }

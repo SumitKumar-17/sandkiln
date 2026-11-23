@@ -6,7 +6,7 @@ tags: ["vmm", "networking", "security", "capabilities", "iptables"]
 updated: 2026-11-24
 ---
 
-Every sandbox with a network gets a tap device, a static IPv4 address on one shared subnet, a path out through the host's uplink, and optionally an egress policy. The implementation is two modules in `sandkiln-vmm` (`core/crates/vmm/src/network.rs` and `core/crates/vmm/src/egress.rs`), a few host-setup scripts, and a capability dance in the daemon's `main`. The background concepts (what a tap device is, what a chain is) are in the docs-site pages on [tap and bridge networking](https://sandkiln.mintlify.site/internals/tap-bridge-networking), [egress iptables](https://sandkiln.mintlify.site/internals/egress-iptables) and [MMDS](https://sandkiln.mintlify.site/internals/mmds). This post is about how the code is organised and why.
+Every sandbox with a network gets a tap device, a static IPv4 address on one shared subnet, a path out through the host's uplink, and optionally an egress policy. The implementation is two modules in `sandkiln-vmm` (`core/crates/vmm/src/network.rs` and `core/crates/vmm/src/egress.rs`), a few host-setup scripts, and a capability raise in the daemon's `main.rs`. The background concepts (what a tap device is, what a chain is) are in the docs-site pages on [tap and bridge networking](https://sandkiln.mintlify.site/internals/tap-bridge-networking), [egress iptables](https://sandkiln.mintlify.site/internals/egress-iptables) and [MMDS](https://sandkiln.mintlify.site/internals/mmds). This post is about how the code is organised and why.
 
 ## The topology
 
@@ -26,7 +26,7 @@ flowchart LR
     DNS -- forwards --> RES[systemd-resolved stub 127.0.0.53]
 ```
 
-One bridge, one gateway address, one NAT rule. The bridge name, gateway, tap prefix and pool size come from `SANDKILN_BRIDGE_NAME` (default `sktapbr0`), `SANDKILN_BRIDGE_GATEWAY` (`172.16.0.1`), `SANDKILN_TAP_POOL_PREFIX` (`sktap`) and `SANDKILN_TAP_POOL_SIZE` (`32`). The uplink is `SANDKILN_UPLINK_IFACE`, or is detected by parsing `ip route show default` (`detect_default_iface`). A `sandkiln.toml` file layer over these environment variables is landing; the names here are the stable surface today.
+One bridge, one gateway address, one NAT rule. The bridge name, gateway, tap prefix and pool size are the settings `bridge_name` (default `sktapbr0`), `bridge_gateway` (`172.16.0.1`), `tap_pool_prefix` (`sktap`) and `tap_pool_size` (`32`) in the daemon's single settings registry (`core/crates/daemon/src/config/settings.rs`). Each resolves from the environment (`SANDKILN_BRIDGE_NAME` and so on) first, then `sandkiln.toml`, then the default. The uplink is `uplink_iface` (`SANDKILN_UPLINK_IFACE`), or is detected by parsing `ip route show default` (`detect_default_iface`) when unset. `tap_pool_size` must match what `create-tap-pool.sh` created; `sandkilnd --check-config` validates the configuration before a start, and `scripts/sandkilnd-ctl.sh` and `scripts/preflight-check.sh` read the effective values through `sandkilnd --print-config` rather than keeping their own copies.
 
 Because there is a single bridge, the NAT, DNS and firewall setup each target exactly one interface and one gateway address. The alternative of one point-to-point interface per VM (Firecracker's quickstart model, still present as `scripts/dev-tools/setup-tap-network.sh`) needs per-VM host addresses and per-VM NAT rules, which is the wildcarding the shared bridge removes.
 
@@ -82,12 +82,14 @@ stateDiagram-v2
     [*] --> Free: create-tap-pool.sh, ensure_ready verifies
     Free --> Leased: lease() pops octet and tap, attach_tap
     Leased --> Free: release(): nomaster, down, push back
-    Leased --> HeldBySnapshot: snapshot-and-stop keeps the Lease
+    Leased --> HeldBySnapshot: snapshot-and-stop keeps the Lease, also at SIGTERM shutdown
     HeldBySnapshot --> Leased: resume hands the same Lease to the new sandbox
     HeldBySnapshot --> Free: snapshot deleted, release()
     Free --> Reserved: reserve() at startup or restore
     Reserved --> Leased: becomes the Lease for a resumed VM
 ```
+
+The shutdown path matters for this state machine. On `SIGTERM` or `SIGINT` the daemon snapshots every live sandbox (`core/crates/daemon/src/lifecycle/shutdown.rs`), and each snapshot keeps its sandbox's tap and address, so the leases move to `HeldBySnapshot` rather than being lost; the next start `reserve`s them again from the snapshots on disk. A jailed sandbox cannot be snapshotted and is destroyed instead, which releases its lease and egress chain. A `SIGKILL` or crash skips all of it: the Firecracker processes are orphaned and keep their taps attached until an operator intervenes.
 
 `NetworkManager` does not track which sandbox holds which lease. That mapping lives in the daemon, in the `Sandbox` and `Snapshot` records, and the daemon answers "who holds this tap" with `AppState::tap_device_holder` across live sandboxes, held snapshots and in-flight restores. Keeping the allocator ignorant of owners keeps `sandkiln-vmm` free of daemon concepts, at the cost of making the daemon responsible for never losing a `Lease`.
 
@@ -137,7 +139,7 @@ Without a policy, a sandbox can reach anything the uplink can. A policy is `Egre
 
 iptables stops at the first match, so deny always beats allow on overlap purely because of position. There is no special-casing code and nothing to get wrong.
 
-All of that is loaded in one `iptables-restore --noflush` call, with the chain declared at the top of the input so the call resets that chain and leaves every other chain alone. This replaced one `iptables` spawn per rule: for a six-CIDR policy the measured cost went from about 8.3 ms to about 3.1 ms per create (`core/crates/vmm/src/egress.rs:91-107`, exposed as the `egress_apply` phase). `--noflush` cannot safely touch `FORWARD`, so the only two `FORWARD` operations remain individual calls: a `-C` check, then `-I FORWARD 1` only if the jump is missing.
+All of that is loaded in one `iptables-restore --noflush` call, with the chain declared at the top of the input so the call resets that chain and leaves every other chain alone. This replaced one `iptables` spawn per rule: for a six-CIDR policy the measured cost went from about 8.3 ms to about 3.1 ms per create (`apply` at `core/crates/vmm/src/egress.rs:91`, exposed as the `egress_apply` phase). `--noflush` cannot safely touch `FORWARD`, so the only two `FORWARD` operations remain individual calls: a `-C` check, then `-I FORWARD 1` only if the jump is missing.
 
 ```rust
 let jump_args = ["-s", guest_ip_str.as_str(), "-o", uplink, "-j", chain.as_str()];
@@ -175,7 +177,7 @@ The forwarder exists because direct queries to public resolvers do not work reli
 
 ## MMDS metadata
 
-Guest-visible metadata (`id`, `name`, `tags`) is served by Firecracker's own MMDS at `169.254.169.254`, answered by the device model with no vsock, no guest agent and no daemon round trip. Boot issues `PUT /mmds/config` (V2, interface `eth0`) and then `PUT /mmds` with the JSON, after `/network-interfaces`, because MMDS is only valid once that interface exists. `VmConfig::metadata` without a network is rejected with an error. A resumed VM's MMDS store comes back uninitialised, so `Vm::update_metadata` redoes the full `PUT /mmds/config` plus `PUT /mmds` rather than a bare `PATCH` (`core/crates/vmm/src/vm/mod.rs:193-196`).
+Guest-visible metadata (`id`, `name`, `tags`) is served by Firecracker's own MMDS at `169.254.169.254`, answered by the device model with no vsock, no guest agent and no daemon round trip. Boot issues `PUT /mmds/config` (V2, interface `eth0`) and then `PUT /mmds` with the JSON, after `/network-interfaces`, because MMDS is only valid once that interface exists. `VmConfig::metadata` without a network is rejected with an error. A resumed VM's MMDS store comes back uninitialised, so `Vm::update_metadata` redoes the full `PUT /mmds/config` plus `PUT /mmds` rather than a bare `PATCH` (`core/crates/vmm/src/vm/mod.rs:230-234`).
 
 ## The capability model
 
@@ -185,9 +187,11 @@ All of the above runs from an unprivileged daemon. The binary has `cap_net_admin
 setcap cap_net_admin+eip "$BIN"
 ```
 
-A file capability alone is not enough, because the daemon does not touch the network directly. It spawns `ip`, `bridge`, `iptables` and `iptables-restore`, and those children only inherit a capability that is in the ambient set. Raising it there requires it to already be in both the permitted and inheritable sets. Permitted comes from the file capability at exec, inheritable is empty by default, so the daemon adds it first (allowed because it is in permitted) and then raises it to ambient. This is the `raise_net_admin_ambient` function in the daemon's `main`, using the `caps` crate: `caps::raise` into `Inheritable`, then into `Ambient`, each with an `expect` whose message names the grant script.
+A file capability alone is not enough, because the daemon does not touch the network directly. It spawns `ip`, `bridge`, `iptables` and `iptables-restore`, and those children only inherit a capability that is in the ambient set. Raising it there requires it to already be in both the permitted and inheritable sets. Permitted comes from the file capability at exec, inheritable is empty by default, so the daemon adds it first (allowed because it is in permitted) and then raises it to ambient. This is the `raise_net_admin_ambient` function in `core/crates/daemon/src/main.rs:221`, using the `caps` crate: `caps::raise` into `Inheritable`, then into `Ambient`, each with an `expect` whose message names the grant script.
 
-The ordering relative to Tokio is the subtle part. `main` is a plain `fn main`, not `#[tokio::main]`: it raises the capability first and only then builds the multi-thread runtime and calls `block_on`. A runtime's worker and blocking threads are created with the credentials of the moment they are spawned, so threads created before the raise never see the ambient capability. The macro would start the runtime before the function body runs.
+The ordering relative to Tokio is the subtle part. `main` is a plain `fn main`, not `#[tokio::main]`: it parses the command line and loads configuration, raises the capability, and only then builds the multi-thread runtime and calls `block_on`. The informational modes (`--help`, `--version`, `--config-reference`, `--print-config`, `--check-config`) return before the raise, so they run without the file capability and without touching the network. A runtime's worker and blocking threads are created with the credentials of the moment they are spawned, so threads created before the raise never see the ambient capability. The macro would start the runtime before the function body runs.
+
+The same raise covers the shutdown path: the `ip` and `iptables` children that release leases and remove egress chains while the daemon drains inherit the ambient capability like any other.
 
 Two consequences follow from the design. First, `setcap` does not survive a rebuild, so the grant script is re-run after every build. Second, the daemon is not root and is not given more capabilities to make jailer or tap creation work; the privileged one-time steps (taps, the DNS unit, the reflink volume, the jailer binary's setuid bit) live in scripts that a human runs with sudo, and the daemon's runtime surface stays at one capability.
 

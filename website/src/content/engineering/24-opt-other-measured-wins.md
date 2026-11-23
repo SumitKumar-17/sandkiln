@@ -6,7 +6,7 @@ tags: ["optimization", "egress", "testing", "benchmarking", "survey"]
 updated: 2026-11-24
 ---
 
-The other posts in this series each take one large optimization. This one is the survey that checks nothing was missed. The method was mechanical: list every commit (`git log --oneline`, 341 at the time of writing), search subjects for performance vocabulary (`git log --oneline -i --grep=perf --grep=latency --grep=faster`, plus the terms batch, parallel, bench and profile), read `CHANGELOG.md` for any entry that quotes a before and after number, and read the Benchmarking section of `ROADMAP.md`. Anything already covered by a sibling post was dropped: the rootfs reflink clone, the API-socket wait, the history-store WAL change, the clone and lease overlap, pool prewarming, the vsock I/O timeout and the snapshot-take analysis.
+The other posts in this series each take one large optimization. This one is the survey that checks nothing was missed. The method was mechanical: list every commit (`git log --oneline`, 341 at the time of writing), search subjects for performance vocabulary (`git log --oneline -i --grep=perf --grep=latency --grep=faster`, plus the terms batch, parallel, bench and profile), read `CHANGELOG.md` for any entry that quotes a before and after number, and read the Benchmarking section of `ROADMAP.md`. Anything already covered by a sibling post was dropped: the rootfs reflink clone, the API-socket wait, the history-store WAL change, the clone and lease overlap, pool prewarming, the vsock I/O timeout, the snapshot-take analysis and the snapshot stop fix.
 
 What is left falls into two groups. Three changes were implemented and have a recorded measurement, and each gets a short case study below under the same six headings. A longer list of candidates was examined and does not qualify, either because nothing was implemented or because the measurement does not support a claim. The rejected list comes first so that its reasons are visible.
 
@@ -83,7 +83,7 @@ restore_input.push_str(&format!("-A {chain} -j {default_verdict}\nCOMMIT\n"));
 run_restore(&restore_input)?;
 ```
 
-The metric lives in the daemon as the `EgressApply` variant of `CreatePhase` and is reported as `create_phase_duration_ms{phase="egress_apply"}`.
+The metric lives in the daemon as the `EgressApply` variant of `CreatePhase` (`core/crates/daemon/src/metrics.rs:36`) and is reported as `create_phase_duration_ms{phase="egress_apply"}`.
 
 ### B. Each topic in its own subshell, bounded with `wait -n`
 
@@ -118,7 +118,7 @@ sequenceDiagram
 
 ### C. One shared backoff helper
 
-The three hand-rolled loops were replaced by `retry_with_backoff` (`core/crates/vmm/src/vm/mod.rs:282`), a doubling backoff from 1ms to a 20ms cap, called with a 5 second deadline from `Vm::call` (`core/crates/vmm/src/vm/mod.rs:140` to `:142`), `open_pty` and `open_exec_stream`. The same helper now also serves the API-socket connect. The worst-case wasted overshoot per retry drops from about 100ms to about 20ms.
+The three hand-rolled loops were replaced by `retry_with_backoff` (`core/crates/vmm/src/vm/mod.rs:341`), a doubling backoff from 1ms to a 20ms cap with a 5 second deadline, used by `open_pty`, `open_exec_stream` and the API-socket connect. Request/response calls now go through a sibling, `retry_while` (`core/crates/vmm/src/vm/mod.rs:321`, called from `AgentEndpoint::call_with_timeout` at `:130`), which has the same backoff but refuses to retry once the request was sent; see [Bounding every vsock call](/engineering/22-opt-bounded-vsock-io). The worst-case wasted overshoot per retry drops from about 100ms to about 20ms.
 
 ```mermaid
 stateDiagram-v2
@@ -142,7 +142,7 @@ Measured the same way before and after: a 6-CIDR policy, the `egress_apply` phas
 | Subprocess spawns for the policy | 9 | about 3 |
 | `egress_apply` mean per create | about 8.3ms | about 3.1ms |
 
-The roadmap reports 300 of 300 integration checks passing, including the allow, deny, deny-wins-on-overlap and survives-snapshot-resume-fork checks. The saving is about 5ms on a create that already takes 18 to 190ms, and only for creates that request a policy, so this is a small absolute win and a correct one.
+At the time, the roadmap reported 300 of 300 integration checks passing, including the allow, deny, deny-wins-on-overlap and survives-snapshot-resume-fork checks. The saving is about 5ms on a create that already takes 18 to 190ms, and only for creates that request a policy, so this is a small absolute win and a correct one.
 
 ### B. Integration suite, about 3x faster
 
@@ -151,7 +151,7 @@ The roadmap reports 300 of 300 integration checks passing, including the allow, 
 | Full suite wall time | about 4m10s (parallelism 1) | about 70 to 90s (parallelism 4) |
 | Speedup | | about 2.8 to 3.5x |
 
-The runner's own header records an honest cost: with concurrency, the pool topic's timing-sensitive assertions were measurably more flaky. Three full runs at parallelism 4 landed 300 of 300, 299 of 300 and 295 of 300, every failure isolated to that one topic and none reproducing on a re-run. The topic's wait windows were widened once, from 30 seconds and 8 tries to 60 seconds and 15 tries. That is a fix of the symptom's window, not its cause.
+A later full run at parallelism 4 over the grown suite (about 320 checks) failed 2 to 3 checks because a freshly resumed guest kernel panicked about 20ms after restore; that is a separate, unresolved issue described in the [pool post](/engineering/21-opt-pool-prewarming), not a flaky assertion. The runner's own header records an honest cost: with concurrency, the pool topic's timing-sensitive assertions were measurably more flaky. Three full runs at parallelism 4 landed 300 of 300, 299 of 300 and 295 of 300, every failure isolated to that one topic and none reproducing on a re-run. The topic's wait windows were widened once, from 30 seconds and 8 tries to 60 seconds and 15 tries. That is a fix of the symptom's window, not its cause.
 
 ### C. Retry backoff, no measurable end-to-end win
 
@@ -207,7 +207,7 @@ SANDKILN_INTEGRATION_TEST_PARALLELISM=1 time scripts/integration-test.sh   # seq
 time scripts/integration-test.sh                                            # default, 4 at once
 ```
 
-`SANDKILN_INTEGRATION_TEST_ONLY=18-pool` runs just that topic. The suite has since grown past the 24 topic files the project standard still cites, so a fresh sequential run will be longer than 4m10s; the ratio, not the absolute, is what carries over.
+`SANDKILN_INTEGRATION_TEST_ONLY=18-pool` runs just that topic. The suite has since grown to 25 topic files (topic 25 is the long-running-command and snapshot-latency regression test) and about 320 checks, so a fresh sequential run will be longer than 4m10s; the ratio, not the absolute, is what carries over.
 
 ### C. Retry backoff
 

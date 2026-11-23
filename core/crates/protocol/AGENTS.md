@@ -19,19 +19,19 @@ process-related need belongs in `vmm`/`guest-agent`, not here.
   `Symlink`, `Readlink`, `Truncate`, plus `DirEntry` (a `ListDir` entry's
   metadata). New operation → new variant here (with a wire-shape test and
   an entry in `every_request_variant_roundtrips`) → implement in
-  `guest-agent`'s `handler.rs` → expose via `daemon`'s `routes_exec.rs`
-  (data transfer) or `routes_fs.rs` (filesystem structure).
+  `guest-agent`'s `handler.rs` → expose via `daemon`'s `http/routes/exec.rs`
+  (data transfer) or `http/routes/fs.rs` (filesystem structure).
   `Exec`/`ExecStreamHandshake`'s `env` is already fully resolved by the
-  daemon (`routes_exec::resolve_env`) before it reaches this crate — no
+  daemon (`routes::exec::resolve_env`) before it reaches this crate — no
   sandbox-level/call-level distinction here, just one final map.
   Also defines `PtyHandshake { cols, rows }` (not a `Request`/`Response`
   variant — a PTY session isn't request/response shaped; one framed
   handshake, then raw bytes, see `guest-agent`'s `pty.rs` and `daemon`'s
-  `routes_pty.rs`) and `ExecStreamHandshake { command, args }` +
+  `http/routes/pty.rs`) and `ExecStreamHandshake { command, args }` +
   `ExecStreamEvent` (`Stdout`/`Stderr`/`Exit`, internally tagged like
   `Response`) for `EXEC_STREAM_PORT` — framing never stops here, a
   structured exit code is part of the contract (see `exec_stream.rs` /
-  `routes_logs.rs`). Also defines `Request::StartTunnel { tunnel_id,
+  `http/routes/logs.rs`). Also defines `Request::StartTunnel { tunnel_id,
   guest_port }`/`StopTunnel { tunnel_id }` (plain request/response over
   `AGENT_PORT`, for the local tunnel feature) and `TunnelOpen { tunnel_id,
   conn_id }` (the one framed handshake a guest-initiated `TUNNEL_PORT`
@@ -52,8 +52,8 @@ process-related need belongs in `vmm`/`guest-agent`, not here.
 
 Both `guest-agent` and `vmm`/`daemon` need rebuilding and
 redeploying together — no version negotiation. A new variant needs both
-crates' `match` statements updated (`handler.rs`; `routes_exec.rs`/
-`routes_fs.rs`) — the compiler catches missing arms only if you actually
+crates' `match` statements updated (`handler.rs`; `http/routes/exec.rs`/
+`http/routes/fs.rs`) — the compiler catches missing arms only if you actually
 rebuild both sides.
 
 ## Verifying a change

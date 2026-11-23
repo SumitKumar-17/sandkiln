@@ -1,6 +1,6 @@
 //! Local tunnel: exposes a service on the *caller's own machine* to code
 //! running inside a sandbox — the reverse of dev-server preview
-//! (`routes_preview.rs`), which exposes a service inside the sandbox
+//! (`http/routes/preview.rs`), which exposes a service inside the sandbox
 //! outward. `POST /sandboxes/:id/tunnel` tells the guest agent to start
 //! listening on a guest port; `GET .../tunnel/:tunnel_id/ws` is the
 //! WebSocket the SDK/CLI caller holds open for the tunnel's whole life,
@@ -54,7 +54,7 @@ pub fn router() -> Router<Arc<AppState>> {
 }
 
 /// The WebSocket route needs `auth::require_preview_token` instead, same
-/// reason as `routes_pty.rs`/`routes_logs.rs`'s own WebSocket routes:
+/// reason as `http/routes/pty.rs`/`http/routes/logs.rs`'s own WebSocket routes:
 /// neither a browser's nor Node's native `WebSocket` constructor can set
 /// a custom `Authorization` header, so this needs the `?token=` fallback
 /// too, even though (unlike PTY/preview) the thing opening it is always
@@ -84,14 +84,17 @@ pub async fn create_tunnel(
     let tunnel_id = Uuid::new_v4().to_string();
     let receiver = sandkiln_vmm::tunnel::register(tunnel_id.clone());
 
+    let endpoint = match state.agent_endpoint(&id) {
+        Some(endpoint) => endpoint,
+        None => {
+            sandkiln_vmm::tunnel::unregister(&tunnel_id);
+            return Err(AppError::NotFound(id));
+        }
+    };
     let send_result = {
-        let state = state.clone();
-        let id = id.clone();
         let tunnel_id = tunnel_id.clone();
         tokio::task::spawn_blocking(move || -> Result<(), AppError> {
-            let sandboxes = state.sandboxes.lock().unwrap();
-            let sandbox = sandboxes.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
-            match sandbox.vm.call(&Request::StartTunnel { tunnel_id, guest_port: request.guest_port }) {
+            match endpoint.call(&Request::StartTunnel { tunnel_id, guest_port: request.guest_port }) {
                 Ok(sandkiln_protocol::Response::Ok) => Ok(()),
                 Ok(sandkiln_protocol::Response::Error { message }) => Err(AppError::BadRequest(message)),
                 Ok(_) => Err(AppError::Internal(io::Error::other("unexpected agent response to start_tunnel"))),
@@ -115,13 +118,13 @@ pub async fn delete_tunnel(State(state): State<Arc<AppState>>, Path((id, tunnel_
     sandkiln_vmm::tunnel::unregister(&tunnel_id);
     state.tunnels.lock().unwrap().remove(&tunnel_id);
 
-    let sandboxes = state.sandboxes.lock().unwrap();
-    let sandbox = sandboxes.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
+    let endpoint = state.agent_endpoint(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
     // Best-effort, like every other "tell the guest to stop something"
     // call on an already-ending resource -- the registration above is
     // already gone either way, which is what actually stops new
-    // connections from going anywhere.
-    let _ = sandbox.vm.call(&Request::StopTunnel { tunnel_id });
+    // connections from going anywhere. On a blocking thread: the call can
+    // wait seconds on a dead guest, and this is an async handler.
+    let _ = tokio::task::spawn_blocking(move || endpoint.call(&Request::StopTunnel { tunnel_id })).await;
     Ok(())
 }
 

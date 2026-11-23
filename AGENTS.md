@@ -68,7 +68,7 @@ scope: rewriting something that already works, for its own sake.
   one-line wrapper. See `scripts/integration-test.sh`.
 - **File splitting**: split a file once it mixes independently-workable
   concerns, or passes ~250-300 lines for no structural reason
-  (`routes_drives.rs`/`routes_snapshot.rs`/`routes_sandbox.rs` are the
+  (`http/routes/drives.rs`/`http/routes/snapshot.rs`/`http/routes/sandbox.rs` are the
   precedent). A large file that's one dense, cohesive invariant
   explanation (not mixed concerns) doesn't need forcing apart — check
   which case you're in before splitting.

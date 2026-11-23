@@ -1,27 +1,34 @@
 ---
-title: "The vsock timeout that could hang a stop"
-description: Why every host-to-guest vsock call carries a 3-second read and write timeout.
+title: "Bounded vsock calls, and the retry that ran commands twice"
+description: Why host-to-guest vsock calls carry a reply bound, and how the first version of that bound broke long-running commands.
 ---
 
-**Claim:** before the vsock client had I/O timeouts, pausing a VM and then stopping it hung forever. Every call now has a 3-second bound, set once at the transport.
+**Claim:** every host-to-guest vsock call is bounded, and a call is never retried after its request has been sent. Both rules are enforced in `core/crates/vmm/src/vsock_client.rs` and `core/crates/vmm/src/vm/mod.rs`.
 
-## What was wrong
+## Problem 1: a stop that hung forever
 
-`Vm::stop` sends `exec sync` to the guest agent before killing Firecracker, so unflushed writes to an attached drive are not lost. Snapshots changed the precondition: Firecracker requires a VM to be paused before it takes a snapshot, and a paused VM's vCPUs are halted, so the guest agent cannot answer anything, including that `sync`.
+`Vm::stop` sends `exec sync` to the guest agent before killing Firecracker, so unflushed writes to an attached drive are not lost. Firecracker requires a VM to be paused before it takes a snapshot, and a paused VM's vCPUs are halted, so the guest agent cannot answer anything, including that `sync`. The vsock client had no read timeout, so the read never returned. The 5-second deadline in the retry loop above it bounded the gap between attempts, not an attempt already in progress. Found by running a full snapshot-then-stop cycle: pause, stop, hang, every time.
 
-The vsock client set no read or write timeout. A single blocked `read` therefore never returned. The 5-second deadline in the retry loop above it did not help, because it bounds the gap between connection attempts, not an attempt already in progress. Found by running a full snapshot-then-stop cycle: pause, stop, hang, every time.
+The first fix set a 3-second read and write timeout on every stream. Any unresponsive guest (paused, crash-looped, kernel-panicked) now yields an error instead of a hang.
+
+## Problem 2: the fix was applied to the wrong thing
+
+That 3-second bound is right for control-plane calls and wrong for user commands. A command that stays silent for more than 3 seconds, such as `sleep 4`, hit the timeout. `Vm::call` then retried on any I/O error, including after the request had already been sent, so the command ran a second time. `echo run >> f; sleep 4` left `run` twice in `f`, and the caller received an error after about 6.5 seconds. Details: [Long-running exec](https://sandkiln.vercel.app/engineering/26-correctness-long-running-exec/).
 
 ## What changed
 
-`core/crates/vmm/src/vsock_client.rs` sets `IO_TIMEOUT` (3 seconds) as both read and write timeout on every stream it opens. It is applied unconditionally rather than special-cased for the snapshot path, so any unresponsive guest (paused, crash-looped, kernel-panicked) and any future caller gets the same bounded worst case. Streaming calls (PTY, streamed exec) clear the read timeout after the handshake, since they legitimately idle.
+- `vsock_client::call(.., response_timeout)` takes the reply bound as a parameter and returns `CallError { error, request_sent }`, which records whether the request left the host.
+- `Vm::call` (control plane) keeps the 3-second reply bound. `Vm::call_with_timeout` takes a caller-chosen bound. Both retry through `retry_while`, which retries only while `request_sent` is false, that is, only while the agent is not yet listening after boot.
+- User commands, file and filesystem requests go through `AgentEndpoint::call_with_timeout` with the `exec_timeout_secs` setting (default 600). On expiry the HTTP API returns `504`; the process keeps running in the guest.
+- `snapshot_and_stop` uses `Vm::force_stop`, which skips the guest `sync` that a paused VM can never answer: 6.8s end to end became 0.56s.
+- The daemon copies an `AgentEndpoint` out of the sandbox table and releases the daemon-wide lock before the call, so one long command no longer blocks other sandbox operations.
 
-## Consequence for long commands
-
-Request/response `exec` goes through `Vm::call`, which uses `vsock_client::call`, so its response read has the same 3-second bound, and `Vm::call` retries on any I/O error for up to 5 seconds. Read from the code only (not tested against a live VM): a plain `exec` that produces no response within 3 seconds fails on the host side. Use streamed exec (`kiln sandbox exec-stream`, `open_exec_stream`), which clears the timeout after its handshake, for anything long-running.
+Streaming calls (PTY, streamed exec) clear their timeouts after the handshake, since they legitimately idle.
 
 ## What to do differently
 
-- Put timeouts at the transport layer, not in each caller.
-- Treat "the guest may be paused or dead" as a normal state when adding any host-to-guest call, and give it a failure path. For a VM already known dead, use `Vm::force_stop` rather than `Vm::stop` so the pre-kill `sync` does not cost a second timeout.
+- A retry is only safe if the request was never delivered. Carry "request sent" in the error type; do not infer it from "an error occurred".
+- Choose the bound per call class. A control-plane reply and a user command have different legitimate durations.
+- Treat "the guest may be paused or dead" as a normal state when adding any host-to-guest call. For a VM already known dead or paused, use `Vm::force_stop`.
 
-Related: [The vsock wire protocol](/internals/vsock-wire-protocol), [Snapshot, resume and fork](/internals/snapshot-resume-fork).
+Regression test: `scripts/integration-tests/25-long-running-commands.sh`. Related: [The vsock wire protocol](/internals/vsock-wire-protocol), [Snapshot, resume and fork](/internals/snapshot-resume-fork).

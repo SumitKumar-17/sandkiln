@@ -9,17 +9,42 @@ REST-ish API — what SDKs/CLI actually talk to. Keep business logic (VM
 lifecycle, networking) in `sandkiln-vmm`; this crate parses requests,
 calls `vmm`, shapes responses.
 
+## Layout
+
+```
+src/
+  main.rs            bootstrap only: CLI, config load, storage init, wiring, serve, shutdown
+  config/            settings.rs (registry) source.rs (env>file>default) cli.rs mod.rs (Config)
+  http/              mod.rs build_router; auth.rs error.rs request_id.rs
+    routes/          one file per API resource (sandbox, exec, fs, logs, pty, preview, tunnel,
+                     mounts, drives, images, pool, snapshot, snapshot_history, metrics, ...)
+  lifecycle/         idle_reaper.rs pool.rs pool_claim.rs pool_replenisher.rs shutdown.rs
+  snapshots/         held.rs (live resumable snapshots) retired.rs (lease-free checkpoints)
+  state.rs sandbox.rs storage.rs metrics.rs log_session.rs tracing_util.rs
+```
+
+Dependency direction: `http` and `lifecycle` call into `state`/`snapshots`/`sandkiln-vmm`;
+nothing under `snapshots/` or `state` knows about HTTP. A new endpoint is a new file in
+`http/routes/` plus one line in `http/mod.rs`'s `build_router`.
+
 ## Files
 
 - **`main.rs`** — not `#[tokio::main]` (see root `AGENTS.md` §12): raises
   `CAP_NET_ADMIN` before the Tokio runtime starts, then builds the
   router. Auth middleware wired onto `/sandboxes*` only; `/healthz` stays
   open.
-- **`config.rs`** — `Config::from_env()`, every `SANDKILN_*` env var in
-  one place. `LogFormat` (`SANDKILN_LOG_FORMAT`), `JailerHostConfig`
-  (`SANDKILN_JAILER_ENABLED` — daemon-operator switch, not a per-request
-  override), `archive_timeout`/`archive_dir` for `idle_reaper`'s archive
-  pass.
+- **`config/`** — every setting lives in one registry (`settings.rs`,
+  `SETTINGS`): key, default, group, doc, secret flag. `source.rs`'s `Resolver`
+  resolves each from the environment (`SANDKILN_<KEY>`), then `sandkiln.toml`,
+  then the default, and *accumulates* errors into one `ConfigError` instead of
+  panicking. `mod.rs` holds `Config` (the resolved, typed struct), `Config::load`
+  / `Config::resolve` (the pure, unit-tested one), the cross-field checks
+  (`vcpu <= max`, suspend before destroy), `render_effective` for
+  `--print-config`, and `JailerHostConfig`/`LogFormat`. `cli.rs` parses
+  `--config/--check-config/--print-config/--config-reference`. **Adding a
+  setting = one `SETTINGS` entry, one `Config` field, one `resolve` line, one
+  `display_value` arm, and a line in `sandkiln.example.toml`**; tests fail if any
+  is missing.
 - **`metrics.rs`** — hand-rolled Prometheus text format (no `prometheus`
   crate — four metrics behind atomics/a histogram isn't enough surface to
   justify the dependency). `sandboxes_created_total`, `boot_duration_ms`,
@@ -32,8 +57,16 @@ calls `vmm`, shapes responses.
   operator might alert on go here; per-PUT Firecracker detail stays a
   debug `tracing` event (also because `sandkiln-vmm` has no `Metrics`
   access).
-- **`auth.rs`** — bearer-token middleware, no-op if
-  `SANDKILN_AUTH_TOKEN` is unset.
+- **`http/auth.rs`** — bearer-token middleware (constant-time comparison),
+  no-op if `auth_token` is unset; `require_preview_token` also accepts `?token=`
+  for browser-opened preview/WebSocket URLs.
+- **`storage.rs`** — the daemon's on-disk layout (`state_dir`, `rootfs_dir`),
+  process-global because snapshot path helpers have no `Config` in hand; plus
+  `OwnedFile`, the scope guard that deletes a rootfs clone on any early return
+  until ownership is handed to a live `Sandbox`.
+- **`lifecycle/shutdown.rs`** — on SIGTERM/SIGINT: stop accepting, grace period
+  for in-flight requests, then snapshot every live sandbox (destroy the ones that
+  cannot be snapshotted). Verified by `scripts/restart-test.sh`.
 - **`state.rs`** — `AppState`: config, `NetworkManager`, optional
   `JailerIdPool`, in-memory `Mutex<HashMap<String, Sandbox>>` (the
   daemon's entire live-state notion — doesn't survive a restart, and per
@@ -54,7 +87,7 @@ calls `vmm`, shapes responses.
   (`Mutex<HashMap<String, mpsc::Receiver<TunnelConnection>>>`) — the
   handoff between `POST /sandboxes/:id/tunnel` (registers, stores the
   receiver) and the matching `GET .../tunnel/:tunnel_id/ws` (takes it,
-  `409` if already taken or never created) — see `routes_tunnel.rs`.
+  `409` if already taken or never created) — see `http/routes/tunnel.rs`.
 - **`sandbox.rs`** — `Sandbox`: id, `Vm` handle, `Lease`, rootfs path,
   tags, timestamps, `image_id` (`None` = daemon default rootfs),
   `jail_id`, `name`, `pty_session_count` (`Arc<AtomicU32>`, survives past
@@ -66,7 +99,7 @@ calls `vmm`, shapes responses.
   so a resumed sandbox stays snapshottable, while lineage needs `Some`
   on both), and `env` (unlike `egress`, identical on resume *and* fork —
   plain data, no external resource to protect).
-- **`routes_sandbox.rs`** — create/list/stop/history.
+- **`http/routes/sandbox.rs`** — create/list/stop/history.
   `create_sandbox_cold` times the rootfs clone and network lease each on
   their own thread (`timed` + `thread::scope`) and records sub-phases via
   `metrics::CreatePhase` — filter with `RUST_LOG=sandkilnd=debug` (the
@@ -87,22 +120,22 @@ calls `vmm`, shapes responses.
   boot, not baked into Firecracker state) — fatal-on-failure for a fresh
   create/claim, loud-warning-only for resume/fork (destroying a
   one-way-operation success over an iptables hiccup would be worse).
-- **`routes_sandbox_name.rs`** — `GET /sandboxes/by-name/:name` (live
+- **`http/routes/sandbox_name.rs`** — `GET /sandboxes/by-name/:name` (live
   only; a name held by a snapshot is `409`, not a silent resume) and
   `POST /sandboxes/get-or-create` (race-safe under `lock_name`).
-- **`routes_images.rs`** — register/list/delete a managed rootfs.
+- **`http/routes/images.rs`** — register/list/delete a managed rootfs.
   `guest_agent_verified: false` always — the daemon can't loop-mount to
   check; `scripts/preflight-check.sh --root-checks` is the out-of-band
   way. `DELETE` refuses while any live/in-flight/held reference exists.
-- **`routes_exec.rs`** — exec/read-file/write-file. `call_agent()` is the
-  shared helper (also used by `routes_fs.rs`) — extend it, don't
+- **`http/routes/exec.rs`** — exec/read-file/write-file. `call_agent()` is the
+  shared helper (also used by `http/routes/fs.rs`) — extend it, don't
   duplicate. `resolve_env()` merges create-time + per-call `env` (call
-  wins); `routes_logs.rs` inlines the same merge rather than importing
+  wins); `http/routes/logs.rs` inlines the same merge rather than importing
   it since it already holds the sandbox-map lock at that point.
-- **`routes_fs.rs`** — chmod/chown/mkdir/rename/copy/symlink/readlink/
+- **`http/routes/fs.rs`** — chmod/chown/mkdir/rename/copy/symlink/readlink/
   truncate/list-dir. No path validation here, matching
   `read_file`/`write_file` — deliberate consistency, not an oversight.
-- **`routes_mounts.rs`** — `rclone mount` of an S3-compatible bucket,
+- **`http/routes/mounts.rs`** — `rclone mount` of an S3-compatible bucket,
   built entirely on `call_agent`/`Mkdir`/`WriteFile`/`Chmod`/`Exec` — no
   new wire protocol. Credentials go in as a `0600` config file, never a
   CLI arg. No holder-tracking (concurrent mounts of one bucket aren't a
@@ -113,17 +146,17 @@ calls `vmm`, shapes responses.
   `Pool::notify` wakes `pool_claim::resolve_pool_claim` on a
   `max_count`-bounded pool — condvar-style, every waiter re-checks on
   wake.
-- **`pool_replenisher.rs`** — unconditional background task, tops up
+- **`lifecycle/pool_replenisher.rs`** — unconditional background task, tops up
   every pool one warm slot per 2s tick (gradual, not a load spike).
-- **`pool_claim.rs`** — `resolve_pool_claim`/`PoolClaim`
+- **`lifecycle/pool_claim.rs`** — `resolve_pool_claim`/`PoolClaim`
   (`Warm`/`ColdSlot`/`NoPool`), `PoolClaimGuard` (RAII commit-or-release),
   `claim_from_pool` (resume + health check + bounded `Vm::update_metadata`
   retry for the MMDS settling-window race). Split out of
-  `routes_sandbox.rs` once claiming pushed it past a defensible size.
-- **`routes_pool.rs`** — pool *configuration* only (`max_count`, rejects
+  `http/routes/sandbox.rs` once claiming pushed it past a defensible size.
+- **`http/routes/pool.rs`** — pool *configuration* only (`max_count`, rejects
   explicit `0` — omit for unbounded). `DELETE` wakes queued waiters first
   so they fail clearly instead of timing out on a pool that's gone.
-- **`idle_reaper.rs`** — unconditional background task; see
+- **`lifecycle/idle_reaper.rs`** — unconditional background task; see
   `docs-site/internals/pre-warmed-pools.mdx`. Runs auto-suspend, then
   destroy, then an independent archive pass each tick.
 - **`snapshot.rs`** — `Snapshot` + durability: atomic `meta.json`
@@ -135,18 +168,18 @@ calls `vmm`, shapes responses.
   forward compat. `move_snapshot_files` **never touches `rootfs_path`** —
   its absolute host path is baked into `state.snap` itself, moving it
   breaks every future resume/fork (proved live).
-- **`snapshot_history.rs`** — `RetiredSnapshot` (time-travel restore):
+- **`snapshots/retired.rs`** — `RetiredSnapshot` (time-travel restore):
   resuming retires a snapshot here instead of deleting it, restorable
   repeatedly. Holds a bare `NetworkConfig`, not a live `Lease` — nothing
   is reserved from the free pool just by sitting in history, only at
   actual restore time, gated by `tap_device_holder`.
-- **`routes_snapshot_history.rs`** — history list/restore/delete.
+- **`http/routes/snapshot_history.rs`** — history list/restore/delete.
   `restore_snapshot_history_by_id` refuses (`409`) if the checkpoint's
   network identity is already live/held/mid-restore, else clones rootfs
   fresh and reserves a new lease. Resulting sandbox:
   `source_snapshot_id: None`, `parent_snapshot_id: Some(checkpoint)` —
   restoring doesn't consume it.
-- **`routes_drives.rs` / `routes_snapshot.rs`** — the real mechanics
+- **`http/routes/drives.rs` / `http/routes/snapshot.rs`** — the real mechanics
   (`snapshot_and_stop`, `resume_snapshot_by_id`, `delete_snapshot_by_id`,
   `archive_snapshot_by_id`, all `pub(crate)`) live here, reused
   everywhere else in the crate so there's exactly one definition of each
@@ -155,29 +188,32 @@ calls `vmm`, shapes responses.
   `resume_snapshot_by_id`'s `retain_history: bool` defaults to retiring
   (not deleting) the checkpoint — falls back to delete-and-reuse as a
   loud warning, not a fatal error, if retiring fails after the VM already
-  resumed. `fork_snapshot()` gives every fork its own private rootfs
-  clone (fixes a real sequential-corruption bug, found live).
-- **`routes_metrics.rs`** — unauthenticated like `/healthz` (operational
+  resumed. `fork_snapshot()` clones the rootfs BEFORE resuming and resumes onto the
+  clone via `ResumeConfig::rootfs_override`, so the snapshot's own disk is never
+  written (a resumed VM otherwise writes the host path baked into the snapshot:
+  a real corruption bug, regression test topic 26). Retain-history resume and
+  history restore do the same; `retained_checkpoints_max` caps retired checkpoints.
+- **`http/routes/metrics.rs`** — unauthenticated like `/healthz` (operational
   data, not sandbox data).
-- **`routes_preview.rs`** — reverse-proxies to
+- **`http/routes/preview.rs`** — reverse-proxies to
   `http://<guest ip>:<port>/<path>` on the bridge network via a pooled
   `hyper_util` client. Own router, `require_preview_token` (a browser
   can't set `Authorization` on a plain navigation — token stripped,
   along with any real `Authorization` header, before forwarding to the
   untrusted guest). `BadGateway`/`GatewayTimeout` on
   unreachable/timeout.
-- **`routes_pty.rs`** — WebSocket → `Vm::open_pty` raw byte proxy, a
+- **`http/routes/pty.rs`** — WebSocket → `Vm::open_pty` raw byte proxy, a
   fundamentally different (long-lived, bidirectional) shape from every
   other route. `require_preview_token` for the same header-limitation
   reason. `MAX_PTY_SESSIONS_PER_SANDBOX` (64) via a `PtySessionGuard`
   whose `Drop` always decrements.
-- **`log_session.rs` / `routes_logs.rs`** — `POST .../exec-stream` starts
+- **`log_session.rs` / `http/routes/logs.rs`** — `POST .../exec-stream` starts
   a detached command and returns immediately; a `spawn_blocking` pump
   reads framed events into a `LogSession` (1MiB ring buffer +
   `broadcast` channel) independent of whether anyone's attached.
   `GET .../logs` replays then live-tails, callable any number of times.
   Not carried across resume/fork/restart.
-- **`routes_tunnel.rs`** — local tunnel: `POST /sandboxes/:id/tunnel`
+- **`http/routes/tunnel.rs`** — local tunnel: `POST /sandboxes/:id/tunnel`
   (registers with `sandkiln_vmm::tunnel`, sends `StartTunnel` over vsock,
   stores the receiver in `AppState::tunnels`) / `DELETE .../tunnel/:id`
   (bearer-gated, normal router) and `GET .../tunnel/:id/ws` (its own

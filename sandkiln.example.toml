@@ -21,10 +21,16 @@
 # How long a dev-server preview request waits before a 504.
 # preview_timeout_secs = 30
 
+# Longest a single exec, file or filesystem request may wait for the guest's reply. On expiry the caller gets a 504; the process keeps running in the guest.
+# exec_timeout_secs = 600
+
 # Bearer token required on the REST API. Unset disables auth entirely: fine for localhost, never beyond.
 # auth_token = "change-me"
 
 # ---- vm ----
+
+# Extra guest kernel command-line arguments, appended after sandkiln's own. Quieting kernel boot logging (the serial console is emulated) shortens time to first command.
+# kernel_args = "quiet"
 
 # Path to the Firecracker binary.
 # firecracker_bin = "~/sandkiln-tools/bin/firecracker"
@@ -50,6 +56,9 @@
 # ---- storage ----
 
 # Durable state: held snapshots and retired checkpoints.
+# How many retired checkpoints (time-travel restore points, each a full-RAM snapshot plus a rootfs) to keep. Beyond this the oldest are deleted after each resume. 0 keeps all, which can fill the disk.
+# retained_checkpoints_max = 8
+
 # state_dir = "~/sandkiln-tools/state"
 
 # Per-sandbox writable rootfs copies. Defaults to `<state_dir>/rootfs`. Put it on the same reflink-capable filesystem (XFS, Btrfs) as `base_rootfs` for instant clones.

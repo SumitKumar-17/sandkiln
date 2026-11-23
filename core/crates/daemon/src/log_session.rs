@@ -1,9 +1,9 @@
 //! `LogSession`: daemon-side state for one streamed background exec
 //! session (`kiln logs -f` — see `crate::http::routes::logs` for the full
-//! design). Own file, not part of `routes_logs.rs`: pure state a
+//! design). Own file, not part of `http/routes/logs.rs`: pure state a
 //! background pump task mutates and any number of WebSocket clients read
 //! concurrently, no HTTP/axum concern — same state/surface seam as
-//! `pool.rs`/`routes_pool.rs`.
+//! `pool.rs`/`http/routes/pool.rs`.
 //!
 //! stdout/stderr merge into one buffer in arrival order (like a real
 //! terminal), even though the wire protocol still tags each chunk by
@@ -95,7 +95,7 @@ impl LogSession {
     }
 
     /// Marks the session finished. Idempotent in effect (a second call
-    /// would just overwrite the same `Some`), but `routes_logs`'s pump
+    /// would just overwrite the same `Some`), but `routes::logs`'s pump
     /// task only ever calls this once, right before it returns.
     pub fn finish(&self, exit_code: i32) {
         let mut inner = self.inner.lock().unwrap();

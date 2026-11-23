@@ -1,6 +1,6 @@
 //! Exec and whole-file read/write against a running sandbox. Filesystem
 //! metadata/structure operations (chmod, chown, mkdir, rename, copy,
-//! symlink, readlink, truncate, directory listing) live in `routes_fs`
+//! symlink, readlink, truncate, directory listing) live in `routes::fs`
 //! instead — a real seam (data transfer vs. filesystem structure), split
 //! out once this file would otherwise have grown well past the ~300-line
 //! range adding all of them here. Both files share the `call_agent`
@@ -118,16 +118,58 @@ pub async fn write_file(
 
 /// Shared by every route that just forwards one request to the guest
 /// agent and reports its response — exec/read/write here and every
-/// `routes_fs` handler all fit this shape.
+/// `routes::fs` handler all fit this shape.
 pub(crate) async fn call_agent(state: Arc<AppState>, id: String, request: Request) -> Result<AgentResponse, AppError> {
-    spawn_blocking_in_current_span("agent call task panicked", move || {
+    // Copy the endpoint out and release the sandbox map's lock *before* the
+    // call: a user command can run for minutes, and holding the daemon-wide
+    // lock across it would freeze every other sandbox operation meanwhile.
+    let endpoint = {
         let sandboxes = state.sandboxes.lock().unwrap();
         let sandbox = sandboxes.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
         *sandbox.last_activity.lock().unwrap() = Instant::now();
+        sandbox.vm.agent_endpoint()
+    };
+    let timeout = state.config.exec_timeout;
+    spawn_blocking_in_current_span("agent call task panicked", move || {
         let started = Instant::now();
-        let response = sandbox.vm.call(&request).map_err(AppError::from)?;
+        let response = endpoint
+            .call_with_timeout(&request, Some(timeout))
+            .map_err(|e| agent_call_error(e, timeout))?;
         state.metrics.record_exec_latency_ms(started.elapsed().as_secs_f64() * 1000.0);
         Ok(response)
     })
     .await
+}
+
+/// A reply that never came within the bound is the caller's 504, not a 500:
+/// the sandbox is fine, the command just has not finished.
+fn agent_call_error(e: std::io::Error, timeout: std::time::Duration) -> AppError {
+    match e.kind() {
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => AppError::GatewayTimeout(format!(
+            "no reply from the sandbox within {}s (exec_timeout_secs); the command may still be running in the guest",
+            timeout.as_secs()
+        )),
+        _ => AppError::from(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error, ErrorKind};
+    use std::time::Duration;
+
+    #[test]
+    fn read_timeouts_become_504_not_500() {
+        for kind in [ErrorKind::WouldBlock, ErrorKind::TimedOut] {
+            let e = agent_call_error(Error::new(kind, "x"), Duration::from_secs(600));
+            assert!(matches!(&e, AppError::GatewayTimeout(m) if m.contains("600s")), "expected a GatewayTimeout");
+        }
+    }
+
+    #[test]
+    fn other_io_errors_stay_internal() {
+        let e = agent_call_error(Error::new(ErrorKind::ConnectionRefused, "x"), Duration::from_secs(5));
+        assert!(matches!(e, AppError::Internal(_)));
+    }
 }

@@ -8,6 +8,8 @@ updated: 2026-11-24
 
 Every sandbox gets its own writable rootfs. The base image is around 300 MiB, so the obvious implementation, copy the file, costs real time on every create. This post follows that one cost from a wrong conclusion, through a profile that overturned it, to a fix measured at roughly a tenth of the original create latency. It is also a story about how a correct measurement can sit next to a wrong explanation for months.
 
+Note that the create totals below end when the VM is started. Time to first command, which includes guest boot, is a separate and larger figure covered in [Guest boot time](/engineering/28-opt-guest-boot-time).
+
 Dates matter here, so they are stated: the profile is from 2026-09-14, the fix and its measurements are from 2026-11-23.
 
 ## Problem and how it was found
@@ -115,14 +117,14 @@ stateDiagram-v2
 
 **The method is returned and counted.** `clone_file` returns a `CloneMethod` (`Reflink` or `Copy`) rather than a bare success. The daemon's `clone_rootfs` wrapper records it and logs a debug `rootfs cloned` event. `/metrics` gains a counter, `rootfs_clone_total{method="reflink"|"copy"}`. The same wrapper serves cold creates, the history-retaining resume and snapshot history restore, because handing a shared rootfs to a new mutating sandbox would corrupt whatever else depends on that file. A host that has silently never reflinked now shows a nonzero `copy` counter and a zero `reflink` counter.
 
-**A configurable destination.** The clone's destination is no longer the OS temp directory. The daemon reads two settings:
+**A configurable destination.** The clone's destination is no longer the OS temp directory. The daemon reads two settings from the registry in `core/crates/daemon/src/config/settings.rs`, resolved environment variable first, then `sandkiln.toml` (`state_dir`, `rootfs_dir`), then the default:
 
-| Variable | Default | Purpose |
+| Environment variable | Default | Purpose |
 | --- | --- | --- |
 | `SANDKILN_STATE_DIR` | `~/sandkiln-tools/state` | durable daemon state: held snapshots and retired checkpoints |
 | `SANDKILN_ROOTFS_DIR` | `$SANDKILN_STATE_DIR/rootfs` | each sandbox's private writable rootfs |
 
-Putting `SANDKILN_ROOTFS_DIR` on the same reflink-capable filesystem as `SANDKILN_BASE_ROOTFS` is what makes the clone instant. Separating the state directory from the OS temp directory is a correctness fix that came along with it: a temp cleaner or reboot could previously destroy "durable" snapshots. Snapshots left in the old temp location by earlier versions are not migrated.
+Putting `SANDKILN_ROOTFS_DIR` on the same reflink-capable filesystem as `SANDKILN_BASE_ROOTFS` is what makes the clone instant. Separating the state directory from the OS temp directory is a correctness fix that came along with it: a temp cleaner or reboot could previously destroy "durable" snapshots. Snapshots left in the old temp location by earlier versions are not migrated. `scripts/preflight-check.sh` now checks this alignment for you: it reports whether the base image and `rootfs_dir` share a reflink-capable filesystem and warns, with the fix, when a reflink cannot cross filesystems (`scripts/preflight-check.sh:189` and `:191`). The daemon also reads the effective values through `sandkilnd --print-config`, so the check follows whatever the running configuration says.
 
 **A way to get a reflink filesystem on an ext4 host.** `scripts/host-setup/create-reflink-volume.sh` builds an XFS loopback volume with `reflink=1`, mounts it, and creates a `rootfs` directory owned by the daemon's user. Its header comment says it also copies the base image in, but the script body does not do that, so the base image has to be copied onto the volume by hand (the reproduction steps below do so). The usage in its header ties it together:
 
@@ -156,6 +158,8 @@ The 187.5 ms ext4 figure is not the 167.65 ms from the September profile. They a
 The total fell by about 169.6 ms while the clone phase fell by about 127.8 ms. The remaining roughly 42 ms of improvement was not itemized in this run. A plausible reading is that a 300 MiB byte copy also slows the rest of the path through disk contention and dirty-page writeback. That is a hypothesis, not something this run measured. A follow-up run that records every phase for both configurations would settle it.
 
 On the reflink volume the clone is no longer the slower branch of the concurrent pair, so the critical path becomes the lease plus the boot. Together with the unitemized figures, that is consistent with a create in the high teens of milliseconds, and the profile in the [performance model post](/engineering/16-performance-model-and-measurement) is the way to check it.
+
+A later re-measurement (2026-11-23, kernel 6.8, 20 creates with a reflink rootfs) did record every phase: clone 0.084 ms, lease 3.1 ms, boot 13.4 ms, mean total 18.4 ms. That is consistent with the inference above, since lease plus boot is about 16.5 ms of the 18.4 ms. It is also 0.5 ms above the 17.9 ms recorded here; both are directional readings from one shared box and the gap is inside its noise.
 
 ## What it cost or risks
 

@@ -1,5 +1,5 @@
 //! Name-based sandbox lookup and get-or-create — split from
-//! `routes_sandbox.rs` since this crosses into snapshot territory and
+//! `http/routes/sandbox.rs` since this crosses into snapshot territory and
 //! needs `AppState::lock_name`.
 //!
 //! - `GET /sandboxes/by-name/:name`: live sandboxes only. Deliberately

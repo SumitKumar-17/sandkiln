@@ -21,20 +21,49 @@ use std::time::Duration;
 /// returns.
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// Why a request/response call failed, and whether the guest could have
+/// seen the request. The distinction is what makes retrying safe: a request
+/// that never left (connect refused, handshake failed) can be sent again;
+/// one that was fully written may already be running, and sending it again
+/// would execute a command twice.
+#[derive(Debug)]
+pub struct CallError {
+    pub error: io::Error,
+    /// The full request frame was written to the guest. Do not retry.
+    pub request_sent: bool,
+}
+
+impl From<CallError> for io::Error {
+    fn from(e: CallError) -> Self {
+        e.error
+    }
+}
+
 /// Sends one request to the guest agent and returns its response. Opens a
 /// fresh connection per call — fine for now; a persistent connection can
 /// replace this later if per-call handshake overhead matters.
-pub fn call(uds_path: &Path, guest_port: u32, request: &Request) -> io::Result<Response> {
-    let mut stream = UnixStream::connect(uds_path)?;
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    connect_handshake(&mut stream, guest_port)?;
+///
+/// `response_timeout` bounds only the wait for the reply (`None` = wait
+/// indefinitely); connecting and writing the request always use
+/// [`IO_TIMEOUT`]. A short bound is right for control-plane calls (a paused
+/// guest never answers); a user command legitimately stays silent for as
+/// long as it runs, so its caller passes a much larger one.
+pub fn call(uds_path: &Path, guest_port: u32, request: &Request, response_timeout: Option<Duration>) -> Result<Response, CallError> {
+    let unsent = |error: io::Error| CallError { error, request_sent: false };
+    let mut stream = UnixStream::connect(uds_path).map_err(unsent)?;
+    stream.set_read_timeout(Some(IO_TIMEOUT)).map_err(unsent)?;
+    stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(unsent)?;
+    connect_handshake(&mut stream, guest_port).map_err(unsent)?;
 
-    let payload = encode_request(request).map_err(to_io_err)?;
-    write_message(&mut stream, &payload)?;
+    let payload = encode_request(request).map_err(|e| unsent(to_io_err(e)))?;
+    // A write that fails part-way leaves the agent with an incomplete frame,
+    // which it discards without executing, so it still counts as unsent.
+    write_message(&mut stream, &payload).map_err(unsent)?;
 
-    let raw = read_message(&mut stream)?;
-    decode_response(&raw).map_err(to_io_err)
+    let sent = |error: io::Error| CallError { error, request_sent: true };
+    stream.set_read_timeout(response_timeout).map_err(sent)?;
+    let raw = read_message(&mut stream).map_err(sent)?;
+    decode_response(&raw).map_err(|e| sent(to_io_err(e)))
 }
 
 /// Opens a long-lived vsock connection for an interactive PTY session —

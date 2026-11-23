@@ -19,7 +19,7 @@ fn main() -> ExitCode {
     let command_args: Vec<String> = args.collect();
 
     let request = Request::Exec { command, args: command_args, env: std::collections::HashMap::new() };
-    match vsock_client::call(&PathBuf::from(uds_path), guest_port, &request) {
+    match vsock_client::call(&PathBuf::from(uds_path), guest_port, &request, Some(std::time::Duration::from_secs(10))) {
         Ok(Response::Exec { stdout, stderr, exit_code }) => {
             print!("{stdout}");
             eprint!("{stderr}");
@@ -34,7 +34,7 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
         Err(e) => {
-            eprintln!("vsock call failed: {e}");
+            eprintln!("vsock call failed: {}", e.error);
             ExitCode::FAILURE
         }
     }

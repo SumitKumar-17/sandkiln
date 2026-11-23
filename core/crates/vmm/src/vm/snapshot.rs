@@ -20,6 +20,15 @@ pub struct ResumeConfig {
     pub snapshot_path: PathBuf,
     /// The guest-memory file written by `Vm::snapshot`'s `mem_path`.
     pub mem_file_path: PathBuf,
+    /// Boot the VM from this disk image instead of the one baked into the
+    /// snapshot. **Required whenever the snapshot must stay reusable** (a fork,
+    /// a restorable checkpoint): the snapshot records its rootfs by host path,
+    /// so without an override the resumed VM writes straight into the
+    /// snapshot's own disk, and the next resume reads a filesystem that no
+    /// longer matches the memory state it was captured with (observed as ext4
+    /// `Bad message` errors). The file must be a copy of the snapshot's disk
+    /// as it was when the snapshot was taken.
+    pub rootfs_override: Option<PathBuf>,
 }
 
 impl Vm {
@@ -92,12 +101,19 @@ impl Vm {
                         "backend_type": "File",
                         "backend_path": path_str(&config.mem_file_path),
                     },
-                    "resume_vm": true,
+                    // With an override the guest must not run before its
+                    // drive is repointed, so load paused and resume below.
+                    "resume_vm": config.rootfs_override.is_none(),
                     "vsock_override": {
                         "uds_path": path_str(&vsock_socket),
                     },
                 }),
-            )
+            )?;
+            if let Some(rootfs) = &config.rootfs_override {
+                patch_checked(&mut api, "/drives/rootfs", &json!({ "drive_id": "rootfs", "path_on_host": path_str(rootfs) }))?;
+                patch_checked(&mut api, "/vm", &json!({ "state": "Resumed" }))?;
+            }
+            Ok(())
         });
 
         if let Err(e) = result {
@@ -116,7 +132,7 @@ impl Vm {
         );
         // Always spawns directly, never jailed — jailer only covers
         // `Vm::boot`. A jailed sandbox's snapshot bakes in in-jail paths
-        // that would need relinking into a fresh chroot; `routes_snapshot`
+        // that would need relinking into a fresh chroot; `routes::snapshot`
         // refuses to attempt this yet rather than half-support it.
         //
         // Non-fatal like egress re-apply on resume/fork, and for the same

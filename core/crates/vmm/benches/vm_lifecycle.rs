@@ -45,6 +45,7 @@ impl BenchConfig {
             rootfs_path,
             vcpu_count: self.vcpu_count,
             mem_size_mib: self.mem_size_mib,
+            extra_boot_args: env_or("SANDKILN_BENCH_KERNEL_ARGS", ""),
             network: None,
             extra_drives: Vec::new(),
             jail: None,
@@ -235,6 +236,7 @@ fn bench_resume(c: &mut Criterion) {
                     firecracker_bin: config.firecracker_bin.clone(),
                     snapshot_path: snapshot_path.clone(),
                     mem_file_path: mem_path.clone(),
+                    rootfs_override: None,
                 };
 
                 let started = Instant::now();

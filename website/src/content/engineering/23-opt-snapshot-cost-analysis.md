@@ -8,7 +8,7 @@ updated: 2026-11-24
 
 This post is different from the others in the series. No snapshot-take optimization has shipped. There is no before and after. What exists is a set of measurements of the cost, a partial explanation of where it comes from, and a short list of candidate techniques that are recorded in `ROADMAP.md` as planned or "worth doing eventually". The value of writing it down is to keep the baseline honest, so that a future change can be judged against something real, and to separate what is measured from what is hypothesized.
 
-Items in `sandkiln-vmm` carry `path:line` references verified against the current tree. The daemon is cited by item name only.
+Items in `sandkiln-vmm` carry `path:line` references verified against the current tree. Daemon items are cited the same way, for example `snapshot_and_stop` in `core/crates/daemon/src/http/routes/snapshot.rs`.
 
 ## Problem and how it was found
 
@@ -32,18 +32,18 @@ SANDKILN_BENCH_ROOTFS_PATH=<path> cargo bench -p sandkiln-vmm --bench vm_lifecyc
 
 The guest is the benchmark default of 2 vCPUs and 512MiB of RAM (`SANDKILN_BENCH_VCPU_COUNT`, `SANDKILN_BENCH_MEM_SIZE_MIB`, defaults at `core/crates/vmm/benches/vm_lifecycle.rs:32` and `:35`). What the benchmark does not time matters as much as what it does: it excludes `Vm::stop` and everything the daemon does around the snapshot (the HTTP layer, the bookkeeping, the lease handling).
 
-The recorded readings, in date order, with their conditions:
+The recorded readings, by date:
 
 | Date | Reading | Conditions | Source |
 | --- | --- | --- | --- |
 | Early (before 2026-09-14) | 309.6 to 335.0ms, mean about 322ms | Criterion, quiet moment on a shared desktop-class dev box | `ROADMAP.md` Benchmarking |
 | 2026-09-14 | 552.7ms | `scripts/bench-report.sh --with-criterion`, 20 iterations, box in active use | commit `119f008` |
 | 2026-09-14 | 560 to 915ms | Isolated `cargo bench -- snapshot_take`, criterion reports no change from prior run (p=0.14) | commit `119f008` |
-| 2026-11-24 | 485 to 727ms | Criterion, this box, kernel 6.8, re-measured by the project lead | lead's re-measurement for this series |
+| 2026-11-23 | 485 to 727ms | Criterion, this box, kernel 6.8, re-measured | lead's re-measurement for this series |
 
-The same project-wide figure appears in the roadmap's findings table as "310-990ms". I could not find a recorded 990ms measurement anywhere in the repository history: the highest individual reading I can locate is 915ms. The 990 appears first in a roadmap commit (`b75bb4a`) that carries no run to back it. I have therefore not used it in the table above and I am flagging it as a figure I could not substantiate.
+The same project-wide figure appears in the roadmap's findings table as "310-990ms". I could not find a recorded 990ms measurement anywhere in the repository history: the highest individual reading I can locate is 915ms.  I have not used it in the table above.
 
-Two things stand out in the table. First, the figure moved by more than 2x across readings with no code change to the snapshot path. The roadmap's own explanation, recorded on 2026-09-14, is that the dev box is an actively used desktop and that a synchronous full-memory write is far more exposed to that than the other benchmarks. Second, the lead's note for 2026-11-24 that the earlier 310 to 335ms figures came from "an earlier kernel/load state" is consistent with that: neither the earlier nor the later set is authoritative, and I present both with their dates rather than picking one.
+Two things stand out in the table. First, the figure moved by more than 2x across readings with no code change to the snapshot path. The roadmap's own explanation, recorded on 2026-09-14, is that the dev box is an actively used desktop and that a synchronous full-memory write is far more exposed to that than the other benchmarks. Second, the lead's note for 2026-11-24 that the earlier 310 to 335ms figures came from "an earlier kernel/load state" is consistent with that: neither the earlier nor the later set is authoritative, and both are shown with their dates.
 
 For contrast, resume is cheap. `resume_from_snapshot` was recorded at about 25.8ms (25.5 to 26.2ms) when first measured, a mere 19 percent below that day's cold boot of about 31.9ms. After the fixed 20ms socket-wait sleep was replaced it read 6.5 to 7.7ms, and a bench-report run on 2026-09-14 read 7.95ms. The asymmetry between take (hundreds of milliseconds) and resume (single digits) is the reason a pool makes sense at all: take is paid ahead of time, in the background; resume is paid on the request path.
 
@@ -112,7 +112,7 @@ stateDiagram-v2
 
 Where the take cost actually lands matters for deciding whether any of this is worth doing. In a pool, take is paid once per warm slot, off the request path, by the background replenisher. For auto-suspend, it is paid when a sandbox goes idle, also off the request path. It is on the request path only for an explicit `POST /sandboxes/:id/snapshot`. So the cost is real but mostly hidden, which is a reason the roadmap leaves it open rather than urgent.
 
-There is one more observation, from reading rather than measuring, that is related but separate. `snapshot_and_stop` ends by calling `vm.stop()` on a VM that has just been paused. `stop` begins with a best-effort `sync` call over vsock, which a paused guest cannot answer, so by the reasoning in the bounded-vsock post in this series it should wait out the vsock timeout bound (roughly 6 seconds) every time. The criterion benchmark does not include `stop`, so none of the numbers in this post would show it. I have not measured the snapshot endpoint's end-to-end latency for this post, and the only recorded end-to-end figure is the roughly 7 second snapshot-and-resume cycle in commit `abb8286`. If that reading is right, the time a caller waits for an explicit snapshot is dominated by a doomed `sync` and not by the memory write. That is a hypothesis to test with a client-side timing of the snapshot endpoint, not a result.
+There is one more thing that bears on the cost a caller sees, and it was a bug, not a property of snapshots. `snapshot_and_stop` used to end by calling `vm.stop()` on a VM that had just been paused. `stop` begins with a best-effort `sync` over vsock that a paused guest cannot answer, so every snapshot waited out two sequential 3 second timeouts. The criterion benchmark does not include `stop`, so none of the numbers in this post showed it. Timing the HTTP request showed 6.8 seconds end to end against roughly half a second of real work. `snapshot_and_stop` now calls `Vm::force_stop`, and the same request measures 0.56 seconds. The full story is in [Snapshot stop: 6.8s to 0.56s](/engineering/25-opt-snapshot-stop-force-stop). The take cost itself (pause plus the memory write) was not changed by it.
 
 Where the take cost is actually paid depends on the caller, which is why most of it is off the request path:
 
@@ -133,19 +133,22 @@ Measured baseline only. These are the numbers a future change would have to beat
 | `snapshot_take` (pause plus snapshot, 512MiB guest) | 309.6 to 335.0ms | Early, quiet moment |
 | `snapshot_take` | 552.7ms | 2026-09-14, bench-report, 20 iterations |
 | `snapshot_take` | 560 to 915ms | 2026-09-14, isolated criterion |
-| `snapshot_take` | 485 to 727ms | 2026-11-24, criterion, kernel 6.8 |
+| `snapshot_take` | 485 to 727ms | 2026-11-23, criterion, kernel 6.8 |
+| `snapshot_take` through `POST /sandboxes/:id/snapshot`, before the stop fix | about 6.8s | Client-side timing, includes a doomed guest sync |
+| `snapshot_take` through `POST /sandboxes/:id/snapshot`, after the stop fix | 0.56s | Client-side timing, `Vm::force_stop` |
 | `resume_from_snapshot` | about 25.8ms | Early, before the socket-wait fix |
 | `resume_from_snapshot` | 6.5 to 7.7ms | After the socket-wait fix |
 | `resume_from_snapshot` | 7.95ms | 2026-09-14, bench-report |
-| Full snapshot then resume, end to end | about 7s | Commit `abb8286`, includes a bounded wait |
+| `resume_from_snapshot` | 3.7 to 4.0ms | 2026-11-23, criterion, kernel 6.8 |
+| Full snapshot then resume, end to end | about 7s | Commit `abb8286`, includes the doomed sync's bounded wait, since fixed |
 
-Nothing here has changed because of an optimization. Differences between rows are load, kernel and date, not code.
+No snapshot-take optimization has shipped. Differences between the criterion rows are load, kernel and date, not code. The one code change that moved a caller-visible number is the stop fix, which removed a wait that sat outside the benchmark, and the 2026-11-23 re-measurement of both take and resume is directional on one shared box, like every other row.
 
 ## What it cost or risks
 
 Nothing was changed, so no change has a cost. The risks are in leaving it alone and in the candidates.
 
-- Leaving it alone: for the roadmap's own reasons the cost is mostly off the request path, so the user-visible harm is bounded. The exposure is a pool or auto-suspend on a loaded box, where a 485 to 915ms take competes with foreground work for the same disk.
+- Leaving it alone: for the roadmap's own reasons the cost is mostly off the request path, so the user-visible harm is bounded.
 - The numbers are untrustworthy at the margin. A single run can read anywhere in a 3x range on this box. Any future claim of a win smaller than that range needs many runs, an isolated box, or both. The project's own standard is to treat one shared dev box as directional only.
 - Diff snapshots would change the on-disk model and the lineage semantics, and would need the memory-file chain to survive archiving, deletion of intermediate snapshots, and time-travel restore. The roadmap already notes that lineage is a parent pointer and not a durable ancestry record, so deleting an intermediate snapshot would break a diff chain in a way it does not break a full snapshot.
 - Compression would sit awkwardly with the fact that Firecracker writes `mem.bin` directly. Sandkiln would have to post-process the file, adding a second pass and extra latency in exchange for smaller files, which is the opposite trade to what a latency optimization wants.
@@ -165,10 +168,10 @@ The same number folded into a report that diffs against the last run:
 scripts/bench-report.sh 20 http://127.0.0.1:7777 --with-criterion
 ```
 
-To go beyond the baseline, the two measurements the roadmap leaves open are the ones worth taking first. Time the explicit endpoint end to end from a client, which includes the `stop` the benchmark leaves out:
+To see what a caller waits for, time the explicit endpoint end to end from a client, which includes the stop the benchmark leaves out. It reads about 0.56s at the time of writing; regression topic `scripts/integration-tests/25-long-running-commands.sh` fails it at 3 seconds or more:
 
 ```bash
 time curl -s -X POST http://127.0.0.1:7777/sandboxes/<id>/snapshot
 ```
 
-And repeat the criterion run at a second guest size (set `SANDKILN_BENCH_MEM_SIZE_MIB` to `256` and `1024`) to see whether the cost scales with RAM, which is the central assumption behind "it is the memory write". Run both on a quiet box, several times, and report the spread and not a single value.
+To go further, the remaining open measurement is to repeat the criterion run at a second guest size (set `SANDKILN_BENCH_MEM_SIZE_MIB` to `256` and `1024`) to see whether the cost scales with RAM, which is the central assumption behind "it is the memory write". Run either on a quiet box, several times, and report the spread and not a single value.

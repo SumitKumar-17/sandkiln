@@ -28,6 +28,7 @@
 # Against a running daemon:
 #   integration-test [base-url]                       scripts/integration-test.sh
 #   load-test [concurrency] [iterations] [base-url]    scripts/load-test.sh
+#   restart-test                  scripts/restart-test.sh (restarts the daemon: shutdown snapshots survive)
 #   bench-report [iterations] [base-url]               scripts/bench-report.sh
 #                                cold-create phase breakdown (rootfs clone,
 #                                network lease, setup join, boot, total) from
@@ -131,6 +132,9 @@ case "$subcommand" in
     ;;
   bench-report)
     exec "$SCRIPT_DIR/bench-report.sh" "$@"
+    ;;
+  restart-test)
+    exec "$SCRIPT_DIR/restart-test.sh" "$@"
     ;;
   inject-agent)
     rootfs="${1:-${SANDKILN_BASE_ROOTFS:-$HOME/sandkiln-tools/images/ubuntu-22.04.ext4}}"

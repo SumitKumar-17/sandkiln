@@ -1,6 +1,6 @@
 ---
 title: "Snapshot, resume, and fork: the mechanism"
-description: "What a Firecracker snapshot actually contains, why resume and fork are so different underneath, and the rootfs-sharing bug this project shipped and then fixed."
+description: "What a Firecracker snapshot actually contains, why resume and fork are so different underneath, and the disk-corruption bug this project shipped and then fixed."
 ---
 
 [Snapshots, resume, and fork](/concepts/snapshots) covers how to call this from the API. This page is what's actually happening underneath, which is worth reading before debugging a resumed sandbox that boots into the wrong filesystem or can't reach its own network.
@@ -41,15 +41,40 @@ flowchart LR
 
 Resume consumes the snapshot record outright (a second resume `404`s); fork only locks it to at most one live descendant at a time, released once that fork is stopped — both set `parent_snapshot_id`, which is how a lineage like `Snapshot 2 → Sandbox B → Snapshot 1` stays queryable in either direction without a dedicated tree-shaped endpoint.
 
-`Vm::pause`/`Vm::snapshot`/`Vm::resume` (`core/crates/vmm/src/vm/snapshot.rs`) are thin wrappers over Firecracker's own `/vm` (state: Paused) and `/snapshot/create` API calls, nothing more than that at the hypervisor layer. Everything about *which* files, *whose* lease, and *what happens after* is the daemon's own design, in `core/crates/daemon/src/routes_snapshot.rs` and `snapshot.rs`.
+`Vm::pause`/`Vm::snapshot`/`Vm::resume` (`core/crates/vmm/src/vm/snapshot.rs`) are thin wrappers over Firecracker's own `/vm` (state: Paused) and `/snapshot/create` API calls, nothing more than that at the hypervisor layer. Everything about *which* files, *whose* lease, and *what happens after* is the daemon's own design, in `http/routes/snapshot.rs` and `snapshots/held.rs` under `core/crates/daemon/src`.
 
-**Resume** (`resume_snapshot_by_id`) builds a brand-new `Sandbox` record that owns a fresh rootfs clone and its original network lease outright: structurally identical to a cold `POST /sandboxes` in everything except how the VM itself boots. The snapshot record is consumed, so a second resume of the same id returns `404`.
+**Resume** (`resume_snapshot_by_id`) builds a brand-new `Sandbox` record that owns its original network lease outright and, by default, a private rootfs clone that the VM actually runs on: structurally identical to a cold `POST /sandboxes` in everything except how the VM itself boots. The snapshot record is consumed, so a second resume of the same id returns `404`. With `?retain_history=false` there is no clone and the VM uses the snapshot's disk in place, which is safe only because nothing will resume from that snapshot again.
 
 **Fork** (`fork_snapshot`) boots a second live sandbox from the same snapshot *without* consuming it. This is where the network-identity constraint above becomes a real design decision rather than a footnote: Firecracker has no verified mechanism to give two live descendants of one snapshot independent guest IP/MAC, since both would resume believing they own the identity frozen into that one memory image. Rather than allow that and produce a silent network collision, `Snapshot::forked_into` is a lock, set while a fork is live, checked by `fork_snapshot`, `resume_snapshot`, `delete_snapshot`, and `snapshot_sandbox` alike, and cleared only once that fork's `Vm` is actually killed. A second `fork`/`resume` attempt while one is already live gets a real `409`, not silent corruption.
 
-**A real bug, and what it teaches about the rootfs-path rule above.** For a while, a forked sandbox shared its source snapshot's rootfs *file* directly, not a copy, the literal same path. `forked_into`'s lock made that look safe as long as nothing was ever *concurrently* live twice. But the rule above ("resume reopens whatever's at the recorded path right now") doesn't care whether the violation is concurrent or sequential. Fork a snapshot, let the fork mutate the shared file, stop the fork, then resume the *original* snapshot directly: its device state still describes the rootfs from before the fork ever ran, but the file on disk now carries the fork's changes. This was reproduced live, not found by re-reading code. Write a marker, fork, overwrite the marker in the fork, stop the fork, resume the original, and the marker comes back with the fork's value. The fix follows directly from the file-path rule stated above: a fork now gets its own private rootfs clone (`cp --reflink=auto`, the same call a fresh `POST /sandboxes` already uses), so nothing a fork does can ever reach back into what the snapshot's next resume sees.
+**A real bug, and what it teaches about the rootfs-path rule above.** The snapshot records its rootfs by host path, so `Vm::resume` used to start the guest on exactly that file. A fork, a history-retaining resume and a restore therefore all wrote into the snapshot's own disk, even though the daemon also made a clone and recorded it on the new sandbox. Nothing told Firecracker about the clone, so the VM never opened it. Fork a snapshot, write a marker in the fork, stop it, and `debugfs -R "stat /root/fork1-marker"` on the snapshot's rootfs found the marker on the snapshot's disk. A second fork of the same snapshot then failed with `cat: /root/fork1-marker: Bad message`, an ext4 checksum error: its memory said one filesystem, the disk held another. The retain-history path had the inverse flaw. The clone was made after the resume and given to the sandbox record while the live VM wrote the checkpoint's original disk, so restoring the same checkpoint twice was corrupt too.
 
-**Time-travel restore.** Resume's "the snapshot is gone once you move forward from it" used to be unconditional. By default now, `POST /snapshots/:id/resume` still consumes the snapshot *record* the same way, but retires the underlying checkpoint into `GET /snapshots/history` instead of deleting its files, restorable again later via `POST /snapshots/history/:id/restore`, as many times as wanted, since restoring doesn't consume it either (`?retain_history=false` opts back into the fully-destructive original behavior). A restored sandbox owns a fresh rootfs clone and lease outright, exactly like a resume, which is also why it stays snapshottable afterward, unlike a fork. The same one-live-descendant lock generalizes across a whole lineage's history: restoring is refused with `409` while anything else sharing that checkpoint's frozen network identity is currently live.
+A first test of the fix looked clean, and that result was wrong. The second guest resumes with the page cache and dentry cache it had at snapshot time, so it answered from stale cache and never read the changed disk. Dropping caches (`echo 3 > /proc/sys/vm/drop_caches`) before the read exposed the damage. A test of isolation has to read past the observer's cache.
+
+The fix is in two parts. `Vm::resume` takes an optional `rootfs_override`. With one set, it loads the snapshot paused (`resume_vm: false`), repoints the drive with `PATCH /drives/rootfs`, then sends `PATCH /vm` with `{"state": "Resumed"}`, so the guest never runs on the wrong disk. The daemon makes a private clone before the resume for fork, retain-history resume and restore, and passes it as the override, so the snapshot or retired checkpoint keeps its pristine original. If the clone fails, a fork fails (a shared disk is unsafe, not degraded) and a retaining resume degrades to the consuming mode with a warning.
+
+```mermaid
+sequenceDiagram
+    participant D as Daemon
+    participant FC as Firecracker
+    participant S as Snapshot disk
+    participant C as Private clone
+    Note over D,S: Before, any fork or retaining resume
+    D->>FC: load snapshot, resume now
+    FC->>S: guest writes the snapshot's own disk
+    D->>D: clone made afterward, never opened
+    Note over D,C: After
+    D->>C: clone the snapshot disk first
+    D->>FC: load snapshot, stay paused
+    D->>FC: PATCH drives rootfs to the clone
+    D->>FC: PATCH vm state Resumed
+    FC->>C: guest writes the clone
+    Note over S: untouched
+```
+
+The regression test is `scripts/integration-tests/26-snapshot-disk-isolation.sh`: fork against fork, then a retaining resume followed by two restores of the same checkpoint, each reading with caches dropped. The full engineering account is in the [Engineering Notebook](/architecture/engineering-notebook), post 27.
+
+**Time-travel restore.** Resume's "the snapshot is gone once you move forward from it" used to be unconditional. By default now, `POST /snapshots/:id/resume` still consumes the snapshot *record* the same way, but retires the underlying checkpoint into `GET /snapshots/history` instead of deleting its files, restorable again later via `POST /snapshots/history/:id/restore`, as many times as wanted, since restoring doesn't consume it either (`?retain_history=false` opts back into the fully-destructive original behavior). A restored sandbox runs on a fresh rootfs clone and owns its lease outright, exactly like a resume, which is also why it stays snapshottable afterward, unlike a fork. The same one-live-descendant lock generalizes across a whole lineage's history: restoring is refused with `409` while anything else sharing that checkpoint's frozen network identity is currently live.
 
 <Note>
 **Why only one live fork.** Firecracker has no mechanism to give two live descendants of one snapshot independent network identities. Rather than risk a silent IP/MAC collision, `Snapshot::forked_into` locks a snapshot to at most one live fork at a time — a second attempt gets a real `409`, not corruption.

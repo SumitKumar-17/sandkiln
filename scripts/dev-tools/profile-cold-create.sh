@@ -12,7 +12,7 @@
 # Usage:
 #   scripts/dev-tools/profile-cold-create.sh [iterations] [base-url]
 #
-# Run the daemon with RUST_LOG=sandkiln_daemon=debug,sandkiln_vmm=debug to
+# Run the daemon with RUST_LOG=sandkilnd=debug,sandkiln_vmm=debug to
 # get the phase events this is meant to be read alongside.
 
 set -uo pipefail

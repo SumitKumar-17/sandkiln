@@ -438,13 +438,49 @@ relying on it for a genuinely adversarial multi-tenant workload.
 
 ## 7. Configuration
 
-Every setting is an environment variable, all optional with the defaults
-below (see `core/crates/daemon/src/config.rs` for the authoritative
-source):
+Settings come from three layers, highest priority first:
+
+1. **Environment variables** (`SANDKILN_<KEY>`, e.g. `SANDKILN_VCPU_COUNT`),
+2. **A config file**, `sandkiln.toml`,
+3. built-in defaults.
+
+`scripts/setup.sh` writes a starter `sandkiln.toml` at the repo root
+(never overwriting an existing one). `sandkiln.example.toml` lists every
+key with its default and a one-line description. The daemon looks for the
+file in this order: `--config <file>`, `$SANDKILN_CONFIG`, `./sandkiln.toml`,
+`~/.config/sandkiln/sandkiln.toml`.
+
+```toml
+# sandkiln.toml
+base_rootfs = "/mnt/sandkiln-xfs/base.ext4"
+rootfs_dir  = "/mnt/sandkiln-xfs/rootfs"
+exec_timeout_secs = 900
+```
+
+The daemon validates everything at startup and reports **all** problems at
+once, including unknown keys with a "did you mean" hint. Three flags make the
+configuration inspectable without starting anything:
+
+```
+sandkilnd --check-config      # validate; exit 0 (ok) or 2 (invalid)
+sandkilnd --print-config      # every effective setting and where it came from (default/file/env), token redacted
+sandkilnd --config-reference  # the settings table below, generated from the code
+```
+
+A config file containing `auth_token` should be `chmod 600`; the daemon warns
+if other users can read it. `scripts/sandkilnd-ctl.sh` runs `--check-config`
+before starting, so a typo fails immediately with the real error rather than
+as a dead daemon and a log line. Once set up, `scripts/sandkilnd-ctl.sh start`
+needs no environment variables at all.
+
+The table below is the same data as `sandkilnd --config-reference` (the code
+is authoritative: `core/crates/daemon/src/config/settings.rs`). The
+environment variable for a key is `SANDKILN_` plus the upper-cased key.
 
 | Variable | Default | What it controls |
 |---|---|---|
 | `SANDKILN_LISTEN_ADDR` | `127.0.0.1:7777` | HTTP listen address |
+| `SANDKILN_EXEC_TIMEOUT_SECS` | `600` | longest a single `exec`, file or filesystem request may wait for the guest's reply; on expiry the caller gets a `504` and the process keeps running in the guest. Must be at least 1 |
 | `SANDKILN_FIRECRACKER_BIN` | `~/sandkiln-tools/bin/firecracker` | path to the Firecracker binary |
 | `SANDKILN_KERNEL_PATH` | `~/sandkiln-tools/images/vmlinux-5.10.223` | guest kernel image |
 | `SANDKILN_BASE_ROOTFS` | `~/sandkiln-tools/images/ubuntu-22.04.ext4` | base rootfs cloned per sandbox — **the default is the small test image; override this for a production image, see section 4** |
@@ -496,7 +532,15 @@ have it, starts the daemon in the background, and waits for `/healthz`
 to actually respond before returning — so "the command exited 0" means
 "the daemon is really up," not just "a process was spawned." It passes
 through every `SANDKILN_*` env var untouched, the same as running
-`sandkilnd` directly.
+`sandkilnd` directly, and uses `sandkiln.toml` when one exists.
+
+**Stopping is orderly.** `SIGTERM` (what `scripts/sandkilnd-ctl.sh stop`
+sends) makes the daemon stop accepting requests, give in-flight ones up to
+30s to finish, and then **snapshot every live sandbox** (concurrently, 60s
+deadline) before exiting; jailed sandboxes, which cannot be snapshotted, are
+destroyed cleanly. No Firecracker process is left behind, and the snapshots
+are resumable after the next start. `scripts/restart-test.sh` verifies this
+against a real daemon.
 
 ```
 scripts/sandkilnd-ctl.sh status      # is it running, is it healthy

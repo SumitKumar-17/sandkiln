@@ -89,7 +89,7 @@ pub struct AppState {
     pending_tap_restores: Mutex<std::collections::HashSet<String>>,
     /// One entry per tunnel between `POST /sandboxes/:id/tunnel`
     /// (register) and the matching `GET .../tunnel/:tunnel_id/ws`
-    /// (take) — see `routes_tunnel.rs`. The receiving half of
+    /// (take) — see `http/routes/tunnel.rs`. The receiving half of
     /// `sandkiln_vmm::tunnel::register`'s channel; removed the moment a
     /// WebSocket takes it, so a second WS attempt on the same tunnel_id
     /// gets a clear `409` instead of silently racing the first for
@@ -137,6 +137,14 @@ impl AppState {
     /// with each attachment's read-only flag. Empty means unheld. Checked
     /// before attaching elsewhere (`can_attach_read_only` allows stacking
     /// read-only holders) or deleting (never fine while non-empty).
+    /// Copies a sandbox's guest-agent endpoint out of the map so the caller can
+    /// release the daemon-wide `sandboxes` lock *before* making a call that can
+    /// block (a dead guest costs up to ~5s of retries). Never call
+    /// `sandbox.vm.call(..)` while holding the lock.
+    pub fn agent_endpoint(&self, id: &str) -> Option<sandkiln_vmm::vm::AgentEndpoint> {
+        self.sandboxes.lock().unwrap().get(id).map(|s| s.vm.agent_endpoint())
+    }
+
     pub fn drive_holders(&self, drive_id: &str) -> Vec<DriveHold> {
         let mut holders: Vec<DriveHold> = self
             .sandboxes
@@ -470,6 +478,9 @@ mod tests {
             auth_token: None,
             drives_dir: dir.join("drives"),
             origins: Default::default(),
+            exec_timeout: std::time::Duration::from_secs(600),
+            kernel_args: String::new(),
+            retained_checkpoints_max: 16,
             state_dir: dir.join("state"),
             rootfs_dir: dir.join("rootfs"),
             images_dir: dir.join("images"),
@@ -624,6 +635,9 @@ mod tests {
                 auth_token: None,
                 drives_dir: dir.join("drives"),
                 origins: Default::default(),
+                exec_timeout: std::time::Duration::from_secs(600),
+                kernel_args: String::new(),
+                retained_checkpoints_max: 16,
                 state_dir: dir.join("state"),
                 rootfs_dir: dir.join("rootfs"),
                 images_dir: dir.join("images"),

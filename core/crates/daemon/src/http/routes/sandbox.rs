@@ -1,6 +1,6 @@
 //! Sandbox lifecycle: create, list, stop. Exec/file ops live in
-//! `routes_exec` (shares `call_agent`, unrelated to lifecycle). Name
-//! lookup/get-or-create lives in `routes_sandbox_name` (crosses into
+//! `routes::exec` (shares `call_agent`, unrelated to lifecycle). Name
+//! lookup/get-or-create lives in `routes::sandbox_name` (crosses into
 //! snapshot territory, needs the per-name lock).
 
 use crate::http::error::AppError;
@@ -28,7 +28,7 @@ use uuid::Uuid;
 #[derive(Deserialize, Default)]
 pub struct CreateSandboxRequest {
     /// Unique among live sandboxes + held snapshots when claimed (`409`
-    /// otherwise). Optional. See `Sandbox::name`, `routes_sandbox_name`.
+    /// otherwise). Optional. See `Sandbox::name`, `routes::sandbox_name`.
     #[serde(default)]
     pub(crate) name: Option<String>,
     #[serde(default)]
@@ -188,7 +188,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
     if request.drives.is_empty() && request.rate_limit.is_none() {
         let key = crate::lifecycle::pool::PoolKey { image_id: request.image_id.clone(), vcpu_count, mem_size_mib };
         // Bounded retry: a warm claim failing its post-resume health
-        // check (measured up to ~2-in-3 resumes — not rare) releases its
+        // check (historically up to 2 in 3 resumes, rare now: see `claim_from_pool`) releases its
         // slot via `PoolClaimGuard`'s drop, and re-resolving immediately
         // is what keeps the fallback cold-create still counted against
         // `max_count` instead of silently exceeding it. Bounded only as
@@ -308,8 +308,27 @@ async fn create_sandbox_cold(
                 setup_join_us = setup_elapsed.as_micros(),
                 "cold create setup phases"
             );
-            copy_result?;
-            let lease = lease_result?;
+            // The two halves ran concurrently, so either can succeed while the
+            // other fails: unwind whichever one holds a resource.
+            let lease = match (copy_result, lease_result) {
+                (Ok(()), Ok(lease)) => lease,
+                (copy, lease) => {
+                    if copy.is_ok() {
+                        let _ = std::fs::remove_file(&rootfs_path);
+                    }
+                    let lease_err = match lease {
+                        Ok(lease) => {
+                            let _ = state.network.release(lease);
+                            None
+                        }
+                        Err(e) => Some(e),
+                    };
+                    return Err(copy.err().or(lease_err).expect("one half failed"));
+                }
+            };
+            // From here until the VM is booted, every early return removes the
+            // rootfs clone; `keep()` below hands it to the live sandbox.
+            let mut rootfs_guard = crate::storage::OwnedFile::new(rootfs_path.clone());
 
             // Third resource besides rootfs/lease: an in-memory pool pop,
             // leased last (nothing to overlap it with), released
@@ -341,6 +360,7 @@ async fn create_sandbox_cold(
                 rootfs_path,
                 vcpu_count,
                 mem_size_mib,
+                extra_boot_args: state.config.kernel_args.clone(),
                 network: Some(lease.config.clone()),
                 extra_drives,
                 jail,
@@ -367,6 +387,7 @@ async fn create_sandbox_cold(
                             return Err(e);
                         }
                     }
+                    rootfs_guard.keep();
                     Ok((vm, lease, jail_id))
                 }
                 Err(e) => {
@@ -791,8 +812,8 @@ fn first_duplicate<'a>(mut items: impl Iterator<Item = &'a str>) -> Option<&'a s
 /// Clones a rootfs for a new mutating sandbox via
 /// `sandkiln_vmm::rootfs::clone_file` (reflink where the filesystem allows,
 /// else a byte copy) and records which method ran. `pub(crate)`: also used by
-/// `routes_snapshot`'s history-retaining resume and
-/// `routes_snapshot_history`'s restore — handing a *shared* rootfs to a new
+/// `routes::snapshot`'s history-retaining resume and
+/// `routes::snapshot_history`'s restore — handing a *shared* rootfs to a new
 /// mutating sandbox would corrupt whatever else depends on that file.
 pub(crate) fn clone_rootfs(
     src: &std::path::Path,

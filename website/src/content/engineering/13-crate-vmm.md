@@ -33,8 +33,8 @@ pub mod vsock_client;
 
 | Module | Main public items | What it owns |
 | --- | --- | --- |
-| `vm` | `Vm`, `VmConfig`, `NetworkConfig`, `DriveConfig`, `RateLimiter`, `TokenBucket`, `ResumeConfig` | One microVM's process and lifecycle |
-| `vsock_client` | `call`, `open_pty`, `open_exec_stream` | Host-side vsock connections to the guest agent |
+| `vm` | `Vm`, `AgentEndpoint`, `VmConfig`, `NetworkConfig`, `DriveConfig`, `RateLimiter`, `TokenBucket`, `ResumeConfig` | One microVM's process and lifecycle |
+| `vsock_client` | `call`, `CallError`, `open_pty`, `open_exec_stream` | Host-side vsock connections to the guest agent |
 | `network` | `NetworkManager`, `Lease`, `detect_default_iface` | Tap, bridge and IP leasing |
 | `egress` | `EgressPolicy`, `EgressMode`, `apply`, `remove`, `validate_cidr` | Per-sandbox outbound firewall |
 | `jailer` | `JailLaunch`, `JailerIdPool`, `build_jailer_args`, `link_resource_into_jail` | Chroot, cgroup and uid isolation |
@@ -43,7 +43,7 @@ pub mod vsock_client;
 | `image` | `ImageStore`, `ImageInfo` | Registered base rootfs images |
 | `tunnel` | `register`, `unregister`, `listen`, `TunnelConnection` | Host acceptor for guest-initiated tunnel connections |
 
-`Vm`'s public methods are the verbs the daemon uses: `boot`, `resume`, `is_jailed`, `call`, `open_pty`, `open_exec_stream`, `update_metadata`, `pause`, `snapshot`, `stop`, and `force_stop`. The type has no public fields. Its private fields are an id, the Firecracker `Child` handle, the API socket path, the vsock socket path, and an optional jail instance directory.
+`Vm`'s public methods are the verbs the daemon uses: `boot`, `resume`, `is_jailed`, `call`, `call_with_timeout`, `agent_endpoint`, `open_pty`, `open_exec_stream`, `update_metadata`, `pause`, `snapshot`, `stop`, and `force_stop`. The type has no public fields. Its private fields are an id, the Firecracker `Child` handle, the API socket path, the vsock socket path, and an optional jail instance directory.
 
 ## Module tour
 
@@ -52,6 +52,8 @@ The crate is about 3,000 lines across 13 source files. The split follows the roo
 `vm/boot.rs` and `vm/snapshot.rs` are submodules, not siblings, of `vm`. That is a visibility decision: they need to see `Vm`'s private fields, and keeping them in-tree lets those fields stay private while the public surface stays a short file.
 
 ### The boot path
+
+The guest kernel command line is built by `kernel_command_line()` (`core/crates/vmm/src/vm/boot.rs:243`): the fixed base `console=ttyS0 reboot=k panic=1 pci=off`, `DEFAULT_KERNEL_ARGS = "quiet loop.max_loop=1"` (`boot.rs:238`), `ip=` when networked, then `VmConfig::extra_boot_args` (`vm/mod.rs:88`) last so operators can override. Two unit tests in `kernel_args_tests` (`boot.rs:344`) cover the ordering. The defaults cut time to first command from 413 ms to 214.5 ms; see [Guest boot time](/engineering/28-opt-guest-boot-time).
 
 `Vm::boot` allocates an id from a process-wide `AtomicU64`, derives a console log path from it, runs the boot, and annotates any failure with that log path. The mechanics live in `boot.rs`, where the direct and jailed paths converge early. Both produce a `BootTarget` holding the child process and the paths Firecracker must be told about, so the configuration sequence never branches on jail versus direct.
 
@@ -97,7 +99,7 @@ return Err(e);
 
 ### Retry and the "is it listening yet" race
 
-Two races exist at every boot: the API socket is not accepting the instant the process spawns, and the guest agent is not listening the instant `InstanceStart` returns. Both use one helper:
+Two races exist at every boot: the API socket is not accepting the instant the process spawns, and the guest agent is not listening the instant `InstanceStart` returns. The API socket and the pty and exec-stream opens use one helper:
 
 ```rust
 fn retry_with_backoff<T>(
@@ -121,45 +123,73 @@ fn retry_with_backoff<T>(
 }
 ```
 
-(`core/crates/vmm/src/vm/mod.rs:282-300`.) The API socket retry starts at 200 microseconds and caps at 5 ms; the vsock retry starts at 1 ms and caps at 20 ms, with a 5 second overall deadline. The doc comment records the history: before this helper there were two separate fixed-sleep loops, and the API-socket one measured a flat ~20.1 ms on every boot, more than half of a ~34 ms boot, because it was a quantized sleep rather than real waiting. `connect_api_with_retry` also retries the *connect*, not the existence of the socket file. The file appears at `bind()`, a moment before `listen()`, so an existence poll can win that race and then get `ECONNREFUSED`.
+(`core/crates/vmm/src/vm/mod.rs:341-359`.) The API socket retry starts at 200 microseconds and caps at 5 ms; the vsock retry starts at 1 ms and caps at 20 ms, with a 5 second overall deadline. The doc comment records the history: before this helper there were two separate fixed-sleep loops, and the API-socket one measured a flat ~20.1 ms on every boot, more than half of a ~34 ms boot, because it was a quantized sleep rather than real waiting. `connect_api_with_retry` also retries the *connect*, not the existence of the socket file. The file appears at `bind()`, a moment before `listen()`, so an existence poll can win that race and then get `ECONNREFUSED`.
+
+Request/response calls to the agent use a sibling, `retry_while`, with the same schedule but a different stop rule. It takes an attempt that returns `Result<T, CallError>` and gives up immediately, deadline or not, when the error says `request_sent`:
+
+```rust
+Err(e) if e.request_sent || Instant::now() >= deadline => return Err(e),
+```
+
+(`core/crates/vmm/src/vm/mod.rs:332`.) A plain backoff loop would retry any failure, which is correct for "is the socket listening yet" and wrong for "did the guest already accept my command". The next section explains where that flag comes from.
 
 ### Talking to the guest
 
 `vsock_client` holds the host side of the protocol. Firecracker bridges guest vsock to a Unix domain socket: connect to the UDS, send `CONNECT <port>\n`, read `OK <port>\n`, and the rest of the connection is bridged to that guest port.
 
+The request/response entry point reports not just that a call failed but whether the guest could have seen the request:
+
 ```rust
-pub fn call(uds_path: &Path, guest_port: u32, request: &Request) -> io::Result<Response> {
-    let mut stream = UnixStream::connect(uds_path)?;
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    connect_handshake(&mut stream, guest_port)?;
+pub struct CallError {
+    pub error: io::Error,
+    /// The full request frame was written to the guest. Do not retry.
+    pub request_sent: bool,
+}
 
-    let payload = encode_request(request).map_err(to_io_err)?;
-    write_message(&mut stream, &payload)?;
+pub fn call(uds_path: &Path, guest_port: u32, request: &Request, response_timeout: Option<Duration>) -> Result<Response, CallError> {
+    let unsent = |error: io::Error| CallError { error, request_sent: false };
+    let mut stream = UnixStream::connect(uds_path).map_err(unsent)?;
+    stream.set_read_timeout(Some(IO_TIMEOUT)).map_err(unsent)?;
+    stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(unsent)?;
+    connect_handshake(&mut stream, guest_port).map_err(unsent)?;
+    // encode, then write_message(...).map_err(unsent)?;
 
-    let raw = read_message(&mut stream)?;
-    decode_response(&raw).map_err(to_io_err)
+    let sent = |error: io::Error| CallError { error, request_sent: true };
+    stream.set_read_timeout(response_timeout).map_err(sent)?;
+    let raw = read_message(&mut stream).map_err(sent)?;
+    decode_response(&raw).map_err(|e| sent(to_io_err(e)))
 }
 ```
 
-(`core/crates/vmm/src/vsock_client.rs:27-38`.) Each call opens a fresh connection. `IO_TIMEOUT` is three seconds on both directions, applied at the transport, because a paused VM has halted vCPUs and a guest that never answers would otherwise hang a blocking read forever; the retry deadline only bounds the gap between attempts, not one that never returns. The `open_pty` and `open_exec_stream` variants apply the timeout only to the handshake and then clear it, since an idle terminal is not a hung connection. See [the vsock timeout that could hang a stop](https://sandkiln.mintlify.site/architecture/bug-hunt-vsock-timeout) for the story.
+(`core/crates/vmm/src/vsock_client.rs:30-67`, encode and write lines elided.) Each call opens a fresh connection. The two closures are the design: everything up to and including writing the frame maps to `request_sent: false`, everything after maps to `true`. A write that fails part-way still counts as unsent, because the agent discards an incomplete frame without executing it. `IO_TIMEOUT` (three seconds) bounds connecting, the handshake and the write, because a paused VM has halted vCPUs and a guest that never answers would otherwise hang a blocking call forever. The wait for the reply is separate: `response_timeout` replaces the read timeout once the request is out, and `None` waits indefinitely.
+
+That split fixed a real correctness bug. Previously one three-second bound covered the reply too, and `Vm::call` retried any failure, so a user command that stayed silent for more than three seconds came back as an error after about 6.5 seconds and had run twice. Now a retry can only follow a failure where the request never left. `CallError` converts to `io::Error` through `From`, so callers outside the crate keep the plain error type. The `open_pty` and `open_exec_stream` variants apply the timeout only to the handshake and then clear it, since an idle terminal is not a hung connection. See [the vsock timeout that could hang a stop](https://sandkiln.mintlify.site/architecture/bug-hunt-vsock-timeout) for the original hang story.
+
+Three entry points sit on top, differing only in who chooses the reply bound:
+
+- `Vm::call(&Request)` is the control-plane call. It waits at most `CONTROL_PLANE_RESPONSE_TIMEOUT` (3 seconds) for the reply, which suits `sync`, health checks and tunnel setup, where a paused guest never answers.
+- `Vm::call_with_timeout(&Request, Option<Duration>)` takes the bound from the caller.
+- `Vm::agent_endpoint()` returns an `AgentEndpoint`, an owned, `Clone` handle holding only the VM id and the vsock socket path. `AgentEndpoint::call_with_timeout` does the retrying call. Because the handle references no `Vm`, a caller can copy it out of a shared map, drop the lock that guarded the map, and then make a call that may take minutes. If the VM has been stopped meanwhile, the call simply fails. The daemon uses this for user commands with `exec_timeout_secs` (default 600) as the bound; see [the daemon tour](/engineering/15-crate-daemon).
 
 ```mermaid
 sequenceDiagram
     participant D as daemon via spawn_blocking
-    participant V as Vm::call
+    participant E as AgentEndpoint
+    participant R as retry_while, 5s deadline
     participant C as vsock_client::call
-    participant F as Firecracker vsock UDS
     participant G as guest agent
-    D->>V: Request
-    V->>C: retry_with_backoff, 5s deadline
-    C->>F: connect, then CONNECT 5000
-    F->>G: bridge to AGENT_PORT
-    F-->>C: OK port
-    C->>G: framed Request
-    G-->>C: framed Response
-    C-->>V: Response, or io::Error after 3s of silence
-    V-->>D: Response with debug timing
+    D->>E: Request and response_timeout
+    E->>R: attempt closure
+    R->>C: attempt 1
+    C-->>R: Err, request_sent false (agent not up yet)
+    R->>C: attempt 2 after backoff
+    C->>G: CONNECT 5000, then framed Request
+    Note over C,G: request_sent is now true
+    G-->>C: framed Response, however long the command runs
+    C-->>R: Ok(Response)
+    R-->>E: Ok
+    E-->>D: Response with debug timing
+    Note over R: if the read times out here, Err with request_sent true is returned at once, never retried
 ```
 
 ### Stop, force stop and teardown ownership
@@ -178,7 +208,7 @@ fn stop_inner(mut self, sync_first: bool) -> io::Result<()> {
     // remove sockets, tunnel socket, jail dir
 ```
 
-(`core/crates/vmm/src/vm/mod.rs:211-221`, tail elided.) A bare `SIGKILL` loses unflushed page-cache writes to attached drives, so `stop` asks the guest to `sync` first, best-effort. `force_stop` skips that for a VM already known dead. Without it, a failed post-resume health check paid two 5 second timeouts back to back (about 10.3 s) instead of one (about 5.4 s), per the crate's `AGENTS.md`. Both consume `self`, so a stopped `Vm` cannot be reused: ownership makes "use after stop" a compile error.
+(`core/crates/vmm/src/vm/mod.rs:248-257`, tail elided.) A bare `SIGKILL` loses unflushed page-cache writes to attached drives, so `stop` asks the guest to `sync` first, best-effort. `force_stop` skips that for a VM that cannot answer, and the daemon uses it in two places. A failed post-resume health check uses it because the guest is already known dead. Snapshotting uses it because the VM is paused: a paused guest has halted vCPUs and can never reply to a `sync`, so the old `stop()` made every snapshot sit out a doomed call before the kill. Moving to `force_stop` took the end-to-end snapshot request from 6.8 s to 0.56 s (measured live 2026-11-24, directional, one shared dev box). The earlier figures in the crate's `AGENTS.md` for the health-check case (about 10.3 s versus 5.4 s) predate the 3 second control-plane bound and were not re-measured for this post. Both consume `self`, so a stopped `Vm` cannot be reused: ownership makes "use after stop" a compile error.
 
 `Vm` has no explicit state field. Its lifecycle is carried by which methods are valid and by Firecracker's own state:
 
@@ -193,11 +223,11 @@ stateDiagram-v2
     Paused --> Stopped: stop, kill
     Snapshotted --> Stopped: caller stops the process
     Stopped --> [*]
-    [*] --> Running: resume loads snapshot with resume_vm true
+    [*] --> Running: resume loads snapshot, repoints rootfs if overridden
     Spawned --> Stopped: configuration failure, cleanup
 ```
 
-The daemon, not this crate, decides that a snapshot is followed by `stop`. `Vm::resume` is an associated function that builds a brand-new `Vm` from a snapshot, which is why the diagram has a second entry point. It always spawns Firecracker directly: the jailer covers `Vm::boot` only, because a jailed snapshot bakes in in-jail paths that would need relinking. The daemon refuses to snapshot a jailed sandbox rather than half-support it, and `Vm::is_jailed` is how it knows.
+The daemon, not this crate, decides that a snapshot is followed by a stop (a `force_stop`, as above). `Vm::resume` is an associated function that builds a brand-new `Vm` from a snapshot, which is why the diagram has a second entry point. It always spawns Firecracker directly: the jailer covers `Vm::boot` only, because a jailed snapshot bakes in in-jail paths that would need relinking. The daemon refuses to snapshot a jailed sandbox rather than half-support it, and `Vm::is_jailed` is how it knows.
 
 ### Network, egress and the jailer
 
@@ -247,7 +277,7 @@ match err.raw_os_error() {
 }
 ```
 
-(`core/crates/vmm/src/rootfs.rs:56-70`.) The method is returned, never hidden, because a silent fallback is indistinguishable from "slow disk" in latency numbers, which is how an earlier benchmark was misread. The daemon records the method in a metric. The repository's `ROADMAP.md` records the measured effect on an XFS reflink volume: cold create 187 ms to 17.9 ms, with the rootfs clone itself going from 127.9 ms to 0.08 ms. No partial destination file is left on error, and an existing destination is refused.
+(`core/crates/vmm/src/rootfs.rs:56-70`.) The method is returned, never hidden, because a silent fallback is indistinguishable from "slow disk" in latency numbers, which is how an earlier benchmark was misread. The daemon records the method in a metric. The repository's `ROADMAP.md` records the measured effect on an XFS reflink volume: cold create 187 ms to 17.9 ms, with the rootfs clone itself going from 127.9 ms to 0.08 ms. A re-measurement on 2026-11-23 (`bench-report`, 20 cold creates with a reflink rootfs, kernel 6.8) gave a mean total of 18.4 ms: clone 0.084 ms, network lease 3.1 ms, boot 13.4 ms. Both runs are directional figures from one shared dev box, and neither is authoritative. No partial destination file is left on error, and an existing destination is refused.
 
 `DriveStore` and `ImageStore` follow the same pattern: one `<id>.ext4` file per resource in a directory, the filesystem as the source of truth, no index to fall out of sync. Both validate ids as 1 to 64 characters of ASCII alphanumerics, hyphen and underscore, because an id becomes a filename (and for drives a Firecracker `drive_id`). `ImageStore::register` checks the ext4 superblock magic at byte 1080, copies through `rootfs::clone_file`, and verifies the copied size matches the source, since a near-full disk can truncate a copy silently. It cannot verify the guest agent is baked in (that needs a loop mount and root). See [managed images](https://sandkiln.mintlify.site/internals/images) and [persistent drives](https://sandkiln.mintlify.site/internals/drives).
 
@@ -261,7 +291,7 @@ Teardown is best-effort (`let _ =` on kills and removals) so a failed cleanup st
 
 ## Test strategy
 
-66 tests run under `cargo test -p sandkiln-vmm`, none needing KVM or root:
+66 tests run under `cargo test -p sandkiln-vmm` (re-run 2026-11-24), none needing KVM or root:
 
 | Module | Tests | What they cover |
 | --- | --- | --- |
@@ -276,11 +306,13 @@ Teardown is best-effort (`let _ =` on kills and removals) so a failed cleanup st
 
 Pure logic is extracted so it can be tested without a VM (`build_jailer_args`, `cgroup_limits`, `validate_cidr`, `looks_like_ext4`, `chain_name`, `parse_status_code`), and tests that need files use real temp directories, real `mkfs.ext4` and real hard links rather than mocks. The timeout test for `connect_api_with_retry` asserts both the `TimedOut` kind and that elapsed time is at least the timeout, because a backoff bug that exits early would otherwise look like a clean fast failure.
 
+Two pieces of the retry-safety design have no unit test in this crate, and that is a real gap: `vsock_client` (including the `request_sent` classification in `call`) and `retry_while` are not covered by any `#[test]`. Both are small and pure enough to test with a stub `UnixListener` that accepts and then stays silent, or an attempt closure returning scripted `CallError`s; neither has been added yet. Their regression coverage is behavioural instead: `scripts/integration-tests/25-long-running-commands.sh` runs a command silent for 4 seconds through a real daemon, asserts it succeeds, and asserts a marker file shows it ran exactly once. That topic also checks that `GET /sandboxes` answers in under a second while another sandbox runs a command, and that a snapshot request completes in under 3 seconds.
+
 What the unit tests cannot cover is stated in the crate's `AGENTS.md`: nothing here proves a VM boots. The `examples/` directory (`exec_test.rs`, `file_test.rs`) and the criterion bench `benches/vm_lifecycle.rs` run against real Firecracker, and the full daemon integration suite is the real bar.
 
 ## How neighbours consume it
 
-The daemon is the only production consumer. It calls `Vm::boot` from its cold-create path and `Vm::resume` from its resume and fork paths, `Vm::call`, `open_pty` and `open_exec_stream` from its exec, file, PTY and log routes, `update_metadata` after claiming a pre-warmed pool snapshot, and `force_stop` when a post-resume health check fails. It builds `VmConfig` and `ResumeConfig` itself, holds `NetworkManager`, `DriveStore`, `ImageStore` and `JailerIdPool` in its application state, and calls `rootfs::clone_file` and `egress::apply` around boot. Resource ownership follows from that: this crate creates and tears down the Firecracker process and chroot, the network manager owns the free pools, and the daemon owns the mapping from sandbox to lease and drive.
+The daemon is the only production consumer. It calls `Vm::boot` from its cold-create path and `Vm::resume` from its resume and fork paths, `Vm::call`, `call_with_timeout` (through an `AgentEndpoint`), `open_pty` and `open_exec_stream` from its exec, file, PTY and log routes, `update_metadata` after claiming a pre-warmed pool snapshot, and `force_stop` both when a post-resume health check fails and when snapshotting a paused sandbox. It builds `VmConfig` and `ResumeConfig` itself (including `rootfs_override`, the private clone a retaining resume or fork writes to), holds `NetworkManager`, `DriveStore`, `ImageStore` and `JailerIdPool` in its application state, and calls `rootfs::clone_file` and `egress::apply` around boot. Resource ownership follows from that: this crate creates and tears down the Firecracker process and chroot, the network manager owns the free pools, and the daemon owns the mapping from sandbox to lease and drive.
 
 Downward, the crate depends on `sandkiln-protocol` for message types and framing, plus `libc`, `serde`, `serde_json` and `tracing`.
 
@@ -291,6 +323,8 @@ Downward, the crate depends on `sandkiln-protocol` for message types and framing
 **On-demand tap device creation.** Rejected because `TUNSETIFF` needs root and the daemon runs with ambient `CAP_NET_ADMIN` only. A pre-created pool turns a privileged operation into an unprivileged lease.
 
 **A netlink library for `ip`, `bridge` and `iptables`.** Rejected: privileged operations run via `std::process::Command` to match the shell scripts exactly, and the `AGENTS.md` warns not to switch without understanding why ambient capabilities propagate to spawned processes but may not to a library call. The per-call cost (about 1.4 ms each, 4.3 ms for the three attach calls) was measured and left alone.
+
+**Retrying every failed call.** Rejected after it ran user commands twice: only failures where `CallError::request_sent` is false are retried.
 
 **An async runtime in this crate.** Rejected: the daemon already bridges every call through `spawn_blocking`.
 

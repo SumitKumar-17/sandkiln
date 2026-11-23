@@ -30,7 +30,7 @@
 //! sharing this checkpoint's network identity is live right now, the same
 //! one-live-descendant rule `Snapshot::forked_into` enforces for fork,
 //! generalized across a whole lineage. True parallel branching is a
-//! separate, harder, still-open problem (see `routes_snapshot.rs`) that
+//! separate, harder, still-open problem (see `http/routes/snapshot.rs`) that
 //! restoring never attempts.
 //!
 //! Restoring does **not** consume the checkpoint — same `clone_rootfs`

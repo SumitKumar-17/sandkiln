@@ -171,21 +171,27 @@ if [ -f "$IMAGE_TO_CHECK" ]; then
     warn "$IMAGE_LABEL is under 1GiB — this looks like the raw CI test image, not a built production rootfs (images/build-universal-image.sh's default output is several GiB). If that's intentional (e.g. you're just testing the setup mechanics), ignore this; otherwise build or point at a real image."
   fi
 
-  # Every sandbox create clones this file via `cp --reflink=auto`
-  # (routes_sandbox::clone_rootfs) -- on a CoW-capable filesystem (XFS,
-  # Btrfs) that's an instant, disk-space-free clone; on anything else
-  # (ext4, the common default) it silently falls back to a real,
-  # full-size copy, which is a measured, real part of sandbox creation
-  # latency -- see ROADMAP.md's Benchmarking section for the actual
-  # numbers behind this (confirmed live: XFS reflink clones added ~0
-  # bytes of real disk usage for four 300MiB clones; ext4 always copies
-  # the full size). Informational only, not a failure -- ext4 still
-  # works correctly, just slower per create.
-  rootfs_fstype="$(df --output=fstype "$(dirname "$IMAGE_TO_CHECK")" 2>/dev/null | tail -1 | tr -d '[:space:]')"
-  case "$rootfs_fstype" in
-    xfs | btrfs) ok "rootfs storage is on $rootfs_fstype — cp --reflink=auto clones will be instant, disk-space-free copies" ;;
-    "") : ;; # df failed (unusual) -- nothing useful to report, not worth a warning of its own
-    *) warn "rootfs storage is on $rootfs_fstype, not a CoW-capable filesystem (XFS or Btrfs) — every sandbox create will pay a real full-file-copy cost cloning $IMAGE_LABEL, instead of an instant CoW clone. Not required, just a real, measured latency cost; see ROADMAP.md's Benchmarking section." ;;
+  # Every sandbox create clones this file (sandkiln_vmm::rootfs::clone_file):
+  # an instant, space-free FICLONE reflink when the base image and
+  # `rootfs_dir` share one CoW-capable filesystem (XFS, Btrfs), a full byte
+  # copy otherwise. The copy is ~70% of a cold create (187ms vs ~18ms on the
+  # dev box, ROADMAP.md Benchmarking), so this is worth a loud warning, but
+  # not a failure: it still works, just slower.
+  ROOTFS_DIR="$(expand_home "$(cfg rootfs_dir "${SANDKILN_ROOTFS_DIR:-$(cfg state_dir '~/sandkiln-tools/state')/rootfs}")")"
+  base_fstype="$(df --output=fstype "$(dirname "$IMAGE_TO_CHECK")" 2>/dev/null | tail -1 | tr -d '[:space:]')"
+  mkdir -p "$ROOTFS_DIR" 2>/dev/null || true
+  dir_fstype="$(df --output=fstype "$ROOTFS_DIR" 2>/dev/null | tail -1 | tr -d '[:space:]')"
+  same_dev=0
+  [ "$(stat -c %d "$IMAGE_TO_CHECK" 2>/dev/null)" = "$(stat -c %d "$ROOTFS_DIR" 2>/dev/null)" ] && same_dev=1
+  case "$base_fstype" in
+    xfs | btrfs)
+      if [ "$same_dev" -eq 1 ]; then
+        ok "base image and rootfs dir are on one $base_fstype filesystem: clones will be instant reflinks"
+      else
+        warn "base image is on $base_fstype but rootfs dir $ROOTFS_DIR is on ${dir_fstype:-an unknown filesystem}: a reflink cannot cross filesystems, so every create does a full copy. Set rootfs_dir (SANDKILN_ROOTFS_DIR) onto the same filesystem as the base image."
+      fi ;;
+    "") : ;; # df failed (unusual): nothing useful to report
+    *) warn "base image is on $base_fstype, not a reflink-capable filesystem (XFS or Btrfs): every sandbox create pays a full-file copy of $IMAGE_LABEL (about 128ms of a 187ms create for a 300MiB image). Fix: scripts/host-setup/create-reflink-volume.sh. Not required, just slower." ;;
   esac
 
   if [ "$ROOT_CHECKS" -eq 1 ]; then

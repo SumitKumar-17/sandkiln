@@ -25,7 +25,7 @@ Given that, rclone was the pragmatic choice over writing a custom FUSE client: i
 
 ## How it works in sandkiln
 
-`core/crates/daemon/src/routes_mounts.rs` needed no new entry in the host-guest wire protocol at all. A mount is built entirely from operations `sandkiln-protocol` already has:
+`core/crates/daemon/src/http/routes/mounts.rs` needed no new entry in the host-guest wire protocol at all. A mount is built entirely from operations `sandkiln-protocol` already has:
 
 1. `WriteFile` writes the rclone config (the endpoint and credentials) to a path under `/root/`.
 2. `Chmod` locks it to `0600` before rclone ever runs, so nothing else on the guest (`ps aux`, another process reading `/proc`) can see the credentials -- they're in a file, never a command-line argument.

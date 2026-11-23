@@ -80,9 +80,11 @@ impl Metrics {
             sandboxes_created_total: AtomicU64::new(0),
             rootfs_clones_reflink: AtomicU64::new(0),
             rootfs_clones_copy: AtomicU64::new(0),
-            // Real cold boots measure ~30ms (see ROADMAP.md's benchmarking
-            // numbers) — bucketed comfortably below and above that so a
-            // regression shows up as a bucket shift, not just a mean.
+            // Spawn to InstanceStart measures ~13ms (criterion 12.6-14.0ms,
+            // ROADMAP.md Benchmarking) — bucketed around that so a regression
+            // shows up as a bucket shift, not just a mean. Not the time until
+            // the guest can run a command (~215ms); that is measured
+            // client-side by scripts/bench-report.sh as first_exec_client.
             boot_duration_ms: Histogram::new(&[10.0, 25.0, 50.0, 100.0, 250.0, 1000.0]),
             // Exec latency spans a much wider range: sub-millisecond on an
             // already-open vsock connection, hundreds of ms through the

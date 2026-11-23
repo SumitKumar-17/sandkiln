@@ -8,18 +8,29 @@ updated: 2026-11-24
 
 `sandkilnd` is an axum and Tokio HTTP server that wraps the `sandkiln-vmm` crate. The crate's rule is that business logic for VMs and networking stays in `sandkiln-vmm`, and the daemon parses requests, calls it, and shapes responses. What the daemon adds on top is everything that makes many concurrent sandboxes safe to operate: a single shared state object, ownership checks across resources, request correlation, metrics, and two background loops.
 
-A note on references: the daemon source tree is being reorganized, so daemon code is cited by concept and item name (`AppState`, `Sandbox`, `idle_reaper`) rather than by file path. Items in other crates carry `path:line` references.
+The daemon source is organized by concern under `core/crates/daemon/src/`:
+
+| Path | Holds |
+| --- | --- |
+| `main.rs` | Bootstrap only: parse flags, load config, raise capabilities, start the runtime, wire up state and serve |
+| `config/` | `mod.rs` (the typed `Config` and `Config::load`), `settings.rs` (the setting registry), `source.rs` (the resolver), `cli.rs` (the flags); see post 10 |
+| `http/` | `mod.rs` (`build_router`), `auth.rs`, `error.rs`, `request_id.rs`, and `routes/` with one file per resource |
+| `lifecycle/` | `idle_reaper.rs`, `pool.rs`, `pool_claim.rs`, `pool_replenisher.rs`, `shutdown.rs` |
+| `snapshots/` | `held.rs` (live snapshots and reconcile), `retired.rs` (time-travel checkpoints) |
+| top level | `state.rs` (`AppState`), `sandbox.rs`, `storage.rs`, `metrics.rs`, `log_session.rs`, `tracing_util.rs` |
 
 ```mermaid
 flowchart LR
   C[SDK, CLI, curl] -->|HTTP| M[request_id::correlate]
   M --> T[TraceLayer]
   T --> A[auth middleware]
-  A --> R[routes_*]
+  A --> R[http/routes/*]
   R -->|spawn_blocking_in_current_span| V[sandkiln-vmm: Vm, NetworkManager]
   R --> S[(AppState)]
   S --> H[(sandkiln-store HistoryStore)]
   L[idle_reaper and pool_replenisher] --> S
+  X[SIGTERM, SIGINT] --> Z[lifecycle/shutdown]
+  Z -->|snapshot_and_stop each live sandbox| S
 ```
 
 ## Startup: capabilities first, runtime second
@@ -28,6 +39,7 @@ The binary's `main` is a plain `fn main`, not `#[tokio::main]`:
 
 ```rust
 fn main() {
+    // ... parse flags, load and validate config (may exit) ...
     raise_net_admin_ambient();
 
     tokio::runtime::Builder::new_multi_thread()
@@ -38,25 +50,27 @@ fn main() {
 }
 ```
 
-(`main`, in the daemon's `main` module.)
+(`main` in `core/crates/daemon/src/main.rs`, shown without the flag handling that precedes the raise.)
 
 The reason is credentials. Linux threads copy their credentials from the creating thread at spawn time. The daemon needs `CAP_NET_ADMIN` for netlink operations on existing interfaces and for the iptables and `ip` child processes it shells out to, and that only reaches children if the capability is in the *ambient* set. Raising it into the ambient set requires it to be in the Permitted and Inheritable sets first. The file capability sets Permitted at exec time but Inheritable comes from the parent shell, so the function raises Inheritable and then Ambient. If a Tokio runtime had already started, its worker and blocking-pool threads would carry the pre-raise credentials, and any `ip` or `iptables` child spawned from one of them would not have the capability. Building the runtime by hand after the raise guarantees every thread has the post-raise set.
 
 The capability is a file capability applied with `setcap`, and `setcap` does not survive a rebuild, so the project script that grants it is re-run after every build. Creating a tap device needs real root rather than `CAP_NET_ADMIN`, which is why taps are pre-created once and the daemon only leases them (see the networking post).
 
+Before the raise, `main` parses the command line and loads the configuration, because `--help`, `--version`, `--check-config`, `--print-config` and `--config-reference` must work without `CAP_NET_ADMIN` and exit without starting anything (post 10 covers the config system). A configuration error exits with status 2 and every problem listed, not a panic. Only a normal run reaches the capability raise.
+
 `async_main` then does a fixed sequence, and the order matters:
 
-1. Load `Config::from_env()` and initialize tracing (JSON or pretty, by `SANDKILN_LOG_FORMAT`).
-2. Create the state and rootfs directories (`SANDKILN_STATE_DIR`, `SANDKILN_ROOTFS_DIR`).
+1. Initialize tracing (JSON or pretty, by the `log_format` setting) and log which config file was loaded and any warnings the loader produced.
+2. Initialize the storage layout (`storage::init`) and create the state and rootfs directories.
 3. Detect or read the uplink interface, build the `NetworkManager`, and call `ensure_ready`.
 4. Open the drive store and the image store.
-5. `snapshot::reconcile`, which rebuilds the snapshot table from disk and pulls each reconciled snapshot's tap device out of the `NetworkManager` free pool. This must run before `AppState` takes ownership of the manager and before the listener binds, so no live create can race a reconciled snapshot for the same tap.
-6. Reconcile retired checkpoints (these hold no lease, so ordering relative to step 5 does not matter).
+5. `snapshots::held::reconcile`, which rebuilds the snapshot table from disk and pulls each reconciled snapshot's tap device out of the `NetworkManager` free pool. This must run before `AppState` takes ownership of the manager and before the listener binds, so no live create can race a reconciled snapshot for the same tap.
+6. `snapshots::retired::reconcile` for retired checkpoints (these hold no lease, so ordering relative to step 5 does not matter).
 7. Open the history database and mark unended records as orphaned (see the persistence post).
 8. Validate jailer settings if enabled.
-9. Build `AppState`, spawn the two background tasks, build the router, bind, and `axum::serve`.
+9. Build `AppState`, spawn the two background tasks, build the router (`http::build_router`), bind, and serve with graceful shutdown (see the last section).
 
-Most setup failures `expect`, which aborts the process with the message. For an infrastructure daemon that is intentional: an unusable network bridge or a missing directory is not something to limp past.
+Most setup failures `expect`, which aborts the process with the message. For an infrastructure daemon that is intentional: an unusable network bridge or a missing directory is not something to limp past. Configuration is the exception, because a bad value is the operator's input and gets a complete, readable report instead of a backtrace.
 
 ## AppState: one shared object, many independent locks
 
@@ -137,11 +151,11 @@ stateDiagram-v2
 - `pty_session_count` is an `Arc<AtomicU32>` because the RAII guard that decrements it can outlive the sandbox's reachability through the map.
 - `source_pool_id` marks a pool slot owned by this sandbox and is deliberately not carried onto the resulting snapshot.
 
-The two terminal paths are shared by everything. `stop_sandbox_by_id(state, id, keep)` is used by `DELETE /sandboxes/:id` and by the idle reaper: with `keep` true it tries `snapshot_and_stop` and falls back to `destroy_sandbox_by_id` when the sandbox is a fork (nothing to preserve), while a jailed sandbox returns `CannotPreserve` so the caller can decide. `destroy_sandbox_by_id` removes the record from the map first, then in one `spawn_blocking` closure stops the VM, removes egress rules, releases the lease, deletes the rootfs clone and returns the jailer id, and finally records the end in history. Removing from the map before doing the slow teardown means no other request can pick up a half-destroyed sandbox.
+The two terminal paths are shared by everything. `stop_sandbox_by_id(state, id, keep)` (`http/routes/sandbox.rs`) is used by `DELETE /sandboxes/:id`, the idle reaper and orderly shutdown: with `keep` true it tries `snapshot_and_stop` and falls back to `destroy_sandbox_by_id` when the sandbox is a fork (nothing to preserve), while a jailed sandbox returns `CannotPreserve` so the caller can decide. `destroy_sandbox_by_id` removes the record from the map first, then in one `spawn_blocking` closure stops the VM, removes egress rules, releases the lease, deletes the rootfs clone and returns the jailer id, and finally records the end in history. Removing from the map before doing the slow teardown means no other request can pick up a half-destroyed sandbox.
 
 ## Errors: one type, one mapping
 
-Every handler returns `Result<_, AppError>`. The enum has nine variants, and a single `status_and_message` function is the only place that maps them to HTTP status codes:
+Every handler returns `Result<_, AppError>`. The enum (`http/error.rs`) has nine variants, and a single `status_and_message` function is the only place that maps them to HTTP status codes:
 
 | Variant | Status |
 | --- | --- |
@@ -157,25 +171,25 @@ The same function feeds both `IntoResponse` (status plus `{"error": "<message>"}
 
 ## Auth
 
-Authentication is a bearer-token middleware applied with `route_layer` to the `/sandboxes*`, `/drives`, `/images`, `/pools` and snapshot routers. `/healthz` and `/metrics` are not behind it. When `SANDKILN_AUTH_TOKEN` is unset the middleware is a no-op and `main` logs a warning that the API is unauthenticated.
+Authentication (`http/auth.rs`) is a bearer-token middleware applied with `route_layer` to the `/sandboxes*`, `/drives`, `/images`, `/pools` and snapshot routers. `/healthz` and `/metrics` are not behind it. When the `auth_token` setting (`SANDKILN_AUTH_TOKEN`) is unset the middleware is a no-op and `main` logs a warning that the API is unauthenticated.
 
 The check is pulled out as a pure function so it can be tested without an `AppState`:
 
 ```rust
 fn token_matches(header_value: Option<&str>, expected: &str) -> bool {
-    header_value.and_then(|value| value.strip_prefix("Bearer ")) == Some(expected)
+    header_value.and_then(|value| value.strip_prefix("Bearer ")).is_some_and(|provided| constant_time_eq(provided, expected))
 }
 ```
 
-(From the daemon's `auth` module.)
+(`core/crates/daemon/src/http/auth.rs:30`.)
 
-This is an ordinary string comparison, not a constant-time one. The tests cover exact, case-sensitive matching, a missing header, a missing `Bearer ` prefix and a wrong scheme, but nothing in the code defends against a timing side channel. That is a gap worth knowing about, not a property to rely on.
+The comparison is constant time. `constant_time_eq` folds the length difference and every byte difference into one accumulator and loops over the longer of the two inputs, with no early exit on the first mismatch, so response time does not reveal how much of a guessed token was right. Only the token length can leak. It used to be an ordinary string comparison, which was a timing side channel on a network-reachable secret. The tests cover exact, case-sensitive matching, a missing header, a missing `Bearer ` prefix and a wrong scheme. The property holds by construction; nothing here benchmarks the timing.
 
-A second middleware, `require_preview_token`, guards the preview, PTY, exec-stream log and tunnel WebSocket routes. A browser tab, an iframe, and the WebSocket constructors in browsers and Node cannot set an `Authorization` header, so this variant also accepts the token as a `?token=` query parameter. It reuses `token_matches` for the header path. Those routes live in their own routers so that the two middlewares cannot be mixed up. A preview URL containing a token is therefore a bearer credential in URL form, which the daemon's own notes record as an accepted tradeoff.
+A second middleware, `require_preview_token`, guards the preview, PTY, exec-stream log and tunnel WebSocket routes. A browser tab, an iframe, and the WebSocket constructors in browsers and Node cannot set an `Authorization` header, so this variant also accepts the token as a `?token=` query parameter. It reuses `token_matches` for the header path and `constant_time_eq` for the query token. Those routes live in their own routers so that the two middlewares cannot be mixed up. A preview URL containing a token is therefore a bearer credential in URL form, which the daemon's own notes record as an accepted tradeoff.
 
 ## Request correlation and tracing
 
-`request_id::correlate` is the outermost layer. It accepts a caller's `X-Request-Id` if it is non-empty, at most 200 characters, and all printable ASCII without whitespace, and otherwise generates a UUID. That validation exists because the value is written into every log line and the response header. It wraps the rest of the request in an `http_request` span carrying the id and echoes it back.
+`request_id::correlate` (`http/request_id.rs`) is the outermost layer. It accepts a caller's `X-Request-Id` if it is non-empty, at most 200 characters, and all printable ASCII without whitespace, and otherwise generates a UUID. That validation exists because the value is written into every log line and the response header. It wraps the rest of the request in an `http_request` span carrying the id and echoes it back.
 
 Span context is thread-local, and VM operations run on blocking-pool threads, so a bare `spawn_blocking` would lose it. `spawn_blocking_in_current_span` captures both the current span and the default dispatcher and re-establishes them on the blocking thread:
 
@@ -187,23 +201,23 @@ tokio::task::spawn_blocking(move || tracing::dispatcher::with_default(&dispatch,
     .expect(panic_message)
 ```
 
-(From the daemon's `tracing_util` module.)
+(From `core/crates/daemon/src/tracing_util.rs`.)
 
 Both are needed because a blocking thread has neither. The module's test installs a thread-local subscriber with no global default and asserts the `request_id` appears in a JSON line emitted from inside a blocking closure. The effect is that a log line from deep inside `sandkiln-vmm` carries the id of the HTTP request that triggered it.
 
 ## Metrics
 
-Metrics are rendered as Prometheus text exposition format by hand rather than through the `prometheus` crate. The rationale in the module is proportionality: a few counters and histograms behind atomics and small mutexes do not justify a dependency and its registry abstraction.
+Metrics (`metrics.rs`) are rendered as Prometheus text exposition format by hand rather than through the `prometheus` crate. The rationale in the module is proportionality: a few counters and histograms behind atomics and small mutexes do not justify a dependency and its registry abstraction.
 
-The `Metrics` struct holds `AtomicU64` counters (sandboxes created, rootfs clones by method) and `Histogram` values for `boot_duration_ms`, `exec_latency_ms` and a `create_phase_duration_ms` family indexed by the `CreatePhase` enum (rootfs clone, network lease, setup, egress apply, total). Histograms keep per-bucket counts, a sum and a count inside a `Mutex`, and render cumulative `le` buckets plus `+Inf`. Bucket bounds are chosen around measured values: boot buckets sit around the roughly 30 ms cold boot, exec buckets span sub-millisecond to a second, and every create phase shares one layout so the family can be aggregated in a single query.
+The `Metrics` struct holds `AtomicU64` counters (sandboxes created, rootfs clones by method) and `Histogram` values for `boot_duration_ms`, `exec_latency_ms` and a `create_phase_duration_ms` family indexed by the `CreatePhase` enum (rootfs clone, network lease, setup, egress apply, total). Histograms keep per-bucket counts, a sum and a count inside a `Mutex`, and render cumulative `le` buckets plus `+Inf`. Bucket bounds are chosen around measured values: boot buckets (10, 25, 50, 100, 250, 1000 ms) bracket the cold boot, which measured about 13 ms on the 2026-11-23 run (the comment next to the bounds still says about 30 ms), exec buckets span sub-millisecond to a second, and every create phase shares one layout so the family can be aggregated in a single query.
 
-`CreatePhase::Setup` is the join of the concurrent rootfs clone and network lease, not their sum, which the HELP text states. `boot_duration_ms` is deliberately not a variant of the family because it predates it and external scrapers may already depend on its name. `sandboxes_active` is not a separate counter: `/metrics` reads `sandboxes.len()` at render time, since a second counter could drift from the map. The route is unauthenticated like `/healthz`, as it exposes daemon operations rather than sandbox data.
+`CreatePhase::Setup` is the join of the concurrent rootfs clone and network lease, not their sum, which the HELP text states. `boot_duration_ms` is deliberately not a variant of the family because it predates it and external scrapers may already depend on its name. `sandboxes_active` is not a separate counter: `/metrics` reads `sandboxes.len()` at render time, since a second counter could drift from the map. The route (`http/routes/metrics.rs`) is unauthenticated like `/healthz`, as it exposes daemon operations rather than sandbox data.
 
 ## Background loops and the idle reaper
 
-Two tasks are spawned unconditionally from `main`: `pool_replenisher::run` and `idle_reaper::run`. An unconditional task with nothing configured is a cheap empty scan, which is simpler than conditional spawning keyed on configuration.
+Two tasks are spawned unconditionally from `main.rs`: `run` in `lifecycle/pool_replenisher.rs` and `run` in `lifecycle/idle_reaper.rs`. An unconditional task with nothing configured is a cheap empty scan, which is simpler than conditional spawning keyed on configuration.
 
-The reaper runs three tiers, each controlled by its own env var and each optional:
+The reaper runs three tiers, each controlled by its own setting (the table names the `SANDKILN_` environment form) and each optional:
 
 | Tier | Trigger | Action |
 | --- | --- | --- |
@@ -219,14 +233,20 @@ Failure handling inside each tier is explicit. A sandbox that cannot be snapshot
 
 ## Route modules and the split rule
 
-The router is assembled from per-concern modules (`routes_sandbox`, `routes_exec`, `routes_fs`, `routes_drives`, `routes_images`, `routes_pool`, `routes_snapshot`, `routes_snapshot_history`, `routes_mounts`, `routes_logs`, `routes_pty`, `routes_tunnel`, `routes_preview`, `routes_metrics`) and grouped into several `Router` values by auth policy: bearer-gated routes, WebSocket and preview routes with the query-token fallback, and the two unauthenticated endpoints. Shared mechanics live once and are `pub(crate)`: `snapshot_and_stop`, `resume_snapshot_by_id`, `delete_snapshot_by_id`, `stop_sandbox_by_id`, and `call_agent` for guest RPC. A module that touches the sandbox map gets its own file, which keeps parallel work on separate routes from colliding.
+`http::build_router` (`http/mod.rs`) assembles the router from one file per concern in `http/routes/`: `sandbox`, `sandbox_name`, `exec`, `fs`, `logs`, `mounts`, `tunnel`, `pty`, `preview`, `drives`, `images`, `pool`, `snapshot`, `snapshot_history` and `metrics`. Routes are grouped into `Router` values by auth policy: bearer-gated routes, WebSocket and preview routes with the query-token fallback, and the two unauthenticated endpoints (`/healthz`, `/metrics`). Shared mechanics live once and are `pub(crate)`: `snapshot_and_stop`, `resume_snapshot_by_id`, `delete_snapshot_by_id`, `stop_sandbox_by_id`, and `call_agent` for guest RPC. A module that touches the sandbox map gets its own file, which keeps parallel work on separate routes from colliding.
 
-## Graceful shutdown and orphaned VMs
+### Calling the guest without holding the sandbox lock
 
-There is no graceful shutdown path. `axum::serve(listener, app)` is awaited with no shutdown signal, the daemon installs no SIGTERM or SIGINT handler, `Vm` has no `Drop` implementation, and the Firecracker child is started with `std::process::Command::spawn` with no parent-death signal configured (`core/crates/vmm/src/vm/boot.rs:119`). Nothing in the code kills guest processes when the daemon exits. A daemon that stops therefore leaves its Firecracker processes running, with their tap devices, rootfs clones and API sockets still in place.
+`call_agent` (`http/routes/exec.rs:122`) is the path every exec, file and filesystem request takes. It used to hold the daemon-wide `sandboxes` mutex across the whole vsock call, so one command running for a minute froze every other sandbox operation. It now takes the lock only long enough to refresh `last_activity` and copy out an `AgentEndpoint` (`Vm::agent_endpoint`, a small value holding the VM id and its vsock socket path), releases the lock, and makes the call on a blocking thread with the `exec_timeout_secs` bound (default 600). A reply that does not arrive in time is an `AppError::GatewayTimeout`, HTTP 504, with a message saying the command may still be running in the guest. The regression test is `scripts/integration-tests/25-long-running-commands.sh`, which also covers a command silent for several seconds running once and not twice, and the fast snapshot path. One call site still holds the lock across a blocking call: the pool claim health check, which makes a single control-plane call bounded to 3 seconds.
 
-The system's answer is not re-adoption but honest bookkeeping. Live sandboxes are an in-memory table with no serializable representation, so the next start cannot reattach to them. Instead, at startup the history store marks every record that never ended as orphaned, and snapshot reconciliation restores held snapshots, which are the durable way to survive a restart. The persistence post covers exactly what is marked. Cleaning up the leftover processes and devices is an operator task, and this is a limitation, not a feature.
+## Orderly shutdown and orphaned VMs
+
+`SIGTERM` and `SIGINT` are handled by `lifecycle/shutdown.rs`. `main.rs` serves with axum's graceful shutdown: on the signal the listener stops accepting, in-flight requests get `REQUEST_GRACE` (30 seconds), and then `drain_sandboxes` runs. It snapshots every live sandbox concurrently through `stop_sandbox_by_id(.., keep = true)`, so each one lands as an ordinary held snapshot with the same persistence and history record as a client-requested stop. A sandbox that structurally cannot be snapshotted (`CannotPreserve`, which is the jailed case) is destroyed instead. A fork is destroyed too, as in the normal stop path, because its source snapshot already holds its identity. The drain has a `DRAIN_DEADLINE` of 60 seconds; if it passes, the daemon logs a warning and exits with sandboxes still stopping.
+
+Verified live on 2026-11-24: three sandboxes were snapshotted in 0.75s, the daemon exited in about a second, no Firecracker process was left, and the snapshots were resumable after a restart (`scripts/restart-test.sh`). Because snapshots are reconciled from disk at startup, a restart now keeps sandboxes where it used to lose them.
+
+What it does not cover is an unclean exit. `Vm` has no `Drop` implementation and the Firecracker child is started with `std::process::Command::spawn` with no parent-death signal (`core/crates/vmm/src/vm/boot.rs:119`), so a `SIGKILL`, an out-of-memory kill or a crash still leaves every Firecracker process running with its tap device, rootfs clone and sockets in place. Live sandboxes are an in-memory table with no serializable representation, so the next start cannot reattach to them. For that case the answer is honest bookkeeping: at startup the history store marks every record that never ended as orphaned (the persistence post covers exactly what is marked), and cleaning up leftover processes and devices is an operator task.
 
 ## Testing
 
-Pure logic is tested in place: token matching, request-id validation, the error body per variant, idle and archive decisions, check-interval clamping, histogram rendering, holder lookups and name matching. These contribute to the 303 tests in `cargo test --workspace`. Anything involving a real VM is covered by the integration suite against a live daemon, 315 checks in total, and `SANDKILN_INTEGRATION_TEST_ONLY=<substring>` runs a single topic. The project convention is that compiling is not proof: the DELETE status-code bug compiled and passed lint and was still wrong.
+Pure logic is tested in place: token matching, request-id validation, the error body per variant, idle and archive decisions, check-interval clamping, histogram rendering, holder lookups and name matching. These contribute to the 340 tests in `cargo test --workspace` (222 in the daemon crate, as of 2026-11-24). Anything involving a real VM is covered by the integration suite against a live daemon, about 320 checks across 25 topics, and `SANDKILN_INTEGRATION_TEST_ONLY=<substring>` runs a single topic. The project convention is that compiling is not proof: the DELETE status-code bug compiled and passed lint and was still wrong.

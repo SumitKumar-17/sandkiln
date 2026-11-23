@@ -1,7 +1,7 @@
 //! Resolving and executing a `POST /sandboxes` request against a
-//! configured pre-warmed pool — split out of `routes_sandbox.rs` (claiming
+//! configured pre-warmed pool — split out of `http/routes/sandbox.rs` (claiming
 //! is a distinct concern from configuring/replenishing, same reasoning as
-//! `pool_replenisher.rs`'s own split, even with no HTTP route of its own:
+//! `lifecycle/pool_replenisher.rs`'s own split, even with no HTTP route of its own:
 //! `routes::sandbox::create_sandbox_core` is the only caller). See
 //! `crate::lifecycle::pool` for the feature's overall shape.
 
@@ -121,14 +121,15 @@ impl Drop for PoolClaimGuard {
 /// correctly-identified live sandbox — the "claim" half of pre-warmed
 /// pools, called once `resolve_pool_claim` finds `PoolClaim::Warm`.
 ///
-/// Runs a real post-resume health check (`exec true`) first: resuming has
-/// a real, non-rare failure mode found live building this feature — a
-/// resumed guest kernel can panic early in boot (divide-by-zero trap,
-/// confirmed via Firecracker's console log), killing the process shortly
-/// after. Measured at a **1-in-3 to 2-in-3** failure rate across clean
-/// isolated resumes on this dev box; `08-snapshots.sh`'s own integration
-/// check never caught it because one resume isn't enough attempts to
-/// reliably hit it. A failed check is treated as "the warm snapshot was
+/// Runs a real post-resume health check (`exec true`) first, because a
+/// resumed guest kernel can still panic right after restore (seen as
+/// `Kernel panic - not syncing: Attempted to kill the idle task!` in
+/// Firecracker's console log), which kills the process. When this feature
+/// was built that happened to **1 in 3 to 2 in 3** resumes; re-measured on
+/// 2026-11-24 it is rare: 0 of 160 resume cycles in isolated and 4-way
+/// parallel loops, and 2 to 3 of ~320 checks in the full parallel
+/// integration suite. Root cause still unknown (ROADMAP.md, finding 20), so
+/// the check stays. A failed check is treated as "the warm snapshot was
 /// bad": clean up and fall through to a normal cold create (see caller),
 /// never hand back a corpse id. `destroy_unhealthy_claim` uses
 /// `Vm::force_stop` so this fallback doesn't pay a second timeout.
@@ -149,18 +150,16 @@ pub(crate) async fn claim_from_pool(
     // snapshots of this sandbox" apart from here, so both get kept.
     let id = resume_snapshot_by_id(state.clone(), snapshot_id, true).await?;
 
-    let health_check = spawn_blocking_in_current_span("pool claim health check task panicked", {
-        let state = state.clone();
-        let id = id.clone();
-        move || {
-            let sandboxes = state.sandboxes.lock().unwrap();
-            let sandbox = sandboxes.get(&id).expect("resume_snapshot_by_id above just inserted this id");
-            sandbox.vm.call(&sandkiln_protocol::Request::Exec {
-                command: "true".to_string(),
-                args: vec![],
-                env: std::collections::HashMap::new(),
-            })
-        }
+    // Endpoint copied out first: a crashed resumed guest makes this call block
+    // for seconds, and holding the daemon-wide sandbox lock across it froze
+    // every other request (measured: GET /sandboxes took 4.9s).
+    let endpoint = state.agent_endpoint(&id).expect("resume_snapshot_by_id above just inserted this id");
+    let health_check = spawn_blocking_in_current_span("pool claim health check task panicked", move || {
+        endpoint.call(&sandkiln_protocol::Request::Exec {
+            command: "true".to_string(),
+            args: vec![],
+            env: std::collections::HashMap::new(),
+        })
     })
     .await;
 

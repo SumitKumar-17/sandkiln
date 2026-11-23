@@ -65,7 +65,7 @@ pub struct Config {
     /// `rootfs_clone_total{method}` metric shows whether that worked.
     pub rootfs_dir: PathBuf,
     /// Registered images' home (`sandkiln_vmm::image::ImageStore`,
-    /// `routes_images`) — a named rootfs `POST /sandboxes` can boot from
+    /// `routes::images`) — a named rootfs `POST /sandboxes` can boot from
     /// instead of `base_rootfs_path`. Own directory, not `drives_dir`:
     /// different resource kinds sharing a storage shape would otherwise
     /// collide on `<id>.ext4` across the two id namespaces.
@@ -121,6 +121,15 @@ pub struct Config {
     /// Generous relative to `exec` — a dev server can be slow to
     /// first-compile (webpack/vite cold start).
     pub preview_timeout: Duration,
+    /// Bound on one request/response call to the guest agent (exec and the
+    /// file operations). Replaces what used to be a 3s control-plane bound
+    /// applied to user commands, which broke anything that stayed silent
+    /// longer than that.
+    pub exec_timeout: Duration,
+    /// Extra guest kernel arguments (`VmConfig::extra_boot_args`); empty = none.
+    pub kernel_args: String,
+    /// Cap on retained time-travel checkpoints; `0` = unlimited.
+    pub retained_checkpoints_max: usize,
     /// `None` (default, `SANDKILN_JAILER_ENABLED` unset/falsy) keeps
     /// direct Firecracker spawn. See `JailerHostConfig`.
     pub jailer: Option<JailerHostConfig>,
@@ -251,6 +260,10 @@ impl Config {
                 Ipv4Addr::UNSPECIFIED
             }
         };
+        let exec_timeout_secs: u64 = r.number("exec_timeout_secs");
+        if exec_timeout_secs == 0 {
+            r.error("exec_timeout_secs must be at least 1".to_string());
+        }
         let state_dir = r.path("state_dir");
         let rootfs_dir = r.opt_path("rootfs_dir").unwrap_or_else(|| state_dir.join("rootfs"));
 
@@ -295,6 +308,9 @@ impl Config {
             archive_dir: r.path("archive_dir"),
             log_format: LogFormat::parse(r.opt_string("log_format").as_deref()),
             preview_timeout: Duration::from_secs(r.number("preview_timeout_secs")),
+            exec_timeout: Duration::from_secs(exec_timeout_secs),
+            kernel_args: r.opt_string("kernel_args").unwrap_or_default(),
+            retained_checkpoints_max: r.number("retained_checkpoints_max"),
             jailer,
             origins: Default::default(),
         };
@@ -328,6 +344,9 @@ impl Config {
             "auth_token" => self.auth_token.clone(),
             "log_format" => Some(format!("{:?}", self.log_format).to_lowercase()),
             "preview_timeout_secs" => Some(self.preview_timeout.as_secs().to_string()),
+            "exec_timeout_secs" => Some(self.exec_timeout.as_secs().to_string()),
+            "retained_checkpoints_max" => Some(self.retained_checkpoints_max.to_string()),
+            "kernel_args" => Some(self.kernel_args.clone()).filter(|a| !a.is_empty()),
             "firecracker_bin" => p(&self.firecracker_bin),
             "kernel_path" => p(&self.kernel_path),
             "base_rootfs" => p(&self.base_rootfs_path),

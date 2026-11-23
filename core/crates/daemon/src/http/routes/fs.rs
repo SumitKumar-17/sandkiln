@@ -1,6 +1,6 @@
 //! Filesystem metadata/structure operations against a running sandbox:
 //! chmod, chown, mkdir, rename, copy, symlink, readlink, truncate, and
-//! directory listing. Split out of `routes_exec` (which keeps exec and
+//! directory listing. Split out of `routes::exec` (which keeps exec and
 //! whole-file read/write) since these are a real, independently-workable
 //! seam — data transfer vs. filesystem structure — and together they'd
 //! have pushed that file well past this crate's usual size range. Every

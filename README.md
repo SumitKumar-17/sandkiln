@@ -14,7 +14,7 @@ Needs a Linux x86_64 host with `/dev/kvm` readable and writable by your user, `s
 ```bash
 git clone https://github.com/SumitKumar-17/sandkiln.git
 cd sandkiln
-scripts/setup.sh                 # build, Firecracker, test kernel+rootfs, tap pool, DNS forwarder, capabilities; idempotent
+scripts/setup.sh                 # build, Firecracker, test kernel+rootfs, tap pool, DNS forwarder, capabilities, sandkiln.toml; idempotent
 scripts/sandkilnd-ctl.sh start   # starts the daemon and waits for /healthz
 
 curl -s -X POST http://127.0.0.1:7777/sandboxes -d '{}'
@@ -26,7 +26,9 @@ curl -s -X POST http://127.0.0.1:7777/sandboxes/<sandbox-id>/exec \
 
 `setup.sh` boots from a small test image (about 300MiB, no language runtimes). For a real Ubuntu image with Node.js and Python, run `scripts/setup.sh --production` (needs about 8GiB of disk and several minutes). Full details and every setting: [SELF_HOSTING.md](SELF_HOSTING.md).
 
-With no `SANDKILN_AUTH_TOKEN` set, every route except `/healthz` and `/metrics` is open to anyone who can reach the port. Set a token before listening beyond localhost.
+Configuration is `sandkiln.toml` (written by `setup.sh`; every key in [sandkiln.example.toml](sandkiln.example.toml)), overridden by `SANDKILN_<KEY>` environment variables. `sandkilnd --check-config` validates it and `--print-config` shows the effective values.
+
+With no `auth_token` set, every route except `/healthz` and `/metrics` is open to anyone who can reach the port. Set one before listening beyond localhost.
 
 From TypeScript (`npm install sandkiln`):
 
@@ -58,24 +60,28 @@ Status as of 2026-11-23, verified against a real daemon and real microVMs on one
 | Snapshot lineage, time-travel restore | HTTP API only; no SDK or CLI surface yet |
 | Firecracker jailer hardening | Opt-in; not yet proven on real hardware |
 | Request ids, `/metrics`, durable lifecycle history (sqlite) | Working |
+| Orderly shutdown: on `SIGTERM` the daemon drains requests, then snapshots every live sandbox so it is resumable after restart | Working; a `SIGKILL` or crash still orphans Firecracker processes |
 | OCI image conversion, multi-node, snapshot encryption at rest | Planned |
-| Per-caller auth scoping | Not implemented; one shared bearer token |
+| Per-caller auth scoping | Not implemented; one shared bearer token, compared in constant time |
 
-Tests: `cargo test --workspace` (303 passing, no KVM needed) and `scripts/integration-test.sh` (315 checks against a live daemon; `SANDKILN_INTEGRATION_TEST_ONLY=<substring>` runs one topic).
+Tests: `cargo test --workspace` (340 passing, no KVM needed) and `scripts/integration-test.sh` (about 320 checks against a live daemon; `SANDKILN_INTEGRATION_TEST_ONLY=<substring>` runs one topic).
 
 ## Measured performance
 
-One shared dev box (Intel i9-13900K, 62 GiB, ext4 host, Firecracker v1.16.1), small samples, directional only.
+One shared dev box (Intel i9-13900K, 62 GiB, ext4 host, Firecracker v1.16.1), small samples, directional only. The latency a caller feels is time to first command; the `POST /sandboxes` response itself returns before the guest is ready.
 
 | Measurement | Result | Source |
 | --- | --- | --- |
+| **Time to first command**: `POST /sandboxes` to the first successful `exec`, cold sandbox | 413ms before, 214.5ms after trimming guest boot (2026-11-24, `scripts/bench-report.sh 20`); about 125ms of what remains is guest systemd userspace | `first_exec_client` |
+| Time to first command, sandbox resumed from a snapshot | 18ms before, 8.4ms after | `first_exec_resumed` |
 | Cold `POST /sandboxes`, rootfs is a full byte copy on ext4 | 187.5ms mean of 20 (clone 127.9ms, boot 14.9ms, network lease 3.5ms) | `scripts/bench-report.sh` |
-| Cold `POST /sandboxes`, rootfs dir on the same XFS reflink filesystem as the base image | 17.9ms mean of 20 (clone 0.08ms) | same |
-| First `exec` after a cold create | about 420-460ms (create returns before the guest agent is listening) | `ROADMAP.md`, Benchmarking |
-| First `exec` after resuming a snapshot with a live agent | about 4-18ms | same |
+| Cold `POST /sandboxes`, rootfs dir on the same XFS reflink filesystem as the base image | 17.9ms mean of 20 on 2026-11-23 (clone 0.08ms); re-run 18.4ms (clone 0.084ms, lease 3.1ms, boot 13.4ms) | same |
 | Later `exec` on the same sandbox | about 3-5ms | same |
-| Snapshot take | 310-990ms, load dependent | same |
-| Cold boot, `criterion` | 10.5-10.9ms (earlier measurement, being re-verified) | `cargo bench -p sandkiln-vmm --bench vm_lifecycle` |
+| Snapshot take, `criterion` | 485-727ms (re-measured 2026-11-23; an earlier run read 310-335ms, and under load 550-915ms) | `cargo bench -p sandkiln-vmm --bench vm_lifecycle` |
+| Snapshot via `POST /sandboxes/:id/snapshot` and stop | 6.8s to 0.56s end to end after the guest `sync` was dropped for a paused VM | `scripts/integration-tests/25-long-running-commands.sh` |
+| Firecracker spawn to `InstanceStart`, `criterion` (an internal phase, not the time a caller waits) | 12.6-14.0ms (2026-11-23; an earlier run read 10.5-10.9ms) | same bench |
+| Resume from snapshot, `criterion` | 3.7-4.0ms | same bench |
+| `exec` round trip on an open connection, `criterion` | 242-248us | same bench |
 
 To get the 17.9ms path, put `SANDKILN_ROOTFS_DIR` on the same reflink-capable filesystem as `SANDKILN_BASE_ROOTFS`. On an ext4-only host, `sudo scripts/host-setup/create-reflink-volume.sh <user>` builds an XFS loopback volume. `/metrics` reports `rootfs_clone_total{method="reflink"|"copy"}` so a silent fallback is visible. See [Startup latency](https://sandkiln.mintlify.site/architecture/startup-latency).
 

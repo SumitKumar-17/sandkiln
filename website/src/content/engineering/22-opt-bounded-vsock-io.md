@@ -1,18 +1,18 @@
 ---
 title: "Bounding every vsock call: from a hang forever to a few seconds"
-summary: "A case study of a robustness fix that is also a latency bound: a missing read timeout let a paused VM hang stop forever, and a 3 second transport timeout turned infinity into a few seconds."
+summary: "A case study of a robustness fix that is also a latency bound: a missing read timeout let a paused VM hang stop forever, a 3 second transport timeout turned infinity into a few seconds, and a later refinement made the bound apply only where a reply is expected quickly."
 order: 22
 tags: ["optimization", "vmm", "vsock", "robustness", "failure-paths"]
 updated: 2026-11-24
 ---
 
-Most latency work lowers a typical number. This case study is about the other kind: changing a worst case from unbounded to bounded. Before the fix, a particular and entirely ordinary sequence of operations (pause a VM, then stop it) never returned. After it, the same sequence returns in a few seconds. That is a change from infinity to a finite number, and it is worth treating as an optimization because the failure it removed was a stuck daemon thread, not a slow request.
+Most latency work lowers a typical number. This case study is about the other kind: changing a worst case from unbounded to bounded. Before the fix, a particular and entirely ordinary sequence of operations (pause a VM, then stop it) never returned. After it, the same sequence returned in a few seconds. That is a change from infinity to a finite number, and it is worth treating as an optimization because the failure it removed was a stuck daemon thread, not a slow request.
 
-Items in `sandkiln-vmm` are cited with `path:line` references, verified against the current tree. The daemon is cited by item name only.
+The story has two acts. The first is the bound itself. The second, months later in the commit history, is the discovery that a blanket bound is wrong for user commands, which led to the finer design this post ends on. Items are cited with `path:line` references, verified against the current tree.
 
 ## Problem and how it was found
 
-Snapshots were new. Firecracker requires a VM to be paused before it will take a snapshot, and the daemon's `snapshot_and_stop` does exactly that: pause, snapshot, then stop the VM. Commit `abb8286` (2026-08-29) records how the hang was found: live-testing the snapshot and resume cycle, the run paused a VM, asked it to stop, and never got a reply. It happened every time, not intermittently, so it was seen on the first full cycle.
+Snapshots were new. Firecracker requires a VM to be paused before it will take a snapshot, and the daemon's `snapshot_and_stop` (`core/crates/daemon/src/http/routes/snapshot.rs:147`) does exactly that: pause, snapshot, then stop the VM. Commit `abb8286` (2026-08-29) records how the hang was found: live-testing the snapshot and resume cycle, the run paused a VM, asked it to stop, and never got a reply. It happened every time, not intermittently, so it was seen on the first full cycle.
 
 The test was nothing more than the cycle itself against a real daemon and a real microVM:
 
@@ -21,19 +21,17 @@ The test was nothing more than the cycle itself against a real daemon and a real
 scripts/integration-test.sh   # topic 08-snapshots.sh exercises this cycle
 ```
 
-The commit message states what was observed afterwards: the full snapshot-then-resume cycle "now completes in ~7s (bounded, not hung)", the resume itself took 39ms, and the resumed VM's marker file and responsiveness both checked out. The 7 seconds is the number to keep in mind; it is bounded, but it is not small, and the reason is further down.
+The commit message states what was observed afterwards: the full snapshot-then-resume cycle "now completes in ~7s (bounded, not hung)", the resume itself took 39ms, and the resumed VM's marker file and responsiveness both checked out. The 7 seconds is the number to keep in mind. It is bounded, but it is not small, and the reason turned out to be a second bug sitting behind the first one, covered in [Snapshot stop: 6.8s to 0.56s](/engineering/25-opt-snapshot-stop-force-stop).
 
-There is no "before" latency number, because the before state has no latency: the call never returned. That is the entire point of the finding.
+There is no "before" latency number for the hang itself, because the before state has no latency: the call never returned.
 
 ## Root cause
 
-`Vm::stop` does not simply kill the Firecracker process. A bare `SIGKILL` loses unflushed guest page-cache writes to attached drives, so `stop` first sends an `exec sync` request to the guest agent over vsock, best-effort, and then kills the process (`core/crates/vmm/src/vm/mod.rs:211` is `stop_inner`, with the `sync` call at `:215` to `:216`).
+`Vm::stop` does not simply kill the Firecracker process. A bare `SIGKILL` loses unflushed guest page-cache writes to attached drives, so `stop` first sends an `exec sync` request to the guest agent over vsock, best-effort, and then kills the process (`core/crates/vmm/src/vm/mod.rs:248` is `stop_inner`, with the `sync` call at `:253` to `:256`).
 
 A paused VM has its vCPUs halted. The guest agent runs inside the guest, so a paused guest cannot answer anything, including `sync`. The request goes out over a Unix domain socket that Firecracker bridges to the guest, and then nothing comes back.
 
 The vsock client at that time set no timeouts on the stream. A blocking `read` on a stream with no read timeout waits forever. The 5 second deadline in `Vm::call`'s retry loop did not help, and this is the subtle part: that deadline is checked between attempts, after an attempt has returned. It bounds the gap between connection attempts, not an attempt already in progress. An attempt that never returns never reaches the deadline check.
-
-Put in layers:
 
 | Layer | What it bounded | Why it did not help |
 | --- | --- | --- |
@@ -62,108 +60,113 @@ sequenceDiagram
 
 ## The change
 
-The fix is eleven added lines in `core/crates/vmm/src/vsock_client.rs`: a constant and two `set_*_timeout` calls on every stream the module opens.
+### The transport bound
+
+The first fix was eleven added lines in `core/crates/vmm/src/vsock_client.rs`: a constant and two `set_*_timeout` calls on every stream the module opens.
 
 ```rust
-/// Bounds every blocking read/write on the vsock stream. Without this, a
-/// guest that connects but never answers (a paused VM, vCPUs halted, is
-/// the case that surfaced this) hangs forever.
+/// Bounds every blocking read/write on the vsock stream. ...
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
 ```
 
-That constant is at `core/crates/vmm/src/vsock_client.rs:22`. Its use in the request and response path is at `:29` and `:30`:
+That constant is at `vsock_client.rs:22`, and it is applied before the `CONNECT` handshake (`:54` and `:55`), so a guest that accepts the connection but never completes the handshake is covered by the same bound.
 
-```rust
-let mut stream = UnixStream::connect(uds_path)?;
-stream.set_read_timeout(Some(IO_TIMEOUT))?;
-stream.set_write_timeout(Some(IO_TIMEOUT))?;
-connect_handshake(&mut stream, guest_port)?;
-```
+The design decision worth defending is where it was put. The fix is in the transport, applied unconditionally to every stream the module opens, rather than special-cased in `Vm::stop` or in the snapshot path. Any unresponsive guest, whether crashed, paused or kernel-panicked, would have hit the same indefinite hang, and a fix at `stop` would have left every other caller exposed.
 
-The design decision worth defending is where it was put. The fix is in the transport, applied unconditionally to every stream the module opens, rather than special-cased in `Vm::stop` or in the snapshot path. The commit message gives the reason: any unresponsive guest, whether crashed, paused or kernel-panicked, would have hit the same indefinite hang, not just this one snapshot code path. A fix at `stop` would have left every other caller exposed and would have needed to be repeated at each new one.
-
-The timeout is set before the `CONNECT` handshake, so the handshake read is bounded too. A guest that accepts the connection but never completes the handshake is covered by the same constant.
-
-Two later additions to the module change what the timeout means for long-lived streams. When interactive PTY sessions and streamed exec sessions were added, they needed the opposite behaviour after the handshake: a real session can sit quiet for a long time with nothing typed, and that is not a hung connection. Both `open_pty` and `open_exec_stream` therefore set the timeout for the handshake and then clear it on the stream they hand back:
-
-```rust
-stream.set_read_timeout(None)?;
-stream.set_write_timeout(None)?;
-Ok(stream)
-```
-
-Those clears are at `core/crates/vmm/src/vsock_client.rs:55` to `:56` for the PTY and `:81` to `:82` for the exec stream. The comments there say the timeout "applies only to the handshake below, not the returned stream". So the rule is: one 3 second bound everywhere a request must be answered, no bound on a stream whose whole purpose is to stay open.
+Interactive PTY sessions and streamed exec sessions needed the opposite behaviour after the handshake: a real session can sit quiet for a long time with nothing typed, and that is not a hung connection. Both `open_pty` (`vsock_client.rs:74`) and `open_exec_stream` (`:93`) therefore bound only the handshake and then clear the timeouts on the stream they hand back (`:84` to `:85` and `:110` to `:111`).
 
 ```mermaid
 stateDiagram-v2
   [*] --> Handshaking: connect, IO_TIMEOUT set
-  Handshaking --> Answered: call, response read within 3s
+  Handshaking --> Answered: call, response read within the bound
   Handshaking --> Streaming: open_pty or open_exec_stream, timeout cleared
-  Handshaking --> Failed: any read or write exceeds 3s
+  Handshaking --> Failed: any read or write exceeds its bound
   Answered --> [*]
   Streaming --> [*]: peer closes
   Failed --> [*]: error to caller
 ```
 
-The two bounds stack, and which one applies depends on the failure. A guest that is paused or hung hits the 3 second stream timeout on each attempt. A guest whose process is gone fails the connect immediately and runs the retry loop to its deadline:
+### The refinement: a bound that depends on who is asking
+
+The blanket 3 second read bound was right for the control plane and wrong for user commands, and the commit that corrected it is `cc5573f` (2026-11-24). A command that stays silent for 4 seconds is not a hung guest, and the old code treated it as one, then retried it. The whole finding is in [Long-running exec](/engineering/26-correctness-long-running-exec). What matters for this post is the design that came out of it, which has three parts.
+
+First, `vsock_client::call` takes a `response_timeout` and returns a structured error (`vsock_client.rs:51`):
+
+```rust
+pub struct CallError {
+    pub error: io::Error,
+    /// The full request frame was written to the guest. Do not retry.
+    pub request_sent: bool,
+}
+```
+
+Connecting and writing still use `IO_TIMEOUT`. Only the wait for the reply uses the caller's `response_timeout` (`None` waits indefinitely), set after the request is written (`:64`). Any failure before the request frame is fully written is marked `request_sent: false`, including a write that fails part-way, because the agent discards an incomplete frame without executing it. Any failure after is `request_sent: true`.
+
+Second, retrying is decided by that flag. `retry_while` (`core/crates/vmm/src/vm/mod.rs:321`) has the same backoff as `retry_with_backoff` but returns immediately on an error whose `request_sent` is true. A refused connect, a failed handshake or an unwritten request is safe to repeat. A request the guest may have started is not.
+
+Third, the bound is chosen at the call site. `Vm::call` is the control-plane entry point and uses `CONTROL_PLANE_RESPONSE_TIMEOUT`, 3 seconds (`vm/mod.rs:105` and `:170`). `Vm::call_with_timeout` (`:178`) takes the bound as an argument. A user command goes through `AgentEndpoint::call_with_timeout` with the daemon's `exec_timeout_secs` setting, default 600 seconds. `AgentEndpoint` (`vm/mod.rs:122`) is an owned, cloneable handle to the vsock socket path, so a caller can copy it out of a shared map, drop the map's lock and make a long call without holding it.
 
 ```mermaid
 flowchart TD
-  A[Vm::call] --> B[retry_with_backoff, 5s deadline]
-  B --> C[vsock_client::call attempt]
-  C -- reply within 3s --> D[return response]
-  C -- read or write exceeds IO_TIMEOUT 3s --> E{deadline reached}
-  C -- connect refused at once --> E
-  E -- no, sleep 1ms up to 20ms --> C
-  E -- yes --> F[return the error]
+  A[caller] --> B{which kind of call}
+  B -- control plane: sync, health check, tunnel --> C[Vm::call, 3s reply bound]
+  B -- user command, file, fs op --> D[AgentEndpoint::call_with_timeout, exec_timeout_secs]
+  C --> E[retry_while, 5s deadline]
+  D --> E
+  E --> F[vsock_client::call attempt]
+  F -- reply within bound --> G[return response]
+  F -- error, request_sent false --> H{deadline reached}
+  F -- error, request_sent true --> I[return the error, never resend]
+  H -- no, sleep 1ms up to 20ms --> F
+  H -- yes --> I
 ```
 
-The second change that belongs to this story is `Vm::force_stop` (`core/crates/vmm/src/vm/mod.rs:207`), added in commit `f6c74d1`. It exists because bounding the hang made the cost of a doomed call visible rather than eliminating it. A VM already known to be dead (for example one that failed a pool claim's post-resume health check) cannot answer `sync` either, and `stop` would spend a second full timeout budget finding that out. `force_stop` calls the same `stop_inner` with `sync_first` set to false, so it kills the process without the pre-kill `sync` call. The doc comment on it states the reason: "nothing to flush, and the sync would just pay its own ~5s timeout for nothing".
+The `Vm::force_stop` method (`vm/mod.rs:244`), added in `f6c74d1`, is the third piece. It calls the same `stop_inner` with `sync_first` false, so it kills the process without the pre-kill `sync`. It was introduced for a VM known to be dead, such as one that fails a pool claim's health check, where a doomed `sync` would pay a second full wait. It later turned out to be the right call for the snapshot path as well.
 
 ## Result
 
-Everything here was observed live and recorded in a commit message or in `ROADMAP.md`. Nothing is from a fresh run on 2026-11-24.
+Everything here was observed live and recorded in a commit message, in `ROADMAP.md`, or in the `cc5573f` regression test. The numbers are directional, from one shared dev box.
 
 | Scenario | Before the timeout | After |
 | --- | --- | --- |
 | `stop` of a paused VM, worst case | never returns | bounded |
 | Full snapshot then resume cycle | hung, every time | about 7s (commit `abb8286`) |
 | Resume step of that cycle | not reached | 39ms |
-| Pool fallback after a failed health check, two doomed calls | about 10.3s (`stop` after the health check) | about 5.4s with `force_stop` (commit `f6c74d1`) |
+| Snapshot request, stop waiting on a doomed `sync` | about 6.8s (found later) | 0.56s with `force_stop` (commit `cc5573f`) |
+| Pool fallback after a failed health check | about 10.3s with `stop` | about 5.4s with `force_stop` (commit `f6c74d1`) |
+| A command silent for 4s | errored after about 6.5s and ran twice | succeeds once (commit `cc5573f`) |
 
-Per call, the bound is 3 seconds for any single read or write. Per `Vm::call`, the observable bound is larger, and this is derived from the code rather than measured. `Vm::call` wraps `vsock_client::call` in `retry_with_backoff` with a 5 second deadline (`core/crates/vmm/src/vm/mod.rs:142`, and the helper at `:282`). A first attempt that times out after 3 seconds has not yet reached the deadline, so the loop sleeps briefly and tries a second attempt, which also times out after 3 seconds. The deadline check then fails and the error returns. That is about 6 seconds from first connect to returned error, which agrees with the roughly 7 seconds recorded for the whole snapshot cycle once the pause, the snapshot write and the resume are added.
+Per call, the bound is 3 seconds for any single connect, write or control-plane read. Per `Vm::call`, the observable bound is larger and is derived from the code. `retry_while` has a 5 second deadline checked after an attempt returns. Under the original blanket rule a timed-out read took 3 seconds, was retried, and timed out again at about 6 seconds, which matches the roughly 7 seconds recorded for the cycle. Under the current rule a timed-out read has `request_sent` true, so it is not retried: a `Vm::call` against a paused guest now returns in about 3 seconds, not 6. That is my reading of the code. I did not time a bare `Vm::call` against a paused guest after the change.
 
-The 10.3s to 5.4s figure has a different shape, and I am careful here because the code does not show the arithmetic directly. A pool claim's health check calls `Vm::call` against a guest whose Firecracker process has already exited. Connecting to a dead process's socket fails immediately rather than blocking, so the retry loop spins until its 5 second deadline. That is the first roughly 5 seconds. The old fallback then called `stop`, which issued another `Vm::call` for `sync` and spent a second roughly 5 second budget. Together about 10.3 seconds. With `force_stop`, only the first budget is paid, about 5.4 seconds. This is why `force_stop` halves the figure: it removes one of two sequential, independent waits. I derived the mechanism from the code and the recorded numbers; the roadmap records the numbers and not this decomposition.
+The 10.3 to 5.4 second figure has a different shape. A health check against a guest whose Firecracker process has already exited fails to connect immediately, so the retry loop spins to its 5 second deadline, about 5 seconds. The old fallback then called `stop`, which issued a second `Vm::call` for `sync` and spent another budget, about 10.3 seconds together. With `force_stop` only the first budget is paid. The roadmap records the numbers, and the decomposition is mine, derived from the code.
 
-So the summary of the worst case is: a single read or write is bounded at 3 seconds, a `Vm::call` at about 6 seconds, and a `Vm::stop` of an unresponsive VM at about 6 seconds plus the kill.
-
-There is one more thing the code shows, and it is not a claim about the past. `snapshot_and_stop` still ends with `vm.stop()` after `pause()` and `snapshot()`, so that `stop` still issues its `sync` call against a VM that is, by then, paused. By the reasoning above, that call can never succeed and should cost about the 6 second bound every time a sandbox is snapshotted through that path. That path is shared by the explicit snapshot endpoint, the idle reaper's auto-suspend, and the pool replenisher. I did not measure this on a live daemon for this post, and the criterion benchmark `snapshot_take` times only the `pause` and `snapshot` pair, so it would not show it. If it holds, using `force_stop` there is an unimplemented change that would remove most of the roughly 7 second figure. Nothing was changed or measured; I am flagging it as a reading of the code that a live timing of the snapshot endpoint would confirm or refute.
+The snapshot stop had a caveat in an earlier version of this post: `snapshot_and_stop` called `vm.stop()` on a paused VM and so should have paid the doomed `sync` on every snapshot. That was a reading of the code, and it was right. It was then measured at 6.8 seconds end to end, fixed by calling `force_stop` (`snapshot.rs:188`), and measured again at 0.56 seconds.
 
 ## What it cost or risks
 
-The timeout is a blanket one, which gives it the costs of a blanket rule.
-
-- A legitimately slow request/response `exec` is bounded too. Request/response `exec` goes through `Vm::call`, whose response read has the same 3 second bound, and `Vm::call` retries on any I/O error for up to 5 seconds. The docs-site page for this fix states, from reading the code and without testing against a live VM, that a plain `exec` producing no response within 3 seconds fails on the host side. It also implies a worse property that I want to call out explicitly: because the retry loop retries on any error, a command that outlives the 3 second read could be sent again, running it a second time. I have not verified that. It is a consequence of two documented behaviours, and for anything long-running the docs recommend streamed exec, which clears the timeout after its handshake.
-- Whether that behaviour is acceptable is a design question that this change did not decide. It accepted it implicitly. The 3 second constant is not configurable.
-- There is no unit test for the timeout. I looked for one in `vsock_client.rs` and found none. The behaviour was verified live (the snapshot cycle completing) but nothing in `cargo test --workspace` fails if the constant or the `set_read_timeout` calls disappear. Section 6 of the project's standard asks for real tests of pure logic, and this is a place a loopback Unix-socket server that accepts and never answers would make a cheap, KVM-free regression test. It is not written.
-- The fix hides a design smell rather than removing it. The sync-before-kill sequence runs against VMs that are known not to be able to answer. Bounding the wait makes that survivable; it does not make it correct, as the `snapshot_and_stop` observation above shows.
-- Treating "the guest may be paused or dead" as a normal state is the lesson the docs-site page draws. The cost of learning it was a hung thread found by chance during a first end-to-end cycle, because no test before it paused a VM and stopped it.
+- **The 3 second bound is a constant.** `IO_TIMEOUT` and `CONTROL_PLANE_RESPONSE_TIMEOUT` are not configurable. A control-plane call that legitimately needs more than 3 seconds, such as a `sync` of a large dirty page cache, would fail on the host side. Only the user-command bound, `exec_timeout_secs`, is a setting.
+- **A reply that never comes is still ambiguous.** When a user command exceeds its bound the daemon returns an error, but the process may still be running in the guest. The bound limits how long the daemon waits, not how long the guest works. The HTTP contract for it is a 504, described in the exec post.
+- **No retry after send means an at-most-once guarantee, not exactly-once.** A request that was sent and then lost to a transport error is reported as failed even if the guest executed it. That is the correct trade for commands with side effects, and callers that need exactly-once have to deal with it above this layer.
+- **Control-plane calls still hold a lock in two places.** The post-resume pool health check (`core/crates/daemon/src/lifecycle/pool_claim.rs:158`) and the tunnel start and stop calls (`core/crates/daemon/src/http/routes/tunnel.rs:94`, `:124`) still call `Vm::call` while holding the daemon's `sandboxes` mutex. They are bounded at about 3 seconds per attempt, so a stuck guest stalls other sandbox operations for that long. User exec and file calls no longer do this. I read it in the code and did not measure the stall.
+- **There is no unit test for the transport timeouts.** `vsock_client.rs` has no tests, and the `retry_while` helper has none either. The behaviour is covered by live checks: the snapshot cycle completing, and `scripts/integration-tests/25-long-running-commands.sh` for the long command, the no-rerun property and the snapshot latency. A loopback Unix-socket server that accepts and never answers would be a cheap, KVM-free regression test for the hang. It is not written, and nothing in `cargo test --workspace` fails if the `set_read_timeout` calls disappear.
+- **The learning was expensive.** A hung thread found by chance during a first end-to-end cycle, then a second bug found only by timing the real HTTP request. Treating "the guest may be paused or dead" as a normal state, not an exceptional one, is the lesson both finds share.
 
 ## How to reproduce
 
-To see the bound in the logs, run the snapshot cycle against a real daemon and watch for the best-effort sync warning, which is what a bounded failure looks like:
+To see the bound in the logs, run the snapshot cycle against a real daemon and watch for the warnings a bounded failure produces:
 
 ```bash
 scripts/remote.sh run scripts/integration-test.sh
 RUST_LOG=sandkilnd=debug,sandkiln_vmm=debug scripts/sandkilnd-ctl.sh logs
 ```
 
-The line to find is `sync before stop failed, proceeding anyway` (`core/crates/vmm/src/vm/mod.rs:217`), together with the `vsock call failed` warning from `Vm::call`. Their timestamps show the elapsed time of the bounded wait. The snapshot endpoint's latency, measured client-side, shows the roughly 7 second figure:
+The `vsock call failed` warning (`vm/mod.rs:135`) carries `request_sent`, which tells you whether the failure was eligible for a retry. The older `sync before stop failed, proceeding anyway` line (`vm/mod.rs:254`) now appears only when a plain `stop` runs against an unreachable guest.
+
+To prove the retry rule, run a command that stays silent past the control-plane bound and check the marker file:
 
 ```bash
-time curl -s -X POST http://127.0.0.1:7777/sandboxes/<id>/snapshot
+curl -s -X POST http://127.0.0.1:7777/sandboxes/<id>/exec \
+  -d '{"command":"sh","args":["-c","echo run >> /tmp/m; sleep 4"]}'
 ```
 
-To reproduce the pool-fallback comparison, run the example in `examples/pool-warm-start` and time the attempts the example classifies as fallbacks; those are the ones that pay the single remaining 5 second budget. Remember that the failure rate that produces them is itself the roadmap's measured 1 in 3 to 2 in 3, on one box.
-
-To prove the original failure, one would revert the two `set_*_timeout` calls at `core/crates/vmm/src/vsock_client.rs:29` and `:30`, pause a VM and call `Vm::stop`. It would hang. That check was done once, live, in August; it has not been automated.
+It should return 200 once and leave a single `run` line. To prove the original hang, one would revert the two `set_*_timeout` calls at `vsock_client.rs:54` and `:55`, pause a VM and call `Vm::stop`. It would hang. That check was done once, live, in August; it has not been automated.
