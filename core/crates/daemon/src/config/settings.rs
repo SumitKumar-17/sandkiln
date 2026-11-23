@@ -51,6 +51,12 @@ pub const SETTINGS: &[Setting] = &[
         "vm",
         "Extra guest kernel command-line arguments, appended after sandkiln's own. Quieting kernel boot logging (the serial console is emulated) shortens time to first command.",
     ),
+    s(
+        "retained_checkpoints_max",
+        Some("8"),
+        "storage",
+        "How many retired checkpoints (time-travel restore points, each a full-RAM snapshot plus a rootfs) to keep. Beyond this the oldest are deleted after each resume. 0 keeps all, which can fill the disk.",
+    ),
     s("firecracker_bin", Some("~/sandkiln-tools/bin/firecracker"), "vm", "Path to the Firecracker binary."),
     s("kernel_path", Some("~/sandkiln-tools/images/vmlinux-5.10.223"), "vm", "Guest kernel image (vmlinux)."),
     s("base_rootfs", Some("~/sandkiln-tools/images/ubuntu-22.04.ext4"), "vm", "Default base rootfs image sandboxes boot from."),

@@ -531,6 +531,7 @@ pub(crate) async fn resume_snapshot_by_id(
     let rootfs_path = match (retire_result, private_rootfs) {
         (Ok(Some(retired)), Some(clone)) => {
             state.retired_snapshots.lock().unwrap().insert(retired.id.clone(), retired);
+            crate::http::routes::snapshot_history::enforce_retention(&state).await;
             clone
         }
         // Not retaining: the snapshot was consumed, the VM runs on its disk.

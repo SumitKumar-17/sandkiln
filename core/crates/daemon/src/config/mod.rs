@@ -128,6 +128,8 @@ pub struct Config {
     pub exec_timeout: Duration,
     /// Extra guest kernel arguments (`VmConfig::extra_boot_args`); empty = none.
     pub kernel_args: String,
+    /// Cap on retained time-travel checkpoints; `0` = unlimited.
+    pub retained_checkpoints_max: usize,
     /// `None` (default, `SANDKILN_JAILER_ENABLED` unset/falsy) keeps
     /// direct Firecracker spawn. See `JailerHostConfig`.
     pub jailer: Option<JailerHostConfig>,
@@ -308,6 +310,7 @@ impl Config {
             preview_timeout: Duration::from_secs(r.number("preview_timeout_secs")),
             exec_timeout: Duration::from_secs(exec_timeout_secs),
             kernel_args: r.opt_string("kernel_args").unwrap_or_default(),
+            retained_checkpoints_max: r.number("retained_checkpoints_max"),
             jailer,
             origins: Default::default(),
         };
@@ -342,6 +345,7 @@ impl Config {
             "log_format" => Some(format!("{:?}", self.log_format).to_lowercase()),
             "preview_timeout_secs" => Some(self.preview_timeout.as_secs().to_string()),
             "exec_timeout_secs" => Some(self.exec_timeout.as_secs().to_string()),
+            "retained_checkpoints_max" => Some(self.retained_checkpoints_max.to_string()),
             "kernel_args" => Some(self.kernel_args.clone()).filter(|a| !a.is_empty()),
             "firecracker_bin" => p(&self.firecracker_bin),
             "kernel_path" => p(&self.kernel_path),

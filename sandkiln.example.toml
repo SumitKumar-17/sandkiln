@@ -56,6 +56,9 @@
 # ---- storage ----
 
 # Durable state: held snapshots and retired checkpoints.
+# How many retired checkpoints (time-travel restore points, each a full-RAM snapshot plus a rootfs) to keep. Beyond this the oldest are deleted after each resume. 0 keeps all, which can fill the disk.
+# retained_checkpoints_max = 8
+
 # state_dir = "~/sandkiln-tools/state"
 
 # Per-sandbox writable rootfs copies. Defaults to `<state_dir>/rootfs`. Put it on the same reflink-capable filesystem (XFS, Btrfs) as `base_rootfs` for instant clones.

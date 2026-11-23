@@ -229,6 +229,46 @@ pub(crate) async fn restore_snapshot_history_by_id(state: Arc<AppState>, id: Str
 /// live**: manual testing filled a 468GB disk to 100% via ordinary
 /// resumes alone, each retiring a full-RAM checkpoint nothing cleaned up.
 ///
+/// Which retired checkpoints to delete so at most `max` remain: the oldest
+/// first. `max == 0` means unlimited. Pure, so the policy is unit-tested
+/// without a daemon.
+pub(crate) fn evict_candidates(retired: &[(String, SystemTime)], max: usize) -> Vec<String> {
+    if max == 0 || retired.len() <= max {
+        return Vec::new();
+    }
+    let mut by_age: Vec<&(String, SystemTime)> = retired.iter().collect();
+    by_age.sort_by_key(|(_, at)| *at);
+    by_age[..retired.len() - max].iter().map(|(id, _)| id.clone()).collect()
+}
+
+/// Deletes the oldest retired checkpoints beyond `retained_checkpoints_max`.
+/// Called after every retiring resume: without it each resume left a full-RAM
+/// snapshot plus a rootfs behind forever and filled disks. Removed from the
+/// map before the files are touched, like `delete_snapshot_history`.
+pub(crate) async fn enforce_retention(state: &Arc<AppState>) {
+    let evicted: Vec<RetiredSnapshot> = {
+        let mut retired = state.retired_snapshots.lock().unwrap();
+        let listing: Vec<(String, SystemTime)> = retired.iter().map(|(id, r)| (id.clone(), r.retired_at)).collect();
+        evict_candidates(&listing, state.config.retained_checkpoints_max)
+            .into_iter()
+            .filter_map(|id| retired.remove(&id))
+            .collect()
+    };
+    if evicted.is_empty() {
+        return;
+    }
+    tracing::info!(count = evicted.len(), max = state.config.retained_checkpoints_max, "evicting the oldest retired checkpoints over the retention cap");
+    spawn_blocking_in_current_span("evict retired checkpoints task panicked", move || {
+        for retired in evicted {
+            let _ = std::fs::remove_file(&retired.rootfs_path);
+            if let Some(dir) = retired.snapshot_path.parent() {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    })
+    .await;
+}
+
 /// Removed from `AppState::retired_snapshots` *before* the files are
 /// touched (same remove-before-act ordering as `resume_snapshot_by_id`)
 /// so a concurrent restore's lookup is atomic, never racing a
@@ -247,4 +287,36 @@ pub async fn delete_snapshot_history(
     })
     .await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn at(secs: u64) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
+    }
+
+    #[test]
+    fn under_or_at_the_cap_evicts_nothing() {
+        let r = vec![("a".to_string(), at(1)), ("b".to_string(), at(2))];
+        assert!(evict_candidates(&r, 2).is_empty());
+        assert!(evict_candidates(&r, 5).is_empty());
+    }
+
+    #[test]
+    fn over_the_cap_evicts_the_oldest_first() {
+        let r = vec![("new".to_string(), at(30)), ("old".to_string(), at(10)), ("mid".to_string(), at(20))];
+        assert_eq!(evict_candidates(&r, 2), vec!["old".to_string()]);
+        let mut two = evict_candidates(&r, 1);
+        two.sort();
+        assert_eq!(two, vec!["mid".to_string(), "old".to_string()]);
+    }
+
+    #[test]
+    fn zero_means_unlimited() {
+        let r: Vec<(String, SystemTime)> = (0..100).map(|i| (i.to_string(), at(i))).collect();
+        assert!(evict_candidates(&r, 0).is_empty());
+    }
 }
