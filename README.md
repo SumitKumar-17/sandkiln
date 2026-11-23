@@ -1,91 +1,108 @@
 # sandkiln
 
-A compute primitive for safely running untrusted or AI-generated code.
+Run untrusted or AI-generated code in hardware-isolated Firecracker microVMs, through an HTTP API, SDKs and a CLI.
 
-sandkiln boots hardware-isolated Firecracker microVMs on demand, gives you a
-programmatic API to execute commands and read/write files inside them, and
-tears them down when you're done. Each sandbox is a real microVM — its own
-kernel, its own filesystem, its own network namespace, isolated from every
-other sandbox on the same host. Built for the same shape of problem as AI
-agent sandboxes, code playgrounds, and untrusted-code execution services:
-isolate first, then run.
+Each sandbox is a real microVM with its own kernel, filesystem and network interface. You run the `sandkilnd` daemon yourself on a Linux host with KVM; there is no hosted service. Clients create a sandbox, run commands, read and write files, snapshot it, and stop it.
 
-**Website**: https://sandkiln.vercel.app (architecture, real benchmark
-numbers, live feature status, and startup-latency research). Full docs
-(getting started, guides, API/SDK/CLI reference) at
-https://sandkiln.mintlify.site/.
+- Docs: https://sandkiln.mintlify.site/
+- Website and engineering deep-dives: https://sandkiln.vercel.app
 
 ## Quickstart
 
-There's no hosted service — you run a `sandkilnd` daemon yourself. See
-[SELF_HOSTING.md](SELF_HOSTING.md) for the full setup (KVM, Firecracker,
-the base rootfs image, tap device pool, daemon config), then talk to it
-from a client.
+Needs a Linux x86_64 host with `/dev/kvm` readable and writable by your user, `sudo` for one-time setup, Rust via [rustup](https://rustup.rs), and `dnsmasq-base` (guest DNS forwarder). `setup.sh` installs `musl-tools` with `apt` if it is missing.
 
+```bash
+git clone https://github.com/SumitKumar-17/sandkiln.git
+cd sandkiln
+scripts/setup.sh                 # build, Firecracker, test kernel+rootfs, tap pool, DNS forwarder, capabilities; idempotent
+scripts/sandkilnd-ctl.sh start   # starts the daemon and waits for /healthz
+
+curl -s -X POST http://127.0.0.1:7777/sandboxes -d '{}'
+# {"id":"<sandbox-id>"}
+curl -s -X POST http://127.0.0.1:7777/sandboxes/<sandbox-id>/exec \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"echo","args":["hello from a microVM"]}'
 ```
-npm install sandkiln
-```
+
+`setup.sh` boots from a small test image (about 300MiB, no language runtimes). For a real Ubuntu image with Node.js and Python, run `scripts/setup.sh --production` (needs about 8GiB of disk and several minutes). Full details and every setting: [SELF_HOSTING.md](SELF_HOSTING.md).
+
+With no `SANDKILN_AUTH_TOKEN` set, every route except `/healthz` and `/metrics` is open to anyone who can reach the port. Set a token before listening beyond localhost.
+
+From TypeScript (`npm install sandkiln`):
 
 ```ts
 import { Sandbox } from "sandkiln";
 
-const sandbox = await Sandbox.create({ tags: { env: "ci" } });
-const result = await sandbox.runCommand("python3", ["analyze.py"]);
-console.log(result.stdout, result.exitCode);
-await sandbox.stop();
+const sandbox = await Sandbox.create({ tags: { env: "demo" } });
+const result = await sandbox.runCommand("python3", ["-c", "print(21 * 2)"]);
+console.log(result.stdout.trim(), result.exitCode); // 42 0
+await sandbox.stop(); // kept as a resumable snapshot by default
 ```
 
-A CLI ships the same operations:
+Python (`pip install sandkiln`) mirrors the same API with snake_case names. The CLI (`npm install -g sandkiln-cli`, command `kiln`) covers the same operations: `kiln sandbox create`, `kiln sandbox exec <id> -- <cmd>`. The `python3` example needs the production image.
+
+## What works
+
+Status as of 2026-11-23, verified against a real daemon and real microVMs on one dev box. `ROADMAP.md` is the authoritative list.
+
+| Area | Status |
+| --- | --- |
+| Create, exec, file operations, list, stop | Working in the HTTP API, both SDKs and the CLI |
+| Snapshot, resume, fork, named sandboxes, durable across daemon restart | Working |
+| Pre-warmed snapshot pools (`max_count`, queueing) | Working; pool config is in-memory, lost on daemon restart |
+| Per-sandbox networking: tap pool, shared bridge with port isolation, NAT, egress policy via iptables chains | Working |
+| Persistent drives with read-only sharing, custom and managed images | Working |
+| Idle lifecycle: auto-suspend, auto-destroy, archive | Working; daemon-operator config only, no client surface |
+| Interactive PTY over WebSocket, streamed exec | Working in the JS SDK and CLI; not in the Python SDK |
+| Dev-server preview proxy, local tunnel, remote storage mounts (S3-compatible via FUSE and rclone) | Working |
+| Snapshot lineage, time-travel restore | HTTP API only; no SDK or CLI surface yet |
+| Firecracker jailer hardening | Opt-in; not yet proven on real hardware |
+| Request ids, `/metrics`, durable lifecycle history (sqlite) | Working |
+| OCI image conversion, multi-node, snapshot encryption at rest | Planned |
+| Per-caller auth scoping | Not implemented; one shared bearer token |
+
+Tests: `cargo test --workspace` (303 passing, no KVM needed) and `scripts/integration-test.sh` (315 checks against a live daemon; `SANDKILN_INTEGRATION_TEST_ONLY=<substring>` runs one topic).
+
+## Measured performance
+
+One shared dev box (Intel i9-13900K, 62 GiB, ext4 host, Firecracker v1.16.1), small samples, directional only.
+
+| Measurement | Result | Source |
+| --- | --- | --- |
+| Cold `POST /sandboxes`, rootfs is a full byte copy on ext4 | 187.5ms mean of 20 (clone 127.9ms, boot 14.9ms, network lease 3.5ms) | `scripts/bench-report.sh` |
+| Cold `POST /sandboxes`, rootfs dir on the same XFS reflink filesystem as the base image | 17.9ms mean of 20 (clone 0.08ms) | same |
+| First `exec` after a cold create | about 420-460ms (create returns before the guest agent is listening) | `ROADMAP.md`, Benchmarking |
+| First `exec` after resuming a snapshot with a live agent | about 4-18ms | same |
+| Later `exec` on the same sandbox | about 3-5ms | same |
+| Snapshot take | 310-990ms, load dependent | same |
+| Cold boot, `criterion` | 10.5-10.9ms (earlier measurement, being re-verified) | `cargo bench -p sandkiln-vmm --bench vm_lifecycle` |
+
+To get the 17.9ms path, put `SANDKILN_ROOTFS_DIR` on the same reflink-capable filesystem as `SANDKILN_BASE_ROOTFS`. On an ext4-only host, `sudo scripts/host-setup/create-reflink-volume.sh <user>` builds an XFS loopback volume. `/metrics` reports `rootfs_clone_total{method="reflink"|"copy"}` so a silent fallback is visible. See [Startup latency](https://sandkiln.mintlify.site/architecture/startup-latency).
+
+## Layout
 
 ```
-npm install -g sandkiln-cli   # installs the `kiln` command
+core/crates/protocol/    wire format shared by host and guest
+core/crates/guest-agent/ static musl binary that runs inside the VM
+core/crates/vmm/         drives Firecracker, rootfs clones, networking (host side)
+core/crates/store/       durable sandbox-lifecycle history (sqlite)
+core/crates/daemon/      axum HTTP API (sandkilnd)
+packages/sdk/            sandkiln on npm (TypeScript)
+packages/python/         sandkiln on PyPI
+packages/cli/            kiln CLI, wraps the JS SDK
+images/                  kernel and rootfs build scripts, agent injection
+scripts/                 setup, daemon control, tests, benchmarks
+website/                 project site (Astro)
+docs-site/               full docs (Mintlify)
+examples/                runnable reference projects
 ```
 
-Python mirrors the JS/TS SDK exactly too:
+## Links
 
-```
-pip install sandkiln
-```
-
-See [`packages/python`](packages/python) and [`packages/cli`](packages/cli).
-
-## Status
-
-Active development. The core primitive, networking, auth, tags, file ops,
-snapshot/resume/fork, named sandboxes, persistent-by-default stop,
-read-only shared drives, auto-suspend on idle, custom/managed images,
-per-sandbox I/O rate limiting, and all three clients (JS/TS, Python, CLI)
-work and are verified against real hardware — see
-[CHANGELOG.md](CHANGELOG.md) for what shipped and
-[ROADMAP.md](ROADMAP.md) for what's still open (OCI-image conversion,
-multi-node, snapshot encryption at rest). The plan is a direction, not a
-spec, and keeps changing as the project gets built.
-
-Picking this up as a contributor (human or agent)? Read
-[AGENTS.md](AGENTS.md) first — it covers non-obvious things this project
-already hit and fixed once.
-
-## Architecture
-
-- **`core/`** — Rust workspace: `sandkiln-protocol` (the wire format
-  shared by host and guest), `sandkiln-guest-agent` (a static binary that
-  runs inside each microVM), `sandkiln-vmm` (drives Firecracker and
-  networking), `sandkiln-store` (durable sandbox-lifecycle history,
-  sqlite), `sandkiln-daemon` (the HTTP API, `sandkilnd`).
-- **`packages/sdk`** — [`sandkiln`](https://www.npmjs.com/package/sandkiln)
-  on npm, the JS/TS client.
-- **`packages/python`** — [`sandkiln`](https://pypi.org/project/sandkiln/)
-  on PyPI, the Python client, mirroring the JS SDK exactly.
-- **`packages/cli`** — `kiln`, the command-line interface.
-- **`images/`** — kernel and rootfs build scripts for sandbox base images.
-- **`scripts/`** — dev-box setup and daily-use tooling (`dev.sh` is the
-  master dispatcher; one-time host provisioning lives under
-  `host-setup/`, narrow manual-debugging tools under `dev-tools/`).
-- **`website/`** — the project site at https://sandkiln.vercel.app:
-  architecture, benchmarks, roadmap.
-- **`docs-site/`** — the full docs site (getting started, core concepts,
-  guides, API/SDK/CLI reference, architecture), a separate Mintlify
-  project — see https://sandkiln.mintlify.site/.
+- [SELF_HOSTING.md](SELF_HOSTING.md): host setup, every `SANDKILN_*` setting, running under systemd
+- [ROADMAP.md](ROADMAP.md): current state, measurements and open work
+- [CHANGELOG.md](CHANGELOG.md)
+- [AGENTS.md](AGENTS.md): engineering standard for contributors, human or agent
 
 ## License
 
