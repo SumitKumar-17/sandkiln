@@ -50,6 +50,7 @@ IMAGES_DIR="$REPO_ROOT/images"
 CORE_DIR="$REPO_ROOT/core"
 TOOLS_DIR="${SANDKILN_TOOLS_DIR:-$HOME/sandkiln-tools}"
 ENV_FILE="$REPO_ROOT/.env.sandkiln-setup"
+TOML_FILE="$REPO_ROOT/sandkiln.toml"
 
 PRODUCTION=0
 TAP_POOL_SIZE=32
@@ -250,23 +251,31 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-step "writing $ENV_FILE"
+step "writing $TOML_FILE"
 # ---------------------------------------------------------------------------
-cat > "$ENV_FILE" <<EOF
-# Written by scripts/setup.sh — sourced automatically by
-# scripts/sandkilnd-ctl.sh. Anything you've already exported yourself
-# takes precedence (every line below only fills in if unset). Safe to
-# edit by hand or delete; re-running setup.sh regenerates it.
-: "\${SANDKILN_FIRECRACKER_BIN:=$FC_BIN}"
-: "\${SANDKILN_KERNEL_PATH:=$KERNEL_PATH}"
-: "\${SANDKILN_BASE_ROOTFS:=$ROOTFS_PATH}"
-: "\${SANDKILN_TAP_POOL_PREFIX:=sktap}"
-: "\${SANDKILN_TAP_POOL_SIZE:=$TAP_POOL_SIZE}"
-: "\${SANDKILN_DRIVES_DIR:=$TOOLS_DIR/drives}"
-export SANDKILN_FIRECRACKER_BIN SANDKILN_KERNEL_PATH SANDKILN_BASE_ROOTFS
-export SANDKILN_TAP_POOL_PREFIX SANDKILN_TAP_POOL_SIZE SANDKILN_DRIVES_DIR
+# sandkiln.toml is the daemon's own config file (see sandkiln.example.toml for
+# every key). Written only when absent so a hand-edited file is never
+# clobbered; the env vars the daemon also reads still override it.
+if [ -f "$TOML_FILE" ]; then
+  skip "$TOML_FILE already exists (left untouched; compare with sandkiln.example.toml)"
+else
+  umask 077
+  cat > "$TOML_FILE" <<EOF
+# Written by scripts/setup.sh. Every key and its default: sandkiln.example.toml
+# Validate with: core/target/release/sandkilnd --check-config
+firecracker_bin = "$FC_BIN"
+kernel_path = "$KERNEL_PATH"
+base_rootfs = "$ROOTFS_PATH"
+tap_pool_prefix = "sktap"
+tap_pool_size = $TAP_POOL_SIZE
+drives_dir = "$TOOLS_DIR/drives"
 EOF
-ok "wrote $ENV_FILE"
+  ok "wrote $TOML_FILE"
+fi
+if [ -f "$ENV_FILE" ]; then
+  mv "$ENV_FILE" "$ENV_FILE.migrated"
+  ok "legacy $ENV_FILE superseded by $TOML_FILE (kept as $ENV_FILE.migrated)"
+fi
 
 echo
 echo "=== setup complete ==="
@@ -276,8 +285,8 @@ echo "rootfs:       $ROOTFS_PATH $([ "$PRODUCTION" -eq 0 ] && echo '(test image 
 echo "tap pool:     sktap0..sktap$((TAP_POOL_SIZE - 1))"
 echo
 echo "next: scripts/sandkilnd-ctl.sh start"
-echo "(no env vars needed — $ENV_FILE covers it; set SANDKILN_AUTH_TOKEN"
-echo " yourself before exposing this beyond localhost)"
+echo "(no env vars needed — $TOML_FILE covers it; set auth_token there or"
+echo " SANDKILN_AUTH_TOKEN before exposing this beyond localhost)"
 
 if [ "$START_AFTER" -eq 1 ]; then
   echo

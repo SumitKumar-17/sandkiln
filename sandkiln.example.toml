@@ -1,0 +1,113 @@
+# sandkiln.example.toml: every daemon setting, with its default.
+#
+# Copy to sandkiln.toml (or ~/.config/sandkiln/sandkiln.toml, or point
+# SANDKILN_CONFIG / `sandkilnd --config` at it) and uncomment what you change.
+# Environment variables (SANDKILN_<KEY>) always override this file.
+#
+#   sandkilnd --check-config     validate it
+#   sandkilnd --print-config     show the effective value of every setting
+#
+# A file containing auth_token must not be readable by other users:
+#   chmod 600 sandkiln.toml
+
+# ---- server ----
+
+# Address the HTTP API listens on.
+# listen_addr = "127.0.0.1:7777"
+
+# `pretty` for terminals, `json` for one JSON object per log line.
+# log_format = "pretty"
+
+# How long a dev-server preview request waits before a 504.
+# preview_timeout_secs = 30
+
+# Bearer token required on the REST API. Unset disables auth entirely: fine for localhost, never beyond.
+# auth_token = "change-me"
+
+# ---- vm ----
+
+# Path to the Firecracker binary.
+# firecracker_bin = "~/sandkiln-tools/bin/firecracker"
+
+# Guest kernel image (vmlinux).
+# kernel_path = "~/sandkiln-tools/images/vmlinux-5.10.223"
+
+# Default base rootfs image sandboxes boot from.
+# base_rootfs = "~/sandkiln-tools/images/ubuntu-22.04.ext4"
+
+# Default vCPUs per sandbox.
+# vcpu_count = 2
+
+# Default memory per sandbox, in MiB.
+# mem_size_mib = 512
+
+# Ceiling on a per-sandbox vCPU override.
+# max_vcpu_count = 16
+
+# Ceiling on a per-sandbox memory override, in MiB.
+# max_mem_size_mib = 16384
+
+# ---- storage ----
+
+# Durable state: held snapshots and retired checkpoints.
+# state_dir = "~/sandkiln-tools/state"
+
+# Per-sandbox writable rootfs copies. Defaults to `<state_dir>/rootfs`. Put it on the same reflink-capable filesystem (XFS, Btrfs) as `base_rootfs` for instant clones.
+# rootfs_dir = "/mnt/sandkiln-xfs/rootfs"
+
+# Persistent drives.
+# drives_dir = "~/sandkiln-tools/drives"
+
+# Registered custom images.
+# images_dir = "~/sandkiln-tools/images-registered"
+
+# SQLite database of durable sandbox lifecycle history.
+# history_db_path = "~/sandkiln-tools/history.db"
+
+# Where idle snapshots' state and memory files are archived to.
+# archive_dir = "~/sandkiln-tools/archive"
+
+# ---- network ----
+
+# Bridge all sandbox taps attach to.
+# bridge_name = "sktapbr0"
+
+# Gateway IPv4 address on the bridge (a /24 is carved from it).
+# bridge_gateway = "172.16.0.1"
+
+# Host interface sandbox traffic NATs out of. Unset detects the default route.
+# uplink_iface = "eth0"
+
+# Name prefix of the pre-created tap devices.
+# tap_pool_prefix = "sktap"
+
+# Number of pre-created tap devices. Must match `create-tap-pool.sh`; caps concurrent sandboxes.
+# tap_pool_size = 32
+
+# ---- lifecycle ----
+
+# Destroy a sandbox after this many idle seconds. Unset or 0 disables.
+# idle_timeout_secs = 600
+
+# Suspend (snapshot) an idle sandbox instead. Must be strictly less than `idle_timeout_secs` when both are set. Unset or 0 disables.
+# auto_suspend_timeout_secs = 300
+
+# Move an unresumed snapshot's state and memory files to `archive_dir` after this many seconds. Unset or 0 disables.
+# archive_timeout_secs = 3600
+
+# ---- jailer ----
+
+# Boot sandboxes under the Firecracker jailer (chroot, cgroups, dedicated uid/gid). `true` or `1` enables.
+# jailer_enabled = false
+
+# Path to the jailer binary (setuid root).
+# jailer_bin = "~/sandkiln-tools/bin/jailer"
+
+# Base directory for per-VM chroots; keep on the same filesystem as rootfs and drives.
+# jailer_chroot_base_dir = "~/sandkiln-tools/jail"
+
+# First uid/gid of the range reserved for jailed VMs.
+# jailer_uid_gid_base = 600000
+
+# Size of the uid/gid range (max concurrent jailed VMs).
+# jailer_pool_size = 32
