@@ -230,12 +230,12 @@ step "DNS proxy for guest name resolution"
 # start's "two commands" promise isn't actually true without it, so it's
 # part of this script rather than a separate manual step users skip past.
 BRIDGE_GATEWAY="${SANDKILN_BRIDGE_GATEWAY:-172.16.0.1}"
-if ss -lnup 2>/dev/null | grep -q "${BRIDGE_GATEWAY}:53"; then
-  skip "dns proxy already listening on $BRIDGE_GATEWAY:53"
+if systemctl is-active --quiet sandkiln-dnsmasq.service 2>/dev/null; then
+  skip "dns proxy service already active"
 else
   sudo bash "$SCRIPT_DIR/host-setup/start-dns-proxy.sh" "$BRIDGE_GATEWAY" \
     || { bad "start-dns-proxy.sh failed"; exit 1; }
-  ok "dns proxy listening on $BRIDGE_GATEWAY:53 (not a systemd service yet -- re-run this after a host reboot, see SELF_HOSTING.md section 5)"
+  ok "dns proxy installed as the sandkiln-dnsmasq systemd service (persists across reboots; binds $BRIDGE_GATEWAY:53 once the daemon creates the bridge)"
 fi
 
 # ---------------------------------------------------------------------------
