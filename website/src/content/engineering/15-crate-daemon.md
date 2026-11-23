@@ -161,9 +161,9 @@ Names get the same treatment. `name_holder` and `resolve_name` check live sandbo
 
 ### Sandbox and Snapshot: where identity lives
 
-A `Sandbox` (`sandbox.rs`) owns a `Vm`, a network `Lease`, and a private rootfs file. A `Snapshot` (`snapshots/held.rs`) takes those over when a sandbox is stopped with its state kept: it holds the exact `Lease`, because guest IP and MAC are frozen into the saved memory image, and it keeps the rootfs path, because Firecracker's snapshot records only the file's host path. Several fields exist to protect these invariants:
+A `Sandbox` (`sandbox.rs`) owns a `Vm`, a network `Lease`, and a private rootfs file. A `Snapshot` (`snapshots/held.rs`) takes those over when a sandbox is stopped with its state kept: it holds the exact `Lease`, because guest IP and MAC are frozen into the saved memory image, and it keeps the rootfs path, because Firecracker's snapshot records only the file's host path. Anything resumed from it must be given its own disk explicitly (`rootfs_override`), or it would write into the snapshot's file (post 27). Several fields exist to protect these invariants:
 
-- **`forked_into`** on a snapshot is a lock ruling out two live descendants sharing one rootfs file or one tap device. It is set while a fork runs and cleared only after that descendant's `Vm` has actually been killed.
+- **`forked_into`** on a snapshot is a lock ruling out two live descendants sharing one tap device and network identity (each fork has its own rootfs clone, so the disk is no longer a reason for it). It is set while a fork runs and cleared only after that descendant's `Vm` has actually been killed.
 - **`source_snapshot_id` and `parent_snapshot_id` are separate on purpose.** The first is `Some` only for a fork, and is what refuses re-snapshotting one. The second is lineage and must be `Some` on both resume and fork. Conflating them was a real bug, caught live, as the field's own doc comment records.
 - **`network` and `egress` are `None` for a fork.** The snapshot owns the lease and the iptables chain tied to it.
 - **A `RetiredSnapshot` holds a bare `NetworkConfig`, not a live `Lease`.** Nothing is reserved from the free pool just by sitting in history; a lease is taken only at restore time, gated by `tap_device_holder`.
@@ -197,7 +197,7 @@ fn check_snapshottable(is_jailed: bool, source_snapshot_id: Option<&str>) -> Res
 }
 ```
 
-A jailed sandbox bakes in-jail paths into its snapshot and `Vm::resume` only spawns directly, and a fork does not own its rootfs outright. Callers react to the two reasons differently: an explicit snapshot request turns both into errors, while the default stop path (`stop_sandbox_by_id`, `http/routes/sandbox.rs:669`) treats a fork as a harmless fall-through to destroy and only a jailed sandbox as a real conflict.
+A jailed sandbox bakes in-jail paths into its snapshot and `Vm::resume` only spawns directly, and a fork does not own its lease. Callers react to the two reasons differently: an explicit snapshot request turns both into errors, while the default stop path (`stop_sandbox_by_id`, `http/routes/sandbox.rs:669`) treats a fork as a harmless fall-through to destroy and only a jailed sandbox as a real conflict.
 
 The snapshot itself runs through `snapshot_and_stop` (`http/routes/snapshot.rs:147`), shared by the explicit route, the default stop path, the idle reaper, the pool replenisher and shutdown, so the mechanics cannot drift. Inside it the VM is paused, snapshotted, and then stopped with `Vm::force_stop`, not `stop`. The old `stop()` first asked the guest to `sync`, a request a paused guest can never answer, so every snapshot sat out a doomed timeout: 6.8 s end to end for about 0.5 s of real work. With `force_stop` the same request measured 0.56 s (live, 2026-11-24, directional). See the [vmm tour](/engineering/13-crate-vmm) for the stop variants.
 

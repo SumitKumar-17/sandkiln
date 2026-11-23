@@ -8,6 +8,8 @@ updated: 2026-11-24
 
 Every sandbox gets its own writable rootfs. The base image is around 300 MiB, so the obvious implementation, copy the file, costs real time on every create. This post follows that one cost from a wrong conclusion, through a profile that overturned it, to a fix measured at roughly a tenth of the original create latency. It is also a story about how a correct measurement can sit next to a wrong explanation for months.
 
+Note that the create totals below end when the VM is started. Time to first command, which includes guest boot, is a separate and larger figure covered in [Guest boot time](/engineering/28-opt-guest-boot-time).
+
 Dates matter here, so they are stated: the profile is from 2026-09-14, the fix and its measurements are from 2026-11-23.
 
 ## Problem and how it was found

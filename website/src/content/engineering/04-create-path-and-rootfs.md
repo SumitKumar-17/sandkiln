@@ -94,7 +94,7 @@ After the blocking task returns, the daemon records the creation in the history 
 
 ## The rootfs clone
 
-Every sandbox boots from its own writable rootfs file. The base image is never attached to a VM, because guests write to their root device. The primitive that produces the private file is `clone_file` in `core/crates/vmm/src/rootfs.rs`.
+Every sandbox boots from its own writable rootfs file. The base image is never attached to a VM, because guests write to their root device. The primitive that produces the private file is `clone_file` in `core/crates/vmm/src/rootfs.rs`. The same wrapper, `clone_rootfs`, is also what gives a fork, a history-retaining resume and a restore their own disk, and there the clone must be made before the resume and handed to Firecracker explicitly (see [post 6](/engineering/06-snapshots-resume-fork) and [post 27](/engineering/27-correctness-snapshot-disk-corruption)).
 
 ```rust
 pub fn clone_file(src: &Path, dst: &Path) -> io::Result<CloneMethod> {

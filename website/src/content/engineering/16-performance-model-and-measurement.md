@@ -8,6 +8,8 @@ updated: 2026-11-24
 
 sandkiln has several performance tools, and each one measures a different slice of the same system. A criterion bench times the VMM crate in isolation. A load script times the HTTP API under concurrency. A metrics histogram times the daemon's own phases. A client-side stopwatch times what a caller actually experiences. Quoting a number without saying which tool produced it is how this project has misread its own data before, so this post is the map: what each tool covers, how to run it, and how to read the result.
 
+The headline latency is **time to first command**: from `POST /sandboxes` until the first exec succeeds, measured by `first_exec_client` in `scripts/bench-report.sh`. It was 413.25 ms and is 214.5 ms after the guest boot change (-48%), described in [Guest boot time](/engineering/28-opt-guest-boot-time). The cold boot figures that appear below, and `InstanceStart` in the phase tables, are internal phases measured at the VMM. They end when Firecracker starts the vCPUs, before the guest kernel, init or agent has run, so they are not the boot time a caller waits for.
+
 Every figure below is from one shared development box with a real Firecracker and KVM, never a dedicated benchmark machine. The numbers are directional. They are good enough to rank bottlenecks and to see a 10x change, and not good enough to quote to two decimal places as a promise.
 
 ## Four layers, four tools
@@ -59,6 +61,8 @@ Published boot numbers have moved, and both sets are real:
 | --- | --- | --- | --- | --- |
 | Earlier published runs (ROADMAP.md Benchmarking) | 10.5 to 10.9 ms | 220 to 250 us | about 322 ms (309.6 to 335.0 ms) | earlier kernel and box load |
 | Re-measured 2026-11-23 (criterion, kernel 6.8) | 12.6 to 14.0 ms | 242 to 248 us | 485 to 727 ms | same box, different load state |
+
+Neither row is time to first command. That figure is higher because it includes the guest kernel and userspace: 413.25 ms before and 214.5 ms after the guest boot change, with `first_exec_resumed` going from 18 ms to 8.4 ms and the create total from 18.4 ms to 16.4 ms (`bench-report.sh 20`, 2026-11-24).
 
 Resume from snapshot was re-measured in the same criterion run at 3.7 to 4.0 ms. The reflink create has the same old-and-new pairing: a mean of 17.9 ms in the first reflink run and 18.4 ms in the re-measurement (20 sequential cold creates through `scripts/bench-report.sh`, rootfs on a reflink filesystem), itemized further down.
 
@@ -114,8 +118,8 @@ sequenceDiagram
 
 It also records two numbers that `/metrics` cannot see, both timed by the client the way a real caller would experience them.
 
-- `first_exec_client`: the first real exec against a freshly created sandbox. `POST /sandboxes` returning 200 means Firecracker's `InstanceStart` succeeded, not that the guest agent is listening. On the box where this was found, the first exec absorbed roughly 420 to 460 ms while every later exec on the same sandbox took about 3 to 5 ms.
-- `first_exec_resumed`: the same measurement against a sandbox forked from a snapshot of an already warmed one, where the agent was confirmed live before the snapshot. It measured about 4 to 18 ms, a 25 to 100 times difference that a cold-only run would never reveal.
+- `first_exec_client`: the first real exec against a freshly created sandbox. `POST /sandboxes` returning 200 means Firecracker's `InstanceStart` succeeded, not that the guest agent is listening. On the box where this was found, the first exec absorbed roughly 420 to 460 ms while every later exec on the same sandbox took about 3 to 5 ms. This is the headline number: it read 413.25 ms and is 214.5 ms after quieting the guest kernel and capping pre-created loop devices ([Guest boot time](/engineering/28-opt-guest-boot-time)).
+- `first_exec_resumed`: the same measurement against a sandbox forked from a snapshot of an already warmed one, where the agent was confirmed live before the snapshot. It measured about 4 to 18 ms (8.4 ms after the guest boot change, against 18 ms in the same comparison), a 25 to 100 times difference that a cold-only run would never reveal.
 
 Those two are the reason the performance story for pre-warmed pools is told in terms of "time until the sandbox can run something", not "time until `create()` returned". The run is capped at ten forks regardless of the iteration count, because a forked first exec has far less variance and each sample needs a real resume.
 
@@ -196,7 +200,7 @@ A short list of rules, each of which has been learned from a specific mistake.
 
 - **Name the tool.** "Boot is 12 ms" (criterion, VMM only) and "create is 18 ms" (HTTP, full path) are both true on the same day and describe different things.
 - **Look for the quantization signature.** A phase that reads the same value on every sample is a sleep or a timeout, not work. The socket wait measured 20.04 to 20.18 ms across twenty boots. Real work has spread.
-- **Count to "usable", not to "returned".** `create()` returning and the guest agent answering are different events, with a gap on the order of 420 to 460 ms for a cold sandbox. `first_exec_client` is the measurement that sees it.
+- **Count to "usable", not to "returned".** `create()` returning and the guest agent answering are different events, with a gap on the order of 420 to 460 ms for a cold sandbox before the guest boot change, and about 214 ms now. `first_exec_client` is the measurement that sees it.
 - **Time the operation the caller invokes, end to end.** The criterion `snapshot_take` bench times only `pause` plus `snapshot`; the daemon's snapshot request also stops the VM afterwards. The bench read a fraction of a second while the HTTP request took 6.8 seconds, because the stop was outside the timed region and was waiting on a reply a paused guest cannot give. See [Snapshot stop: 6.8s to 0.56s](/engineering/25-opt-snapshot-stop-force-stop).
 - **Expect noise.** One shared desktop-class box, small samples, one create at a time. Phase shares were consistent enough to act on, and absolute totals moved by a few percent run to run. Disk-heavy phases such as snapshot take move far more than that.
 

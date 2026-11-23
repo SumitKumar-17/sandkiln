@@ -53,6 +53,8 @@ The crate is about 3,000 lines across 13 source files. The split follows the roo
 
 ### The boot path
 
+The guest kernel command line is built by `kernel_command_line()` (`core/crates/vmm/src/vm/boot.rs:243`): the fixed base `console=ttyS0 reboot=k panic=1 pci=off`, `DEFAULT_KERNEL_ARGS = "quiet loop.max_loop=1"` (`boot.rs:238`), `ip=` when networked, then `VmConfig::extra_boot_args` (`vm/mod.rs:88`) last so operators can override. Two unit tests in `kernel_args_tests` (`boot.rs:344`) cover the ordering. The defaults cut time to first command from 413 ms to 214.5 ms; see [Guest boot time](/engineering/28-opt-guest-boot-time).
+
 `Vm::boot` allocates an id from a process-wide `AtomicU64`, derives a console log path from it, runs the boot, and annotates any failure with that log path. The mechanics live in `boot.rs`, where the direct and jailed paths converge early. Both produce a `BootTarget` holding the child process and the paths Firecracker must be told about, so the configuration sequence never branches on jail versus direct.
 
 ```mermaid
@@ -221,7 +223,7 @@ stateDiagram-v2
     Paused --> Stopped: stop, kill
     Snapshotted --> Stopped: caller stops the process
     Stopped --> [*]
-    [*] --> Running: resume loads snapshot with resume_vm true
+    [*] --> Running: resume loads snapshot, repoints rootfs if overridden
     Spawned --> Stopped: configuration failure, cleanup
 ```
 
@@ -310,7 +312,7 @@ What the unit tests cannot cover is stated in the crate's `AGENTS.md`: nothing h
 
 ## How neighbours consume it
 
-The daemon is the only production consumer. It calls `Vm::boot` from its cold-create path and `Vm::resume` from its resume and fork paths, `Vm::call`, `call_with_timeout` (through an `AgentEndpoint`), `open_pty` and `open_exec_stream` from its exec, file, PTY and log routes, `update_metadata` after claiming a pre-warmed pool snapshot, and `force_stop` both when a post-resume health check fails and when snapshotting a paused sandbox. It builds `VmConfig` and `ResumeConfig` itself, holds `NetworkManager`, `DriveStore`, `ImageStore` and `JailerIdPool` in its application state, and calls `rootfs::clone_file` and `egress::apply` around boot. Resource ownership follows from that: this crate creates and tears down the Firecracker process and chroot, the network manager owns the free pools, and the daemon owns the mapping from sandbox to lease and drive.
+The daemon is the only production consumer. It calls `Vm::boot` from its cold-create path and `Vm::resume` from its resume and fork paths, `Vm::call`, `call_with_timeout` (through an `AgentEndpoint`), `open_pty` and `open_exec_stream` from its exec, file, PTY and log routes, `update_metadata` after claiming a pre-warmed pool snapshot, and `force_stop` both when a post-resume health check fails and when snapshotting a paused sandbox. It builds `VmConfig` and `ResumeConfig` itself (including `rootfs_override`, the private clone a retaining resume or fork writes to), holds `NetworkManager`, `DriveStore`, `ImageStore` and `JailerIdPool` in its application state, and calls `rootfs::clone_file` and `egress::apply` around boot. Resource ownership follows from that: this crate creates and tears down the Firecracker process and chroot, the network manager owns the free pools, and the daemon owns the mapping from sandbox to lease and drive.
 
 Downward, the crate depends on `sandkiln-protocol` for message types and framing, plus `libc`, `serde`, `serde_json` and `tracing`.
 

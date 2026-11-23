@@ -3,7 +3,7 @@ title: Startup latency
 description: Where a cold sandbox create spends its time, what a reflink rootfs clone changes, and why a pre-warmed pool is the lever for time-to-first-command.
 ---
 
-**Claim:** a cold `POST /sandboxes` takes 187.5ms when the per-sandbox rootfs is a full byte copy on ext4 and 17.9ms when the rootfs directory shares a reflink-capable filesystem (XFS) with the base image. The rootfs clone, not VM boot or networking, is the cost.
+**Claim:** the latency a caller feels is the time from `POST /sandboxes` to the first successful command, and it was 413ms on a cold sandbox before guest boot was trimmed, 214.5ms after (2026-11-24, `scripts/bench-report.sh 20`, `first_exec_client`). The `POST` itself returns earlier than that: it takes 187.5ms when the per-sandbox rootfs is a full byte copy on ext4 and 17.9ms when the rootfs directory shares a reflink-capable filesystem (XFS) with the base image. The rootfs clone, not VM boot or networking, is the cost of the `POST`; the guest's own boot is the cost of the first command. See [Guest boot time](https://sandkiln.vercel.app/engineering/28-opt-guest-boot-time/).
 
 ## Evidence
 
@@ -39,9 +39,11 @@ Reproduce with `scripts/bench-report.sh [iterations]` against a running daemon. 
 
 The same profile found `Vm::boot` sleeping a flat 20ms (20.11ms on all 20 boots, min 20.04, max 20.18) before connecting to Firecracker's API socket. It now retries the connect itself on a 200us to 5ms backoff (`connect_api_with_retry` in `core/crates/vmm/src/vm/mod.rs`). Retrying the connect also avoids a race: the socket file appears at `bind()`, slightly before `listen()`. Measured then: socket wait 20.11ms to 0.67ms, boot 34.00ms to about 11.3ms, create 167.65ms to about 144ms. That run is earlier than the table above and on a differently loaded box, so the totals are not comparable across the two.
 
-Under `criterion` (`cargo bench -p sandkiln-vmm --bench vm_lifecycle`) on the same box, cold boot read 10.5-10.9ms in an earlier run and 12.6-14.0ms on 2026-11-23 (kernel 6.8). The same run read an exec on an open connection at 242-248us, resume from a snapshot at 3.7-4.0ms, and snapshot take at 485-727ms (earlier: 310-335ms). Both sets are directional, from one shared box; neither is authoritative.
+Under `criterion` (`cargo bench -p sandkiln-vmm --bench vm_lifecycle`) on the same box, cold boot (spawn to `InstanceStart`, an internal phase and not the time to a usable sandbox) read 10.5-10.9ms in an earlier run and 12.6-14.0ms on 2026-11-23 (kernel 6.8). The same run read an exec on an open connection at 242-248us, resume from a snapshot at 3.7-4.0ms, and snapshot take at 485-727ms (earlier: 310-335ms). Both sets are directional, from one shared box; neither is authoritative.
 
 ## Create returns before the sandbox is usable
+
+The numbers in this section predate the guest boot change: the default kernel command line is now `quiet loop.max_loop=1` (plus any `kernel_args` you set), which cut `first_exec_client` from 413.25ms to 214.5ms and `first_exec_resumed` from 18ms to 8.4ms. Roughly 125ms of what remains is guest systemd userspace. The earlier measurements below are kept for the record.
 
 `POST /sandboxes` returns 200 once Firecracker's `InstanceStart` succeeds, not once the guest agent is listening. The first `exec` on a cold sandbox measured about 420-460ms; every later `exec` on the same sandbox measured 3-5ms. The first `exec` on a sandbox resumed from a snapshot whose agent was already live measured about 4-18ms. `scripts/bench-report.sh` tracks both as `first_exec_client` and `first_exec_resumed`.
 
