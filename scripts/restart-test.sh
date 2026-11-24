@@ -6,6 +6,11 @@
 # It restarts the daemon, so it is not part of integration-test.sh, whose
 # topics share one long-running daemon.
 #
+# SANDKILN_INTEGRATION_TEST_IMAGE=<registered-image-id> boots the sandboxes from
+# that image (for example the init-mode image) instead of the daemon default.
+# Firecracker processes are tracked by the pids of the daemon's own children,
+# so other daemons on the same box do not change the result.
+#
 # Usage: scripts/restart-test.sh [base-url]
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,18 +26,23 @@ AUTH=()
 api() { curl -s "${AUTH[@]}" "$@"; }
 
 run="restart-test-$$"
+IMAGE_JSON=""
+[ -n "${SANDKILN_INTEGRATION_TEST_IMAGE:-}" ] && IMAGE_JSON=",\"image_id\":\"$SANDKILN_INTEGRATION_TEST_IMAGE\""
 echo "=== orderly shutdown ==="
 "$CTL" status >/dev/null 2>&1 || { echo "daemon not running: start it first (scripts/sandkilnd-ctl.sh start)"; exit 2; }
 
 for i in 1 2 3; do
-  api -X POST "$BASE/sandboxes" -H 'content-type: application/json' -d "{\"name\":\"$run-$i\"}" -o /dev/null
+  api -X POST "$BASE/sandboxes" -H 'content-type: application/json' -d "{\"name\":\"$run-$i\"$IMAGE_JSON}" -o /dev/null
 done
-before="$(pgrep -x firecracker | wc -l)"
 pid="$(cat "$PID_FILE")"
+children="$(pgrep -P "$pid" -x firecracker)"
+before="$(echo "$children" | grep -c .)"
 kill -TERM "$pid"
 for _ in $(seq 1 120); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
 kill -0 "$pid" 2>/dev/null && bad "daemon still running 60s after SIGTERM" || ok "daemon exited after SIGTERM"
-[ "$(pgrep -x firecracker | wc -l)" -lt "$before" ] && ok "Firecracker processes were stopped ($before before)" || bad "Firecracker processes outlived the daemon"
+[ "$before" -ge 3 ] && ok "the daemon had $before Firecracker children before the signal" || bad "expected 3 Firecracker children before the signal, saw $before"
+alive=0; for c in $children; do kill -0 "$c" 2>/dev/null && alive=$((alive + 1)); done
+[ "$alive" -eq 0 ] && ok "every Firecracker child exited with the daemon" || bad "$alive Firecracker child(ren) outlived the daemon"
 
 "$CTL" start --no-build >/dev/null 2>&1 || { bad "daemon failed to restart"; exit 1; }
 names="$(api "$BASE/snapshots" | json '" ".join(sorted(s.get("name") or "" for s in d["snapshots"]))')"
