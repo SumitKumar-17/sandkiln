@@ -11,7 +11,7 @@ The detail lives in [manual host setup](/self-hosting/manual-setup) (what each s
 
 - Linux x86_64 with `/dev/kvm` readable and writable by your user (check with `ls -la /dev/kvm`). Bare metal and nested virtualization both work. If you are not in the owning group: `sudo usermod -aG kvm $USER`, then log in again. Nothing is verified for aarch64.
 - `sudo`, for one-time host setup only. The daemon never runs as root; it holds only `CAP_NET_ADMIN`. See [TAP devices and bridge networking](/internals/tap-bridge-networking).
-- Rust via [rustup](https://rustup.rs), and `dnsmasq-base` for the guest DNS forwarder. `scripts/setup.sh` adds the musl target (`rustup target add x86_64-unknown-linux-musl`) and installs `musl-tools` with `apt` if missing. Node.js 20+ is needed only to build the CLI or SDK from source. The full prerequisite list is in [Manual host setup](/self-hosting/manual-setup#prerequisites).
+- Rust via [rustup](https://rustup.rs), and `dnsmasq-base` for the guest DNS forwarder. `scripts/setup.sh` adds the musl target (`rustup target add x86_64-unknown-linux-musl`) and installs `musl-tools` with `apt` if missing. Node.js 22.18+ is needed only to build the CLI or SDK from source. The full prerequisite list is in [Manual host setup](/self-hosting/manual-setup#prerequisites).
 
 `scripts/preflight-check.sh` reports what is missing, using the same `SANDKILN_*` variables and defaults as the daemon, so it tells you what is missing before you try to start anything.
 

@@ -15,7 +15,7 @@ Run `scripts/preflight-check.sh` at any point to see where you stand against eve
 - **Rust (stable, via `rustup`)** to build `core/`, plus the `x86_64-unknown-linux-musl` target and the `musl-tools` package to build the guest agent: `rustup target add x86_64-unknown-linux-musl`, and on Debian or Ubuntu `sudo apt install musl-tools`.
 - **`debootstrap`, `ubuntu-keyring` and standard build tooling**, only if you build a production rootfs rather than use the small test image. Debian or Ubuntu: `sudo apt install debootstrap ubuntu-keyring`.
 - **Disk.** Several GiB free for a production image build (the universal image defaults to 6GiB). The test image path needs under 500MiB.
-- **Node.js 20+**, only to build the CLI or SDK from source instead of installing the published `sandkiln` and `sandkiln-cli` packages.
+- **Node.js 22.18+**, only to build the CLI or SDK from source instead of installing the published `sandkiln` and `sandkiln-cli` packages.
 
 ## Build, Firecracker and kernel
 

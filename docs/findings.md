@@ -41,8 +41,19 @@ stable references used across `docs/` and `ROADMAP.md`.
 - Remaining chore: a stale `pass.txt` plaintext file sits in the remote
   repo dir. Delete it and rotate the password.
 
-### 7. JS tooling lags (typescript 5.9 vs 7, tsup 8 vs 9). Open, low
-Low risk; bump when convenient.
+### 7. JS tooling lagged (typescript 5.9 vs 7, tsup 8 vs 9). Fixed
+- Fix: tsup 9 and typescript 6.0.3 across `sandkiln`, `sandkiln-cli`
+  and `sandkiln-mcp`; CI and publish workflows build on Node 22, which tsup 9
+  requires (`^22.18`). The lockfile is generated with npm 10, the major Node 22
+  ships.
+- Real breakage fixed rather than silenced: `encodeFrame` in `tunnel.ts` now
+  returns `Uint8Array<ArrayBuffer>`, which the newer DOM typings need to accept
+  it in `WebSocket.send`.
+- Packed file lists and the JS bundles are unchanged.
+- Not adopted: typescript 7. It ships no compiler API, and tsup 9.0.0 still
+  calls `typescript.parseJsonConfigFileContent` when it builds declaration
+  files, so the SDK build fails (`@typescript/typescript6` does not help,
+  tsup's own import is not routed through it). Revisit when tsup supports it.
 
 ### 18. `remote.sh sync` never deleted removed files. Fixed
 - Symptom: a refactor left duplicate modules on the box.
