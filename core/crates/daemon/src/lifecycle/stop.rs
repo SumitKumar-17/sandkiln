@@ -66,12 +66,13 @@ pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String, keep: b
             }
         }
     }
-    destroy_sandbox_by_id(state, id).await
+    destroy_with_reason(state, id, sandkiln_store::EndReason::Destroyed).await
 }
 
-/// Full teardown: VM stop, network release, rootfs cleanup. Reached via
-/// `keep=false`, or internally when `keep=true` has nothing new to
-/// preserve for a fork.
+/// Full teardown: VM stop, network release, rootfs cleanup, history row closed
+/// with `reason`. Reached via `keep=false` (`Destroyed`), internally when
+/// `keep=true` has nothing new to preserve for a fork, and by the VM watcher
+/// when the guest's process exited on its own (`VmExited`).
 ///
 /// A forked sandbox (`source_snapshot_id.is_some()`) doesn't own the guest's
 /// IP — it still belongs to the snapshot, so it is left alone; the fork's own
@@ -80,7 +81,7 @@ pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String, keep: b
 /// only after `vm.stop()` returns (kills and waits on the process), so a
 /// new fork can't start writing the shared rootfs before the old one has
 /// actually stopped touching it.
-async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopOutcome, StopError> {
+pub(crate) async fn destroy_with_reason(state: Arc<AppState>, id: String, reason: sandkiln_store::EndReason) -> Result<StopOutcome, StopError> {
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or(StopError::NotFound)?;
     let source_snapshot_id = sandbox.source_snapshot_id.clone();
 
@@ -93,10 +94,13 @@ async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopO
         }
     }
 
+    // A VM that already exited has nothing to flush: skipping the guest `sync`
+    // keeps its teardown from waiting out a call to a dead guest.
+    let vm_already_gone = matches!(reason, sandkiln_store::EndReason::VmExited);
     spawn_blocking_in_current_span("stop task panicked", {
         let state = state.clone();
         move || {
-            let _ = sandbox.vm.stop();
+            let _ = if vm_already_gone { sandbox.vm.force_stop() } else { sandbox.vm.stop() };
             // The egress chain (if any) goes before its tap is returned: it is
             // keyed by the tap, which the next sandbox to lease it must not
             // inherit. Safe even if no policy was ever applied — see
@@ -131,7 +135,7 @@ async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopO
         }
     }
 
-    if let Err(e) = state.history.record_ended(&id, SystemTime::now(), sandkiln_store::EndReason::Destroyed, None) {
+    if let Err(e) = state.history.record_ended(&id, SystemTime::now(), reason, None) {
         tracing::warn!(error = %e, sandbox_id = %id, "failed to record sandbox destruction in history store");
     }
 

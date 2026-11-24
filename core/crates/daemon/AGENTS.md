@@ -18,7 +18,7 @@ src/
   http/              mod.rs build_router; auth.rs error.rs request_id.rs
     routes/          one file per API resource (sandbox, exec, fs, logs, pty, preview, tunnel,
                      mounts, drives, images, pool, snapshot, snapshot_history, metrics, ...)
-  lifecycle/         create.rs create_options.rs stop.rs idle_reaper.rs pool.rs pool_claim.rs
+  lifecycle/         create.rs create_options.rs stop.rs idle_reaper.rs vm_watcher.rs pool.rs pool_claim.rs
                      pool_replenisher.rs shutdown.rs
   snapshots/         held.rs + held/reconcile.rs (live resumable snapshots) retired.rs (IP-free
                      checkpoints) layout.rs (shared on-disk layout) ops/ (take resume fork delete archive)
@@ -177,7 +177,7 @@ validation and response shaping; the lifecycle logic lives in `lifecycle/` and
 - **`http/routes/pool.rs`** — pool *configuration* only (`max_count`, rejects
   explicit `0` — omit for unbounded). `DELETE` wakes queued waiters first
   so they fail clearly instead of timing out on a pool that's gone.
-- **`lifecycle/idle_reaper.rs`** — unconditional background task; see
+- **`lifecycle/idle_reaper.rs`**, **`vm_watcher.rs`** — unconditional background tasks (the watcher tears down a sandbox whose VM exited on its own, history `vm_exited`); see
   `docs-site/internals/pre-warmed-pools.mdx`. Runs auto-suspend, then
   destroy, then an independent archive pass each tick.
 - **`snapshots/held.rs` / `snapshots/held/reconcile.rs`** — `Snapshot` +

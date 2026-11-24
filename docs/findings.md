@@ -296,15 +296,18 @@ needs a design (who owns the chroot and the taps, how the daemon reaches the
 socket), not a patch. A hung create also made a graceful daemon stop wait
 out its full 30 seconds.
 
-### 33. A guest that shuts itself down leaves its sandbox listed. Open
+### 33. A guest that shuts itself down left its sandbox listed. FIXED
 `reboot -f` in a systemd guest, or `kill -TERM 1` in an init-mode guest, ends
-the Firecracker process (the guest resets, `reboot=k`), but the daemon keeps
-the sandbox in `GET /sandboxes` with a dead VM: every call returns `500
-Connection refused (os error 111)` until a `DELETE`, which succeeds and
-releases the tap (8 SIGTERM-then-DELETE cycles on a 6-tap pool never ran out).
-The same on both image kinds, so not specific to init mode. A watcher on the
-VM process that marks the sandbox stopped (and an honest status code for calls
-to it) is the missing piece.
+the Firecracker process, but the daemon kept the sandbox in `GET /sandboxes`
+with a dead VM: every call returned `500 Connection refused` until a `DELETE`.
+A new watcher (`lifecycle/vm_watcher.rs`) checks each sandbox's VM process once
+a second without blocking (`Vm::exit_status`) and tears a dead one down like a
+destroy: tap and address back to the pool, egress chain and rootfs removed,
+pool slot released, history row ended as `vm_exited`. The teardown skips the
+guest `sync` (a dead VM has nothing to flush; it had cost a 5 s wait). Calls to
+the gone sandbox answer 404. `/metrics` gains `sandbox_vm_exits_total`.
+Integration topic `33-vm-exit-cleanup` (passed 3 of 3, and the full suite
+442 of 442) makes a real guest shut itself down and checks all of it.
 
 ### 27. Pool claim bookkeeping under full-suite load. FIXED (test isolation)
 Intermittent `18-pool` failures: `warm_ready` read 0 where 1 was expected,
