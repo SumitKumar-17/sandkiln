@@ -9,6 +9,7 @@
 
 mod boot;
 mod snapshot;
+mod terminate;
 
 use crate::firecracker_api::ApiClient;
 use crate::jailer::JailLaunch;
@@ -24,6 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 pub use snapshot::ResumeConfig;
+pub use terminate::{is_unkilled_process, UnkilledProcess};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -289,8 +291,7 @@ impl Vm {
             }
         }
 
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let termination = terminate::terminate_child(&mut self.child, terminate::REAP_GRACE);
         let _ = std::fs::remove_file(&self.api_socket);
         let _ = std::fs::remove_file(&self.vsock_socket);
         crate::tunnel::cleanup(&self.vsock_socket);
@@ -301,6 +302,11 @@ impl Vm {
             if let Err(e) = std::fs::remove_dir_all(dir) {
                 tracing::warn!(vm_id = self.id, error = %e, dir = %dir.display(), "failed to remove jail instance directory");
             }
+        }
+        if let terminate::Termination::StillRunning { pid, kill_error } = termination {
+            let err = terminate::unkilled_error(pid, kill_error.as_ref(), &format!("could not stop vm {}", self.id));
+            tracing::error!(vm_id = self.id, pid, error = %err, "vm process survived stop");
+            return Err(err);
         }
         tracing::info!(vm_id = self.id, jailed = self.jail_instance_dir.is_some(), "vm stopped");
         Ok(())
@@ -344,7 +350,12 @@ pub(crate) fn console_log_stdio(log_path: &Path) -> io::Result<(Stdio, Stdio)> {
 /// evidence of a kernel panic or agent crash that happened before vsock
 /// was reachable.
 pub(crate) fn annotate_with_console_log(err: io::Error, log_path: &Path) -> io::Error {
-    io::Error::other(format!("{err} (guest console log: {})", log_path.display()))
+    let message = format!("{err} (guest console log: {})", log_path.display());
+    // Keep the "process could not be killed" marker the daemon keys on.
+    match err.get_ref().and_then(|inner| inner.downcast_ref::<UnkilledProcess>()) {
+        Some(unkilled) => io::Error::other(UnkilledProcess { pid: unkilled.pid, message }),
+        None => io::Error::other(message),
+    }
 }
 
 /// Retries `attempt` with exponential backoff (`initial_interval` to

@@ -25,6 +25,9 @@ pub struct JailerHostConfig {
     /// Uid/gid range dedicated to jailed VMs — must not overlap anything
     /// else on the host (`sandkiln_vmm::jailer::JailerIdPool`).
     pub uid_gid_range: RangeInclusive<u32>,
+    /// Run `sandkiln_vmm::jailer::self_check` at startup and refuse to start
+    /// when it fails. On by default; off only to diagnose a jailer setup.
+    pub self_check: bool,
 }
 
 /// Ceiling on `default_warm_count`: every warm instance is a full-RAM snapshot on disk and a guest address.
@@ -286,6 +289,7 @@ impl Config {
                 jailer_bin: r.path("jailer_bin"),
                 chroot_base_dir: r.path("jailer_chroot_base_dir"),
                 uid_gid_range: jailer_uid_gid_range(base, pool_size),
+                self_check: r.flag("jailer_self_check"),
             })
         } else {
             None
@@ -383,6 +387,7 @@ impl Config {
             "jailer_bin" => self.jailer.as_ref().and_then(|j| p(&j.jailer_bin)),
             "jailer_chroot_base_dir" => self.jailer.as_ref().and_then(|j| p(&j.chroot_base_dir)),
             "jailer_uid_gid_base" => self.jailer.as_ref().map(|j| j.uid_gid_range.start().to_string()),
+            "jailer_self_check" => self.jailer.as_ref().map(|j| j.self_check.to_string()),
             "jailer_pool_size" => self.jailer.as_ref().map(|j| j.uid_gid_range.clone().count().to_string()),
             _ => None,
         }
