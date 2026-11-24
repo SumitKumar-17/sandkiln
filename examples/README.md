@@ -24,6 +24,7 @@ packages. "Image" is what the guest image must contain beyond the agent.
 | [`named-persistent-sandbox`](named-persistent-sandbox/) | `getOrCreate({ name })`, state kept across `stop()` | Node 18+ | `node index.js` | yes |
 | [`pool-warm-start`](pool-warm-start/) | pre-warmed pool claims, fallback reporting | Node 18+ | `node index.js` (about 25 s) | yes |
 | [`exec-stream-logs`](exec-stream-logs/) | detached command, live tail, reattach after exit | Node 22+ | `node index.js` | yes |
+| [`exec-stream-logs-python`](exec-stream-logs-python/) | the same, in Python | Python 3.9+ | `python3 main.py` | yes |
 | [`local-tunnel`](local-tunnel/) | sandbox reaches a service on this machine via `tunnel()` | Node 22+ | `node index.js` | yes |
 | [`egress-policy`](egress-policy/) | `deny_all` and `allowCidrs` against a real target | Node 18+, image: ping, `EGRESS_EXAMPLE_TARGET_IP` | see its README | yes |
 | [`remote-storage-mount`](remote-storage-mount/) | S3-compatible bucket mounted in the guest | FUSE kernel, rclone image, S3 endpoint | see its README | no: only validation and the failure path (see its README) |

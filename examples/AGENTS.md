@@ -35,6 +35,8 @@ user would actually write.
 - `exec-stream-logs/` — JS/TS. Starts a detached command, live-tails via
   `.attachLogs()`, then **reattaches after it finished** and gets the
   identical buffered log back in milliseconds.
+- `exec-stream-logs-python/` — Python. Same flow as `exec-stream-logs` via
+  `exec_stream()`/`attach_logs()` (needs `sandkiln` >= 0.6.0).
 - `remote-storage-mount/` — JS/TS. Mounts an S3-compatible bucket at
   `/mnt/bucket`, read/write through it, unmounts, confirms the FUSE mount
   is gone. Needs the optional FUSE+rclone rootfs setup (`SELF_HOSTING.md`)
