@@ -8,7 +8,8 @@
 
 use crate::http::error::AppError;
 use crate::sandbox::Sandbox;
-use crate::snapshots::held::{snapshot_dir, Snapshot};
+use crate::snapshots::held::Snapshot;
+use crate::snapshots::layout::snapshot_dir;
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
 use std::sync::Arc;

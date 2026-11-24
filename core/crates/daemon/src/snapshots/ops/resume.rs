@@ -52,9 +52,9 @@ fn retire_snapshot_files(snapshot: &Snapshot, old_snapshot_dir: Option<&std::pat
     };
 
     std::fs::create_dir_all(&dest_dir)?;
-    let new_state = crate::snapshots::held::state_path(&dest_dir);
-    let new_mem = crate::snapshots::held::mem_path(&dest_dir);
-    if let Err(e) = crate::snapshots::held::move_file(&snapshot.snapshot_path, &new_state) {
+    let new_state = crate::snapshots::layout::state_path(&dest_dir);
+    let new_mem = crate::snapshots::layout::mem_path(&dest_dir);
+    if let Err(e) = crate::snapshots::layout::move_file(&snapshot.snapshot_path, &new_state) {
         cleanup_partial(&new_state);
         return Err(e);
     }
@@ -62,7 +62,7 @@ fn retire_snapshot_files(snapshot: &Snapshot, old_snapshot_dir: Option<&std::pat
     // this does, so it stays in `dest_dir`: a future `reconcile()` sees a
     // directory missing `mem.bin` and skips it with a warning, like any other
     // crashed-mid-write case.
-    crate::snapshots::held::move_file(&snapshot.mem_file_path, &new_mem)?;
+    crate::snapshots::layout::move_file(&snapshot.mem_file_path, &new_mem)?;
 
     let retired = RetiredSnapshot {
         id: snapshot.id.clone(),

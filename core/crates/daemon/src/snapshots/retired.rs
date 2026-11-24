@@ -141,7 +141,7 @@ impl RetiredSnapshot {
         };
         let json =
             serde_json::to_vec_pretty(&meta).map_err(|e| io::Error::other(format!("serializing retired-snapshot metadata: {e}")))?;
-        crate::snapshots::held::write_atomically(&crate::snapshots::held::meta_path(dir), &json)
+        crate::snapshots::layout::write_atomically(&crate::snapshots::layout::meta_path(dir), &json)
     }
 }
 
@@ -201,9 +201,9 @@ pub fn reconcile() -> HashMap<String, RetiredSnapshot> {
 /// already logged why) for anything that isn't a complete, valid one —
 /// same three-cases-of-invalid shape as `snapshot::load_one`.
 fn load_one(dir: &Path, id: &str) -> Option<RetiredSnapshot> {
-    let meta_file = crate::snapshots::held::meta_path(dir);
-    let state_file = crate::snapshots::held::state_path(dir);
-    let mem_file = crate::snapshots::held::mem_path(dir);
+    let meta_file = crate::snapshots::layout::meta_path(dir);
+    let state_file = crate::snapshots::layout::state_path(dir);
+    let mem_file = crate::snapshots::layout::mem_path(dir);
 
     let meta_exists = meta_file.is_file();
     let state_exists = state_file.is_file();
@@ -300,8 +300,8 @@ mod tests {
         RetiredSnapshot {
             id: id.to_string(),
             source_sandbox_id: "sandbox-1".to_string(),
-            snapshot_path: crate::snapshots::held::state_path(dir),
-            mem_file_path: crate::snapshots::held::mem_path(dir),
+            snapshot_path: crate::snapshots::layout::state_path(dir),
+            mem_file_path: crate::snapshots::layout::mem_path(dir),
             rootfs_path: PathBuf::from("/tmp/sandkiln-rootfs-1.ext4"),
             network: NetworkConfig {
                 tap_device: "tapA".to_string(),
@@ -332,8 +332,8 @@ mod tests {
     #[test]
     fn persist_then_load_one_round_trips_every_field() {
         let t = TempDir::new("round-trip");
-        fs::write(crate::snapshots::held::state_path(&t.path), b"state").unwrap();
-        fs::write(crate::snapshots::held::mem_path(&t.path), b"mem").unwrap();
+        fs::write(crate::snapshots::layout::state_path(&t.path), b"state").unwrap();
+        fs::write(crate::snapshots::layout::mem_path(&t.path), b"mem").unwrap();
 
         let checkpoint = sample_checkpoint("retired-1", &t.path);
         checkpoint.persist(&t.path).unwrap();
@@ -367,7 +367,7 @@ mod tests {
     #[test]
     fn load_one_skips_a_directory_missing_state_snap() {
         let t = TempDir::new("missing-state");
-        fs::write(crate::snapshots::held::mem_path(&t.path), b"mem").unwrap();
+        fs::write(crate::snapshots::layout::mem_path(&t.path), b"mem").unwrap();
         sample_checkpoint("retired-2", &t.path).persist(&t.path).unwrap();
         // state.snap deliberately never written.
 
@@ -377,8 +377,8 @@ mod tests {
     #[test]
     fn load_one_skips_a_directory_missing_meta_json() {
         let t = TempDir::new("missing-meta");
-        fs::write(crate::snapshots::held::state_path(&t.path), b"state").unwrap();
-        fs::write(crate::snapshots::held::mem_path(&t.path), b"mem").unwrap();
+        fs::write(crate::snapshots::layout::state_path(&t.path), b"state").unwrap();
+        fs::write(crate::snapshots::layout::mem_path(&t.path), b"mem").unwrap();
         // meta.json deliberately never written.
 
         assert!(load_one(&t.path, "retired-3").is_none());
@@ -387,9 +387,9 @@ mod tests {
     #[test]
     fn load_one_skips_a_directory_with_corrupt_metadata() {
         let t = TempDir::new("corrupt-meta");
-        fs::write(crate::snapshots::held::state_path(&t.path), b"state").unwrap();
-        fs::write(crate::snapshots::held::mem_path(&t.path), b"mem").unwrap();
-        fs::write(crate::snapshots::held::meta_path(&t.path), b"not valid json{{{").unwrap();
+        fs::write(crate::snapshots::layout::state_path(&t.path), b"state").unwrap();
+        fs::write(crate::snapshots::layout::mem_path(&t.path), b"mem").unwrap();
+        fs::write(crate::snapshots::layout::meta_path(&t.path), b"not valid json{{{").unwrap();
 
         assert!(load_one(&t.path, "retired-4").is_none());
     }
@@ -403,8 +403,8 @@ mod tests {
     #[test]
     fn load_one_returns_none_when_metadata_id_does_not_match_directory_name() {
         let t = TempDir::new("id-mismatch");
-        fs::write(crate::snapshots::held::state_path(&t.path), b"state").unwrap();
-        fs::write(crate::snapshots::held::mem_path(&t.path), b"mem").unwrap();
+        fs::write(crate::snapshots::layout::state_path(&t.path), b"state").unwrap();
+        fs::write(crate::snapshots::layout::mem_path(&t.path), b"mem").unwrap();
         sample_checkpoint("a-different-id", &t.path).persist(&t.path).unwrap();
 
         assert!(load_one(&t.path, "dir-name-that-does-not-match").is_none());

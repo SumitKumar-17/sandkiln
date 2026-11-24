@@ -47,7 +47,7 @@ pub(crate) async fn archive_snapshot_by_id(state: Arc<AppState>, id: String, arc
     // false-alarm warning for a healthy, successfully-archived snapshot.
     let old_dir = snapshot.snapshot_path.parent().map(|p| p.to_path_buf());
 
-    let dest_dir = crate::snapshots::held::archive_snapshot_dir(&archive_root, &id);
+    let dest_dir = crate::snapshots::layout::archive_snapshot_dir(&archive_root, &id);
     let (snapshot, result) = spawn_blocking_in_current_span("archive snapshot task panicked", move || {
         let mut snapshot = snapshot;
         let result = crate::snapshots::held::move_snapshot_files(&mut snapshot, &dest_dir).and_then(|()| {

@@ -100,7 +100,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// `snapshots` comes from `crate::snapshots::held::reconcile` against disk,
+    /// `snapshots` comes from `crate::snapshots::held::reconcile::reconcile` against disk,
     /// passed in rather than started empty so a restart doesn't orphan
     /// durable snapshots (see `main.rs`).
     pub fn new(
