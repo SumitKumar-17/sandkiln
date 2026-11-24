@@ -41,8 +41,10 @@ more than one caller shares a daemon.
 - Docs site (`docs-site/`): Getting Started, Core Concepts, Guides,
   Internals, Reference (HTTP API, JS/TS SDK, Python SDK, CLI) and
   Architecture, deployed independently of the marketing site (see
-  `docs-site/AGENTS.md`). The marketing site (`website/`) links out and
-  carries no docs content.
+  `docs-site/AGENTS.md`). The marketing site (`website/`, hosted as static pages with a mirror) links
+  out and no longer carries any docs content of its own. The docs site is
+  deployed through its host's own GitHub integration at
+  sandkiln.mintlify.site.
 - Ten runnable example projects, one per feature surface: code playground,
   AI-agent runner, dev-server preview, interactive terminal, pre-warmed
   pool, streamed exec/logs, remote storage mount, snapshot lifecycle,

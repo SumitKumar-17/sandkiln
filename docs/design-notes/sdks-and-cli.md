@@ -11,15 +11,18 @@ Matches the daemon's full surface. `Sandbox.create()` (tags, auth token,
 `runCommand()`, `readFile()`/`writeFile()`, `snapshot()`, `previewUrl()`,
 `stop()`, `execStream()`/`listExecStreams()`/`attachLogs()`,
 `mount()`/`listMounts()`/`unmount()`, `pty()`, `tunnel()`. ESM + CJS + types
-via `tsup`. Published at npmjs.com/package/sandkiln (0.11.0, signed
-provenance from CI). Verified against a live auth-enabled daemon, which is
+via `tsup`. Published at [npmjs.com/package/sandkiln](https://www.npmjs.com/package/sandkiln) (0.11.0, signed
+provenance from CI). Verified against a live auth-enabled daemon (not just typechecked), which is
 how `stop()` returning 200 instead of the documented 204 was caught.
 
 ## Python SDK (`sandkiln` on PyPI)
 
-Mirrors the JS SDK, including `resume()`/`fork()`/`snapshot()`/
+Mirrors the JS SDK exactly, including `resume()`/`fork()`/`snapshot()`/
 `preview_url()` and resource overrides, with zero runtime dependencies
-(stdlib `urllib`). Published via the OIDC trusted-publishing workflow
+(stdlib `urllib`, matching the JS SDK's own zero-dependency `fetch`
+approach). Verified live end to end, including `attach()` reconstructing a
+handle without a network call and correct 404 handling on a stopped
+sandbox. Published via the OIDC trusted-publishing workflow
 `.github/workflows/publish-python-sdk.yml`; see `packages/python/AGENTS.md`
 for shipping the next version. Not in Python: `pty()`, `execStream()`.
 
@@ -46,8 +49,11 @@ chmod|chown|mkdir|rename|cp|symlink|readlink|truncate|ls-dir`.
 
 No path validation, same as `read_file`/`write_file`: the guest agent is a
 dumb executor by design (its `AGENTS.md`), and a path resolves inside that
-one microVM, not the host. Verified end to end against the real base rootfs
-(21 integration checks: `mkdir -p` and its conflict case, chmod visible in a
+one microVM, not the host. Verified end to end after rebuilding and re-injecting the guest agent into
+the daemon's actual base rootfs (`~/sandkiln-tools/images/ubuntu-22.04.ext4`,
+the real `SANDKILN_BASE_ROOTFS` default, not the differently named test image
+first injected by mistake): 21 new integration checks, 193/193 passing at the
+time (`mkdir -p` `mkdir -p` and its conflict case, chmod visible in a
 later listing, rename and copy checked by content, symlink/readlink
 round-trip, truncate byte-accurate, chown, and the error cases).
 
@@ -61,24 +67,37 @@ so the guest receives a single resolved `env` field on `Request::Exec` and
 persists through snapshot, resume and fork like `tags` (no external resource
 to re-apply, unlike `egress`). SDK: `Sandbox.create({env})`,
 `runCommand(cmd, args, {env})`, `execStream(...)`; Python `env=` kwargs;
-CLI `--env key=value` (repeatable). Verified in all three languages and the
-CLI, including survival across snapshot to resume and fork.
+CLI `--env key=value` (repeatable). Verified live on the dev box in all three languages
+(daemon via curl, JS/TS SDK, Python SDK) and the CLI: create-time env
+reaching an unmodified exec; a per-call override winning on a shared key
+while an unrelated create-time key survives; a per-call key that did not
+exist at create time still reaching the process; identical merged behavior
+for `exec` and `exec-stream`; survival across snapshot to resume and
+snapshot to fork unchanged.
 `scripts/integration-tests/24-env-vars.sh`.
 
 ## Already covered
 
-Interactive access exists as `kiln sandbox pty`. Converting an OCI image
-into a rootfs is out of scope (see [ideas](ideas-not-started.md)).
+File operations, SSH/PTY-style interactive access and image build/import were
+checked against the same "is it actually built" standard: file operations
+are covered in full (above); an interactive session exists as
+`kiln sandbox pty` over a WebSocket, so that is shipped, not a gap;
+converting an existing OCI/Docker image into a bootable rootfs is out of
+scope today (see `routes_images.rs`'s module doc comment and
+[ideas](ideas-not-started.md)): a custom image must already be a bootable
+ext4 rootfs, built with `images/build-universal-image.sh` or handed in
+directly.
 
 ## CLI (`kiln`)
 
-A thin `commander` wrapper over the JS SDK, usable standalone for manual
-testing, agent workflows and debugging.
+A thin `commander` wrapper over the JS SDK, verified live end to end, usable
+standalone for manual testing, agent workflows and debugging; it mirrors the
+SDK surface.
 - `kiln sandbox create|ls|rm|exec|exec-stream|logs|read|write|preview|
   snapshot|resume|fork|get-or-create|get|pty|tunnel|mount|mounts|unmount`
   plus `kiln image` and `kiln pool` and `kiln drive`. A single `cp` was
   replaced by explicit `read`/`write`: less magic than a `sandbox:path`
   prefix syntax for a first version.
-- Published as `sandkiln-cli` (0.2.0, signed provenance). Not as `kiln`,
+- Published as [`sandkiln-cli`](https://www.npmjs.com/package/sandkiln-cli) (0.2.0, signed provenance); verified by installing fresh from the registry and running `kiln --help`. Not as `kiln`,
   which is an unrelated package owned by someone else; npm's `bin` field
   still installs the `kiln` command.
