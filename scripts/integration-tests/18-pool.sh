@@ -1,4 +1,12 @@
 section "pre-warmed pools"
+# A pool matches any create with the same image, vcpu and memory, and the
+# whole suite runs topics concurrently with the default shape. Each pool here
+# therefore uses a memory size no other topic uses, so a create from another
+# topic can neither consume its warm snapshot nor count against its
+# max_count (that interference caused intermittent warm_ready and claimed
+# mismatches, finding 27).
+POOL_MEM=192
+MAX_POOL_MEM=160
 # Waits for real replenishment (a real cold boot + pause + snapshot +
 # stop, see crate::pool_replenisher) to happen against the live daemon --
 # no mocking the timing. A pool's replenish interval is a fixed 2s (see
@@ -28,7 +36,7 @@ wait_for_warm() {
   return 1
 }
 
-status="$(req POST /pools "{\"id\":\"it-pool-$$\",\"warm_count\":1}")"
+status="$(req POST /pools "{\"id\":\"it-pool-$$\",\"warm_count\":1,\"mem_size_mib\":$POOL_MEM}")"
 assert_status "create a pool" 200 "$status"
 CREATED_POOLS+=("it-pool-$$")
 
@@ -48,7 +56,7 @@ assert_contains "pool list includes the configured pool" "$pools_body" "it-pool-
 # cold create, though this doesn't assert a specific number (see
 # `docs/benchmarks.md` for real measured numbers; a
 # shared, variable-load dev box makes a hard latency assertion flaky).
-status="$(req POST /sandboxes "{\"name\":\"it-pool-claim-$$\",\"tags\":{\"suite\":\"integration\",\"case\":\"pool\"}}")"
+status="$(req POST /sandboxes "{\"name\":\"it-pool-claim-$$\",\"mem_size_mib\":$POOL_MEM,\"tags\":{\"suite\":\"integration\",\"case\":\"pool\"}}")"
 assert_status "claim a sandbox from the pool" 200 "$status"
 CLAIMED_SBX="$(extract id < "$WORKDIR/resp.json")"
 if [ -z "$CLAIMED_SBX" ]; then
@@ -158,7 +166,7 @@ section "pre-warmed pools: max_count ceiling and queueing"
 # max_count/claimed-count lifecycle, not replenishment (already covered
 # above), so every claim below cold-creates under capacity rather than
 # resuming anything.
-status="$(req POST /pools "{\"id\":\"it-pool-max-$$\",\"warm_count\":0,\"max_count\":1}")"
+status="$(req POST /pools "{\"id\":\"it-pool-max-$$\",\"warm_count\":0,\"max_count\":1,\"mem_size_mib\":$MAX_POOL_MEM}")"
 assert_status "create a pool with max_count: 1" 200 "$status"
 CREATED_POOLS+=("it-pool-max-$$")
 
@@ -171,7 +179,7 @@ pool_claimed() {
   fi
 }
 
-status="$(req POST /sandboxes "{\"name\":\"it-pool-max-1-$$\"}")"
+status="$(req POST /sandboxes "{\"name\":\"it-pool-max-1-$$\",\"mem_size_mib\":$MAX_POOL_MEM}")"
 assert_status "first claim succeeds and cold-creates under max_count headroom" 200 "$status"
 SBX_MAX_1="$(extract id < "$WORKDIR/resp.json")"
 if [ -z "$SBX_MAX_1" ]; then
@@ -191,7 +199,7 @@ else
   # DELETE below, then more `req` calls afterward) would race and
   # clobber while this is still in flight.
   curl -s -o "$WORKDIR/pool-max-2-resp.json" -X POST "$BASE_URL/sandboxes" \
-    -H 'Content-Type: application/json' "${AUTH_HEADER[@]}" -d "$(with_test_image "{\"name\":\"it-pool-max-2-$$\"}")" &
+    -H 'Content-Type: application/json' "${AUTH_HEADER[@]}" -d "$(with_test_image "{\"name\":\"it-pool-max-2-$$\",\"mem_size_mib\":$MAX_POOL_MEM}")" &
   QUEUED_PID=$!
   sleep 4
   if kill -0 "$QUEUED_PID" 2>/dev/null; then

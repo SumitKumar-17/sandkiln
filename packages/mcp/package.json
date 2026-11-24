@@ -1,6 +1,6 @@
 {
   "name": "sandkiln-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Model Context Protocol server that gives AI agents sandkiln microVM sandboxes as tools (stdio transport).",
   "license": "MIT",
   "author": "Sumit Kumar",
@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
-    "sandkiln": "0.13.0",
+    "sandkiln": "0.14.0",
     "zod": "4.6.7"
   },
   "devDependencies": {

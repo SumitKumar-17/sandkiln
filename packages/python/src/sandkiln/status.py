@@ -22,6 +22,10 @@ class DaemonStatus:
     pool_warm_ready: int
     tap_devices_free: int
     tap_devices_total: int
+    tap_devices_in_use: int | None
+    ip_free: int | None
+    ip_total: int | None
+    ips_held_by_snapshots: int | None
     sandboxes_created_total: int
     rootfs_clones_reflink: int
     rootfs_clones_copy: int
@@ -49,6 +53,10 @@ def to_daemon_status(body: dict) -> DaemonStatus:
         pool_warm_ready=counts["pool_warm_ready"],
         tap_devices_free=body["tap_pool"]["free"],
         tap_devices_total=body["tap_pool"]["size"],
+        tap_devices_in_use=body["tap_pool"].get("in_use"),
+        ip_free=(body.get("ip_pool") or {}).get("free"),
+        ip_total=(body.get("ip_pool") or {}).get("size"),
+        ips_held_by_snapshots=(body.get("ip_pool") or {}).get("held_by_snapshots"),
         sandboxes_created_total=body["sandboxes_created_total"],
         rootfs_clones_reflink=body["rootfs_clones"]["reflink"],
         rootfs_clones_copy=body["rootfs_clones"]["copy"],

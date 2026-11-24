@@ -13,7 +13,7 @@ changes, edit it in one place.
 
 | File | Contents |
 | --- | --- |
-| [findings.md](findings.md) | Redevelopment audit findings 1-28: symptom, root cause, fix, status. Findings 20, 25, 26 and 28 are fixed; 27 is open. |
+| [findings.md](findings.md) | Redevelopment audit findings 1-28: symptom, root cause, fix, status. Findings 20, 25, 26, 27 and 28 are fixed. |
 | [benchmarks.md](benchmarks.md) | Method, current numbers, before/after history, profiling conclusions. |
 | [documentation-plan.md](documentation-plan.md) | Where each kind of fact lives, page shapes, size budgets, what `docs-check` enforces. |
 | [code-conventions.md](code-conventions.md) | Layout, file shape, error and state rules, recipes for adding an endpoint, setting or script. |

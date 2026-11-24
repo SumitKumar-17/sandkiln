@@ -257,17 +257,20 @@ now also attaches a tap (about 4ms of `ip`/`bridge` calls): end to end resume
 measured 13.6 and 14.4ms median against 13.1ms recorded before, within the
 noise of a shared box.
 
-### 27. Pool claim bookkeeping under full-suite load. OPEN
-One of two full runs after the finding 20 fix failed two `18-pool` checks
-(delete did not find its own warm snapshot; `claimed` read 1 with both
-sandboxes stopped); the other run was 346/346 and isolated runs are 3/3. It
-points at pool slot accounting (`record_claim`/`record_release`) racing a
-fallback path, not at resume health. Next: reproduce with the parallel loop
-plus pool create/claim/stop, log claim and release per pool id. Seen again
-while verifying finding 29: 18-pool failed 1 of 6 isolated runs and 2 of 2 full
-runs (one check each, the same two symptoms), on a quiet daemon. A likely
-contributor to chase: the replenisher boots its warm instance through the same
-pool-matching create path, so it counts as a claim until it is snapshotted.
+### 27. Pool claim bookkeeping under full-suite load. FIXED (test isolation)
+Intermittent `18-pool` failures: `warm_ready` read 0 where 1 was expected,
+the pool's warm snapshot was missing at delete, and `claimed` read 1 with both
+of the topic's sandboxes stopped. Not a daemon bug. A pool matches any create
+with the same image, vcpu and memory, and every other topic in the concurrent
+suite creates default-shaped sandboxes, so they claimed the topic's warm
+snapshot and filled its `max_count` slot (the daemon log showed many "claimed
+a pre-warmed pool instance" lines during the run). Isolated runs passed 8 of 8
+before and after the tap change, which fits. Fix: both pools in the topic now
+use a memory size no other topic uses (192 and 160 MiB) and the topic's own
+creates carry it; topic 29 already used a non-default shape. Three full runs
+afterwards: 393/393 each. Product note: by design a pool serves every
+matching create, so on a shared daemon a pool's shape should be chosen to be
+the shape you want served.
 
 ### 8. Stale copies on the remote box. Note
 The remote box holds stale copies (`docs/architecture`, worktrees).
