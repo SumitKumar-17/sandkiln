@@ -367,7 +367,7 @@ fn ms(d: Duration) -> f64 {
 /// Clones a rootfs for a new mutating sandbox via
 /// `sandkiln_vmm::rootfs::clone_file` (reflink where the filesystem allows,
 /// else a byte copy) and records which method ran. `pub(crate)`: also used by
-/// `routes::snapshot`'s history-retaining resume and
+/// `snapshots::ops`'s history-retaining resume and fork, and
 /// `routes::snapshot_history`'s restore — handing a *shared* rootfs to a new
 /// mutating sandbox would corrupt whatever else depends on that file.
 pub(crate) fn clone_rootfs(

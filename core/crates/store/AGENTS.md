@@ -31,7 +31,7 @@ existed and how it ended" — different problems, not overlapping.
   `SANDKILN_HISTORY_DB_PATH` (default `~/sandkiln-tools/history.db`).
 - `mark_unended_as_orphaned_on_startup` runs in `main.rs` alongside
   `snapshot::reconcile`, both before the HTTP listener binds.
-- `record_created` fires from `create_sandbox_core` only after a boot
+- `record_created` fires from `create_sandbox_core` (`lifecycle/create.rs`) only after a boot
   succeeds (a failed boot never appears in history). `record_ended` fires
   from `destroy_sandbox_by_id` (`Destroyed`) and `snapshot_and_stop`
   (`Snapshotted`, with the resulting snapshot id).

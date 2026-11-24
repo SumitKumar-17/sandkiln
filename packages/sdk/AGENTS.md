@@ -25,7 +25,7 @@ implements logic the daemon doesn't already have; new behavior goes in
   `readFile`/`writeFile` (validation belongs daemon/guest-agent side).
   `resume`/`fork`/`byName` are static since none acts on an existing
   `Sandbox`; `fork` doesn't consume the snapshot, `resume` does (at most
-  one live fork per snapshot — see daemon's `http/routes/snapshot.rs`).
+  one live fork per snapshot — see daemon's `snapshots/ops/fork.rs`).
   `getOrCreate` returns `{ sandbox, created }`. `stop()` returns
   `{ kept, snapshotId }` (daemon preserves by default; `{ keep: false }`
   for the old destroy behavior). `previewUrl` is pure/network-free,
