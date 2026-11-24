@@ -177,8 +177,7 @@ validation and response shaping; the lifecycle logic lives in `lifecycle/` and
 - **`http/routes/pool.rs`** — pool *configuration* only (`max_count`, rejects
   explicit `0` — omit for unbounded). `DELETE` wakes queued waiters first
   so they fail clearly instead of timing out on a pool that's gone.
-- **`lifecycle/vm_watcher.rs`**: a sandbox whose VM process exited is torn down via `stop::destroy_with_reason(.., VmExited)` (history `vm_exited`).
-- **`lifecycle/idle_reaper.rs`** — unconditional background task; see
+- **`lifecycle/idle_reaper.rs`**, **`vm_watcher.rs`** — unconditional background tasks (the watcher tears down a sandbox whose VM exited on its own, history `vm_exited`); see
   `docs-site/internals/pre-warmed-pools.mdx`. Runs auto-suspend, then
   destroy, then an independent archive pass each tick.
 - **`snapshots/held.rs` / `snapshots/held/reconcile.rs`** — `Snapshot` +
