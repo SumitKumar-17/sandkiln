@@ -1,0 +1,74 @@
+# Persistence and snapshotting
+
+A sandbox is a persistent identity (name, config, filesystem state); a
+session is one running microVM of it. Resumed daily for a week it is one
+sandbox, seven sessions.
+
+## What is built
+
+| Feature | Behavior |
+| --- | --- |
+| Snapshot/resume | `POST /sandboxes/:id/snapshot`, `POST /snapshots/:id/resume`. Full memory and disk saved; resume skips boot and dependency install. `Sandbox.snapshot()`/`resume()` in both SDKs, `kiln sandbox snapshot|resume`. Works with drives attached. |
+| Durable across daemon restart | Metadata written atomically beside the state/memory files and reconciled at startup. The held tap device is reserved out of the pool before the daemon accepts creates, preventing a double-lease race. Not durable across a host reboot unless `SANDKILN_STATE_DIR` is persistent (see `SELF_HOSTING.md`). |
+| Persistent by default | `DELETE /sandboxes/:id` auto-snapshots (`stop_sandbox_by_id(..., keep: true)`). `?keep=false` (`kiln sandbox rm --destroy`) destroys. A jailed sandbox cannot be preserved and falls back to destroy. The idle reaper's destroy pass uses the same default. |
+| Named sandboxes | `name` on create/resume/fork (1-64 chars, `[A-Za-z0-9_-]`, unique among live sandboxes). `GET /sandboxes/by-name/:name` (live only; 409 pointing at get-or-create if the name resolves to a held snapshot). `POST /sandboxes/get-or-create` returns if live, resumes if snapshotted, creates otherwise, race-safe under a per-name lock. |
+| Auto-suspend on idle | `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS` pauses and snapshots a quiet sandbox using the same path as the manual route. `SANDKILN_IDLE_TIMEOUT_SECS` (plain destroy), if also set, must be strictly longer and acts as a backstop. `GET /snapshots?source_sandbox_id=<id>` finds what a sandbox became (`listSnapshots()`, `kiln sandbox snapshots --source`). |
+| Fork (partial) | `POST /snapshots/:id/fork` boots a new sandbox without consuming the snapshot. At most one live fork per snapshot (`Snapshot::forked_into`, enforced for resume, fork, delete and snapshot; a second is 409). |
+| Time-travel restore | Resume retires its checkpoint into `GET /snapshots/history` instead of deleting it. `POST /snapshots/history/:id/restore` restores it any number of times; `DELETE /snapshots/history/:id` reclaims it; `?retain_history=false` opts out. Sequential, not branching. |
+| Archive tier | `SANDKILN_ARCHIVE_TIMEOUT_SECS` moves a held snapshot's `state.snap`/`mem.bin` to `SANDKILN_ARCHIVE_DIR` once unresumed that long. Applies to any held snapshot. `GET /snapshots` reports `archived_at_unix`. Daemon-operator config only. |
+| Retention cap | `retained_checkpoints_max` (default 8), oldest retired checkpoint evicted after each resume. |
+
+Lineage (parent pointers) and warm pools are in
+[pools and lineage](pools-and-lineage.md).
+
+## Why fork is single-live
+
+Firecracker has no verified way to give two live descendants of one
+snapshot independent rootfs backing files or guest IP/MAC; both are frozen
+into the snapshotted state. Real parallel branches (and fan-out cloning of
+one snapshot into several sandboxes) need either a verified per-fork drive
+override plus a way to change guest identity, or a live-memory-clone design.
+Fan-out is the same unsolved problem restated, not a separate item. The
+rootfs half is now solved by `rootfs_override` (finding 21 in
+[findings](../findings.md)); the network identity half is not.
+
+## Time-travel restore rules
+
+- Restoring an old checkpoint does not destroy what came after it; those
+  stay in history, like descendants of an old commit after a checkout.
+- Restore refuses (409, naming the holder) while anything sharing that
+  checkpoint's frozen network identity is live or held. This generalizes the
+  one-live-descendant rule across a lineage's full history.
+- A restored sandbox owns everything (fresh network lease, private rootfs
+  clone), so unlike a fork it stays snapshottable and starts a new branch.
+- Surface: daemon HTTP API only, no SDK or CLI yet.
+
+## Bugs found while building
+
+- **Fork shared its source's rootfs file.** Fine for simultaneous forks
+  (already excluded), wrong for sequential ones: fork, mutate, stop the
+  fork, resume the original, and the marker came back mutated. Fixed by
+  giving every fork a private copy (`clone_rootfs`); the deeper form of the
+  same bug was finding 21.
+- **Unbounded retention filled a 468GB disk.** Fixed by
+  `DELETE /snapshots/history/:id`, then the retention cap (finding 24).
+
+## Archive: a Firecracker constraint
+
+The first design moved state, memory and rootfs into the archive dir.
+Resume then failed with "Error manipulating the backing file: No such file
+or directory": Firecracker bakes the rootfs's absolute host path into
+`state.snap`, and `/snapshot/load` has no override for it (unlike
+`mem_backend.backend_path`). So archiving moves only `state.snap` and
+`mem.bin`; the rootfs stays put while the snapshot may be resumed. `mem.bin`
+equals the guest RAM size, often as large as the rootfs, so this still
+relieves hot storage.
+
+A second bug from the same pass: `resume_snapshot_by_id` cleanup and
+`delete_snapshot_by_id` derived the directory from a hardcoded hot-root
+`snapshot_dir(&id)`, which would silently no-op for an archived snapshot and
+leak its files. They now derive it from the snapshot's own `snapshot_path`.
+
+Not built: a delete-after-archive tier; archiving onto remote storage mounts
+(`SANDKILN_ARCHIVE_DIR` is a local path; the practical win is pointing it at
+a real disk instead of the default under `$TMPDIR`, often tmpfs).
