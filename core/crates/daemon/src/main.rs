@@ -14,6 +14,7 @@ use config::{Config, LogFormat};
 use sandkiln_store::HistoryStore;
 use sandkiln_vmm::drive::DriveStore;
 use sandkiln_vmm::image::ImageStore;
+use sandkiln_vmm::jailer::JailLaunch;
 use sandkiln_vmm::network::{self, NetworkManager};
 use state::AppState;
 use std::sync::Arc;
@@ -140,6 +141,11 @@ async fn async_main(loaded: config::Loaded) {
                 "SANDKILN_JAILER_BIN does not point at a file: {} — run scripts/host-setup/install-firecracker.sh first",
                 jailer_cfg.jailer_bin.display()
             );
+            if jailer_cfg.self_check {
+                run_jailer_self_check(jailer_cfg, &config.firecracker_bin);
+            } else {
+                tracing::warn!("jailer startup self-check disabled (SANDKILN_JAILER_SELF_CHECK=false): a jailer setup the daemon cannot use will only show up as failing creates");
+            }
             tracing::info!(
                 jailer_bin = %jailer_cfg.jailer_bin.display(),
                 chroot_base_dir = %jailer_cfg.chroot_base_dir.display(),
@@ -214,6 +220,25 @@ async fn async_main(loaded: config::Loaded) {
 /// `.json()` and the default pretty layer are different builder types, so
 /// this can't be one `tracing_subscriber::fmt()` chain with a branch in
 /// the middle — each arm builds and `init()`s its own subscriber.
+/// Refuses to start on a jailer setup the daemon cannot use, instead of
+/// accepting requests that would each fail (see `sandkiln_vmm::jailer::self_check`).
+fn run_jailer_self_check(jailer_cfg: &config::JailerHostConfig, firecracker_bin: &std::path::Path) {
+    let launch = JailLaunch {
+        jailer_bin: jailer_cfg.jailer_bin.clone(),
+        chroot_base_dir: jailer_cfg.chroot_base_dir.clone(),
+        uid: *jailer_cfg.uid_gid_range.start(),
+        gid: *jailer_cfg.uid_gid_range.start(),
+    };
+    match sandkiln_vmm::jailer::self_check(&launch, firecracker_bin) {
+        Ok(()) => tracing::info!("jailer self-check passed: the daemon can use the jails jailer builds"),
+        Err(reason) => {
+            eprintln!("sandkilnd: jailer_enabled is set but the jailer is not usable: {reason}");
+            eprintln!("(set SANDKILN_JAILER_SELF_CHECK=false to start anyway and diagnose)");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn init_tracing(log_format: LogFormat) {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     match log_format {

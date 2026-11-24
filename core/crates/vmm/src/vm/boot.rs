@@ -3,6 +3,7 @@
 //! process-spawning and the Firecracker PUT sequence shouldn't sit next
 //! to the public `Vm` API, same reasoning [`super::snapshot`] gives.
 
+use super::terminate::{self, Termination};
 use super::{connect_api_with_retry, console_log_stdio, path_str, put_checked, RateLimiter, Vm, VmConfig};
 use crate::jailer::{self, JailLaunch};
 use serde_json::json;
@@ -70,12 +71,21 @@ pub(super) fn boot(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<Vm
             // drive copies. Leaving either is a resource leak or an
             // info-disclosure surface, not just untidy state — same
             // cleanup `snapshot::resume` does for the equivalent failure.
-            let _ = target.child.kill();
-            let _ = target.child.wait();
+            let termination = terminate::terminate_child(&mut target.child, terminate::REAP_GRACE);
             let _ = std::fs::remove_file(&target.api_socket);
             let _ = std::fs::remove_file(&target.vsock_socket);
             if let Some(dir) = &target.jail_instance_dir {
-                let _ = std::fs::remove_dir_all(dir);
+                if let Err(remove_err) = std::fs::remove_dir_all(dir) {
+                    tracing::warn!(
+                        vm_id = id,
+                        dir = %dir.display(),
+                        error = %remove_err,
+                        "could not remove the jail directory of a failed boot (jailer-owned files need root to delete); remove it by hand"
+                    );
+                }
+            }
+            if let Termination::StillRunning { pid, kill_error } = termination {
+                return Err(terminate::unkilled_error(pid, kill_error.as_ref(), &e.to_string()));
             }
             return Err(e);
         }
@@ -191,6 +201,69 @@ fn spawn_jailed_inner(
     })
 }
 
+/// How long a jailed boot waits for the API socket to become connectable.
+/// Generous next to the direct path's 2s: jailer first copies the
+/// Firecracker binary into the chroot, creates cgroups and device nodes.
+/// Jailer-to-socket is well under a second when it works, so hitting this
+/// means something is wrong, not slow.
+const JAILED_API_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Bound on any single read or write to Firecracker's API during boot.
+/// `InstanceStart` is the slowest call (tens of milliseconds); this only
+/// exists so a wedged process cannot hang a create.
+const API_IO_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Waits for a jailed Firecracker's API socket, with a deadline and with
+/// early exit when the jailer/Firecracker process has already died. On
+/// failure the error names the likely cause (see
+/// [`jailed_api_unreachable_message`]).
+fn wait_for_jailed_api(api_socket: &Path, child: &mut Child, timeout: Duration) -> io::Result<crate::firecracker_api::ApiClient> {
+    use crate::firecracker_api::ApiClient;
+    let deadline = Instant::now() + timeout;
+    let mut interval = Duration::from_micros(500);
+    loop {
+        match ApiClient::connect(api_socket) {
+            Ok(api) => return Ok(api),
+            Err(last) => {
+                if let Ok(Some(status)) = child.try_wait() {
+                    return Err(io::Error::other(format!(
+                        "the jailer/Firecracker process exited ({status}) before its API socket {} became reachable; \
+                         see the guest console log for the jailer's own error",
+                        api_socket.display()
+                    )));
+                }
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, jailed_api_unreachable_message(api_socket, timeout, &last)));
+                }
+                std::thread::sleep(interval);
+                interval = (interval * 2).min(Duration::from_millis(20));
+            }
+        }
+    }
+}
+
+/// The operator-facing explanation when a jailed Firecracker's API socket
+/// never became reachable. A permission error is the known failure
+/// (finding 32 in `docs/findings.md`): jailer makes the chroot root mode
+/// 0700 and owned by the per-VM uid, so the unprivileged daemon cannot walk
+/// into it to reach `api.sock`, even though Firecracker itself is running
+/// and listening.
+fn jailed_api_unreachable_message(api_socket: &Path, timeout: Duration, last_error: &io::Error) -> String {
+    let cause = match last_error.kind() {
+        io::ErrorKind::PermissionDenied => {
+            "permission denied: the daemon is not allowed to reach the socket inside the jail. The jailer makes the chroot root \
+             owned by the per-VM uid with mode 0700, which the unprivileged daemon cannot traverse (finding 32). Firecracker is \
+             probably running but unreachable"
+        }
+        io::ErrorKind::NotFound => {
+            "the socket never appeared: the jailer or Firecracker likely failed to start (a jailer binary that is not setuid root, \
+             cgroup v2 missing, or a bad uid/gid range)"
+        }
+        _ => "the socket exists but refused the connection",
+    };
+    format!("jailed Firecracker API socket {} was not reachable within {timeout:?}: {cause} (last error: {last_error})", api_socket.display())
+}
+
 /// The Firecracker API PUT sequence turning a freshly spawned process
 /// into a running VM — identical for both boot modes, only `target`'s
 /// paths differ. Bodies are built up front by [`configuration_requests`]
@@ -198,7 +271,14 @@ fn spawn_jailed_inner(
 /// timeable and keeps the ordering constraints as one readable list.
 fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result<BootPhases> {
     let before_socket = Instant::now();
-    let mut api = connect_api_with_retry(&target.api_socket, Duration::from_secs(2))?;
+    let mut api = if target.jail_instance_dir.is_some() {
+        wait_for_jailed_api(&target.api_socket, &mut target.child, JAILED_API_TIMEOUT)?
+    } else {
+        connect_api_with_retry(&target.api_socket, Duration::from_secs(2))?
+    };
+    // A Firecracker that accepts the connection but never answers must not
+    // hang the create: every configuration call is bounded.
+    api.set_io_timeout(Some(API_IO_TIMEOUT))?;
     let socket_wait = before_socket.elapsed();
 
     let requests = configuration_requests(config, target)?;
@@ -338,6 +418,51 @@ fn insert_rate_limiter(body: &mut serde_json::Value, key: &str, rate_limit: &Opt
     if let Some(rl) = rate_limit {
         let value = serde_json::to_value(rl).expect("RateLimiter always serializes");
         body.as_object_mut().expect("body is always a JSON object").insert(key.to_string(), value);
+    }
+}
+
+#[cfg(test)]
+mod jailed_wait_tests {
+    use super::*;
+
+    #[test]
+    fn permission_denied_is_explained_as_the_unreachable_chroot() {
+        let msg = jailed_api_unreachable_message(Path::new("/j/root/api.sock"), Duration::from_secs(10), &io::Error::from(io::ErrorKind::PermissionDenied));
+        assert!(msg.contains("finding 32") && msg.contains("0700") && msg.contains("/j/root/api.sock"), "{msg}");
+    }
+
+    #[test]
+    fn a_missing_socket_points_at_jailer_startup_failure() {
+        let msg = jailed_api_unreachable_message(Path::new("/s"), Duration::from_secs(1), &io::Error::from(io::ErrorKind::NotFound));
+        assert!(msg.contains("never appeared") && msg.contains("setuid"), "{msg}");
+    }
+
+    #[test]
+    fn wait_fails_fast_when_the_process_already_exited() {
+        let mut child = Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        let started = Instant::now();
+        let err = match wait_for_jailed_api(Path::new("/nonexistent/api.sock"), &mut child, Duration::from_secs(30)) {
+            Ok(_) => panic!("connected to nothing"),
+            Err(e) => e,
+        };
+        assert!(started.elapsed() < Duration::from_secs(5), "must not wait out the deadline for a dead process");
+        assert!(err.to_string().contains("exited"), "{err}");
+    }
+
+    #[test]
+    fn wait_times_out_with_a_clear_error_when_the_socket_never_appears() {
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let started = Instant::now();
+        let err = match wait_for_jailed_api(Path::new("/nonexistent/api.sock"), &mut child, Duration::from_millis(200)) {
+            Ok(_) => panic!("connected to nothing"),
+            Err(e) => e,
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        assert!(err.to_string().contains("not reachable within"), "{err}");
     }
 }
 

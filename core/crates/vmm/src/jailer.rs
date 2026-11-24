@@ -26,9 +26,10 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::ops::RangeInclusive;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// Linux's fixed `EXDEV` errno (cross-device link) — checked by raw code
 /// rather than pulling in `libc` for one constant this project has no
@@ -63,11 +64,12 @@ pub struct JailLaunch {
 /// anything else.
 pub struct JailerIdPool {
     free: Mutex<VecDeque<u32>>,
+    quarantined: Mutex<Vec<u32>>,
 }
 
 impl JailerIdPool {
     pub fn new(range: RangeInclusive<u32>) -> Self {
-        Self { free: Mutex::new(range.collect()) }
+        Self { free: Mutex::new(range.collect()), quarantined: Mutex::new(Vec::new()) }
     }
 
     /// Number of ids currently available to lease — the daemon's max
@@ -82,6 +84,19 @@ impl JailerIdPool {
 
     pub fn release(&self, id: u32) {
         self.free.lock().unwrap().push_back(id);
+    }
+
+    /// Withholds `id` from reuse for the rest of this process's life. For a
+    /// uid whose process could not be killed: handing the uid to the next
+    /// VM would let a live, possibly guest-controlled, process share an
+    /// identity with it.
+    pub fn quarantine(&self, id: u32) {
+        self.quarantined.lock().unwrap().push(id);
+    }
+
+    /// Ids withheld by [`Self::quarantine`].
+    pub fn quarantined(&self) -> Vec<u32> {
+        self.quarantined.lock().unwrap().clone()
     }
 }
 
@@ -242,10 +257,123 @@ pub fn build_jailer_args(
     args
 }
 
+/// Jail instance id of the startup self-check's throwaway jail.
+const SELF_CHECK_INSTANCE: &str = "sandkiln-selfcheck";
+
+/// How long the self-check waits for its throwaway jailer run to finish.
+const SELF_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Whether `meta` describes a setuid-root file: the way the unprivileged
+/// daemon is allowed to run `jailer` (chroot, setuid, cgroups, device nodes
+/// all need root).
+pub fn is_setuid_root(meta: &fs::Metadata) -> bool {
+    meta.mode() & 0o4000 != 0 && meta.uid() == 0
+}
+
+/// Turns the result of "can the daemon list the jail root" into the
+/// startup verdict. Pure so the wording and the classification are tested
+/// without a real jailer. A permission error is the known failure of
+/// finding 32 in `docs/findings.md`; anything else is reported as is.
+fn judge_jail_access(access: io::Result<()>, root: &Path, uid: u32) -> Result<(), String> {
+    match access {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Err(format!(
+            "the daemon cannot enter the jail root {} that jailer just created (owned by uid {uid}, mode 0700). \
+             The unprivileged daemon therefore could not reach a jailed Firecracker's API socket, and every jailed create would fail \
+             (finding 32 in docs/findings.md). Turn jailer_enabled off, or see docs-site/self-hosting/jailer.mdx",
+            root.display()
+        )),
+        Err(e) => Err(format!("cannot inspect the jail root {}: {e}", root.display())),
+    }
+}
+
+/// Startup probe for `jailer_enabled`: runs the real `jailer` once against a
+/// throwaway jail that runs `firecracker --version` (a static binary, so it runs inside an empty chroot), then checks, as the daemon's own user,
+/// that it can enter the jail root afterwards. That is the exact access a
+/// real boot needs to reach Firecracker's API socket. It also proves, with
+/// one run, the other prerequisites: `jailer` is setuid root, cgroup v2 is
+/// usable, the uid is accepted, the chroot base is writable.
+///
+/// Why a probe and not a static check: whether the daemon can enter the
+/// jail depends on what jailer does to ownership and modes, which is only
+/// observable by running it as root, and the daemon is deliberately not.
+/// The one thing a probe cannot do is clean up after a failed run: jailer's
+/// files are owned by `probe_uid`, so on the known-bad configuration the
+/// throwaway directory stays (one fixed name, reused by the next probe) and
+/// the error names it.
+pub fn self_check(launch: &JailLaunch, firecracker_bin: &Path) -> Result<(), String> {
+    let meta = fs::metadata(&launch.jailer_bin).map_err(|e| format!("cannot stat jailer binary {}: {e}", launch.jailer_bin.display()))?;
+    if !is_setuid_root(&meta) {
+        return Err(format!(
+            "{} is not setuid root; jailer needs root for chroot, setuid and cgroups. Run: sudo chown root:root {0} && sudo chmod u+s {0}",
+            launch.jailer_bin.display()
+        ));
+    }
+    run_probe(launch, firecracker_bin)
+}
+
+/// The probe itself, past the setuid gate: one jailer run, then the access
+/// test. Separate from [`self_check`] so tests can drive it with a stand-in
+/// jailer that is not setuid root.
+fn run_probe(launch: &JailLaunch, firecracker_bin: &Path) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+
+    let root = chroot_root(&launch.chroot_base_dir, firecracker_bin, SELF_CHECK_INSTANCE);
+    let instance = instance_dir(&root);
+    let _ = fs::remove_dir_all(&instance);
+    prepare_chroot_dir(&root).map_err(|e| format!("cannot create the probe jail under {}: {e}", launch.chroot_base_dir.display()))?;
+
+    // Same argv as a real boot (cgroup limits included: jailer cannot move itself
+    // into the shared parent cgroup without them) up to the separator, then a
+    // no-op for Firecracker.
+    let mut args = build_jailer_args(launch, SELF_CHECK_INSTANCE, firecracker_bin, &cgroup_limits(128, 1), Path::new("/api.sock"));
+    let separator = args.iter().position(|a| a == "--").expect("build_jailer_args always emits `--`");
+    args.truncate(separator + 1);
+    args.push(OsString::from("--version"));
+    let mut child = Command::new(&launch.jailer_bin)
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("cannot run {}: {e}", launch.jailer_bin.display()))?;
+
+    let deadline = Instant::now() + SELF_CHECK_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                return Err(format!("the jailer probe did not finish within {SELF_CHECK_TIMEOUT:?}"));
+            }
+            Err(e) => return Err(format!("waiting for the jailer probe failed: {e}")),
+        }
+    };
+    if !status.success() {
+        let mut stderr = String::new();
+        if let Some(mut pipe) = child.stderr.take() {
+            let _ = io::Read::read_to_string(&mut pipe, &mut stderr);
+        }
+        return Err(format!("the jailer probe failed ({status}): {}", stderr.trim()));
+    }
+
+    let verdict = judge_jail_access(fs::read_dir(&root).map(|_| ()), &root, launch.uid);
+    match &verdict {
+        Ok(()) => {
+            let _ = fs::remove_dir_all(&instance);
+        }
+        Err(_) if fs::remove_dir_all(&instance).is_err() => {
+            return verdict.map_err(|e| format!("{e}. The probe left {} behind (root-owned files inside); remove it with sudo", instance.display()));
+        }
+        Err(_) => {}
+    }
+    verdict
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::MetadataExt;
 
     struct TempDir {
         path: PathBuf,
@@ -383,6 +511,108 @@ mod tests {
         // Mode bits are only ever widened (adding other-read), never replaced.
         let after_mode = fs::metadata(&source).unwrap().permissions().mode();
         assert_eq!(after_mode & 0o700, original_mode & 0o700, "owner permission bits must be unchanged");
+    }
+
+    #[test]
+    fn quarantined_ids_never_return_to_the_pool() {
+        let pool = JailerIdPool::new(600000..=600001);
+        let a = pool.lease().unwrap();
+        pool.quarantine(a);
+        assert_eq!(pool.quarantined(), vec![a]);
+        let b = pool.lease().unwrap();
+        assert_ne!(a, b);
+        assert!(pool.lease().is_err(), "the quarantined id must stay out of circulation");
+    }
+
+    #[test]
+    fn setuid_root_needs_both_the_bit_and_root_ownership() {
+        let tmp = TempDir::new("setuid-root");
+        let file = tmp.path.join("jailer");
+        fs::write(&file, b"x").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o4755)).unwrap();
+        // Owned by the test user, not root: the bit alone is not enough.
+        let meta = fs::metadata(&file).unwrap();
+        assert_eq!(is_setuid_root(&meta), meta.uid() == 0);
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!is_setuid_root(&fs::metadata(&file).unwrap()));
+    }
+
+    #[test]
+    fn judge_jail_access_names_finding_32_on_permission_denied() {
+        let verdict = judge_jail_access(Err(io::Error::from(io::ErrorKind::PermissionDenied)), Path::new("/j/root"), 600001);
+        let msg = verdict.unwrap_err();
+        assert!(msg.contains("finding 32") && msg.contains("/j/root") && msg.contains("600001"), "{msg}");
+    }
+
+    #[test]
+    fn judge_jail_access_passes_through_other_errors_and_success() {
+        assert!(judge_jail_access(Ok(()), Path::new("/j/root"), 1).is_ok());
+        let msg = judge_jail_access(Err(io::Error::from(io::ErrorKind::NotFound)), Path::new("/j/root"), 1).unwrap_err();
+        assert!(!msg.contains("finding 32"), "{msg}");
+    }
+
+    /// A stand-in `jailer` shell script: parses `--id`/`--chroot-base-dir`/
+    /// `--exec-file` like the real one, creates the jail root, then applies
+    /// `root_mode` to it. Not setuid root, so `self_check`'s first gate is
+    /// bypassed by calling `run_probe` directly.
+    fn fake_jailer(dir: &Path, root_mode: &str, exit_code: i32) -> PathBuf {
+        let script = dir.join("fake-jailer");
+        let body = format!(
+            "#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in --id) id=$2; shift;; --chroot-base-dir) base=$2; shift;; --exec-file) exe=$2; shift;; esac; shift; done\n\
+             root=\"$base/$(basename $exe)/$id/root\"; mkdir -p \"$root\"; chmod {root_mode} \"$root\"; echo probe-stderr >&2; exit {exit_code}\n"
+        );
+        fs::write(&script, body).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    fn probe_launch(tmp: &TempDir, jailer: PathBuf) -> JailLaunch {
+        JailLaunch { jailer_bin: jailer, chroot_base_dir: tmp.path.join("jail"), uid: 600000, gid: 600000 }
+    }
+
+    #[test]
+    fn self_check_rejects_a_jailer_that_is_not_setuid_root() {
+        let tmp = TempDir::new("selfcheck-not-setuid");
+        let launch = probe_launch(&tmp, fake_jailer(&tmp.path, "700", 0));
+        let err = self_check(&launch, Path::new("/usr/bin/firecracker")).unwrap_err();
+        assert!(err.contains("not setuid root"), "{err}");
+    }
+
+    #[test]
+    fn self_check_reports_a_missing_jailer_binary() {
+        let tmp = TempDir::new("selfcheck-missing");
+        let launch = probe_launch(&tmp, tmp.path.join("no-such-jailer"));
+        assert!(self_check(&launch, Path::new("/usr/bin/firecracker")).unwrap_err().contains("cannot stat"));
+    }
+
+    #[test]
+    fn probe_reports_the_jailers_own_failure_output() {
+        let tmp = TempDir::new("probe-jailer-fails");
+        let launch = probe_launch(&tmp, fake_jailer(&tmp.path, "755", 3));
+        let msg = run_probe(&launch, Path::new("/usr/bin/firecracker")).unwrap_err();
+        assert!(msg.contains("probe failed") && msg.contains("probe-stderr"), "{msg}");
+    }
+
+    #[test]
+    fn probe_passes_when_the_daemon_can_enter_the_jail_root() {
+        let tmp = TempDir::new("probe-ok");
+        let launch = probe_launch(&tmp, fake_jailer(&tmp.path, "755", 0));
+        assert!(run_probe(&launch, Path::new("/usr/bin/firecracker")).is_ok());
+    }
+
+    #[test]
+    fn probe_detects_a_jail_root_the_daemon_cannot_enter() {
+        // As root every directory is enterable, so the condition cannot be built.
+        if std::process::Command::new("id").arg("-u").output().map(|o| o.stdout == b"0\n").unwrap_or(false) {
+            return;
+        }
+        let tmp = TempDir::new("probe-bad");
+        let launch = probe_launch(&tmp, fake_jailer(&tmp.path, "000", 0));
+        let msg = run_probe(&launch, Path::new("/usr/bin/firecracker")).unwrap_err();
+        assert!(msg.contains("finding 32"), "{msg}");
+        // Let TempDir's drop remove what the stand-in locked.
+        let root = chroot_root(&launch.chroot_base_dir, Path::new("/usr/bin/firecracker"), SELF_CHECK_INSTANCE);
+        fs::set_permissions(root, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[test]

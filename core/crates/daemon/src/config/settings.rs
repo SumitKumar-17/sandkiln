@@ -93,6 +93,7 @@ pub const SETTINGS: &[Setting] = &[
     s("jailer_bin", Some("~/sandkiln-tools/bin/jailer"), "jailer", "Path to the jailer binary (setuid root)."),
     s("jailer_chroot_base_dir", Some("~/sandkiln-tools/jail"), "jailer", "Base directory for per-VM chroots; keep on the same filesystem as rootfs and drives."),
     s("jailer_uid_gid_base", Some("600000"), "jailer", "First uid/gid of the range reserved for jailed VMs."),
+    s("jailer_self_check", Some("true"), "jailer", "At startup, run the real jailer once against a throwaway jail and refuse to start if the daemon could not use the result. Disable only to diagnose a jailer setup."),
     s("jailer_pool_size", Some("32"), "jailer", "Size of the uid/gid range (max concurrent jailed VMs)."),
 ];
 

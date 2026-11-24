@@ -304,7 +304,13 @@ async fn create_sandbox_cold(
                 Err(e) => {
                     state.network.release(lease);
                     if let (Some(id), Some(pool)) = (jail_id, &state.jailer_ids) {
-                        pool.release(id);
+                        // A process that survived the failed boot still runs
+                        // as this uid: never hand the uid to another VM.
+                        if sandkiln_vmm::vm::is_unkilled_process(&e) {
+                            pool.quarantine(id);
+                        } else {
+                            pool.release(id);
+                        }
                     }
                     Err(e)
                 }

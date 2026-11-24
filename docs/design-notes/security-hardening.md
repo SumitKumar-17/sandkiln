@@ -16,7 +16,7 @@ in this shape. State it outright in docs and on the website.
 | Idle timeout | Done (`SANDKILN_IDLE_TIMEOUT_SECS`): a sandbox with no exec/read/write activity past the window is stopped automatically |
 | I/O rate limiting | Done, below |
 | Constant-time bearer comparison | Done (finding 15) |
-| Jailer | Opt-in, built, not verified on real hardware, below |
+| Jailer | Opt-in; verified not working (finding 32): startup refuses it, below |
 | Encryption at rest | Filesystem-level only, below |
 | seccomp filters, disk-size ceilings | Open |
 | Runtime-configurable agent users | Open |
@@ -36,8 +36,14 @@ The first real-hardware attempt failed every `POST /sandboxes` with a 500
 setuid-root (a one-time step outside `setup.sh`, needing an interactive root
 password, which that session lacked). Details are on the
 [jailer internals page](../../docs-site/internals/jailer-privilege-model.mdx).
-Still unverified on real hardware; verify before relying on it for an
-adversarial workload.
+That was fixed by a setuid `jailer`, which then exposed the next failure:
+the chroot root is mode 0700 owned by the per-VM uid, so the unprivileged
+daemon cannot reach `api.sock` (finding 32). Today the daemon detects this at
+startup (`jailer_self_check`: it runs the real jailer once against a
+throwaway jail and tests access as its own user) and refuses to start; failed
+jailed boots are bounded (10 seconds for the socket, 5 for reaping) instead of
+hanging, and a process the daemon cannot kill keeps its uid out of the pool.
+The design for making it work is the open item.
 
 ## I/O rate limiting
 

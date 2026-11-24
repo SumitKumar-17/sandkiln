@@ -21,6 +21,15 @@ impl ApiClient {
         Ok(Self { stream: BufReader::new(stream) })
     }
 
+    /// Bounds every later read and write on this connection. Without it a
+    /// Firecracker that accepts the connection but never answers (stuck, or
+    /// started but not serving) blocks the caller forever.
+    pub fn set_io_timeout(&self, timeout: Option<std::time::Duration>) -> io::Result<()> {
+        let stream = self.stream.get_ref();
+        stream.set_read_timeout(timeout)?;
+        stream.set_write_timeout(timeout)
+    }
+
     pub fn put(&mut self, path: &str, json_body: &str) -> io::Result<ApiResponse> {
         self.send("PUT", path, json_body)
     }

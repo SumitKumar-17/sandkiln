@@ -1,4 +1,8 @@
 section "jailer"
+# With the jailer enabled the daemon currently refuses to start unless
+# jailer_self_check is off (finding 32), so this topic can only run against a
+# daemon started with SANDKILN_JAILER_SELF_CHECK=false, where the create below
+# fails with an explanation after about 15 seconds instead of hanging.
 if [ -z "${SANDKILN_JAILER_ENABLED:-}" ]; then
   echo "  skip - SANDKILN_JAILER_ENABLED not set in this script's environment, presumed off on the daemon too"
 else
