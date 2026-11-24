@@ -40,7 +40,8 @@
               "getting-started/self-hosting",
               "getting-started/js",
               "getting-started/python",
-              "getting-started/cli"
+              "getting-started/cli",
+              "getting-started/mcp"
             ]
           },
           {
@@ -131,6 +132,12 @@
               "api-reference/cli/pool",
               "api-reference/cli/status",
               "api-reference/cli/doctor"
+            ]
+          },
+          {
+            "group": "MCP server",
+            "pages": [
+              "api-reference/mcp/overview"
             ]
           }
         ]
