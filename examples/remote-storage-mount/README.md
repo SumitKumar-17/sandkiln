@@ -66,6 +66,20 @@ default), not `127.0.0.1`, which inside the guest means the guest itself. Object
 files under `/tmp/s3data/my-bucket`, so you can confirm from the host
 that a write really landed.
 
+## What was and was not verified
+
+Verified on 2026-11-24 against a daemon **without** the FUSE kernel and
+rclone: the example validates its four `S3_*` variables (exit 2 with a
+message when one is missing), creates and removes its sandbox, and fails at
+`mount()` with `SandkilnApiError: No such file or directory (os error 2)`,
+status 400 — that is what a guest without `rclone` looks like, so seeing it
+means the setup above is not done on that daemon. The full mount, write,
+read-back and unmount sequence needs the FUSE kernel and the rclone image
+and was **not** re-run for this example in that session; it was verified
+when the mount feature itself was built (see `CHANGELOG.md`).
+`scripts/dev.sh examples-smoke` skips this example unless the `S3_*`
+variables are set.
+
 ## Run it
 
 ```

@@ -9,7 +9,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "sandkiln": "^0.12.0"
+    "sandkiln": "^0.13.0"
   },
   "engines": {
     "node": ">=22"

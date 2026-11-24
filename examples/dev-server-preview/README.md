@@ -16,7 +16,8 @@ a toy snippet.
    no network call itself; the daemon's `/sandboxes/:id/preview/:port`
    route proxies each request to the sandbox's own port lazily, on demand.
 5. Prints that URL. Open it in a browser to see the running server.
-6. On `Ctrl+C`, stops the sandbox with `sandbox.stop()`.
+6. On `Ctrl+C` (or SIGTERM), destroys the sandbox with
+   `sandbox.stop({ keep: false })` and exits.
 
 See `index.js` — it's the whole program.
 
@@ -26,6 +27,9 @@ A running `sandkilnd` daemon reachable from this machine *and* from
 whatever browser opens the printed preview URL — see
 [`SELF_HOSTING.md`](../../SELF_HOSTING.md) at the repo root for how to
 stand one up. There is no hosted service.
+
+The sandbox image needs `python3` (the stand-in server is Python standard
+library only).
 
 ## Run it
 

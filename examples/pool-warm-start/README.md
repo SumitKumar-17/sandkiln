@@ -43,6 +43,10 @@ to a normal cold create on failure — this example surfaces both
 outcomes honestly instead of hiding one. See `ROADMAP.md`'s "Persistence
 and snapshotting" section at the repo root for the full finding.
 
+On the dev box on 2026-11-24 the run was 5 clean claims out of 5 (24 to
+52 ms each), so the failure rate above may be out of date; the example still reports both outcomes rather
+than assuming either.
+
 ## Requirements
 
 A running `sandkilnd` daemon reachable from this machine — see

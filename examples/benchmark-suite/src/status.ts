@@ -1,5 +1,5 @@
-/** `GET /status` called directly: the SDK's `getStatus` is newer than the
- * published 0.12.0 this example pins, and only a few fields are needed. */
+/** `GET /status` called directly: only a few fields are needed, and it keeps
+ * this module independent of the SDK's status types. */
 
 import type { Connection } from "./context.ts";
 
