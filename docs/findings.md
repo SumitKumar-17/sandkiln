@@ -11,7 +11,16 @@ store 0.4k. End of the audit (2026-11-24): findings 1-19 and 21-24 fixed,
 (the misses: the finding 20 pool flake and a timing bound under 4-way load,
 since loosened). 345 unit tests, clippy clean.
 
+At the start the box had rebooted since the last session, so the bridge, tap
+pool and DNS proxy were gone (preflight failed only on the missing tap pool,
+which needs real root) and the live integration suite had not been re-run;
+everything previously claimed as working was as of the last live run, not
+re-proven.
+
 Status key: Fixed, Open, Note.
+
+Findings are grouped by theme below, not in number order. Numbers 1-24 are
+stable references used across `docs/` and `ROADMAP.md`.
 
 ## Dependencies and build hygiene
 
@@ -101,12 +110,15 @@ egress failed (AGENTS.md section 7). Fix: both-halves unwind plus the
 
 ### 21. CRITICAL: forks, retain-history resumes and restores wrote into the snapshot's own disk. Fixed
 - Root cause: a snapshot records its rootfs by host path, so a VM resumed
-  without a drive override wrote straight into it. Reproduced: a fork's
-  marker file appeared on the snapshot's `.ext4` (`debugfs`) and the next
-  fork failed with ext4 `Bad message`. A first test looked clean because
-  the second guest's cached metadata masked the damage; dropping caches
-  exposed it. Time-travel restore had the inverse flaw (a clone made after
-  resume, given to the record, never used by the VM).
+  without a drive override wrote straight into it. Full account, including
+  the reproduction (a fork's marker on the snapshot's `.ext4` via `debugfs`,
+  then ext4 `Bad message` on the next fork), the false-clean first test (the
+  second guest's cached metadata masked the damage; dropping caches exposed
+  it) and the diagram, is on the
+  [snapshot internals page](../docs-site/internals/snapshot-resume-fork.mdx)
+  and in engineering notebook post 27. Time-travel restore had the inverse
+  flaw (a clone made after resume, given to the record, never used by the
+  VM).
 - Fix: `ResumeConfig.rootfs_override` (load paused, `PATCH /drives/rootfs`,
   resume). Fork, retain-history resume and restore clone BEFORE resuming.
 - Regression: integration topic 26 (13 checks).
@@ -181,3 +193,50 @@ resume-readiness race. Probably the same family as finding 20.
 The remote box holds stale copies (`docs/architecture`, worktrees).
 Production data to preserve: `~/sandkiln-tools/history.db`, images,
 registered images. Do not delete.
+
+## Audit plan, re-measure and resume record
+
+The original plan, in order:
+1. Re-establish the live environment (tap pool, DNS proxy, grant caps), run
+   the full integration suite, record the real baseline numbers.
+2. Fix finding 4 (configurable clone destination plus reflink-vs-copy
+   reporting), then re-measure with an XFS or btrfs loopback.
+3. Snapshot cost: measure sandkiln's overhead, then evaluate Diff snapshots.
+4. Split the oversized daemon files; add admin tooling (CLI status/doctor,
+   dashboard of sandboxes, pools, drives, history).
+5. Website, docs, packaging and launch pass once the core is re-verified.
+
+Re-measured 2026-11-23 (criterion, this box, kernel 6.8, directional, one
+shared machine; previously published figures in parentheses): cold boot
+12.6-14.0ms (10.5-10.9), exec round trip 242-248us (220-250), snapshot take
+485-727ms (309.6-335.0), resume 3.7-4.0ms (6.5-7.7). Cold `POST /sandboxes`
+mean over 20: 187.5ms on ext4 with a full-copy clone, 18.4ms with a
+reflinked rootfs. The snapshot HTTP request: 6.8s before finding 13, 0.56s
+after. Full table in [benchmarks](benchmarks.md).
+
+State at the end of the session (2026-11-24): findings 1-19 and 21-24 fixed,
+20 open; live suite 334 of 335 and 333 of 335 on the last two full runs;
+345 unit tests, clippy clean. The "resume here" list that followed is in the
+[roadmap](../ROADMAP.md) "What's next". Items with detail not repeated
+there:
+- Finding 20 root-causing: also note that finding 21's disk bug was a
+  separate cause and may have contributed to old resume failures.
+- Reflink by default: preflight now warns when the base image and
+  `rootfs_dir` do not share a reflink filesystem. `sandkiln.toml` on the box
+  points at the XFS loop volume.
+- Website: the hero shows "ready for first command" 214ms and "create
+  returns" 16.4ms.
+- Housekeeping: the box password was used from `password.txt` during this
+  work, hence the rotation.
+
+### State of "what works" before the audit
+
+For history: the pre-audit claim was a live suite of 294 checks, 0 failing,
+with `SANDKILN_AUTH_TOKEN` set (the script's usage comment lists what is
+skipped without one), boot "about 11ms" (it had been about 32ms until a
+fixed 20ms socket-wait sleep was found, see
+[benchmarks](benchmarks.md)), and `POST /sandboxes` averaging about 144ms
+(168ms before the same fix). Several features were then daemon-API-only:
+interactive PTY was JS/TS and CLI only, idle-lifecycle archiving was
+operator config only, and snapshot lineage and time-travel restore had no
+SDK or CLI surface.
