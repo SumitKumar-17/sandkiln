@@ -148,11 +148,11 @@ validation and response shaping; the lifecycle logic lives in `lifecycle/` and
   `guest_agent_verified: false` always — the daemon can't loop-mount to
   check; `scripts/preflight-check.sh --root-checks` is the out-of-band
   way. `DELETE` refuses while any live/in-flight/held reference exists.
-- **`http/routes/exec.rs`** — exec/read-file/write-file. `call_agent()` is the
-  shared helper (also used by `http/routes/fs.rs`) — extend it, don't
-  duplicate. `resolve_env()` merges create-time + per-call `env` (call
-  wins); `http/routes/logs.rs` inlines the same merge rather than importing
-  it since it already holds the sandbox-map lock at that point.
+- **`http/routes/exec.rs`** — exec/read-file/write-file;
+  `call_agent[_with_timeout]()` is the shared helper (also `fs.rs`): extend
+  it. `exec`'s `timeout_secs` (`resolve_exec_timeout`, else 400) is enforced
+  by the guest: `TimedOut` is a 504 with `timed_out: true`. `resolve_env()`
+  merges create-time + per-call `env`; `logs.rs` inlines it (holds the lock).
 - **`http/routes/fs.rs`** — chmod/chown/mkdir/rename/copy/symlink/readlink/
   truncate/list-dir. No path validation here, matching
   `read_file`/`write_file` — deliberate consistency, not an oversight.

@@ -24,6 +24,12 @@ process-related need belongs in `vmm`/`guest-agent`, not here.
   `Exec`/`ExecStreamHandshake`'s `env` is already fully resolved by the
   daemon (`routes::exec::resolve_env`) before it reaches this crate — no
   sandbox-level/call-level distinction here, just one final map.
+  `Exec`'s optional `timeout_secs` (omitted from the wire when `None`, so a
+  request without a limit is unchanged, and an agent that predates it ignores
+  it) makes the guest enforce the limit and answer `Response::TimedOut {
+  stdout, stderr }` instead of `Exec` — a separate variant, not a flag, since
+  there is no exit code and an `Exec` consumer can never mistake a killed
+  command for a finished one.
   Also defines `PtyHandshake { cols, rows }` (not a `Request`/`Response`
   variant — a PTY session isn't request/response shaped; one framed
   handshake, then raw bytes, see `guest-agent`'s `pty.rs` and `daemon`'s

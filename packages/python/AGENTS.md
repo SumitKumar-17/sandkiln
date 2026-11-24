@@ -63,7 +63,7 @@ SDK's calls are occasional, not high-throughput).
   specific protocol, not a general-purpose gap.
 - **`_config.py`** — env fallback (`SANDKILN_DAEMON_URL`/
   `SANDKILN_AUTH_TOKEN`), matching `config.ts` exactly.
-- **`errors.py`** — `SandkilnApiError(status, message)`.
+- **`errors.py`** — `SandkilnApiError(status, message, body)` and `SandkilnExecTimeoutError`, its 504 subclass raised by `run_command(timeout=)` when the guest killed the command (`stdout`, `stderr`, `timeout_secs`); `as_exec_timeout` is the pure conversion.
 - **`py.typed`** — empty PEP 561 marker; ships in the wheel automatically
   via hatchling's package config, no extra `pyproject.toml` entry needed.
 

@@ -33,7 +33,7 @@ a stated gap; **planned** not built.
 | Observability | done | Structured logs, request ids, `/metrics`, JSON logs, console capture. `GET /status` shipped with `kiln status` and SDK `getStatus`/`get_status`. |
 | History store | done | Sqlite record of every sandbox and how it ended. Live sandboxes do not survive a daemon crash. |
 | JS/TS SDK, Python SDK (sync and async), CLI | done | Published to npm and PyPI (`sandkiln`, `sandkiln-cli`). Gaps are the ones named in the rows above. |
-| MCP server (`sandkiln-mcp`) | done | Stdio server with 12 tools and 2 resources, published to npm (0.1.0) and verified from the registry against a live daemon. Exec timeout is client-side only (see the exec-timeout item). |
+| MCP server (`sandkiln-mcp`) | done | Stdio server with 12 tools and 2 resources, published to npm (0.1.0) and verified from the registry against a live daemon. `sandbox_exec` uses the guest-enforced exec timeout. |
 | Docs site, website, examples | done | Ten runnable examples. |
 | GitHub Actions integration | partial | `sandkiln-run` action and example verified against a real daemon; not yet run on GitHub. Daemon inside a hosted runner is not supported ([note](docs/design-notes/ci-integration.md)). |
 | Load testing | planned | Concurrency-ceiling ramp, see [load testing](docs/design-notes/load-testing.md). |
@@ -68,8 +68,10 @@ In order, most load-bearing first.
    107ms, `fcnet.service` 45ms) is the remaining floor to first command: a
    purpose-built init or trimmed image. Ranked levers and goals:
    [latency floor](docs/design-notes/latency-floor.md).
-5. **Per-request exec timeout** that also kills the guest process (today the
-   process keeps running after a 504 or an MCP/CI client timeout).
+5. **Exec timeout for streamed exec.** `exec` takes a per-request
+   `timeout_secs` that kills the guest process group (shipped; SDKs, CLI, MCP
+   use it). `exec-stream` has no limit of its own: the GitHub Action runs the
+   job under `timeout` in the guest instead.
 6. **Reflink by default** for production setups (preflight already warns).
    `create-reflink-volume.sh` is a loop mount; add a systemd mount unit.
 7. **Split oversized daemon files** (finding 6) per AGENTS.md section 2.

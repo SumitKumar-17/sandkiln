@@ -48,6 +48,16 @@ ships inside every rootfs image.
   of any kind, deliberately — the guest agent is a dumb executor, a path
   is scoped to whatever it resolves to inside that one microVM's own
   filesystem regardless.
+- **`bounded_exec.rs`** — `Request::Exec` with `timeout_secs`: runs the command
+  in its own process group (`process_group(0)`), drains stdout and stderr on
+  their own threads into shared buffers, and enforces one deadline over three
+  completion events (child reaped, both pipes at EOF) with `recv_timeout`. On
+  expiry: SIGTERM the group, wait up to 2s for the leader, SIGKILL the group
+  unconditionally, then wait up to 2s for the pipes, and return what was
+  captured (`Outcome::TimedOut`). A process that left the group (`setsid`) can
+  keep a pipe open past that, so the return does not wait for it. The no-limit
+  path stays `Command::output` in `handler.rs`, untouched. Unit-tested on the
+  host with real `sh`/`sleep` children (grandchild, TERM-ignoring, chatty).
 - **`pty.rs`** — read `PtyHandshake`, `forkpty(2)` a shell sized to it
   (via `nix`), shovel bytes between the vsock connection and pty master
   on two threads until either side ends. See the hangup gotcha below.

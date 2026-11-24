@@ -12,7 +12,7 @@ description: Every kiln sandbox subcommand -- lifecycle, filesystem, preview, tu
 | `by-name <name>` | Resolve a name to a live sandbox's id. |
 | `ls` | List sandboxes. `--tag <key=value>` (repeatable) filters. |
 | `rm <id>` | Stop a sandbox. Preserves state as a snapshot by default; `--destroy` fully destroys it instead — no snapshot, nothing left to resume. |
-| `exec <id> <command> [args...]` | Run a command inside a sandbox, wait for it to finish, print its output. Exits with the command's own exit code. An arg starting with `-` needs a `--` before it, or `commander` parses it as a `kiln` flag instead of passing it through. |
+| `exec <id> <command> [args...]` | Run a command inside a sandbox, wait for it to finish, print its output. Exits with the command's own exit code. `--timeout <seconds>` kills the command (its whole process group, inside the sandbox) after that many seconds, prints whatever it had produced, and exits **124**, like coreutils `timeout`; the daemon's `exec_timeout_secs` is both the default and the maximum. An arg starting with `-` needs a `--` before it, or `commander` parses it as a `kiln` flag instead of passing it through. |
 | `exec-stream <id> <command> [args...]` | Start a command in the background and follow its output live (replay so far, then a live tail) until it exits. Ctrl+C detaches without stopping the command. |
 | `logs <id> [session-id]` | Without `session-id`: list this sandbox's `exec-stream` sessions. With one: attach and follow it, exactly like right after `exec-stream` started it — works any number of times, including after the process has already finished. Neither survives `resume()`/`fork()`/a daemon restart. |
 | `read <id> <path>` | Read a file from a sandbox and print it to stdout. |

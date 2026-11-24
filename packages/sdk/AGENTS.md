@@ -42,6 +42,10 @@ implements logic the daemon doesn't already have; new behavior goes in
   `Sandbox.create()` matching a configured pool (`daemon/src/lifecycle/pool.rs`).
 - **`client.ts`** — `ClientContext`/`resolveClient`, shared `baseUrl`/
   `authToken` resolution (pulled out once `image.ts` needed it too).
+- **`errors.ts`** — `SandkilnApiError` (keeps the parsed JSON `body`) and
+  `SandkilnExecTimeoutError`, its 504 subclass for a command the guest killed at
+  `runCommand`'s `timeoutSeconds` (`stdout`, `stderr`, `timeoutSeconds`);
+  `asExecTimeout` is the pure conversion.
 - **`http.ts`** — the one `fetch` call site. Non-2xx throws
   `SandkilnApiError`; empty body (incl. 204) resolves `undefined`.
 - **`config.ts`** — env fallback (`SANDKILN_DAEMON_URL`/

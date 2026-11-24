@@ -12,6 +12,22 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Exec timeout that kills the command — 2026-11-24
+
+### Added
+- `POST /sandboxes/:id/exec` takes an optional `timeout_secs` (1 to `exec_timeout_secs`, which is also the default; `0` or more than the ceiling is `400`). The guest agent runs the command in its own process group, and at the limit sends the group `SIGTERM`, then `SIGKILL` after a 2 second grace, and reports what it had captured. The daemon answers `504` with `{"timed_out": true, "timeout_secs", "stdout", "stderr"}`. A `504` without `timed_out` is still the daemon giving up waiting (limit plus a 10 second margin, or a guest agent that predates the field, which ignores it and runs unbounded).
+- Protocol: `Request::Exec.timeout_secs` (omitted from the wire when unset, so existing requests are byte-identical) and `Response::TimedOut { stdout, stderr }`. The guest agent must be re-injected for the limit to take effect.
+- JS SDK `runCommand(..., { timeoutSeconds })` throws `SandkilnExecTimeoutError` (a `SandkilnApiError`, status 504) with `stdout`, `stderr`, `timeoutSeconds`. Python `run_command(..., timeout=)` (sync and async) raises `SandkilnExecTimeoutError` the same way. `kiln sandbox exec --timeout <secs>` prints the partial output and exits 124 like coreutils `timeout`.
+- Integration topic `30-exec-timeout`: `sleep 30` with `timeout_secs=2` answers in about 2s and no `sleep` is left in the guest, including the children of a shell.
+
+### Changed
+- MCP `sandbox_exec` passes `timeout_seconds` to the daemon instead of abandoning the call client-side; a killed command is a `timeout` tool error whose `details` carry the partial output, and nothing keeps running. `ToolError` gains optional `details`. The internal `withTimeout` helper is gone.
+- The GitHub Action runs the job under `timeout --kill-after=10` inside the sandbox (the streamed exec API has no limit of its own), with a client-side backstop 30 seconds longer. Needs `timeout` in the image.
+- Without `timeout_secs` an exec is now limited by `exec_timeout_secs` inside the guest too, so a command that outlives it is killed instead of left running after the `504`.
+
+### Not covered
+- `exec-stream` has no timeout. A process that calls `setsid` leaves the group and survives the kill.
+
 ## Snapshots no longer hold a tap device — 2026-11-24
 
 ### Fixed

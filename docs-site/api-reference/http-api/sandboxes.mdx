@@ -13,7 +13,7 @@ description: Every /sandboxes route -- lifecycle, filesystem ops, exec-stream, s
 | `GET /sandboxes/by-name/:name` | Resolve a name to a *live* sandbox's id. `409` if the name currently belongs to a held snapshot instead. |
 | `POST /sandboxes/get-or-create` | Resolve-or-create by name in one call. Body: `name` (required), `tags?`, `vcpu_count?`, `mem_size_mib?`, `image_id?`, `rate_limit?`, `drives?`, `egress?` (the last five used only if a fresh sandbox is created — resuming an existing snapshot always uses what was recorded on it). |
 | `DELETE /sandboxes/:id` | Stop a sandbox. Preserves state as a snapshot by default (`200`, `{"kept": true, "snapshot_id": "..."}`); `?keep=false` fully destroys instead (`204`). See [Sandbox lifecycle](/concepts/sandbox-lifecycle). |
-| `POST /sandboxes/:id/exec` | Run a command. Body: `{"command": "...", "args": [...]}`. Returns `stdout`/`stderr`/`exit_code`. |
+| `POST /sandboxes/:id/exec` | Run a command. Body: `{"command": "...", "args": [...], "env"?: {...}, "timeout_secs"?: <n>}`. Returns `stdout`/`stderr`/`exit_code`. `timeout_secs` is enforced inside the guest: on expiry the command's whole process group is killed and the reply is a `504` (see [Exec timeout](#exec-timeout)). |
 | `POST /sandboxes/:id/read-file` | Body: `{"path": "..."}`. Returns `{"content_base64": "..."}`. |
 | `POST /sandboxes/:id/write-file` | Body: `{"path": "...", "content_base64": "..."}`. |
 | `POST /sandboxes/:id/chmod` | Body: `{"path": "...", "mode": <octal-as-int>}`. |
@@ -29,6 +29,22 @@ description: Every /sandboxes route -- lifecycle, filesystem ops, exec-stream, s
 | `POST /sandboxes/:id/exec-stream` | Starts a command in the background, returns `{"id": "..."}` immediately — the command itself may not even be spawned yet. Attach to the `logs` route below to actually see its output. Not `exec`'s request/response shape: this is for a long-running command you want to watch live, not wait on. |
 | `GET /sandboxes/:id/exec-stream` | Lists every streamed session tracked against this sandbox, running or finished: `{"sessions": [{"id", "command", "args", "started_at_unix", "exit_code"}, ...]}` — `exit_code` is `null` while still running. |
 | `GET /sandboxes/:id/exec-stream/:session_id/logs` | Upgrades to a WebSocket: replays everything captured so far, then live-tails anything new, until the process exits (one final `"[process exited with code N]"` text message, then the socket closes) or the client disconnects. Callable again any number of times for the same session, including long after it finished — it's just a replay with nothing to tail. Buffered replay frames arrive as binary; the final exit notice arrives as text — a client needs to handle both frame types. Sessions aren't carried across `resume()`/`fork()` and don't survive a daemon restart. |
+
+
+## Exec timeout
+
+`POST /sandboxes/:id/exec` takes an optional `timeout_secs`, a wall-clock limit in whole seconds that the **guest agent enforces itself**. The command runs in its own process group; when the limit passes, the agent sends the group `SIGTERM`, then `SIGKILL` after a short grace (so a shell's children die with it), reaps it, and answers with whatever output was captured. Nothing is left running.
+
+| Case | Response |
+|---|---|
+| Finishes within the limit | `200` with `stdout`, `stderr`, `exit_code`, exactly as without a limit. |
+| Killed at the limit | `504` with `{"error": "...", "timed_out": true, "timeout_secs": <n>, "stdout": "...", "stderr": "..."}`: the partial output the command produced before it was killed. |
+| `timeout_secs` is `0` | `400`. |
+| `timeout_secs` exceeds `exec_timeout_secs` | `400` naming the limit. It is not clamped, so a client never believes it granted more time than it got. |
+| `timeout_secs` is negative or not a number | `422`. |
+| No reply from the guest at all (limit plus a 10 second margin) | `504` **without** `timed_out`: the daemon stopped waiting and the command may still be running. This is the old behaviour, and the only one for a guest agent that predates the field. |
+
+Without `timeout_secs` the limit is `exec_timeout_secs` (default 600), which is also the most a request may ask for. Check `timed_out` in the body to tell a killed command from a lost reply. Streamed exec (`exec-stream`) has no limit of its own: stop it by destroying the sandbox, or run it under `timeout` in the guest.
 
 ## Snapshots
 

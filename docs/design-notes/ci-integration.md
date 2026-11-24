@@ -129,9 +129,13 @@ this repository pretends to do it.
   connection closes without ever seeing an exit notice, so trusting it alone
   could turn a dropped connection into a green build. A missing file maps to
   exit code 125.
-- Timeout is enforced by the client (`timeout`, exit code 124). The daemon
-  has no exec timeout or kill, so the command may keep running until the
-  sandbox is destroyed, which the cleanup step does.
+- Timeout is enforced in the guest: the job runs under `timeout --kill-after`
+  inside the sandbox (exit code 124), which signals its whole process group.
+  The streaming API has no limit of its own, so this is `timeout` from the
+  image rather than the daemon's `timeout_secs`. A client-side `timeout`
+  30 seconds longer is the backstop; an image without `timeout` is only
+  covered by that, and the command then runs until the sandbox is destroyed,
+  which the cleanup step does.
 - Always exclude `.git`: `actions/checkout` can leave a token in
   `.git/config`, and the sandbox is where untrusted code runs.
 - Default egress is `deny_all` in the action. The sandbox gets no secrets and
@@ -174,5 +178,6 @@ Not verified, because it needs GitHub:
 
 - Does a hosted runner boot a Firecracker guest at all, and at what latency?
 - A published guest kernel/rootfs release would unlock C; not planned.
-- A daemon-side exec timeout and kill would replace the client-side one
-  (also listed under the MCP server's gaps).
+- Streamed exec (`exec-stream`) has no daemon-side timeout, so the action
+  relies on `timeout` inside the guest. A `timeout_secs` on the stream
+  handshake would remove that dependency on the image.
