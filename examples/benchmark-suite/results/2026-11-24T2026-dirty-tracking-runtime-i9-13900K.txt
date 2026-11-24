@@ -1,0 +1,8 @@
+# runtime cost of snapshot_dirty_tracking, 2026-11-24T20:26:14Z, 13th Gen Intel(R) Core(TM) i9-13900K, kernel 6.8.0-138-generic
+# per round and mode: the suite's create scenario (n=20, results in *-dirty-tracking-*.json) and the time a 1024 MiB guest takes to write 400 MiB to its tmpfs (8 runs)
+round 1 tracking=off: dd_400MiB_ms: 260 249 262 250 257 256 262 255
+round 1 tracking=on: dd_400MiB_ms: 269 254 264 243 259 247 257 264
+round 2 tracking=off: dd_400MiB_ms: 252 250 260 250 259 255 244 256
+round 2 tracking=on: dd_400MiB_ms: 250 258 261 247 263 265 256 260
+round 3 tracking=off: dd_400MiB_ms: 260 269 262 256 253 254 260 278
+round 3 tracking=on: dd_400MiB_ms: 253 246 245 250 246 267 245 258

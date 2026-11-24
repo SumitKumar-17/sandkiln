@@ -15,6 +15,21 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Snapshot take: only the touched pages — 2026-11-25
+
+Taking a snapshot of a cold-booted sandbox writes the pages the guest touched instead of the whole memory file. Suite median for a create, one command and a snapshot: 1781 ms to 546 ms (60 takes each, alternated, pool off); p95 3380 ms to 775 ms. Evidence, levers weighed and not built: `docs/design-notes/snapshot-take-cost.md`.
+
+### Added
+- `snapshot_dirty_tracking` (`SANDKILN_SNAPSHOT_DIRTY_TRACKING`, default `true`): VMs boot with Firecracker dirty-page tracking, and `Vm::snapshot` asks a tracked VM for a `Diff` snapshot, which is a complete, sparse memory file for a booted guest. A resumed sandbox is still snapshotted in full. `false` restores full writes. Diff snapshots are a developer preview upstream.
+- `snapshot_take_phase_duration_ms{phase}` on `/metrics`: pause, create (Firecracker's write), force_stop, release, persist and total.
+- `scripts/snapshot-profile.sh` (`scripts/dev.sh snapshot-profile`): per-step breakdown of a take with medians.
+- Integration topic `34-snapshot-memory-integrity`: checksums of guest-only data across a diff take, a fork, a resume and a full take of the resumed sandbox.
+- `VmConfig::track_dirty_pages` in `sandkiln-vmm`.
+
+### Changed
+- `mem.bin` of a cold-booted sandbox's snapshot is sparse: its apparent size is still the guest's RAM, the allocated size is what the guest touched (92 MiB for a fresh 512 MiB guest).
+- The benchmark page gains before/after take scenarios and a create-with-tracking comparison.
+
 ## Jailer works — 2026-11-24
 
 Finding 32 is fixed: a jailed sandbox can be created, used and stopped by the unprivileged daemon, which gains no privilege. Design and rejected alternatives: `docs/design-notes/security-hardening.md`.

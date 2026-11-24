@@ -10,7 +10,7 @@ most load-sensitive figure of all.
 
 | Tool | What it measures |
 | --- | --- |
-| `cargo bench -p sandkiln-vmm --bench vm_lifecycle` | Cold boot, exec round trip, snapshot take, resume, against real Firecracker. Needs `SANDKILN_BENCH_FIRECRACKER_BIN`, `SANDKILN_BENCH_KERNEL_PATH`, `SANDKILN_BENCH_ROOTFS_PATH`. |
+| `cargo bench -p sandkiln-vmm --bench vm_lifecycle` | Cold boot, exec round trip, snapshot take, resume, against real Firecracker. Needs `SANDKILN_BENCH_FIRECRACKER_BIN`, `SANDKILN_BENCH_KERNEL_PATH`, `SANDKILN_BENCH_ROOTFS_PATH`. `SANDKILN_BENCH_TRACK_DIRTY_PAGES=1` boots with dirty-page tracking, so `snapshot_take` measures the diff take. |
 | `scripts/bench-report.sh [iterations]` | Fast regression check against `/metrics`, plus client-side `first_exec_client` (time to first real command after `create()` returns). Diffed against the last run. |
 | [`examples/benchmark-suite`](../examples/benchmark-suite/README.md) (`scripts/dev.sh bench-suite`) | Client-side suite on the JS SDK against any daemon: create, first command, exec, snapshot, fork, resume, parallel create. JSON result plus a `compare` mode. See "Reproduce these numbers". |
 | `scripts/load-test.sh [concurrency] [iterations] [base-url]` | Concurrent create/exec/delete through the HTTP API (defaults: 10 workers, 20 iterations, port 7777). |
@@ -33,11 +33,35 @@ Log filter note: it is the binary name, `RUST_LOG=sandkilnd=debug`, not
 | Resume from snapshot | 3.7-4.0ms |
 | Resumed first exec | 8.4ms |
 | Exec round trip, open vsock connection | 242-248us (about 245us) |
-| Snapshot take | 485-727ms (309.6-335.0 on a quieter day; up to 990ms under load) |
+| Snapshot take, vmm level | 485-727ms (309.6-335.0 on a quieter day; up to 990ms under load), before the diff snapshot; see [Snapshot take](#snapshot-take-2026-11-24) |
+| Snapshot take, suite (create, one command, snapshot) | 546ms median, p95 775ms (was 1781ms, p95 3380ms), 60 takes each |
 | Snapshot HTTP request | 0.56s (was 6.8s) |
 | Graceful shutdown, 3 live sandboxes | 0.75s |
 | Create to first command, warm pool (default), paced | 26.4ms median, p95 39.4ms (cold: 233.9ms), see [Warm pool by default](#warm-pool-by-default-2026-11-24) |
 | Remaining boot floor | about 125ms of systemd userspace in our guest (not to be confused with Firecracker's 125ms init bound; see "What each number measures") (`dev-vda.device` 107ms, `fcnet.service` 45ms); an opt-in init-mode image removes it, see below (median 147ms to first command instead of 230ms) |
+
+## Snapshot take (2026-11-24)
+
+Where a take went, what the memory write costs, the levers and what shipped:
+[snapshot take cost](design-notes/snapshot-take-cost.md). The benchmark suite's
+`snapshot` scenario (create, one command, snapshot), pool disabled, three rounds
+alternating the daemon as it was (full memory file) and with dirty-page tracking,
+20 takes per round, pooled:
+
+| Take, suite | Median | p95 | Max |
+| --- | ---: | ---: | ---: |
+| Before: whole memory file | 1781ms | 3380ms | 3837ms |
+| After: touched pages only | 546ms | 775ms | 853ms |
+
+Resume and fork medians did not change (resume 19.2ms to 19.7ms, fork 14.9ms to
+15.1ms, same runs). Before and after files are
+`examples/benchmark-suite/results/2026-11-24T2005-snapshot-{full,diff}-r{1,2,3}-i9-13900K.json`.
+Load average on the box was 1.9 to 2.4 for those runs (one `nvtop` process
+holds a core); the full-write runs vary by round (medians 1650, 1156 and 2727ms)
+because they are disk-bound, which is the point. An earlier set of the same three
+rounds (full 792 to 988ms, diff 455 to 462ms medians) was lost to a deleting
+sync before it was copied off the box and is not used. A right-after-create take
+includes about 282ms of settling wait (`pause`, experiment E1b).
 
 ## What each number measures
 
@@ -361,8 +385,9 @@ took effect; 300/300 workspace tests and clippy clean at the time.
 
 ## Snapshot and resume
 
-- Snapshot take (pause, write memory and state to disk) is dominated by
-  synchronously writing the full guest memory; a real cost for auto-suspend
+- Snapshot take (pause, write memory and state to disk) was dominated by
+  synchronously writing and fsyncing the full guest memory (now only the touched
+  pages for a cold-booted sandbox, see [Snapshot take](#snapshot-take-2026-11-24)); a real cost for auto-suspend
   and any tiered idle lifecycle, not free. This dev box is a real, actively
   used desktop (editor, browser, remote-desktop client), not a dedicated
   bench machine, and the synchronous disk write is far more exposed to that

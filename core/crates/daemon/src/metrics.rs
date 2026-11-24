@@ -20,6 +20,8 @@ pub struct Metrics {
     exec_latency_ms: Histogram,
     /// Indexed by `CreatePhase as usize`, parallel to `CreatePhase::ALL`.
     create_phase_duration_ms: Vec<Histogram>,
+    /// Indexed by `SnapshotPhase as usize`, parallel to `SnapshotPhase::ALL`.
+    snapshot_take_phase_duration_ms: Vec<Histogram>,
 }
 
 /// The sub-phases of a cold `POST /sandboxes` that get their own
@@ -67,6 +69,49 @@ impl CreatePhase {
             CreatePhase::Setup => "setup",
             CreatePhase::EgressApply => "egress_apply",
             CreatePhase::Total => "total",
+        }
+    }
+}
+
+/// The steps of `snapshot_and_stop`, one `snapshot_take_phase_duration_ms`
+/// series each. Unlike the create phases these run strictly one after the
+/// other, so `Total` is their sum plus the daemon's own bookkeeping.
+/// Declaration order must match `ALL` (asserted below).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SnapshotPhase {
+    /// `Vm::pause`: Firecracker's `PATCH /vm` (includes the minimum guest age wait).
+    Pause,
+    /// `Vm::snapshot`: Firecracker's `PUT /snapshot/create`, which writes the
+    /// guest memory file and the device-state file.
+    Create,
+    /// `Vm::force_stop`: kill and reap the paused Firecracker process.
+    ForceStop,
+    /// Egress chain removal and handing the lease back (tap to the pool, IP kept).
+    Release,
+    /// `Snapshot::persist`: the atomic `meta.json` write.
+    Persist,
+    /// The whole `snapshot_and_stop`, request to the snapshot being registered.
+    Total,
+}
+
+impl SnapshotPhase {
+    pub const ALL: [SnapshotPhase; 6] = [
+        SnapshotPhase::Pause,
+        SnapshotPhase::Create,
+        SnapshotPhase::ForceStop,
+        SnapshotPhase::Release,
+        SnapshotPhase::Persist,
+        SnapshotPhase::Total,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            SnapshotPhase::Pause => "pause",
+            SnapshotPhase::Create => "create",
+            SnapshotPhase::ForceStop => "force_stop",
+            SnapshotPhase::Release => "release",
+            SnapshotPhase::Persist => "persist",
+            SnapshotPhase::Total => "total",
         }
     }
 }
@@ -128,6 +173,12 @@ impl Metrics {
                 .iter()
                 .map(|_| Histogram::new(&[1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 1000.0]))
                 .collect(),
+            // A take spans sub-millisecond bookkeeping to a second-scale
+            // memory write, so the layout is wider than the create phases'.
+            snapshot_take_phase_duration_ms: SnapshotPhase::ALL
+                .iter()
+                .map(|_| Histogram::new(&[1.0, 5.0, 25.0, 100.0, 250.0, 500.0, 1000.0, 2500.0]))
+                .collect(),
         }
     }
 
@@ -173,6 +224,10 @@ impl Metrics {
 
     pub fn record_create_phase_ms(&self, phase: CreatePhase, ms: f64) {
         self.create_phase_duration_ms[phase as usize].observe(ms);
+    }
+
+    pub fn record_snapshot_phase_ms(&self, phase: SnapshotPhase, ms: f64) {
+        self.snapshot_take_phase_duration_ms[phase as usize].observe(ms);
     }
 
     /// Renders the full exposition-format text. `sandboxes_active` is
@@ -221,6 +276,14 @@ impl Metrics {
         out.push_str("# TYPE create_phase_duration_ms histogram\n");
         for (phase, histogram) in CreatePhase::ALL.iter().zip(self.create_phase_duration_ms.iter()) {
             histogram.render_labeled("create_phase_duration_ms", &format!("phase=\"{}\"", phase.label()), &mut out);
+        }
+
+        out.push_str(
+            "# HELP snapshot_take_phase_duration_ms Duration of one step of taking a snapshot (pause, Firecracker's memory write, force stop, lease release, metadata persist), in milliseconds. total is the whole take.\n",
+        );
+        out.push_str("# TYPE snapshot_take_phase_duration_ms histogram\n");
+        for (phase, histogram) in SnapshotPhase::ALL.iter().zip(self.snapshot_take_phase_duration_ms.iter()) {
+            histogram.render_labeled("snapshot_take_phase_duration_ms", &format!("phase=\"{}\"", phase.label()), &mut out);
         }
 
         out
@@ -406,6 +469,30 @@ mod tests {
     fn create_phase_discriminants_match_all_ordering() {
         for (i, phase) in CreatePhase::ALL.into_iter().enumerate() {
             assert_eq!(phase as usize, i, "{phase:?} is out of order relative to CreatePhase::ALL");
+        }
+    }
+
+    #[test]
+    fn snapshot_phase_family_renders_one_labelled_series_per_phase() {
+        let metrics = Metrics::new();
+        metrics.record_snapshot_phase_ms(SnapshotPhase::Create, 300.0);
+
+        let text = metrics.render(0);
+        for phase in SnapshotPhase::ALL {
+            assert!(
+                text.contains(&format!("snapshot_take_phase_duration_ms_count{{phase=\"{}\"}} ", phase.label())),
+                "phase {phase:?} is missing from the rendered family:\n{text}"
+            );
+        }
+        assert!(text.contains("snapshot_take_phase_duration_ms_bucket{phase=\"create\",le=\"250\"} 0\n"));
+        assert!(text.contains("snapshot_take_phase_duration_ms_bucket{phase=\"create\",le=\"500\"} 1\n"));
+        assert!(text.contains("snapshot_take_phase_duration_ms_count{phase=\"pause\"} 0\n"));
+    }
+
+    #[test]
+    fn snapshot_phase_discriminants_match_all_ordering() {
+        for (i, phase) in SnapshotPhase::ALL.into_iter().enumerate() {
+            assert_eq!(phase as usize, i, "{phase:?} is out of order relative to SnapshotPhase::ALL");
         }
     }
 

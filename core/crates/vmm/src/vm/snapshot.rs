@@ -79,14 +79,7 @@ impl Vm {
     /// at that path whenever this snapshot is resumed.
     pub fn snapshot(&self, mem_path: &Path, snapshot_path: &Path) -> io::Result<()> {
         let mut api = ApiClient::connect(&self.api_socket)?;
-        put_checked(
-            &mut api,
-            "/snapshot/create",
-            &json!({
-                "mem_file_path": path_str(mem_path),
-                "snapshot_path": path_str(snapshot_path),
-            }),
-        )?;
+        put_checked(&mut api, "/snapshot/create", &snapshot_request(mem_path, snapshot_path, self.dirty_tracked))?;
         tracing::info!(vm_id = self.id, "vm snapshotted");
         Ok(())
     }
@@ -175,7 +168,7 @@ impl Vm {
         if let Err(e) = crate::tunnel::listen(&vsock_socket) {
             tracing::warn!(vm_id = id, error = %e, "failed to start tunnel listener on resume; local tunnels unavailable on this sandbox");
         }
-        Ok(Self { id, child, api_socket, vsock_socket, jail: None, started_at: Instant::now() })
+        Ok(Self { id, child, api_socket, vsock_socket, jail: None, started_at: Instant::now(), dirty_tracked: false })
     }
 }
 
@@ -186,6 +179,23 @@ fn network_overrides(tap: Option<&str>) -> serde_json::Value {
         Some(tap) => json!([{ "iface_id": "eth0", "host_dev_name": tap }]),
         None => json!([]),
     }
+}
+
+/// The `PUT /snapshot/create` body. A VM booted with dirty tracking asks for a
+/// `Diff`: with no earlier snapshot to be relative to, that is every page the
+/// guest touched since boot, written into a file that is sparse everywhere else.
+/// Untouched pages of a booted guest are zero, which is what a hole reads as, so
+/// the file loads as a complete memory image (checked in
+/// `docs/design-notes/snapshot-take-cost.md`).
+fn snapshot_request(mem_path: &Path, snapshot_path: &Path, dirty_tracked: bool) -> serde_json::Value {
+    let mut body = json!({
+        "mem_file_path": path_str(mem_path),
+        "snapshot_path": path_str(snapshot_path),
+    });
+    if dirty_tracked {
+        body["snapshot_type"] = json!("Diff");
+    }
+    body
 }
 
 fn patch_checked(api: &mut ApiClient, path: &str, body: &serde_json::Value) -> io::Result<()> {
@@ -206,6 +216,19 @@ mod tests {
     #[test]
     fn a_tap_override_repoints_the_one_guest_interface() {
         assert_eq!(network_overrides(Some("sktap7")), json!([{ "iface_id": "eth0", "host_dev_name": "sktap7" }]));
+    }
+
+    #[test]
+    fn a_dirty_tracked_vm_asks_for_a_diff_snapshot() {
+        let body = snapshot_request(Path::new("/s/mem.bin"), Path::new("/s/state.snap"), true);
+        assert_eq!(body["snapshot_type"], "Diff");
+        assert_eq!(body["mem_file_path"], "/s/mem.bin");
+    }
+
+    #[test]
+    fn an_untracked_vm_asks_for_the_default_full_snapshot() {
+        let body = snapshot_request(Path::new("/s/mem.bin"), Path::new("/s/state.snap"), false);
+        assert!(body.get("snapshot_type").is_none());
     }
 
     #[test]

@@ -73,14 +73,61 @@ The same run with an image whose `/sbin/init` is the guest agent, so systemd nev
 
 Run `2026-11-24T2030-init-image-cold-r3-i9-13900K.json`, 2026-11-24, daemon 0.0.1, guest kernel 5.10.223.
 
-## Snapshots, resume, fork, commands and parallel creates
+## Take a snapshot, before: the whole memory file written
+
+The same suite on the daemon as it was before the change, with the default pool disabled so background refills cannot interfere. The sandbox is created, answers a command, then is snapshotted: `take a snapshot` includes the guest settling wait that applies to a guest younger than 500 ms. All runs alternate with the ones below and are pooled.
+
+| Measurement | Median | p95 | Min | Max | Runs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| take a snapshot (create, one command, snapshot) | 1781 ms | 3380 ms | 706 ms | 3837 ms | 60 |
+| fork a snapshot | 14.9 ms | 16.9 ms | 12.8 ms | 18.9 ms | 60 |
+| resume a snapshot | 19.2 ms | 23.5 ms | 14.9 ms | 27.5 ms | 60 |
+
+3 runs pooled (`2026-11-24T2005-snapshot-full-r1-i9-13900K.json`, `2026-11-24T2005-snapshot-full-r2-i9-13900K.json`, `2026-11-24T2005-snapshot-full-r3-i9-13900K.json`), 2026-11-24, daemon 0.0.1, guest kernel 5.10.223.
+
+## Take a snapshot, after: only the pages the guest touched
+
+The same suite on the daemon with `snapshot_dirty_tracking` on (the default now), alternating with the runs above, same box, pool disabled, pooled over every run.
+
+| Measurement | Median | p95 | Min | Max | Runs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| take a snapshot (create, one command, snapshot) | 546 ms | 775 ms | 396 ms | 853 ms | 60 |
+| fork a snapshot | 15.1 ms | 17.1 ms | 12.7 ms | 23.9 ms | 60 |
+| resume a snapshot | 19.7 ms | 23.0 ms | 14.2 ms | 29.8 ms | 60 |
+
+3 runs pooled (`2026-11-24T2005-snapshot-diff-r1-i9-13900K.json`, `2026-11-24T2005-snapshot-diff-r2-i9-13900K.json`, `2026-11-24T2005-snapshot-diff-r3-i9-13900K.json`), 2026-11-24, daemon 0.0.1, guest kernel 5.10.223.
+
+## Cold create, dirty-page tracking off
+
+What tracking costs a sandbox that is never snapshotted: the create scenario with `snapshot_dirty_tracking` off, alternating with the next section, same box, pool disabled, pooled over every run.
+
+| Measurement | Median | p95 | Min | Max | Runs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| create call returns | 21.2 ms | 25.9 ms | 18.6 ms | 28.5 ms | 60 |
+| first command after create returns | 208 ms | 230 ms | 178 ms | 237 ms | 60 |
+| create to first command | 229 ms | 253 ms | 203 ms | 259 ms | 60 |
+
+3 runs pooled (`2026-11-24T2026-create-dirty-tracking-off-r1-i9-13900K.json`, `2026-11-24T2026-create-dirty-tracking-off-r2-i9-13900K.json`, `2026-11-24T2026-create-dirty-tracking-off-r3-i9-13900K.json`), 2026-11-24, daemon 0.0.1, guest kernel 5.10.223.
+
+## Cold create, dirty-page tracking on
+
+The alternating runs with tracking on, which is the default.
+
+| Measurement | Median | p95 | Min | Max | Runs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| create call returns | 20.6 ms | 25.9 ms | 17.4 ms | 31.5 ms | 60 |
+| first command after create returns | 207 ms | 224 ms | 181 ms | 235 ms | 60 |
+| create to first command | 228 ms | 245 ms | 206 ms | 256 ms | 60 |
+
+3 runs pooled (`2026-11-24T2026-create-dirty-tracking-on-r1-i9-13900K.json`, `2026-11-24T2026-create-dirty-tracking-on-r2-i9-13900K.json`, `2026-11-24T2026-create-dirty-tracking-on-r3-i9-13900K.json`), 2026-11-24, daemon 0.0.1, guest kernel 5.10.223.
+
+## Resume, fork, commands and parallel creates
 
 Measured with the default pool's replenishment idle.
 
 | Measurement | Median | p95 | Min | Max | Runs |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | run a command in a running sandbox | 1.76 ms | 1.98 ms | 0.54 ms | 3.30 ms | 200 |
-| take a snapshot | 1208 ms | 2091 ms | 1001 ms | 2615 ms | 20 |
 | resume a snapshot | 13.1 ms | 14.9 ms | 8.94 ms | 15.1 ms | 20 |
 | first command after a resume | 6.27 ms | 8.34 ms | 4.75 ms | 8.35 ms | 20 |
 | fork a snapshot | 8.77 ms | 9.44 ms | 7.46 ms | 9.74 ms | 20 |

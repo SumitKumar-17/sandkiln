@@ -114,6 +114,7 @@ pub(super) fn boot(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<Vm
         api_socket: target.api_socket,
         vsock_socket: target.vsock_socket,
         jail: target.jail,
+        dirty_tracked: config.track_dirty_pages,
     })
 }
 
@@ -380,6 +381,7 @@ fn configuration_requests(config: &VmConfig, target: &BootTarget) -> io::Result<
         json!({
             "vcpu_count": config.vcpu_count,
             "mem_size_mib": config.mem_size_mib,
+            "track_dirty_pages": config.track_dirty_pages,
         }),
     ));
 
@@ -491,6 +493,7 @@ mod kernel_args_tests {
             jail: None,
             rate_limit: None,
             metadata: None,
+            track_dirty_pages: false,
         }
     }
 

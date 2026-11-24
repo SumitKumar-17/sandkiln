@@ -51,6 +51,7 @@ impl BenchConfig {
             jail: None,
             rate_limit: None,
             metadata: None,
+            track_dirty_pages: env_or("SANDKILN_BENCH_TRACK_DIRTY_PAGES", "") == "1",
         }
     }
 }

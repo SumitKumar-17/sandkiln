@@ -18,6 +18,9 @@ root = Path(__file__).resolve().parents[2]
 results = root / "examples/benchmark-suite/results"
 out = root / "docs-site/performance/current-numbers.md"
 
+# Result files that belong to a dedicated scenario below, so the generic "-i9-13900K.json" lookups skip them.
+OTHER_RUNS = ("warm-pool", "image-cold", "snapshot-full", "snapshot-diff", "dirty-tracking")
+
 # (heading, intro, label that selects the newest file, label to exclude or None, metrics shown in order)
 SCENARIOS = [
     (
@@ -57,10 +60,38 @@ SCENARIOS = [
         ["create_call", "first_command_after_create", "create_to_first_command"],
     ),
     (
-        "Snapshots, resume, fork, commands and parallel creates",
+        "Take a snapshot, before: the whole memory file written",
+        "The same suite on the daemon as it was before the change, with the default pool disabled so background refills cannot interfere. The sandbox is created, answers a command, then is snapshotted: `take a snapshot` includes the guest settling wait that applies to a guest younger than 500 ms. All runs alternate with the ones below and are pooled.",
+        "snapshot-full", None,
+        ["snapshot_take", "fork_call", "resume_call"],
+        True,
+    ),
+    (
+        "Take a snapshot, after: only the pages the guest touched",
+        "The same suite on the daemon with `snapshot_dirty_tracking` on (the default now), alternating with the runs above, same box, pool disabled, pooled over every run.",
+        "snapshot-diff", None,
+        ["snapshot_take", "fork_call", "resume_call"],
+        True,
+    ),
+    (
+        "Cold create, dirty-page tracking off",
+        "What tracking costs a sandbox that is never snapshotted: the create scenario with `snapshot_dirty_tracking` off, alternating with the next section, same box, pool disabled, pooled over every run.",
+        "create-dirty-tracking-off", None,
+        ["create_call", "first_command_after_create", "create_to_first_command"],
+        True,
+    ),
+    (
+        "Cold create, dirty-page tracking on",
+        "The alternating runs with tracking on, which is the default.",
+        "create-dirty-tracking-on", None,
+        ["create_call", "first_command_after_create", "create_to_first_command"],
+        True,
+    ),
+    (
+        "Resume, fork, commands and parallel creates",
         "Measured with the default pool's replenishment idle.",
-        "-i9-13900K.json", ("warm-pool", "image-cold"),
-        ["exec_roundtrip", "snapshot_take", "resume_call", "resume_first_command", "fork_call", "fork_first_command",
+        "-i9-13900K.json", OTHER_RUNS,
+        ["exec_roundtrip", "resume_call", "resume_first_command", "fork_call", "fork_first_command",
          "parallel_create_to_first_command_c8", "parallel_throughput_c8"],
     ),
 ]
@@ -69,7 +100,7 @@ LABELS = {
     "first_command_after_create": "first command after create returns",
     "create_to_first_command": "create to first command",
     "exec_roundtrip": "run a command in a running sandbox",
-    "snapshot_take": "take a snapshot",
+    "snapshot_take": "take a snapshot (create, one command, snapshot)",
     "resume_call": "resume a snapshot",
     "resume_first_command": "first command after a resume",
     "fork_call": "fork a snapshot",
@@ -77,6 +108,14 @@ LABELS = {
     "parallel_create_to_first_command_c8": "create to first command, 8 at once",
     "parallel_throughput_c8": "creates per second, 8 at once",
 }
+
+
+def matching(label: str, exclude):
+    excluded = (exclude,) if isinstance(exclude, str) else (exclude or ())
+    files = sorted(p for p in results.glob("*.json") if label in p.name and not any(e in p.name for e in excluded))
+    if not files:
+        raise SystemExit(f"no benchmark result matching {label!r}")
+    return files
 
 
 def newest(label: str, exclude):
@@ -111,20 +150,26 @@ lines = [
     "",
 ]
 env_done = False
-for heading, intro, label, exclude, metrics in SCENARIOS:
-    path = newest(label, exclude)
-    run = json.loads(path.read_text())
+for heading, intro, label, exclude, metrics, *rest in SCENARIOS:
+    pooled = bool(rest and rest[0])
+    paths = matching(label, exclude) if pooled else [newest(label, exclude)]
+    runs = [json.loads(p.read_text()) for p in paths]
+    run = runs[-1]
     env = run["environment"]
     lines += [f"## {heading}", "", intro, ""]
     lines += ["| Measurement | Median | p95 | Min | Max | Runs |", "| --- | ---: | ---: | ---: | ---: | ---: |"]
     for m in metrics:
         entry = run["metrics"][m]
-        s = entry["samples"]
+        s = [x for r in runs for x in r["metrics"][m]["samples"]]
         if entry.get("unit") == "ms" or entry.get("unit") is None:
             lines.append(f"| {LABELS[m]} | {ms(statistics.median(s))} | {ms(pct(s, 95))} | {ms(min(s))} | {ms(max(s))} | {len(s)} |")
         else:
             lines.append(f"| {LABELS[m]} | {statistics.median(s):.1f} {entry['unit']} | {pct(s, 95):.1f} | {min(s):.1f} | {max(s):.1f} | {len(s)} |")
-    lines += ["", f"Run `{path.name}`, {env['date'][:10]}, daemon {env['daemonVersion']}, guest kernel {env['guestKernel']}.", ""]
+    if pooled:
+        names = ", ".join(f"`{p.name}`" for p in paths)
+        lines += ["", f"{len(paths)} runs pooled ({names}), {env['date'][:10]}, daemon {env['daemonVersion']}, guest kernel {env['guestKernel']}.", ""]
+    else:
+        lines += ["", f"Run `{paths[0].name}`, {env['date'][:10]}, daemon {env['daemonVersion']}, guest kernel {env['guestKernel']}.", ""]
     if not env_done:
         host = f"{env['hostCpu']}, host kernel {env['hostKernel']}"
         env_done = True
@@ -144,11 +189,11 @@ CREATE_ROWS = [
     ("20 creates back to back", med("warm-pool-on-burst", None, "create_to_first_command")),
 ]
 FAST_ROWS = [
-    ("resume a snapshot", med(BASE, ("warm-pool", "image-cold"), "resume_call")),
-    ("fork a snapshot", med(BASE, ("warm-pool", "image-cold"), "fork_call")),
-    ("1st command after resume", med(BASE, ("warm-pool", "image-cold"), "resume_first_command")),
-    ("1st command after fork", med(BASE, ("warm-pool", "image-cold"), "fork_first_command")),
-    ("command in a running sandbox", med(BASE, ("warm-pool", "image-cold"), "exec_roundtrip")),
+    ("resume a snapshot", med(BASE, OTHER_RUNS, "resume_call")),
+    ("fork a snapshot", med(BASE, OTHER_RUNS, "fork_call")),
+    ("1st command after resume", med(BASE, OTHER_RUNS, "resume_first_command")),
+    ("1st command after fork", med(BASE, OTHER_RUNS, "fork_first_command")),
+    ("command in a running sandbox", med(BASE, OTHER_RUNS, "exec_roundtrip")),
 ]
 
 

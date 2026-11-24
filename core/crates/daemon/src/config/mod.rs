@@ -138,6 +138,9 @@ pub struct Config {
     pub exec_timeout: Duration,
     /// Extra guest kernel arguments (`VmConfig::extra_boot_args`); empty = none.
     pub kernel_args: String,
+    /// Boot VMs with dirty-page tracking so a snapshot of one writes only the
+    /// pages it touched (`VmConfig::track_dirty_pages`).
+    pub snapshot_dirty_tracking: bool,
     /// Cap on retained time-travel checkpoints; `0` = unlimited.
     pub retained_checkpoints_max: usize,
     /// Warm instances of the default shape kept ready (the `default` pool); 0 disables.
@@ -329,6 +332,7 @@ impl Config {
             preview_timeout: Duration::from_secs(r.number("preview_timeout_secs")),
             exec_timeout: Duration::from_secs(exec_timeout_secs),
             kernel_args: r.opt_string("kernel_args").unwrap_or_default(),
+            snapshot_dirty_tracking: r.flag("snapshot_dirty_tracking"),
             retained_checkpoints_max: r.number("retained_checkpoints_max"),
             default_warm_count,
             jailer,
@@ -368,6 +372,7 @@ impl Config {
             "retained_checkpoints_max" => Some(self.retained_checkpoints_max.to_string()),
             "default_warm_count" => Some(self.default_warm_count.to_string()),
             "kernel_args" => Some(self.kernel_args.clone()).filter(|a| !a.is_empty()),
+            "snapshot_dirty_tracking" => Some(self.snapshot_dirty_tracking.to_string()),
             "firecracker_bin" => p(&self.firecracker_bin),
             "kernel_path" => p(&self.kernel_path),
             "base_rootfs" => p(&self.base_rootfs_path),
@@ -560,6 +565,14 @@ mod tests {
                 assert!(c.display_value(s.key).is_some(), "{} has a default but no display value", s.key);
             }
         }
+    }
+
+    #[test]
+    fn snapshot_dirty_tracking_is_on_by_default_and_can_be_turned_off() {
+        let on = Config::resolve(env(&[]), None).unwrap_or_else(|e| panic!("{e}"));
+        assert!(on.config.snapshot_dirty_tracking);
+        let off = Config::resolve(env(&[("SANDKILN_SNAPSHOT_DIRTY_TRACKING", "false")]), None).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!off.config.snapshot_dirty_tracking);
     }
 
     const EXAMPLE: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../sandkiln.example.toml"));
