@@ -56,9 +56,9 @@ In order, most load-bearing first.
 
 1. **Re-run the full suite twice** to confirm finding 20's fix (25 of 55 early-snapshot resumes crashed before, 0 of 180 after) holds at suite scale.
 2. **Admin tooling follow-up.** `GET /status`, `kiln status` and
-   `getStatus`/`get_status` have shipped. Remaining: `kiln doctor` (host
-   prerequisite checks reusing the preflight logic) and a dashboard page on
-   the same endpoint.
+   `getStatus`/`get_status` have shipped. `kiln doctor` has shipped as a
+   client-side end-to-end probe (host prerequisite checks stay in
+   `scripts/dev.sh preflight`). Remaining: a dashboard page on the same endpoint.
 3. **Snapshot-take cost.** Measure sandkiln's own overhead, then evaluate
    Firecracker Diff snapshots. See
    [latency investigation](docs/design-notes/latency-investigation.md).

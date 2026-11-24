@@ -50,6 +50,9 @@ operation delegates to the SDK.
 - **`src/commands/pool.ts`** — thin calls into `Pool` statics. No
   "claim" command — claiming is transparent via a plain `sandbox create`
   matching a configured pool.
+- **`src/commands/status.ts`, `src/commands/doctor.ts`** — `kiln status` (one `getStatus` call) and
+  `kiln doctor` (reachable, host warnings, then create, exec and stop; exit 0/1/2).
+- **`src/doctor.ts`** — the pure check runner and formatting behind `doctor`, unit-tested with fakes.
 - **`src/format.ts`** — logic pulled out for unit-testability without
   importing commander's `process.argv`-parsing module load: `parseTag`
   (throws commander's `InvalidArgumentError`, not a plain `Error`, for a
@@ -89,7 +92,7 @@ duplicate-command bug above was caught.
 
 - ESM bundle with a shebang banner (not ESM+CJS like the SDK — a binary
   doesn't need dual-format). Two `tsup` entries: `index.ts` (shebanged)
-  and `format.ts` (banner-less, for test imports); `package.json`'s
+  and `format.ts` + `doctor.ts` (banner-less, for test imports); `package.json`'s
   `bin` points only at `dist/index.js`.
 - `cp` was deliberately kept as explicit `read`/`write` rather than a
   unified `sandbox:path` form — less magic parsing for a first version,

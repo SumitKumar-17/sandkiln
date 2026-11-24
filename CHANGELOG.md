@@ -21,6 +21,9 @@ loosely follows [Keep a Changelog](https://keepachangelog.com/).
   (JS), `get_status()` (Python, sync and async), `kiln status` (exits 2 on
   warnings). Integration topic `27-status`.
 
+### Added (CLI)
+- `kiln doctor`: end-to-end daemon check (reachable, host warnings, then a real create, exec and stop), timed per step; exits 0, 1 or 2.
+
 ### Fixed
 - A resumed guest could die about 0.5s after resume when it had been paused
   right after boot (the flaky pool claims, finding 20). `Vm::pause` now lets a

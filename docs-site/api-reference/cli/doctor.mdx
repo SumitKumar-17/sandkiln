@@ -1,0 +1,21 @@
+---
+title: "kiln doctor"
+description: Diagnose a daemon end to end.
+---
+
+## `kiln doctor`
+
+Checks that a daemon actually works, from the client side, in five steps: it is reachable, its [`/status`](/api-reference/http-api/status) reports no host warnings, then a real sandbox is created, a command runs in it, and it is destroyed. Each step is timed. The probe sandbox is always destroyed, even when a later step fails.
+
+Exits `0` when healthy, `1` when any step fails, `2` when there are warnings only, so it works as a scripted check or a deploy gate.
+
+```text
+$ kiln doctor
+ok    daemon reachable  sandkilnd 0.0.1, up 421s (17ms)
+warn  host health       auth_token is unset: the API is open to anyone who can reach it (1ms)
+ok    create sandbox    sandbox 2031ff29-3033-424b-a93d-62e663f7384e (25ms)
+ok    run a command     echo round trip (223ms)
+ok    stop sandbox      destroyed, nothing left behind (54ms)
+```
+
+To check the host itself before a daemon exists (KVM, Firecracker, tap pool, DNS), use `scripts/dev.sh preflight`; see [self-hosting operations](/self-hosting/operations).

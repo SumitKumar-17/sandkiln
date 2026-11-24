@@ -129,7 +129,8 @@
               "api-reference/cli/image",
               "api-reference/cli/drive",
               "api-reference/cli/pool",
-              "api-reference/cli/status"
+              "api-reference/cli/status",
+              "api-reference/cli/doctor"
             ]
           }
         ]
