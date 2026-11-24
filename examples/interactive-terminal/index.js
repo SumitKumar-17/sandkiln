@@ -53,7 +53,7 @@ async function main() {
       });
     });
   } finally {
-    await sandbox.stop();
+    await sandbox.stop({ keep: false });
     console.log(`\nSandbox ${sandbox.id} stopped.`);
   }
 }

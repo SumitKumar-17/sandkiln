@@ -42,9 +42,17 @@ async function main() {
     console.log(`Dev server running inside the sandbox. Preview it at:\n\n  ${url}\n`);
     console.log("Press Ctrl+C to stop the sandbox and exit.");
 
-    await new Promise((resolve) => process.once("SIGINT", resolve));
+    // A signal listener alone does not keep Node's event loop alive, so
+    // without a ref'd timer the process would exit here and leave the
+    // sandbox running.
+    const keepAlive = setInterval(() => {}, 1 << 30);
+    await new Promise((resolve) => {
+      process.once("SIGINT", resolve);
+      process.once("SIGTERM", resolve);
+    });
+    clearInterval(keepAlive);
   } finally {
-    await sandbox.stop();
+    await sandbox.stop({ keep: false });
     console.log(`\nSandbox ${sandbox.id} stopped.`);
   }
 }

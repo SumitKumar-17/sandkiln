@@ -56,7 +56,7 @@ async function main() {
     console.log(`--- exit code: ${result.exitCode} ---`);
     process.exitCode = result.exitCode;
   } finally {
-    await sandbox.stop();
+    await sandbox.stop({ keep: false });
     console.log(`Sandbox ${sandbox.id} stopped.`);
   }
 }
