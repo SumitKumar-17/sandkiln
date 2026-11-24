@@ -118,7 +118,19 @@ pub struct Vm {
     /// `Some(<chroot_base>/<exec>/<id>)` for a jailed boot, removed
     /// wholesale on `stop()`; `None` for a direct boot.
     jail_instance_dir: Option<PathBuf>,
+    /// When this process started running guest code (boot or resume). See
+    /// [`MIN_GUEST_AGE_BEFORE_PAUSE`].
+    started_at: Instant,
 }
+
+/// A guest paused less than this long after it started running can be
+/// snapshotted in a state that crashes when resumed: measured with 6
+/// parallel snapshot-resume loops, 25 of 55 resumes of a guest paused at
+/// the instant create returned died within ~0.55s (Firecracker logs
+/// `KVM_KVMCLOCK_CTRL call failed` at load for exactly those), against 0 of
+/// 60 with 0.1s of extra settling and 0 of 180 at 0.2s or more. Only a
+/// snapshot taken right after create waits at all.
+const MIN_GUEST_AGE_BEFORE_PAUSE: Duration = Duration::from_millis(500);
 
 /// Owned handle for request/response calls to one VM's guest agent. Holds
 /// no reference to the `Vm`, so it stays valid to call after the lock that

@@ -101,6 +101,7 @@ pub(super) fn boot(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<Vm
         "vm booted"
     );
     Ok(Vm {
+        started_at: Instant::now(),
         id,
         child: target.child,
         api_socket: target.api_socket,

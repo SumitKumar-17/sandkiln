@@ -36,6 +36,10 @@ impl Vm {
     /// `/snapshot/create` will accept a request — an un-paused VM's
     /// memory and device state are a moving target.
     pub fn pause(&self) -> io::Result<()> {
+        let age = self.started_at.elapsed();
+        if age < super::MIN_GUEST_AGE_BEFORE_PAUSE {
+            std::thread::sleep(super::MIN_GUEST_AGE_BEFORE_PAUSE - age);
+        }
         let mut api = ApiClient::connect(&self.api_socket)?;
         patch_checked(&mut api, "/vm", &json!({"state": "Paused"}))?;
         tracing::info!(vm_id = self.id, "vm paused");
@@ -143,7 +147,7 @@ impl Vm {
         if let Err(e) = crate::tunnel::listen(&vsock_socket) {
             tracing::warn!(vm_id = id, error = %e, "failed to start tunnel listener on resume; local tunnels unavailable on this sandbox");
         }
-        Ok(Self { id, child, api_socket, vsock_socket, jail_instance_dir: None })
+        Ok(Self { id, child, api_socket, vsock_socket, jail_instance_dir: None, started_at: Instant::now() })
     }
 }
 
