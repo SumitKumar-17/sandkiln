@@ -1,0 +1,272 @@
+name: Test the sandkiln-run action
+
+# Runs the composite action on GitHub-hosted runners against a stub daemon on
+# 127.0.0.1. This tests the action's wiring (inputs, CLI install, outputs,
+# exit codes, cleanup, masking), not microVM behaviour: see
+# .github/actions/sandkiln-run/test/README.md.
+
+on:
+  push:
+    paths:
+      - ".github/actions/sandkiln-run/**"
+      - ".github/workflows/test-action.yml"
+  pull_request:
+    paths:
+      - ".github/actions/sandkiln-run/**"
+      - ".github/workflows/test-action.yml"
+  workflow_dispatch:
+    inputs:
+      cancel-probe:
+        description: Also run the job meant to be cancelled by hand (see the action README)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CLI_VERSION: "0.14.0"
+  STUB: .github/actions/sandkiln-run/test
+
+jobs:
+  success:
+    name: success (kiln ${{ matrix.cli-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        cli-version: ["0.12.0", "0.14.0"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Start the stub daemon
+        run: ${{ env.STUB }}/start-stub.sh
+      - name: Run a command that reads the uploaded workspace
+        id: run
+        uses: ./.github/actions/sandkiln-run
+        with:
+          daemon-url: ${{ env.STUB_URL }}
+          cli-version: ${{ matrix.cli-version }}
+          command: |
+            set -eu
+            test "$(cat .github/actions/sandkiln-run/test/fixture/hello.txt)" = fixture-marker-7f3a
+            test ! -e .git
+            echo streamed-line-before-sleep
+            sleep 2
+            echo streamed-line-after-sleep
+      - name: Assert outputs and recorded requests
+        if: always()
+        env:
+          SANDBOX_ID: ${{ steps.run.outputs.sandbox-id }}
+          EXIT_CODE: ${{ steps.run.outputs.exit-code }}
+        run: |
+          set -eu
+          test -n "$SANDBOX_ID"
+          test "$EXIT_CODE" = 0
+          which kiln
+          kiln --version
+          ${{ env.STUB }}/assert-requests.sh destroyed "$SANDBOX_ID"
+          ${{ env.STUB }}/assert-requests.sh streamed "$SANDBOX_ID"
+
+  failing-command:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Start the stub daemon
+        run: ${{ env.STUB }}/start-stub.sh
+      - name: Run a command that exits 3
+        id: run
+        continue-on-error: true
+        uses: ./.github/actions/sandkiln-run
+        with:
+          daemon-url: ${{ env.STUB_URL }}
+          cli-version: ${{ env.CLI_VERSION }}
+          command: |
+            echo about-to-fail
+            exit 3
+      - name: Assert the step failed with the command's exit code
+        env:
+          OUTCOME: ${{ steps.run.outcome }}
+          CONCLUSION: ${{ steps.run.conclusion }}
+          SANDBOX_ID: ${{ steps.run.outputs.sandbox-id }}
+          EXIT_CODE: ${{ steps.run.outputs.exit-code }}
+        run: |
+          set -eu
+          test "$OUTCOME" = failure
+          test "$CONCLUSION" = success   # continue-on-error: the job itself carries on
+          test "$EXIT_CODE" = 3
+          ${{ env.STUB }}/assert-requests.sh destroyed "$SANDBOX_ID"
+
+  timeout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Start the stub daemon
+        run: ${{ env.STUB }}/start-stub.sh
+      - name: Note the start time
+        run: echo "STARTED=$(date +%s)" >>"$GITHUB_ENV"
+      - name: Run a command that outlives its limit
+        id: run
+        continue-on-error: true
+        uses: ./.github/actions/sandkiln-run
+        with:
+          daemon-url: ${{ env.STUB_URL }}
+          cli-version: ${{ env.CLI_VERSION }}
+          timeout: "3"
+          command: sleep 120
+      - name: Assert exit code 124, an early stop and a destroyed sandbox
+        env:
+          OUTCOME: ${{ steps.run.outcome }}
+          SANDBOX_ID: ${{ steps.run.outputs.sandbox-id }}
+          EXIT_CODE: ${{ steps.run.outputs.exit-code }}
+        run: |
+          set -eu
+          test "$OUTCOME" = failure
+          test "$EXIT_CODE" = 124
+          elapsed=$(( $(date +%s) - STARTED ))
+          echo "step took ${elapsed}s including the CLI install"
+          test "$elapsed" -lt 100
+          ${{ env.STUB }}/assert-requests.sh destroyed "$SANDBOX_ID"
+
+  auth-token:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FAKE_TOKEN: ${{ secrets.SANDKILN_FAKE_TOKEN }}
+    steps:
+      # Fork pull requests get no secrets; there is nothing to mask then.
+      - name: Check the fake token secret is available
+        id: gate
+        run: |
+          if [ -n "$FAKE_TOKEN" ]; then echo "present=true" >>"$GITHUB_OUTPUT"; else echo "::notice::SANDKILN_FAKE_TOKEN is not available here; skipping the masking test"; fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.present == 'true'
+        with:
+          persist-credentials: false
+      - name: Start a stub that requires the token
+        if: steps.gate.outputs.present == 'true'
+        run: ${{ env.STUB }}/start-stub.sh --token-env FAKE_TOKEN
+      - name: Run with the token
+        id: run
+        if: steps.gate.outputs.present == 'true'
+        uses: ./.github/actions/sandkiln-run
+        with:
+          daemon-url: ${{ env.STUB_URL }}
+          auth-token: ${{ secrets.SANDKILN_FAKE_TOKEN }}
+          cli-version: ${{ env.CLI_VERSION }}
+          command: echo authenticated-run
+      - name: Run with a wrong token
+        id: wrong
+        if: steps.gate.outputs.present == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/sandkiln-run
+        with:
+          daemon-url: ${{ env.STUB_URL }}
+          auth-token: not-the-token
+          install-cli: "false"
+          command: echo must-not-run
+      - name: Assert every request carried the token and the wrong one was refused
+        if: steps.gate.outputs.present == 'true'
+        env:
+          SANDBOX_ID: ${{ steps.run.outputs.sandbox-id }}
+          WRONG: ${{ steps.wrong.outcome }}
+        run: |
+          set -eu
+          test "$WRONG" = failure
+          ${{ env.STUB }}/assert-requests.sh authenticated "$SANDBOX_ID"
+          ${{ env.STUB }}/assert-requests.sh refused
+
+  invalid-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Start the stub daemon
+        run: ${{ env.STUB }}/start-stub.sh
+      - name: Bad egress value
+        id: egress
+        continue-on-error: true
+        uses: ./.github/actions/sandkiln-run
+        with:
+          daemon-url: ${{ env.STUB_URL }}
+          cli-version: ${{ env.CLI_VERSION }}
+          egress: sometimes
+          command: "true"
+      - name: Plain http to a non-loopback host
+        id: http
+        continue-on-error: true
+        uses: ./.github/actions/sandkiln-run
+        with:
+          daemon-url: http://example.com
+          install-cli: "false"
+          command: "true"
+      - name: Non-numeric timeout
+        id: timeout
+        continue-on-error: true
+        uses: ./.github/actions/sandkiln-run
+        with:
+          daemon-url: ${{ env.STUB_URL }}
+          install-cli: "false"
+          timeout: soon
+          command: "true"
+      - name: Assert all three failed before creating anything
+        env:
+          EGRESS: ${{ steps.egress.outcome }}
+          HTTP: ${{ steps.http.outcome }}
+          TIMEOUT: ${{ steps.timeout.outcome }}
+        run: |
+          set -eu
+          test "$EGRESS" = failure
+          test "$HTTP" = failure
+          test "$TIMEOUT" = failure
+          ${{ env.STUB }}/assert-requests.sh none
+
+  cancel-probe:
+    # Blocks on a long sleep so a human can cancel the run and read what the
+    # final step did. Never part of the pass/fail result.
+    if: github.event_name == 'workflow_dispatch' && inputs.cancel-probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Start the stub daemon
+        run: ${{ env.STUB }}/start-stub.sh
+      - name: Run a command that blocks
+        uses: ./.github/actions/sandkiln-run
+        with:
+          daemon-url: ${{ env.STUB_URL }}
+          cli-version: ${{ env.CLI_VERSION }}
+          timeout: "900"
+          command: |
+            echo cancel-probe-blocking
+            sleep 600
+      - name: Show what the stub recorded
+        if: always()
+        run: |
+          echo "job status: ${{ job.status }}"
+          jq -c '{method, path, status}' "$STUB_LOG"
+
+  all:
+    name: all action tests
+    needs: [success, failing-command, timeout, auth-token, invalid-input]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          [ "$(jq -r 'map(select(. != "success")) | length' <<<"$RESULTS")" = 0 ]
