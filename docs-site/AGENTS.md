@@ -11,7 +11,7 @@ CI workflow to maintain.
 `docs.json` is the nav and theme config. Navigation is three top-level
 tabs, each its own groups:
 
-- **Docs** — Getting Started, Self-Hosting (manual setup, configuration, operations and security), Core Concepts, Guides.
+- **Docs** — Getting Started, Self-Hosting (manual setup, jailer, configuration, operations and security, troubleshooting), Core Concepts, Guides.
 - **API Reference** — HTTP API, JS/TS SDK, Python SDK, CLI, each split
   into `overview` + one page per resource (`sandbox`/`sandboxes`,
   `image`/`images`, `drive`/`drives`, `pool`/`pools`) under

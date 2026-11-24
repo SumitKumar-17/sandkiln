@@ -169,6 +169,6 @@ const mount = await sandbox.mount({
 await sandbox.unmount(mount.id);
 ```
 
-- **`sandbox.mount(options)`** — mounts an S3-compatible bucket at `options.mountPath` via `rclone mount`. `options.endpoint` is the full URL of the S3-compatible service, never defaulted. Needs the optional FUSE-capable rootfs setup in `SELF_HOSTING.md`; throws `SandkilnApiError` on a guest-side mount failure. Not carried across `resume()`/`fork()` — it's a live guest FUSE process, already captured by Firecracker's own snapshot.
+- **`sandbox.mount(options)`** — mounts an S3-compatible bucket at `options.mountPath` via `rclone mount`. `options.endpoint` is the full URL of the S3-compatible service, never defaulted. Needs the optional FUSE-capable rootfs setup described in [Manual host setup](/self-hosting/manual-setup#remote-storage-mounts-optional); throws `SandkilnApiError` on a guest-side mount failure. Not carried across `resume()`/`fork()` — it's a live guest FUSE process, already captured by Firecracker's own snapshot.
 - **`sandbox.listMounts()`** — lists every remote-storage mount currently active in this sandbox.
 - **`sandbox.unmount(mountId)`** — tears down one mount. Best-effort on the guest side — a failed `umount` is a daemon-log warning, not a failed request.
