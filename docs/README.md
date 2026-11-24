@@ -1,7 +1,15 @@
 # sandkiln docs
 
-Detail that used to live in `ROADMAP.md`. The [roadmap](../ROADMAP.md) is
-the short current-state view; user-facing docs are in `docs-site/`.
+Detail that used to live in `ROADMAP.md`: findings, measurements, design
+reasoning, rejected ideas and open questions. The [roadmap](../ROADMAP.md) is
+the short current-state view.
+
+Single source of truth: user-facing and mechanism docs live in `docs-site/`
+(Mintlify: concepts, internals, architecture, API reference) and narrative
+write-ups in `website/src/content/engineering/` (posts 01-28). Files here link
+to those instead of repeating them and keep only what they do not carry
+(decisions, caveats, verification records, open questions). When a fact
+changes, edit it in one place.
 
 | File | Contents |
 | --- | --- |
@@ -25,3 +33,23 @@ the short current-state view; user-facing docs are in `docs-site/`.
 | [load-testing.md](design-notes/load-testing.md) | Planned concurrency-ceiling test |
 | [latency-investigation.md](design-notes/latency-investigation.md) | Open latency questions |
 | [ideas-not-started.md](design-notes/ideas-not-started.md) | Future directions and non-goals |
+
+## Where each former roadmap section went
+
+| Former `ROADMAP.md` section | Now |
+| --- | --- |
+| Redevelopment audit, plan, re-measure, state record | [findings.md](findings.md) |
+| What works today (history) | [findings.md](findings.md#state-of-what-works-before-the-audit), [../ROADMAP.md](../ROADMAP.md) status table |
+| Networking, Authentication, Images, Documentation and examples | [images-and-auth.md](design-notes/images-and-auth.md) |
+| Client SDKs, CLI | [sdks-and-cli.md](design-notes/sdks-and-cli.md) |
+| Persistence and snapshotting | [snapshots.md](design-notes/snapshots.md) |
+| Drives and remote storage | [drives-and-storage.md](design-notes/drives-and-storage.md) |
+| Firewall and egress policy | [egress-firewall.md](design-notes/egress-firewall.md) |
+| Security hardening, multi-agent isolation, privileged workloads | [security-hardening.md](design-notes/security-hardening.md) |
+| Dev servers and live preview | [preview.md](design-notes/preview.md) |
+| Tags and sandbox metadata | [tags-and-metadata.md](design-notes/tags-and-metadata.md) |
+| Benchmarking (incl. pools and lineage) | [benchmarks.md](benchmarks.md), [pools-and-lineage.md](design-notes/pools-and-lineage.md) |
+| Observability | [observability.md](design-notes/observability.md) |
+| Multi-node, Ecosystem, Ideas not started, writing-style pass | [ideas-not-started.md](design-notes/ideas-not-started.md) |
+| Load testing | [load-testing.md](design-notes/load-testing.md) |
+| Further latency investigation | [latency-investigation.md](design-notes/latency-investigation.md) |
