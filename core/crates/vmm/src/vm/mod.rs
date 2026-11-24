@@ -118,7 +118,19 @@ pub struct Vm {
     /// `Some(<chroot_base>/<exec>/<id>)` for a jailed boot, removed
     /// wholesale on `stop()`; `None` for a direct boot.
     jail_instance_dir: Option<PathBuf>,
+    /// When this process started running guest code (boot or resume). See
+    /// [`MIN_GUEST_AGE_BEFORE_PAUSE`].
+    started_at: Instant,
 }
+
+/// A guest paused less than this long after it started running can be
+/// snapshotted in a state that crashes when resumed: measured with 6
+/// parallel snapshot-resume loops, 25 of 55 resumes of a guest paused at
+/// the instant create returned died within ~0.55s (Firecracker logs
+/// `KVM_KVMCLOCK_CTRL call failed` at load for exactly those), against 0 of
+/// 60 with 0.1s of extra settling and 0 of 180 at 0.2s or more. Only a
+/// snapshot taken right after create waits at all.
+const MIN_GUEST_AGE_BEFORE_PAUSE: Duration = Duration::from_millis(500);
 
 /// Owned handle for request/response calls to one VM's guest agent. Holds
 /// no reference to the `Vm`, so it stays valid to call after the lock that
@@ -229,17 +241,20 @@ impl Vm {
         result
     }
 
-    /// Updates this VM's MMDS content in place — for when a sandbox's
-    /// real identity (id/name/tags) is only known after it's running,
-    /// e.g. resumed from a pre-warmed pool snapshot. Redoes the full
-    /// `PUT /mmds/config` + `PUT /mmds` rather than a bare `PATCH`: a
-    /// resumed VM's MMDS store comes back uninitialized even though it
-    /// was configured pre-snapshot, so `PATCH` alone fails (Engineering
-    /// Notebook: "MMDS forgets who you are after a resume"). Fails if
-    /// this VM has no network interface — shouldn't happen, every
-    /// sandbox is networked.
+    /// Updates this VM's MMDS content in place: for when a sandbox's real
+    /// identity (id/name/tags) is only known after it is running, e.g.
+    /// resumed from a pre-warmed pool snapshot. Writes the data with
+    /// `PUT /mmds`, which Firecracker accepts on a running VM and which
+    /// keeps the MMDS configuration restored from the snapshot. Only if that
+    /// is refused is the configuration re-applied first: Firecracker rejects
+    /// `PUT /mmds/config` once the VM has started ("not supported after
+    /// starting the microVM"), so that is a fallback, not the normal path
+    /// (it failed every time when used unconditionally after resume).
     pub fn update_metadata(&self, metadata: &serde_json::Value) -> io::Result<()> {
         let mut api = ApiClient::connect(&self.api_socket)?;
+        if put_checked(&mut api, "/mmds", metadata).is_ok() {
+            return Ok(());
+        }
         put_checked(&mut api, "/mmds/config", &serde_json::json!({ "network_interfaces": ["eth0"], "version": "V2" }))?;
         put_checked(&mut api, "/mmds", metadata)
     }

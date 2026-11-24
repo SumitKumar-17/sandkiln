@@ -1,0 +1,17 @@
+name: CI (docs)
+
+on:
+  push:
+    branches: [main]
+    paths: ["**/*.md", "docs-site/**", "scripts/dev-tools/check-docs.sh", ".github/workflows/ci-docs.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["**/*.md", "docs-site/**", "scripts/dev-tools/check-docs.sh", ".github/workflows/ci-docs.yml"]
+
+jobs:
+  docs-check:
+    name: Links, nav, wording, size budgets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/dev-tools/check-docs.sh

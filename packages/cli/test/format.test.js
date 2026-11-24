@@ -313,3 +313,36 @@ test("formatStatus prints counts, disk and warnings", () => {
   assert.match(out, /50\.0 GiB free of 100\.0 GiB/);
   assert.match(out, /warning: open auth/);
 });
+
+import { exitCodeFor, formatOutcomes, runChecks } from "../dist/doctor.js";
+
+test("runChecks times checks, turns throws into failures and stops after a blocking failure", async () => {
+  let t = 0;
+  const now = () => (t += 5);
+  const ran = [];
+  const outcomes = await runChecks(
+    [
+      { name: "a", run: async () => (ran.push("a"), { level: "ok", detail: "fine" }) },
+      { name: "b", blocking: true, run: async () => { throw new Error("boom"); } },
+      { name: "c", run: async () => (ran.push("c"), { level: "ok", detail: "never" }) },
+    ],
+    now,
+  );
+  assert.deepEqual(ran, ["a"]);
+  assert.equal(outcomes.length, 2);
+  assert.equal(outcomes[1].level, "fail");
+  assert.equal(outcomes[1].detail, "boom");
+  assert.equal(outcomes[0].ms, 5);
+  assert.equal(exitCodeFor(outcomes), 1);
+  assert.match(formatOutcomes(outcomes), /FAIL {2}b {2}boom/);
+});
+
+test("a non-blocking failure does not stop the run and warnings alone exit 2", async () => {
+  const outcomes = await runChecks([
+    { name: "x", run: async () => ({ level: "warn", detail: "w" }) },
+    { name: "y", run: async () => ({ level: "ok", detail: "ok" }) },
+  ]);
+  assert.equal(outcomes.length, 2);
+  assert.equal(exitCodeFor(outcomes), 2);
+  assert.equal(exitCodeFor([{ name: "z", level: "ok", detail: "", ms: 0 }]), 0);
+});

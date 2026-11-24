@@ -7,7 +7,7 @@ findings and numbers live in [`docs/`](docs/README.md).
 Last verified 2026-11-24 on the dev box (Intel i9-13900K, kernel 6.8,
 Firecracker v1.16.1): 345 unit tests, clippy clean, live suite
 (`scripts/integration-test.sh`) 334 of 335 and 333 of 335 on the last two
-full runs. The misses are the open finding 20 pool flake and a timing bound
+full runs. The misses were the finding 20 pool flake (fixed since) and a timing bound
 that has since been loosened.
 
 Status key: **done** works end to end and is verified; **partial** works with
@@ -54,15 +54,11 @@ Directional, one shared box. Method, full table and history in
 
 In order, most load-bearing first.
 
-1. **Root-cause finding 20**, the rare post-resume guest kernel panic that
-   makes `18-pool` flaky. Re-run the full suite twice; capture a failing
-   `state.snap`/`mem.bin` and the host load; try a CPU template and other
-   Firecracker or kernel versions. See
-   [findings](docs/findings.md#20-rare-post-resume-guest-kernel-panic-open).
+1. **Re-run the full suite twice** to confirm finding 20's fix (25 of 55 early-snapshot resumes crashed before, 0 of 180 after) holds at suite scale.
 2. **Admin tooling follow-up.** `GET /status`, `kiln status` and
-   `getStatus`/`get_status` have shipped. Remaining: `kiln doctor` (host
-   prerequisite checks reusing the preflight logic) and a dashboard page on
-   the same endpoint.
+   `getStatus`/`get_status` have shipped. `kiln doctor` has shipped as a
+   client-side end-to-end probe (host prerequisite checks stay in
+   `scripts/dev.sh preflight`). Remaining: a dashboard page on the same endpoint.
 3. **Snapshot-take cost.** Measure sandkiln's own overhead, then evaluate
    Firecracker Diff snapshots. See
    [latency investigation](docs/design-notes/latency-investigation.md).

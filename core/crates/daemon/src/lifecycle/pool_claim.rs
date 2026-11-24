@@ -25,10 +25,9 @@ pub(crate) const POOL_QUEUE_TIMEOUT: std::time::Duration = std::time::Duration::
 /// an accepted rare edge case.
 pub(crate) const MAX_POOL_CLAIM_ATTEMPTS: u32 = 3;
 
-/// Retries of `Vm::update_metadata` right after a resume (see that call
-/// site for the settling-window race) — ~3s total, matching the
-/// guest-visible side of the same race
-/// (`scripts/integration-tests/18-pool.sh`'s MMDS check retries 8s).
+/// Bounded retries of `Vm::update_metadata` right after a resume, ~3s total.
+/// The guest-visible side retries separately
+/// (`scripts/integration-tests/18-pool.sh`'s MMDS check).
 const UPDATE_METADATA_MAX_ATTEMPTS: u32 = 10;
 const UPDATE_METADATA_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 
@@ -125,11 +124,10 @@ impl Drop for PoolClaimGuard {
 /// resumed guest kernel can still panic right after restore (seen as
 /// `Kernel panic - not syncing: Attempted to kill the idle task!` in
 /// Firecracker's console log), which kills the process. When this feature
-/// was built that happened to **1 in 3 to 2 in 3** resumes; re-measured on
-/// 2026-11-24 it is rare: 0 of 160 resume cycles in isolated and 4-way
-/// parallel loops, and 2 to 3 of ~320 checks in the full parallel
-/// integration suite. Root cause still unknown (docs/findings.md, finding 20), so
-/// the check stays. A failed check is treated as "the warm snapshot was
+/// was built that happened to **1 in 3 to 2 in 3** resumes. Root cause
+/// (docs/findings.md, finding 20): a guest paused moments after boot could be
+/// snapshotted in a state that crashes on resume; `Vm::pause` now lets a
+/// fresh guest settle. The check stays as defence in depth. A failed check is treated as "the warm snapshot was
 /// bad": clean up and fall through to a normal cold create (see caller),
 /// never hand back a corpse id. `destroy_unhealthy_claim` uses
 /// `Vm::force_stop` so this fallback doesn't pay a second timeout.
@@ -186,12 +184,9 @@ pub(crate) async fn claim_from_pool(
             return Err(AppError::from(e));
         }
     }
-    // `update_metadata` right after a `resume_vm: true` resume can
-    // spuriously hit Firecracker's "operation not supported after
-    // starting the microVM" on /mmds/config even though the resume fully
-    // succeeded -- a pre-existing, load-related race (reproduces on an
-    // unmodified daemon, ~1 run in 3), not feature-specific. Retried with
-    // a pause between attempts rather than treated as one-shot.
+    // `update_metadata` writes only the MMDS data (the configuration comes
+    // back with the snapshot), so it is normally one call. The bounded retry
+    // remains for a Firecracker API socket that is momentarily busy.
     let update_metadata_result = spawn_blocking_in_current_span("MMDS metadata refresh task panicked", {
         let state = state.clone();
         let id = id.clone();

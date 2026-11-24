@@ -21,7 +21,18 @@ loosely follows [Keep a Changelog](https://keepachangelog.com/).
   (JS), `get_status()` (Python, sync and async), `kiln status` (exits 2 on
   warnings). Integration topic `27-status`.
 
+### Added (CLI)
+- `kiln doctor`: end-to-end daemon check (reachable, host warnings, then a real create, exec and stop), timed per step; exits 0, 1 or 2.
+
 ### Fixed
+- A resumed guest could die about 0.5s after resume when it had been paused
+  right after boot (the flaky pool claims, finding 20). `Vm::pause` now lets a
+  fresh guest run for 500ms first; 0 of 180 early-snapshot resumes failed
+  afterwards, against about half before.
+- MMDS metadata after a pool claim was never refreshed (Firecracker rejects
+  `PUT /mmds/config` on a started VM); it now writes the data only.
+- Each VM leaked a tunnel listener thread and file descriptor, which ended in
+  "Too many open files"; fixed, and the daemon raises its open-file limit.
 - A command silent for more than 3 seconds returned an error after ~6.5s **and
   ran twice**: the 3s control-plane vsock timeout applied to user commands and
   the retry re-sent an already-delivered request. Requests are now retried only

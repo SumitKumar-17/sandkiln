@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { registerDriveCommands } from "./commands/drive.js";
+import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerImageCommands } from "./commands/image.js";
 import { registerPoolCommands } from "./commands/pool.js";
 import { registerSandboxCommands } from "./commands/sandbox.js";
@@ -18,6 +19,7 @@ registerImageCommands(program);
 registerDriveCommands(program);
 registerPoolCommands(program);
 registerStatusCommand(program);
+registerDoctorCommand(program);
 
 // Every subcommand's own action handler already catches its errors; this
 // is a backstop for anything that escapes one anyway (a bug in a future

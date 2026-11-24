@@ -3,6 +3,7 @@ mod http;
 mod lifecycle;
 mod log_session;
 mod metrics;
+mod rlimit;
 mod sandbox;
 mod snapshots;
 mod state;
@@ -57,6 +58,9 @@ fn main() {
     }
 
     raise_net_admin_ambient();
+    if let Err(e) = rlimit::raise_nofile_to_hard() {
+        eprintln!("warning: could not raise the open-file limit: {e}");
+    }
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()

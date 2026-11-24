@@ -18,7 +18,8 @@ use std::io;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 /// One accepted guest-initiated connection, already past its handshake —
@@ -71,9 +72,19 @@ pub fn listen(vsock_socket: &Path) -> io::Result<()> {
     let path = tunnel_socket_path(vsock_socket);
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path)?;
+    let stop = Arc::new(AtomicBool::new(false));
+    stop_flags().lock().unwrap().insert(path, stop.clone());
+    LIVE_LISTENERS.fetch_add(1, Ordering::SeqCst);
 
     thread::spawn(move || {
+        // Runs for the VM's life; `cleanup` sets `stop` and connects once to
+        // wake the blocking `accept`, so the thread exits and `listener`
+        // (one fd) is closed instead of leaking per VM.
+        let _live = LiveGuard;
         for conn in listener.incoming() {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
             let Ok(mut stream) = conn else { break };
             let handshake = read_message(&mut stream).ok().and_then(|raw| decode_tunnel_open(&raw).ok());
             match handshake {
@@ -93,9 +104,62 @@ pub fn listen(vsock_socket: &Path) -> io::Result<()> {
     Ok(())
 }
 
+static LIVE_LISTENERS: AtomicUsize = AtomicUsize::new(0);
+
+struct LiveGuard;
+
+impl Drop for LiveGuard {
+    fn drop(&mut self) {
+        LIVE_LISTENERS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Acceptor threads currently running (one per live VM). A steadily growing
+/// number after sandboxes stop means a leak.
+pub fn live_listeners() -> usize {
+    LIVE_LISTENERS.load(Ordering::SeqCst)
+}
+
+fn stop_flags() -> &'static Mutex<HashMap<PathBuf, Arc<AtomicBool>>> {
+    static FLAGS: OnceLock<Mutex<HashMap<PathBuf, Arc<AtomicBool>>>> = OnceLock::new();
+    FLAGS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// Removes this VM's guest-initiated-connection socket. Best-effort,
 /// same as every other per-VM teardown path in this crate — there's
 /// nothing further to do if the file is already gone.
 pub fn cleanup(vsock_socket: &Path) {
-    let _ = std::fs::remove_file(tunnel_socket_path(vsock_socket));
+    let path = tunnel_socket_path(vsock_socket);
+    if let Some(stop) = stop_flags().lock().unwrap().remove(&path) {
+        stop.store(true, Ordering::SeqCst);
+        // Wakes the acceptor blocked in `accept`; it sees the flag and exits.
+        let _ = UnixStream::connect(&path);
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn cleanup_stops_the_acceptor_thread_and_closes_its_listener() {
+        let dir = std::env::temp_dir().join(format!("sandkiln-tunnel-leak-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let vsock = dir.join("vsock.sock");
+        let before = live_listeners();
+
+        listen(&vsock).unwrap();
+        assert_eq!(live_listeners(), before + 1);
+        cleanup(&vsock);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while live_listeners() > before && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(live_listeners(), before, "acceptor thread outlived cleanup");
+        assert!(!tunnel_socket_path(&vsock).exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

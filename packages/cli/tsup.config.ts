@@ -14,7 +14,7 @@ export default defineConfig([
     // parsing logic can be imported and unit-tested without pulling in
     // the CLI's top-level commander wiring, which parses process.argv as
     // a side effect of being imported at all.
-    entry: ["src/format.ts"],
+    entry: ["src/format.ts", "src/doctor.ts"],
     format: ["esm"],
     sourcemap: true,
     clean: false,
