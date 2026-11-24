@@ -41,6 +41,9 @@ loosely follows [Keep a Changelog](https://keepachangelog.com/).
   (JS), `get_status()` (Python, sync and async), `kiln status` (exits 2 on
   warnings). Integration topic `27-status`.
 
+### Added (SDK and CLI)
+- `sandbox.uploadDir` / `downloadDir` (JS SDK) and `kiln sandbox upload-dir` / `download-dir`: copy directory trees with modes and symlinks; downloads validate names and symlinks from the untrusted guest.
+
 ### Added (CLI)
 - `kiln doctor`: end-to-end daemon check (reachable, host warnings, then a real create, exec and stop), timed per step; exits 0, 1 or 2.
 

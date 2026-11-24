@@ -367,6 +367,39 @@ export function registerSandboxCommands(program: Command): void {
     });
 
   sandbox
+    .command("upload-dir <id> <local-dir> <remote-dir>")
+    .description("Copy a local directory tree into a sandbox, keeping file modes and symlinks.")
+    .option("--exclude <name...>", "skip any entry with this name (for example node_modules .git)")
+    .action(async function (this: Command, id: string, localDir: string, remoteDir: string, options: { exclude?: string[] }) {
+      const { baseUrl, token } = clientOptions(this);
+      try {
+        const names = new Set(options.exclude ?? []);
+        const result = await attachSandbox(id, baseUrl, token).uploadDir(localDir, remoteDir, {
+          exclude: (rel) => rel.split("/").some((part) => names.has(part)),
+        });
+        process.stdout.write(`${result.files} files, ${result.directories} dirs, ${result.symlinks} symlinks, ${result.bytes} bytes -> ${id}:${remoteDir}\n`);
+      } catch (error) {
+        await handleApiError(error);
+      }
+    });
+
+  sandbox
+    .command("download-dir <id> <remote-dir> <local-dir>")
+    .description("Copy a directory tree out of a sandbox. Symlinks that would point outside <local-dir> are skipped and reported.")
+    .action(async function (this: Command, id: string, remoteDir: string, localDir: string) {
+      const { baseUrl, token } = clientOptions(this);
+      try {
+        const result = await attachSandbox(id, baseUrl, token).downloadDir(remoteDir, localDir);
+        process.stdout.write(`${result.files} files, ${result.directories} dirs, ${result.symlinks} symlinks, ${result.bytes} bytes -> ${localDir}\n`);
+        for (const skipped of result.skipped) {
+          process.stderr.write(`skipped: ${skipped}\n`);
+        }
+      } catch (error) {
+        await handleApiError(error);
+      }
+    });
+
+  sandbox
     .command("symlink <id> <target> <link-path>")
     .description("Create a symlink at <link-path> pointing at <target>, both inside the sandbox.")
     .action(async function (this: Command, id: string, target: string, linkPath: string) {

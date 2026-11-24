@@ -1,6 +1,7 @@
 import { decodeBase64, encodeBase64 } from "./base64.js";
 import { resolveClient, type ClientContext } from "./client.js";
 import { request } from "./http.js";
+import { downloadDir, uploadDir, type TransferOptions, type TransferResult } from "./transfer.js";
 import { openTunnel, type TunnelHandle, type TunnelOptions } from "./tunnel.js";
 import type {
   ChmodRequestBody,
@@ -202,6 +203,22 @@ export class Sandbox {
    * directories, succeeds if the target already exists); omitted/`false`
    * behaves like plain `mkdir` — fails if the parent is missing or the
    * target already exists. */
+  /**
+   * Copies a local directory into the sandbox (modes and symlinks kept),
+   * one file call at a time with bounded concurrency.
+   */
+  async uploadDir(localDir: string, remoteDir: string, options: TransferOptions = {}): Promise<TransferResult> {
+    return uploadDir(this, localDir, remoteDir, options);
+  }
+
+  /**
+   * Copies a directory out of the sandbox. Entry names and symlinks from
+   * the guest are validated so it cannot write outside `localDir`.
+   */
+  async downloadDir(remoteDir: string, localDir: string, options: TransferOptions = {}): Promise<TransferResult> {
+    return downloadDir(this, remoteDir, localDir, options);
+  }
+
   async mkdir(path: string, options: { parents?: boolean } = {}): Promise<void> {
     const requestBody: MkdirRequestBody = { path, parents: options.parents };
     await request<void>({ ...this.client, method: "POST", path: `/sandboxes/${encodeURIComponent(this.id)}/mkdir`, body: requestBody });

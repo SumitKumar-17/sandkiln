@@ -22,6 +22,8 @@ description: Every kiln sandbox subcommand -- lifecycle, filesystem, preview, tu
 | `mkdir <id> <path>` | Create a directory. |
 | `rename <id> <from> <to>` | Rename/move a file or directory. |
 | `cp <id> <from> <to>` | Copy a file within the sandbox. |
+| `upload-dir <id> <local-dir> <remote-dir>` | Copy a local directory tree in, keeping modes and symlinks. `--exclude <name...>` skips entries with those names. |
+| `download-dir <id> <remote-dir> <local-dir>` | Copy a directory tree out. Symlinks that would escape `<local-dir>` are skipped and reported on stderr. |
 | `symlink <id> <target> <link-path>` | Create a symlink. |
 | `readlink <id> <path>` | Print a symlink's target. |
 | `truncate <id> <path> <size>` | Truncate (or extend) a file to an exact byte size. |
