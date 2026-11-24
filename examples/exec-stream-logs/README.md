@@ -1,22 +1,41 @@
 # sandkiln exec-stream logs
 
-Start a command detached in a sandbox, watch it live, then reattach after it finished and get the whole log back, via `execStream()`, `listExecStreams()` and `attachLogs()`.
+A minimal reference example of streamed background exec sessions: start a
+command running detached inside a sandbox, watch it live, then reattach
+to the same session *after it has already finished* and get the whole log
+back — via `Sandbox.execStream()`/`.listExecStreams()`/`.attachLogs()`.
 
 ## What it does
 
-1. Creates a sandbox and starts a roughly 6 second multi-line command with `execStream()`, which returns a session id immediately.
-2. Attaches with `attachLogs(sessionId)` (a plain `WebSocket`) and prints lines as they arrive, ending with `[process exited with code 0]`.
-3. Lists the session with `listExecStreams()`, now showing its exit code.
-4. Reattaches to the finished session and gets the identical log in milliseconds. The daemon captures output from the start whether or not anything is attached, so each attach is a full replay then a live tail.
-5. Calls `stop({ keep: false })`.
+1. Creates a sandbox with `Sandbox.create()`.
+2. Starts a ~6-second, multi-line command with
+   `sandbox.execStream(command, args)`, which returns a session id
+   **immediately** — unlike `runCommand()`, it does not hold an HTTP
+   request open for the command's lifetime.
+3. Attaches with `sandbox.attachLogs(sessionId)` — a plain `WebSocket`,
+   the same shape `Sandbox.pty()` returns — and prints each line as it
+   arrives, ending with the daemon's `[process exited with code 0]`
+   notice.
+4. Lists the session with `sandbox.listExecStreams()`, now showing its
+   exit code.
+5. **Reattaches to the same, already-finished session** and prints what
+   it gets: byte-for-byte the same log, in milliseconds instead of
+   seconds. This is the distinctive part — the daemon captures the
+   output from the moment the command starts, independently of whether
+   anything is attached, so every attach is a full replay followed by a
+   live tail rather than "whatever happens after you connect".
+6. Stops the sandbox with `sandbox.stop({ keep: false })`.
 
-The whole program is `index.js`.
+See `index.js` — it's the whole program.
 
 ## Requirements
 
-A running `sandkilnd` daemon ([`SELF_HOSTING.md`](../../SELF_HOSTING.md)). There is no hosted service.
+A running `sandkilnd` daemon reachable from this machine — see
+[`SELF_HOSTING.md`](../../SELF_HOSTING.md) at the repo root for how to
+stand one up. There is no hosted service.
 
-Node.js 22 or newer: `attachLogs()` needs a global `WebSocket`.
+Node.js >= 22: `attachLogs()` needs a global `WebSocket`, same as
+`pty()`.
 
 ## Run it
 
@@ -28,12 +47,21 @@ node index.js
 
 ## Configuration
 
-- `SANDKILN_DAEMON_URL`: daemon base URL (default `http://127.0.0.1:7777`).
-- `SANDKILN_AUTH_TOKEN`: only needed if the daemon has a token.
+- `SANDKILN_DAEMON_URL` — base URL of the daemon. Defaults to
+  `http://127.0.0.1:7777`.
+- `SANDKILN_AUTH_TOKEN` — auth token, only needed if the daemon was
+  started with one. When set, `attachLogs()` appends it to the WebSocket
+  URL as a `?token=` query parameter automatically, since neither
+  browsers' nor Node's native `WebSocket` constructor can set a custom
+  `Authorization` header.
 
-## Notes
+## Known limitations
 
-- With an auth token set, `attachLogs()` appends it as `?token=` because `WebSocket` cannot set headers.
-- Sessions live in daemon memory and are not carried across a restart, `resume()`, `fork()` or restore.
-- There is no cancel endpoint; a session runs until its command exits or the sandbox stops.
-- The replay buffer is capped; a longer log starts with a `[... N earlier bytes truncated ...]` notice.
+- Sessions live in the daemon's memory: they don't survive a daemon
+  restart, and aren't carried across `resume()`/`fork()`/a restored
+  checkpoint. The same scope PTY sessions already have.
+- No kill/cancel endpoint yet — a background session runs until its
+  command exits or the sandbox stops.
+- The replay buffer is capped; an attach to a session that has already
+  produced more output than the cap starts with a
+  `[... N earlier bytes truncated ...]` notice.

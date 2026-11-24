@@ -3,6 +3,21 @@ title: Operations and security
 description: Running sandkilnd under systemd, upgrades, troubleshooting, persistent state, and the security posture to know about.
 ---
 
+## Starting, verifying and the control script
+
+`scripts/sandkilnd-ctl.sh start` builds `sandkilnd` (a no-op if unchanged), runs `preflight-check.sh` and refuses to start on a `FAIL`, grants `CAP_NET_ADMIN` through `sudo` if the binary lacks it, starts the daemon in the background, and returns only after `/healthz` answers. It passes every `SANDKILN_*` variable through and uses `sandkiln.toml` when present. `SANDKILN_AUTH_TOKEN=$(openssl rand -hex 32) scripts/sandkilnd-ctl.sh start` sets a token for one run.
+
+```bash
+scripts/sandkilnd-ctl.sh status      # running and healthy?
+scripts/sandkilnd-ctl.sh logs [-f]
+scripts/sandkilnd-ctl.sh restart     # stop, start, and reap Firecracker processes left orphaned
+scripts/sandkilnd-ctl.sh stop
+```
+
+`start` on a running daemon prints its PID; `stop` on a stopped one is a no-op. `start --no-build` skips the build and `start --no-preflight` skips the check. Running `SANDKILN_AUTH_TOKEN=... core/target/release/sandkilnd` in a foreground shell also works; the script is a convenience.
+
+Verify by hand with the `curl` calls in the [quickstart](/getting-started/self-hosting#verify), or fully with `SANDKILN_AUTH_TOKEN=<token> scripts/integration-test.sh`. It exercises sandbox lifecycle, tags, drives (persistence, read-only sharing, conflicts), snapshot/resume/fork, named sandboxes, registered images, auth, `/metrics` and error cases, and cleans up after itself pass or fail. Clients: `npm install sandkiln`, `pip install sandkiln`, and `npm install -g sandkiln-cli` (the package is `sandkiln-cli` because `kiln` was taken; the command is `kiln`), for example `kiln sandbox create --base-url http://127.0.0.1:7777 --token $SANDKILN_AUTH_TOKEN`. All three default to `SANDKILN_DAEMON_URL` and `SANDKILN_AUTH_TOKEN`.
+
 ## Running under systemd
 
 ```bash
@@ -12,7 +27,7 @@ sudo systemctl enable --now sandkilnd
 journalctl -u sandkilnd -f
 ```
 
-The unit (from `scripts/sandkilnd.service.template`) runs the daemon as the given unprivileged user, grants `CAP_NET_ADMIN` through `AmbientCapabilities=` (no `setcap`, nothing to redo after a rebuild), runs `scripts/preflight-check.sh` before each start, restarts on failure, and reads `SANDKILN_*` from the env file, which is created from a template on first install. Set `SANDKILN_AUTH_TOKEN` in it before exposing the daemon beyond localhost. The guest DNS forwarder is the separate `sandkiln-dnsmasq` unit that `setup.sh` installs.
+The unit (from `scripts/sandkilnd.service.template`) runs the daemon as the given unprivileged user, grants `CAP_NET_ADMIN` through `AmbientCapabilities=` (no `setcap`, nothing to redo after a rebuild), runs `scripts/preflight-check.sh` before each start, restarts on failure, and reads `SANDKILN_*` from the env file, which is created from a template on first install. Set `SANDKILN_AUTH_TOKEN` in it before exposing the daemon beyond localhost. A full lifecycle (install, start, create and exec in a sandbox, `systemctl restart`, the integration suite) was verified with the binary's file capability stripped, which confirms `AmbientCapabilities=` works independently of `setcap`. The guest DNS forwarder is the separate `sandkiln-dnsmasq` unit that `setup.sh` installs.
 
 ## Upgrades and what to repeat
 
@@ -34,6 +49,7 @@ Run `scripts/preflight-check.sh` afterwards.
 
 | Symptom | Cause and fix |
 |---|---|
+| Rebuild-then-restart over SSH cannot prompt for sudo | Run `sudo scripts/host-setup/allow-passwordless-cap-grant.sh` once, interactively, so `sandkilnd-ctl.sh restart` can grant `CAP_NET_ADMIN` unattended. |
 | `setup.sh`: "a terminal is required to read the password" | A `sudo` step had no TTY. Run interactively, or `sudo -v` first. |
 | "Operation not permitted" on network calls | Direct run after a rebuild. Re-run `grant-net-admin.sh`, or use systemd. |
 | `tap devices missing: [...]` at startup | `tap_pool_prefix`/`tap_pool_size` differ from what you created, or the pool belongs to another user. |

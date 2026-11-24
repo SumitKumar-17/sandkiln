@@ -50,3 +50,46 @@ Unknown keys are rejected with a did-you-mean hint. `sandkiln.example.toml` at t
 | `history_db_path` | SQLite lifecycle history behind `GET /sandboxes/history`. A restart marks still-live records orphaned. See [SQLite history store](/internals/sqlite-history-store). |
 | `jailer_*` | See [Manual host setup](/self-hosting/manual-setup#jailer-optional). |
 | `log_format` | `json` for log pipelines. |
+
+## Environment variables and defaults
+
+The environment variable for a key is `SANDKILN_` plus the upper-cased key. Defaults:
+
+| Variable | Default |
+|---|---|
+| `SANDKILN_LISTEN_ADDR` | `127.0.0.1:7777` |
+| `SANDKILN_EXEC_TIMEOUT_SECS` | `600` |
+| `SANDKILN_FIRECRACKER_BIN` | `~/sandkiln-tools/bin/firecracker` |
+| `SANDKILN_KERNEL_PATH` | `~/sandkiln-tools/images/vmlinux-5.10.223` |
+| `SANDKILN_BASE_ROOTFS` | `~/sandkiln-tools/images/ubuntu-22.04.ext4` |
+| `SANDKILN_KERNEL_ARGS` | unset (extra guest kernel arguments, for example `quiet`) |
+| `SANDKILN_VCPU_COUNT` | `2` |
+| `SANDKILN_MEM_SIZE_MIB` | `512` |
+| `SANDKILN_MAX_VCPU_COUNT` | `16` |
+| `SANDKILN_MAX_MEM_SIZE_MIB` | `16384` |
+| `SANDKILN_BRIDGE_NAME` | `sktapbr0` |
+| `SANDKILN_BRIDGE_GATEWAY` | `172.16.0.1` |
+| `SANDKILN_UPLINK_IFACE` | auto-detected from the default route |
+| `SANDKILN_TAP_POOL_PREFIX` | `sktap` |
+| `SANDKILN_TAP_POOL_SIZE` | `32` |
+| `SANDKILN_AUTH_TOKEN` | unset (auth disabled) |
+| `SANDKILN_DRIVES_DIR` | `~/sandkiln-tools/drives` |
+| `SANDKILN_STATE_DIR` | `~/sandkiln-tools/state` |
+| `SANDKILN_RETAINED_CHECKPOINTS_MAX` | `8` |
+| `SANDKILN_ROOTFS_DIR` | `$SANDKILN_STATE_DIR/rootfs` |
+| `SANDKILN_IMAGES_DIR` | `~/sandkiln-tools/images-registered` |
+| `SANDKILN_HISTORY_DB_PATH` | `~/sandkiln-tools/history.db` |
+| `SANDKILN_IDLE_TIMEOUT_SECS` | unset (disabled) |
+| `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS` | unset (disabled) |
+| `SANDKILN_ARCHIVE_TIMEOUT_SECS` | unset (disabled) |
+| `SANDKILN_ARCHIVE_DIR` | `~/sandkiln-tools/archive` |
+| `SANDKILN_LOG_FORMAT` | `pretty` |
+| `SANDKILN_PREVIEW_TIMEOUT_SECS` | `30` |
+| `SANDKILN_JAILER_ENABLED` | unset (disabled) |
+| `SANDKILN_JAILER_BIN` | `~/sandkiln-tools/bin/jailer` |
+| `SANDKILN_JAILER_CHROOT_BASE_DIR` | `~/sandkiln-tools/jail` |
+| `SANDKILN_JAILER_UID_GID_BASE` | `600000` |
+| `SANDKILN_JAILER_POOL_SIZE` | `32` |
+| `SANDKILN_TAP_POOL_SIZE` upward | re-run `scripts/host-setup/create-tap-pool.sh` with the new count (it's idempotent — existing devices are left alone, only missing ones are created) before raising the env var, or the daemon's own startup `ensure_ready()` check fails loudly rather than silently under-provisioning. |
+
+`sandkilnd --config-reference` prints the same list with descriptions, and `core/crates/daemon/src/config/settings.rs` is authoritative. `SANDKILN_AUTH_TOKEN` also guards `/images*` and `/snapshots*`, and `SANDKILN_JAILER_ENABLED` accepts `true` or `1`.
