@@ -20,13 +20,20 @@ What sqlite buys is a durable record of every sandbox that ever existed: id,
 name, tags, image, created-at and how it ended (`destroyed`, `snapshotted`
 with the snapshot id, or `orphaned_by_restart`). At startup any record still
 marked live becomes `orphaned_by_restart`, unconditionally, since nothing
-can make it genuinely live. Verified live including a real restart; 15
-integration checks cover the create/destroy/snapshot paths (the restart case
-is manual).
+can make it genuinely live. Verified live end to end including the real restart case: created a
+sandbox, confirmed its live history entry, restarted the real daemon,
+confirmed it flipped to `orphaned_by_restart` with tags intact while
+destroyed/snapshotted entries from before the restart were untouched. 15 new
+integration checks cover the create/destroy/snapshot recording path (209/209
+overall at the time); the restart case needs a real daemon restart mid-test,
+so it is manual. This is more than the in-memory map or `Snapshot`'s
+flat-file durability give (those only cover sandboxes that got that far).
+`SELF_HOSTING.md`'s troubleshooting section documents the orphan symptom.
 
-Write latency: sqlite's defaults fsync twice per write, so the store uses
-`journal_mode=WAL` and `synchronous=NORMAL` (1897.8us to 37.1us, see
-[benchmarks](../benchmarks.md)).
+Write latency: the store uses `journal_mode=WAL` and `synchronous=NORMAL`
+(1897.8us to 37.1us); the pragma explanation, A/B and test are on the
+[history store internals page](../../docs-site/internals/sqlite-history-store.mdx),
+and the create-path context is in [benchmarks](../benchmarks.md).
 
 ## Guest-accessible metadata service
 
@@ -36,15 +43,15 @@ answered by Firecracker's device model at the network layer. No vsock, guest
 agent, protocol, daemon route or SDK/CLI change: it is automatic from the
 `tags`/`name` already given at create.
 
-- Configured V2 (token-gated: the guest must `PUT
-  http://169.254.169.254/latest/api/token` before any `GET`), because a
-  sandbox may run untrusted code that could SSRF an unauthenticated
-  endpoint.
+- Configured V2 (token-gated), because a sandbox may run untrusted code that
+  could SSRF an unauthenticated endpoint; see the
+  [MMDS internals page](../../docs-site/internals/mmds.mdx).
 - Gotcha: `GET /` without an `Accept` header returns an AWS-IMDS-style
   newline list of key names (`id`, `name`, `tags`), not JSON. Send
   `Accept: application/json` for content.
-- Verified by curling from inside a real sandbox (5 integration checks).
+- Verified by curling from inside a real sandbox (5 new integration checks, 194/194 at the time).
 - Not wired: live updates (no mutable-tags API exists; `PATCH /mmds` would
   serve it, but needs the re-init workaround from
   [pools and lineage](pools-and-lineage.md)) and exposing resource config
-  alongside `id`/`name`/`tags`.
+  (`vcpu_count`/`mem_size_mib`/etc.) alongside `id`/`name`/`tags` (out of scope
+for what the item asked).

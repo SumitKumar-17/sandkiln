@@ -12,8 +12,8 @@ in this shape. State it outright in docs and on the website.
 | Item | State |
 | --- | --- |
 | Bridge port isolation (no sandbox-to-sandbox traffic) | Done, verified: cross-sandbox ping fails, gateway ping and outbound HTTP work |
-| Per-sandbox resource ceilings | Done. `vcpu_count`/`mem_size_mib` overrides checked against `SANDKILN_MAX_VCPU_COUNT`/`SANDKILN_MAX_MEM_SIZE_MIB`; 0 or over the ceiling is a 400, never silently clamped |
-| Idle timeout | Done (`SANDKILN_IDLE_TIMEOUT_SECS`) |
+| Per-sandbox resource ceilings | Done. `vcpu_count`/`mem_size_mib` overrides checked against `SANDKILN_MAX_VCPU_COUNT`/`SANDKILN_MAX_MEM_SIZE_MIB`; 0 or over the ceiling is a 400, never silently clamped; live-verified |
+| Idle timeout | Done (`SANDKILN_IDLE_TIMEOUT_SECS`): a sandbox with no exec/read/write activity past the window is stopped automatically |
 | I/O rate limiting | Done, below |
 | Constant-time bearer comparison | Done (finding 15) |
 | Jailer | Opt-in, built, not verified on real hardware, below |
@@ -26,33 +26,32 @@ in this shape. State it outright in docs and on the website.
 
 `SANDKILN_JAILER_ENABLED` gives chroot, cgroup v2 limits and a dedicated
 unprivileged uid/gid per VM (`SELF_HOSTING.md`, "Optional: jailer-based
-sandbox boot"). Off by default; the daemon spawns Firecracker directly.
+sandbox boot"). Off by default; the daemon spawns Firecracker directly. Builds and passes unit tests.
 Snapshotting a jailed sandbox is unsupported (400): jailer support covers
 `Vm::boot` only, and `Vm::resume` always spawns directly.
 
-First real-hardware attempt failed: every `POST /sandboxes` returned 500
-(`"<chroot>/root/api.sock" never appeared`). The console log showed jailer
-failing with `Failed to change owner for .../firecracker: Operation not
-permitted`. Not a code bug: the jailer binary needs `setuid-root`
-(`sudo chown root:root` and `sudo chmod u+s`), a one-time step outside
-`setup.sh` because it needs an interactive root password. It was never
-applied on the box and the session had no interactive terminal. Still
-unverified on real hardware; verify before relying on it for an adversarial
-workload.
+The first real-hardware attempt failed every `POST /sandboxes` with a 500
+(`"<chroot>/root/api.sock" never appeared`); the console log showed jailer's
+`Operation not permitted` chown, because the `jailer` binary was never made
+setuid-root (a one-time step outside `setup.sh`, needing an interactive root
+password, which that session lacked). Details are on the
+[jailer internals page](../../docs-site/internals/jailer-privilege-model.mdx).
+Still unverified on real hardware; verify before relying on it for an
+adversarial workload.
 
 ## I/O rate limiting
 
 `rate_limit: {bandwidth_bytes_per_sec?, ops_per_sec?}` on `POST /sandboxes`
-and `get-or-create`. Validation rejects rather than no-ops: at least one
-sub-field if present, 0 is a 400. Applied uniformly to the rootfs drive,
-every attached drive and both NIC directions through Firecracker's
-token-bucket limiter (`rate_limiter`, `rx_rate_limiter`, `tx_rate_limiter`,
-checked against the real swagger schema). Each bucket refills fully once per
-second. A deliberately simple sandbox-level knob; Firecracker's independent
-burst and direction granularity stays available at the vmm layer
-(`VmConfig::rate_limit`). `None` means unlimited. SDKs: `rateLimit` /
-`rate_limit_bandwidth_bytes_per_sec` + `rate_limit_ops_per_sec`; CLI:
-`--rate-bandwidth`/`--rate-ops`.
+and `get-or-create`. Mechanism (token buckets applied uniformly to the rootfs
+and every drive and both NIC directions, full refill once per second,
+validation that rejects rather than no-ops, a custom limit never matching a
+pool): see the
+[rate limiting internals page](../../docs-site/internals/rate-limiting.mdx).
+Firecracker's independent burst and direction granularity stays available at
+the vmm layer (`VmConfig::rate_limit`); `None` means unlimited. SDKs:
+`rateLimit` / `rate_limit_bandwidth_bytes_per_sec` + `rate_limit_ops_per_sec`;
+CLI: `--rate-bandwidth`/`--rate-ops`. The limiter fields were checked against
+the real `firecracker_spec` swagger schema, not assumed.
 
 ## Encryption at rest
 

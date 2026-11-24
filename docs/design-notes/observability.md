@@ -9,5 +9,13 @@
 | Guest console capture | Firecracker's stdout/stderr (the guest's `console=ttyS0`) goes to a per-VM log file, and a boot failure's error message names the file. A guest that dies before answering over vsock (kernel panic, agent crash) is no longer invisible. |
 
 Operator health: `GET /status` (with `kiln status` and SDK `getStatus`/
-`get_status`) shipped. `kiln doctor` and a dashboard page are planned, see the
-[roadmap](../../ROADMAP.md).
+`get_status`) shipped. As designed it reports version, uptime, live, held and
+retired counts, pools, tap pool total and free
+(`NetworkManager::free_tap_devices`), free bytes for `state_dir` and
+`rootfs_dir`, `rootfs_clone_total`, the exec timeout, and the auth and
+jailer flags, exposed through `AppState`. Remaining: `kiln doctor` and a
+dashboard page on the same endpoint (a dashboard of sandboxes, pools, drives
+and history), see the [roadmap](../../ROADMAP.md).
+
+Request-id correlation, `/metrics` and the other items above are
+live-verified.
