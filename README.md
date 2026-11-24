@@ -24,7 +24,7 @@ curl -s -X POST http://127.0.0.1:7777/sandboxes/<sandbox-id>/exec \
   -d '{"command":"echo","args":["hello from a microVM"]}'
 ```
 
-`setup.sh` boots from a small test image (about 300MiB, no language runtimes). For a real Ubuntu image with Node.js and Python, run `scripts/setup.sh --production` (needs about 8GiB of disk and several minutes). Full details and every setting: [SELF_HOSTING.md](SELF_HOSTING.md).
+`setup.sh` boots from a small test image (about 300MiB, no language runtimes). For a real Ubuntu image with Node.js and Python, run `scripts/setup.sh --production` (needs about 8GiB of disk and several minutes). Details: [SELF_HOSTING.md](SELF_HOSTING.md).
 
 Configuration is `sandkiln.toml` (written by `setup.sh`; every key in [sandkiln.example.toml](sandkiln.example.toml)), overridden by `SANDKILN_<KEY>` environment variables. `sandkilnd --check-config` validates it and `--print-config` shows the effective values.
 
@@ -68,22 +68,17 @@ Tests: `cargo test --workspace` (340 passing, no KVM needed) and `scripts/integr
 
 ## Measured performance
 
-One shared dev box (Intel i9-13900K, 62 GiB, ext4 host, Firecracker v1.16.1), small samples, directional only. The latency a caller feels is time to first command; the `POST /sandboxes` response itself returns before the guest is ready.
+One shared dev box (Intel i9-13900K, ext4 host, Firecracker v1.16.1), small samples, directional only. Method and history: [ROADMAP.md](ROADMAP.md) and [Startup latency](https://sandkiln.mintlify.site/architecture/startup-latency).
 
-| Measurement | Result | Source |
-| --- | --- | --- |
-| **Time to first command**: `POST /sandboxes` to the first successful `exec`, cold sandbox | 413ms before, 214.5ms after trimming guest boot (2026-11-24, `scripts/bench-report.sh 20`); about 125ms of what remains is guest systemd userspace | `first_exec_client` |
-| Time to first command, sandbox resumed from a snapshot | 18ms before, 8.4ms after | `first_exec_resumed` |
-| Cold `POST /sandboxes`, rootfs is a full byte copy on ext4 | 187.5ms mean of 20 (clone 127.9ms, boot 14.9ms, network lease 3.5ms) | `scripts/bench-report.sh` |
-| Cold `POST /sandboxes`, rootfs dir on the same XFS reflink filesystem as the base image | 17.9ms mean of 20 on 2026-11-23 (clone 0.08ms); re-run 18.4ms (clone 0.084ms, lease 3.1ms, boot 13.4ms) | same |
-| Later `exec` on the same sandbox | about 3-5ms | same |
-| Snapshot take, `criterion` | 485-727ms (re-measured 2026-11-23; an earlier run read 310-335ms, and under load 550-915ms) | `cargo bench -p sandkiln-vmm --bench vm_lifecycle` |
-| Snapshot via `POST /sandboxes/:id/snapshot` and stop | 6.8s to 0.56s end to end after the guest `sync` was dropped for a paused VM | `scripts/integration-tests/25-long-running-commands.sh` |
-| Firecracker spawn to `InstanceStart`, `criterion` (an internal phase, not the time a caller waits) | 12.6-14.0ms (2026-11-23; an earlier run read 10.5-10.9ms) | same bench |
-| Resume from snapshot, `criterion` | 3.7-4.0ms | same bench |
-| `exec` round trip on an open connection, `criterion` | 242-248us | same bench |
+| Measurement | Result |
+| --- | --- |
+| Time to first command, cold sandbox (`POST /sandboxes` to first `exec`) | 214.5ms (413ms before trimming guest boot) |
+| Time to first command, resumed from a snapshot | 8.4ms |
+| Cold `POST /sandboxes`, rootfs a full copy on ext4 | 187.5ms mean (clone 127.9ms) |
+| Cold `POST /sandboxes`, rootfs on the same XFS reflink filesystem as the base image | 17.9ms mean (clone 0.08ms) |
+| Later `exec` on the same sandbox | about 3-5ms |
 
-To get the 17.9ms path, put `SANDKILN_ROOTFS_DIR` on the same reflink-capable filesystem as `SANDKILN_BASE_ROOTFS`. On an ext4-only host, `sudo scripts/host-setup/create-reflink-volume.sh <user>` builds an XFS loopback volume. `/metrics` reports `rootfs_clone_total{method="reflink"|"copy"}` so a silent fallback is visible. See [Startup latency](https://sandkiln.mintlify.site/architecture/startup-latency).
+For the reflink path, put `SANDKILN_ROOTFS_DIR` on the same reflink-capable filesystem as `SANDKILN_BASE_ROOTFS` (on ext4, `sudo scripts/host-setup/create-reflink-volume.sh <user>` builds an XFS loopback volume). `/metrics` reports `rootfs_clone_total{method="reflink"|"copy"}`.
 
 ## Layout
 
@@ -105,7 +100,7 @@ examples/                runnable reference projects
 
 ## Links
 
-- [SELF_HOSTING.md](SELF_HOSTING.md): host setup, every `SANDKILN_*` setting, running under systemd
+- [SELF_HOSTING.md](SELF_HOSTING.md): host setup, configuration, running under systemd
 - [ROADMAP.md](ROADMAP.md): current state, measurements and open work
 - [CHANGELOG.md](CHANGELOG.md)
 - [AGENTS.md](AGENTS.md): engineering standard for contributors, human or agent
