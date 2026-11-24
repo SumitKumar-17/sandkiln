@@ -54,7 +54,8 @@
 #                                repo's SDK build; --published installs from the registry.
 #
 # Guest agent (after any protocol/guest-agent/vmm change):
-#   inject-agent [rootfs-path]   builds sandkiln-guest-agent for the musl
+#   inject-agent [--init] [rootfs-path]
+#                                 builds sandkiln-guest-agent for the musl
 #                                 target, then `sudo images/inject-agent.sh`
 #                                 into rootfs-path (default: $SANDKILN_BASE_ROOTFS
 #                                 if set, else the daemon's own configured
@@ -162,13 +163,18 @@ case "$subcommand" in
     exec node "$suite/src/cli.ts" "$@"
     ;;
   inject-agent)
+    init_flag=()
+    if [ "${1:-}" = "--init" ]; then
+      init_flag=(--init)
+      shift
+    fi
     rootfs="${1:-${SANDKILN_BASE_ROOTFS:-$HOME/sandkiln-tools/images/ubuntu-22.04.ext4}}"
     echo "==> building sandkiln-guest-agent for x86_64-unknown-linux-musl"
     cargo build --release --manifest-path "$REPO_ROOT/core/Cargo.toml" \
       -p sandkiln-guest-agent --target x86_64-unknown-linux-musl
     agent_bin="$REPO_ROOT/core/target/x86_64-unknown-linux-musl/release/sandkiln-agent"
     echo "==> injecting into $rootfs (needs sudo)"
-    exec sudo "$REPO_ROOT/images/inject-agent.sh" "$agent_bin" "$rootfs"
+    exec sudo "$REPO_ROOT/images/inject-agent.sh" ${init_flag[@]+"${init_flag[@]}"} "$agent_bin" "$rootfs"
     ;;
   inject-rclone)
     rclone_bin="${1:?path to a static rclone binary required -- see docs-site/self-hosting/manual-setup.mdx}"

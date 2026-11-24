@@ -12,9 +12,19 @@
 # scripts/host-setup/grant-net-admin.sh.
 #
 # Usage:
-#   sudo images/build-universal-image.sh <output-image-path> [size-in-gb] [ubuntu-codename] [agent-count]
+#   sudo images/build-universal-image.sh [--agent <agent-binary> [--init]] \
+#        <output-image-path> [size-in-gb] [ubuntu-codename] [agent-count]
 # Example:
 #   sudo images/build-universal-image.sh ~/sandkiln-tools/images/universal.ext4 6 resolute 4
+#   sudo images/build-universal-image.sh --agent target/x86_64-unknown-linux-musl/release/sandkiln-agent \
+#        --init ~/sandkiln-tools/images/universal-init.ext4 6 resolute 4
+#
+# --agent injects the guest agent as the last step (images/inject-agent.sh),
+# so a bootable image comes out of one command. --init (needs --agent) makes
+# the agent the guest's PID 1 instead of a systemd service: faster cold start,
+# no systemd units at runtime (see images/README.md, "Init-mode image"). The
+# image still contains systemd, kept as /sbin/init.systemd, so re-running
+# inject-agent.sh without --init switches it back.
 #
 # Env overrides:
 #   UBUNTU_MIRROR   apt/debootstrap mirror (default: http://archive.ubuntu.com/ubuntu)
@@ -22,15 +32,34 @@
 #                    Active LTS line as of 2026 — bump this as Node's LTS
 #                    line moves on: https://nodejs.org/en/about/previous-releases)
 #
-# After building, inject the guest agent unmodified:
+# Without --agent, inject the guest agent afterwards:
 #   cargo build --release -p sandkiln-guest-agent --target x86_64-unknown-linux-musl
-#   sudo images/inject-agent.sh target/x86_64-unknown-linux-musl/release/sandkiln-agent <output-image-path>
+#   sudo images/inject-agent.sh [--init] target/x86_64-unknown-linux-musl/release/sandkiln-agent <output-image-path>
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Args and config
 # ---------------------------------------------------------------------------
+
+AGENT_BIN=""
+INIT_MODE=0
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --agent) AGENT_BIN="${2:?--agent needs the path to the built guest agent binary}"; shift 2 ;;
+    --init) INIT_MODE=1; shift ;;
+    -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 0 ;;
+    *) echo "unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+if [[ "$INIT_MODE" -eq 1 && -z "$AGENT_BIN" ]]; then
+  echo "--init needs --agent <agent-binary>: init mode is the agent as PID 1, so there is nothing to build without it" >&2
+  exit 1
+fi
+if [[ -n "$AGENT_BIN" && ! -f "$AGENT_BIN" ]]; then
+  echo "agent binary not found: $AGENT_BIN" >&2
+  exit 1
+fi
 
 OUTPUT="${1:?output image path required, e.g. ~/sandkiln-tools/images/universal.ext4}"
 SIZE_GB="${2:-6}"
@@ -329,6 +358,18 @@ unmount_all
 echo "==> setting up multi-agent isolation users ($AGENT_COUNT agents)"
 "$SCRIPT_DIR/setup-multi-agent-users.sh" "$OUTPUT" "$AGENT_COUNT"
 
+if [[ -n "$AGENT_BIN" ]]; then
+  if [[ "$INIT_MODE" -eq 1 ]]; then
+    echo "==> injecting the guest agent as PID 1 (init mode)"
+    "$SCRIPT_DIR/inject-agent.sh" --init "$AGENT_BIN" "$OUTPUT"
+  else
+    echo "==> injecting the guest agent as a systemd service"
+    "$SCRIPT_DIR/inject-agent.sh" "$AGENT_BIN" "$OUTPUT"
+  fi
+fi
+
 BUILD_OK=1
 echo "universal base image ready: $OUTPUT (${SIZE_GB}G, $CODENAME, Node.js ${NODE_MAJOR}.x, $AGENT_COUNT agent users)"
-echo "next: inject the guest agent with images/inject-agent.sh <agent-binary> $OUTPUT"
+if [[ -z "$AGENT_BIN" ]]; then
+  echo "next: inject the guest agent with images/inject-agent.sh [--init] <agent-binary> $OUTPUT"
+fi

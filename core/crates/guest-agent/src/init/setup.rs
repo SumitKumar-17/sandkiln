@@ -37,11 +37,6 @@ pub(super) const MOUNTS: &[MountSpec] = &[
 const DEV_LINKS: &[(&str, &str)] =
     &[("/proc/self/fd", "/dev/fd"), ("/proc/self/fd/0", "/dev/stdin"), ("/proc/self/fd/1", "/dev/stdout"), ("/proc/self/fd/2", "/dev/stderr")];
 
-/// Environment of the previous systemd-run agent, minus systemd's own
-/// variables. Everything else (the kernel's `HOME=/`, `TERM=linux`) is
-/// dropped so exec and shells see what they saw before.
-pub(super) const ENV: &[(&str, &str)] = &[("LANG", "C.UTF-8"), ("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")];
-
 /// systemd's service default for `LimitNOFILE` (soft stays at 1024).
 const NOFILE_HARD: libc::rlim_t = 524_288;
 
@@ -61,7 +56,7 @@ pub(super) fn prepare() {
     if let Err(e) = loopback_up() {
         eprintln!("init: loopback up: {e}");
     }
-    set_environment();
+    super::environment::apply();
     raise_nofile_limit();
     // Deliver Ctrl-Alt-Del as SIGINT to us instead of an instant reset, so
     // the supervisor can sync first.
@@ -129,15 +124,6 @@ fn loopback_up() -> io::Result<()> {
     // SAFETY: `fd` was opened above and is closed once.
     unsafe { libc::close(fd) };
     result
-}
-
-fn set_environment() {
-    for (key, _) in std::env::vars_os().collect::<Vec<_>>() {
-        std::env::remove_var(key);
-    }
-    for (key, value) in ENV {
-        std::env::set_var(key, value);
-    }
 }
 
 fn raise_nofile_limit() {
@@ -214,11 +200,5 @@ mod tests {
         assert_eq!(parse_hostname("# only a comment\n"), None);
         assert_eq!(parse_hostname(&"a".repeat(65)), None);
         assert_eq!(parse_hostname(&"a".repeat(64)).map(str::len), Some(64));
-    }
-
-    #[test]
-    fn the_environment_has_a_path_and_nothing_systemd_private() {
-        assert!(ENV.iter().any(|(k, v)| *k == "PATH" && v.contains("/usr/local/bin")));
-        assert!(ENV.iter().all(|(k, _)| !k.contains("SYSTEMD") && *k != "INVOCATION_ID" && *k != "JOURNAL_STREAM"));
     }
 }

@@ -24,8 +24,20 @@ from urllib.parse import urlencode
 from ._config import resolve_auth_token, resolve_base_url
 from ._http_async import request
 from .errors import SandkilnApiError, as_exec_timeout
+from ._ws_async import AsyncWebSocketConnection
+from .astreams import AsyncLogStream, AsyncPtySession
+from .atransfer import download_dir, upload_dir
 from .atunnel import AsyncTunnelHandle
 from .atunnel import open_tunnel as open_async_tunnel
+from .streams import (
+    DEFAULT_COLS,
+    DEFAULT_ROWS,
+    ExecStreamSession,
+    exec_stream_session_from_body,
+    logs_path,
+    pty_path,
+)
+from .transfer import DEFAULT_CONCURRENCY, Exclude, TransferResult
 from .sandbox import (
     DirEntry,
     DriveAttachment,
@@ -299,6 +311,42 @@ class AsyncSandbox:
         the full picture. The relay runs as a background `asyncio.Task`
         instead of a thread."""
         return await open_async_tunnel(self._base_url, self._auth_token, self.id, guest_port, local_port, local_host)
+
+    async def upload_dir(
+        self, local_dir: str, remote_dir: str, exclude: Exclude | None = None, concurrency: int = DEFAULT_CONCURRENCY
+    ) -> TransferResult:
+        """Async counterpart to `Sandbox.upload_dir`."""
+        return await upload_dir(self, local_dir, remote_dir, exclude, concurrency)
+
+    async def download_dir(
+        self, remote_dir: str, local_dir: str, exclude: Exclude | None = None, concurrency: int = DEFAULT_CONCURRENCY
+    ) -> TransferResult:
+        """Async counterpart to `Sandbox.download_dir`: the same validation of
+        names and symlinks from the untrusted guest."""
+        return await download_dir(self, remote_dir, local_dir, exclude, concurrency)
+
+    async def pty(self, cols: int = DEFAULT_COLS, rows: int = DEFAULT_ROWS) -> AsyncPtySession:
+        """Async counterpart to `Sandbox.pty`; returns an `AsyncPtySession`
+        (`await send()`, `await recv()`, `async for`, `async with`)."""
+        connection = await AsyncWebSocketConnection.connect(self._base_url, pty_path(self.id, cols, rows), self._auth_token)
+        return AsyncPtySession(connection)
+
+    async def exec_stream(self, command: str, args: list[str] | None = None, env: dict[str, str] | None = None) -> str:
+        """Async counterpart to `Sandbox.exec_stream`."""
+        body: dict[str, object] = {"command": command, "args": args or []}
+        if env is not None:
+            body["env"] = env
+        return (await self._request("POST", f"/sandboxes/{self.id}/exec-stream", body))["id"]
+
+    async def list_exec_streams(self) -> list[ExecStreamSession]:
+        """Async counterpart to `Sandbox.list_exec_streams`."""
+        response = await self._request("GET", f"/sandboxes/{self.id}/exec-stream")
+        return [exec_stream_session_from_body(s) for s in response["sessions"]]
+
+    async def attach_logs(self, session_id: str) -> AsyncLogStream:
+        """Async counterpart to `Sandbox.attach_logs`; returns an `AsyncLogStream`."""
+        connection = await AsyncWebSocketConnection.connect(self._base_url, logs_path(self.id, session_id), self._auth_token)
+        return AsyncLogStream(connection)
 
     async def snapshot(self) -> str:
         response = await self._request("POST", f"/sandboxes/{self.id}/snapshot")
