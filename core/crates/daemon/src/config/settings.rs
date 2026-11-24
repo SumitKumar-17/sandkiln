@@ -43,7 +43,7 @@ pub const SETTINGS: &[Setting] = &[
         "exec_timeout_secs",
         Some("600"),
         "server",
-        "Longest a single `exec`, file or filesystem request may wait for the guest's reply. On expiry the caller gets a 504; the process keeps running in the guest.",
+        "Longest a single `exec`, file or filesystem request may wait for the guest's reply. Also the default and the ceiling for an exec's own `timeout_secs`: on that limit the guest kills the command and the caller gets a 504 with the partial output. A reply that never comes at all is a plain 504 and the command may still be running.",
     ),
     s(
         "kernel_args",

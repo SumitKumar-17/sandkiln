@@ -232,13 +232,13 @@ pub async fn create_mount(
 
     let args = rclone_mount_args(&config_path, &request.bucket, &request.mount_path, request.read_only);
     let mount_response =
-        call_agent(state.clone(), id.clone(), Request::Exec { command: "rclone".to_string(), args, env: HashMap::new() }).await?;
+        call_agent(state.clone(), id.clone(), Request::Exec { command: "rclone".to_string(), args, env: HashMap::new(), timeout_secs: None }).await?;
     let (stdout, stderr, exit_code) = exec_ok(mount_response)?;
     if exit_code != 0 {
         let _ = call_agent(
             state.clone(),
             id.clone(),
-            Request::Exec { command: "rm".to_string(), args: vec!["-f".to_string(), config_path], env: HashMap::new() },
+            Request::Exec { command: "rm".to_string(), args: vec!["-f".to_string(), config_path], env: HashMap::new(), timeout_secs: None },
         )
         .await;
         return Err(AppError::BadRequest(format!("rclone mount failed (exit {exit_code}): {stderr}{stdout}")));
@@ -250,20 +250,20 @@ pub async fn create_mount(
     let verify = call_agent(
         state.clone(),
         id.clone(),
-        Request::Exec { command: "mountpoint".to_string(), args: vec!["-q".to_string(), request.mount_path.clone()], env: HashMap::new() },
+        Request::Exec { command: "mountpoint".to_string(), args: vec!["-q".to_string(), request.mount_path.clone()], env: HashMap::new(), timeout_secs: None },
     )
     .await?;
     if !matches!(verify, AgentResponse::Exec { exit_code: 0, .. }) {
         let _ = call_agent(
             state.clone(),
             id.clone(),
-            Request::Exec { command: "umount".to_string(), args: vec![request.mount_path.clone()], env: HashMap::new() },
+            Request::Exec { command: "umount".to_string(), args: vec![request.mount_path.clone()], env: HashMap::new(), timeout_secs: None },
         )
         .await;
         let _ = call_agent(
             state.clone(),
             id.clone(),
-            Request::Exec { command: "rm".to_string(), args: vec!["-f".to_string(), config_path], env: HashMap::new() },
+            Request::Exec { command: "rm".to_string(), args: vec!["-f".to_string(), config_path], env: HashMap::new(), timeout_secs: None },
         )
         .await;
         return Err(AppError::Internal(io::Error::other(
@@ -316,13 +316,13 @@ pub async fn delete_mount(
     let unmount_result = call_agent(
         state.clone(),
         id.clone(),
-        Request::Exec { command: "umount".to_string(), args: vec![mount.mount_path.clone()], env: HashMap::new() },
+        Request::Exec { command: "umount".to_string(), args: vec![mount.mount_path.clone()], env: HashMap::new(), timeout_secs: None },
     )
     .await;
     let _ = call_agent(
         state.clone(),
         id.clone(),
-        Request::Exec { command: "rm".to_string(), args: vec!["-f".to_string(), config_path_for(&mount.id)], env: HashMap::new() },
+        Request::Exec { command: "rm".to_string(), args: vec!["-f".to_string(), config_path_for(&mount.id)], env: HashMap::new(), timeout_secs: None },
     )
     .await;
 

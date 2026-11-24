@@ -157,6 +157,7 @@ pub(crate) async fn claim_from_pool(
             command: "true".to_string(),
             args: vec![],
             env: std::collections::HashMap::new(),
+            timeout_secs: None,
         })
     })
     .await;

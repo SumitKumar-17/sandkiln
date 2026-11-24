@@ -18,7 +18,7 @@ fn main() -> ExitCode {
     let guest_port: u32 = guest_port.parse().expect("guest-port must be a number");
     let command_args: Vec<String> = args.collect();
 
-    let request = Request::Exec { command, args: command_args, env: std::collections::HashMap::new() };
+    let request = Request::Exec { command, args: command_args, env: std::collections::HashMap::new(), timeout_secs: None };
     match vsock_client::call(&PathBuf::from(uds_path), guest_port, &request, Some(std::time::Duration::from_secs(10))) {
         Ok(Response::Exec { stdout, stderr, exit_code }) => {
             print!("{stdout}");

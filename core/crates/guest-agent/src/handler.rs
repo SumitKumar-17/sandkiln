@@ -1,11 +1,14 @@
+use crate::bounded_exec::{self, Outcome};
 use base64::Engine;
 use sandkiln_protocol::{DirEntry, Request, Response};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::process::Command;
+use std::time::Duration;
 
 pub fn handle(req: Request) -> Response {
     match req {
-        Request::Exec { command, args, env } => exec(&command, &args, &env),
+        Request::Exec { command, args, env, timeout_secs: None } => exec(&command, &args, &env),
+        Request::Exec { command, args, env, timeout_secs: Some(secs) } => exec_bounded(&command, &args, &env, secs),
         Request::ReadFile { path } => read_file(&path),
         Request::WriteFile { path, content_base64 } => write_file(&path, &content_base64),
         Request::ListDir { path } => list_dir(&path),
@@ -40,6 +43,21 @@ fn exec(command: &str, args: &[String], env: &std::collections::HashMap<String, 
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
             exit_code: out.status.code().unwrap_or(-1),
+        },
+        Err(e) => Response::Error { message: e.to_string() },
+    }
+}
+
+fn exec_bounded(command: &str, args: &[String], env: &std::collections::HashMap<String, String>, timeout_secs: u64) -> Response {
+    match bounded_exec::run(command, args, env, Duration::from_secs(timeout_secs)) {
+        Ok(Outcome::Finished { stdout, stderr, status }) => Response::Exec {
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            exit_code: status.code().unwrap_or(-1),
+        },
+        Ok(Outcome::TimedOut { stdout, stderr }) => Response::TimedOut {
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
         },
         Err(e) => Response::Error { message: e.to_string() },
     }

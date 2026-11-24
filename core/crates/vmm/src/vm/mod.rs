@@ -276,7 +276,7 @@ impl Vm {
         // attached drives (rootfs copies don't care, they're discarded
         // anyway). Best-effort: fall through to the kill if unreachable.
         if sync_first {
-            if let Err(e) = self.call(&Request::Exec { command: "sync".to_string(), args: vec![], env: HashMap::new() }) {
+            if let Err(e) = self.call(&Request::Exec { command: "sync".to_string(), args: vec![], env: HashMap::new(), timeout_secs: None }) {
                 tracing::warn!(vm_id = self.id, error = %e, "sync before stop failed, proceeding anyway");
             }
         }
