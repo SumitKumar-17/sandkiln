@@ -2,7 +2,7 @@
 //! configured pre-warmed pool — split out of `http/routes/sandbox.rs` (claiming
 //! is a distinct concern from configuring/replenishing, same reasoning as
 //! `lifecycle/pool_replenisher.rs`'s own split, even with no HTTP route of its own:
-//! `routes::sandbox::create_sandbox_core` is the only caller). See
+//! `lifecycle::create::create_sandbox_core` is the only caller). See
 //! `crate::lifecycle::pool` for the feature's overall shape.
 
 use crate::http::error::AppError;

@@ -13,7 +13,7 @@
 //! spawns unconditionally from `main` — same no-op-tick-is-cheap
 //! reasoning `pool_replenisher` already uses.
 
-use crate::http::routes::sandbox::{stop_sandbox_by_id, StopError};
+use crate::lifecycle::stop::{stop_sandbox_by_id, StopError};
 use crate::snapshots::ops::archive::{archive_snapshot_by_id, ArchiveError};
 use crate::snapshots::ops::take::{snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
 use crate::state::AppState;

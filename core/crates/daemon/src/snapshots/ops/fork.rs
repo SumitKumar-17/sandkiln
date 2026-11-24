@@ -51,7 +51,7 @@ pub(crate) async fn fork_snapshot_by_id(state: Arc<AppState>, snapshot_id: Strin
         let source_rootfs_path = source_rootfs_path.clone();
         let new_rootfs_path = new_rootfs_path.clone();
         let state = state.clone();
-        move || crate::http::routes::sandbox::clone_rootfs(&source_rootfs_path, &new_rootfs_path, &state.metrics)
+        move || crate::lifecycle::create::clone_rootfs(&source_rootfs_path, &new_rootfs_path, &state.metrics)
     })
     .await
     {

@@ -19,7 +19,7 @@ use uuid::Uuid;
 /// transient) reasons `check_snapshottable` refuses. Split from
 /// `SnapshotStopError` so each caller reacts differently:
 /// `snapshot_sandbox` turns either into an error, while
-/// `routes::sandbox::stop_sandbox_by_id` treats `ForkedFrom` as harmless
+/// `lifecycle::stop::stop_sandbox_by_id` treats `ForkedFrom` as harmless
 /// and only `Jailed` as a real conflict.
 pub(crate) enum SnapshotBlocked {
     /// Firecracker's snapshot state bakes in the in-jail paths a jailed

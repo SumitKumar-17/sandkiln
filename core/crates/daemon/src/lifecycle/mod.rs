@@ -1,8 +1,12 @@
-//! Background and pool machinery that outlives a single request: the idle
-//! reaper (suspend, archive, destroy tiers) and pre-warmed pools.
+//! Sandbox lifecycle machinery shared by the routes and the background tasks:
+//! create (`create`, `create_options`), stop/destroy (`stop`), the idle reaper
+//! (suspend, archive, destroy tiers), pre-warmed pools and shutdown.
 
+pub mod create;
+pub mod create_options;
 pub mod idle_reaper;
 pub mod pool;
 pub mod pool_claim;
 pub mod pool_replenisher;
 pub mod shutdown;
+pub mod stop;

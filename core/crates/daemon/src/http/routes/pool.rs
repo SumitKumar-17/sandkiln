@@ -1,11 +1,11 @@
 //! HTTP handlers for pool *configuration* only — create/list/delete.
 //! Replenishment lives in `crate::lifecycle::pool_replenisher`, claiming in
-//! `crate::lifecycle::pool_claim` (invoked from `routes::sandbox::create_sandbox_core`).
+//! `crate::lifecycle::pool_claim` (invoked from `lifecycle::create::create_sandbox_core`).
 //! See `crate::lifecycle::pool`'s doc comment for the feature's overall shape.
 
 use crate::http::error::AppError;
 use crate::lifecycle::pool::{Pool, PoolConfig};
-use crate::http::routes::sandbox::resolve_resource_override;
+use crate::lifecycle::create_options::resolve_resource_override;
 use crate::snapshots::ops::delete::delete_snapshot_by_id;
 use crate::state::AppState;
 use axum::extract::{Path, State};

@@ -150,7 +150,7 @@ pub(crate) async fn resume_snapshot_by_id(
             let source = snapshot.rootfs_path.clone();
             let dest = dest.clone();
             let state = state.clone();
-            move || crate::http::routes::sandbox::clone_rootfs(&source, &dest, &state.metrics)
+            move || crate::lifecycle::create::clone_rootfs(&source, &dest, &state.metrics)
         })
         .await;
         match cloned {

@@ -299,7 +299,7 @@ pub async fn list_mounts(State(state): State<Arc<AppState>>, Path(id): Path<Stri
 /// call itself succeeds — a stuck FUSE mount (e.g. "device busy") is a
 /// loud warning, not a failed request, the same "best-effort past this
 /// point" treatment this project already gives other guest-side cleanup
-/// that a caller can't retry into working (see `routes::sandbox::
+/// that a caller can't retry into working (see `lifecycle::pool_claim::
 /// destroy_unhealthy_claim`'s neighboring reasoning for `force_stop`).
 #[tracing::instrument(skip(state), fields(sandbox_id = %id, mount_id = %mount_id))]
 pub async fn delete_mount(

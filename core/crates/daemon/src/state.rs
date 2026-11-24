@@ -48,7 +48,7 @@ pub struct AppState {
     pub drives: DriveStore,
     pub images: ImageStore,
     /// `Some` iff `config.jailer` is `Some` — uid/gid pairs leased per
-    /// jailed boot (`routes::sandbox::create_sandbox`), released on stop.
+    /// jailed boot (`lifecycle::create::create_sandbox_cold`), released on stop.
     pub jailer_ids: Option<JailerIdPool>,
     pub sandboxes: Mutex<HashMap<String, Sandbox>>,
     pub snapshots: Mutex<HashMap<String, Snapshot>>,
@@ -296,7 +296,7 @@ impl AppState {
 
     /// Claims a pending reference on `image_id` for a boot's duration —
     /// see `pending_image_boots`. Pair with `release_pending_image_boot`,
-    /// ideally via an RAII guard (`routes::sandbox::ImagePendingBootGuard`)
+    /// ideally via an RAII guard (`lifecycle::create::PendingImageBootGuard`)
     /// so every exit path releases it.
     pub fn reserve_pending_image_boot(&self, image_id: &str) {
         *self.pending_image_boots.lock().unwrap().entry(image_id.to_string()).or_insert(0) += 1;
