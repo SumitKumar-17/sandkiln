@@ -109,9 +109,16 @@ cmd_run() {
 
   # The exit code is also written to a file in the guest: the streaming client
   # reports 0 when its connection drops, which must never read as success.
-  local wrapper="cd $GUEST_DIR && sh $GUEST_SCRIPT; rc=\$?; echo \$rc >$GUEST_EXIT_FILE; exit \$rc"
+  # The limit is enforced in the guest with `timeout` (it signals the command's
+  # whole process group, then SIGKILLs it) so a timed-out job really stops; the
+  # streaming API has no timeout of its own. An image without `timeout` falls
+  # back to the client-side limit below, which only abandons the stream.
+  local run_job="if command -v timeout >/dev/null 2>&1; then timeout --kill-after=10 $timeout sh $GUEST_SCRIPT; else sh $GUEST_SCRIPT; fi"
+  local wrapper="cd $GUEST_DIR && $run_job; rc=\$?; echo \$rc >$GUEST_EXIT_FILE; exit \$rc"
   echo "running command (timeout ${timeout}s)"
-  timeout --kill-after=10 "$timeout" kiln sandbox exec-stream "$id" -- sh -c "$wrapper" || rc=$?
+  # The backstop outlasts the guest's own limit plus its kill delay, so the
+  # guest-side exit code (124) is what normally reports a timeout.
+  timeout --kill-after=10 "$((timeout + 30))" kiln sandbox exec-stream "$id" -- sh -c "$wrapper" || rc=$?
 
   if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
     echo "::error::sandkiln-run: command timed out after ${timeout}s"
@@ -121,6 +128,11 @@ cmd_run() {
     reported=$(kiln sandbox read "$id" "$GUEST_EXIT_FILE" 2>/dev/null | tr -d '[:space:]') || reported=""
     if [[ "$reported" =~ ^[0-9]+$ ]]; then
       rc=$reported
+      # `timeout` exits 124, or 137 after its SIGKILL: the job was killed in the guest.
+      if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+        echo "::error::sandkiln-run: command timed out after ${timeout}s"
+        rc=124
+      fi
     else
       echo "::error::sandkiln-run: the sandbox never reported an exit code (stream dropped?)"
       rc=125

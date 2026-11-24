@@ -30,7 +30,7 @@ shaping and session cleanup, never daemon logic. New behavior goes in
 - **`src/truncate.ts`** — `truncateText` (head and tail, UTF-8 safe) and
   `decodeFile` (text or base64, bounded). Everything returned to the model
   goes through these.
-- **`src/timeout.ts`** — `withTimeout`: abandons (cannot cancel) slow work.
+- **`src/exec-timeout.ts`** — `execTimeoutFailure`: a `SandkilnExecTimeoutError` (the command was killed in the guest at its limit) as a `timeout` tool error carrying the bounded partial output.
 - **`src/resources.ts`** — `sandkiln://sandboxes`, `sandkiln://status`.
 - **`src/tools/register.ts`** — `defineTool` (success and `isError` shaping,
   the only place errors are converted), `ToolContext`, `attach`.
@@ -41,7 +41,7 @@ shaping and session cleanup, never daemon logic. New behavior goes in
 
 `node:test`, no added dependency. `tsup` builds the pure helpers as their own
 banner-less entries (`dist/config.js`, `truncate.js`, `errors.js`,
-`session.js`, `timeout.js`) so tests import them without starting the stdio
+`session.js`, `exec-timeout.js`) so tests import them without starting the stdio
 server, which `index.ts` does as a side effect. Add a new pure helper to
 `tsup.config.ts`' second entry list. `npm test -w sandkiln-mcp` builds first.
 
@@ -68,7 +68,8 @@ npm run test -w sandkiln-mcp
 - Tool arguments are snake_case (the MCP convention models see); the SDK is camelCase.
 - `sandbox_snapshot` retires the sandbox id, so the session forgets it.
   `sandbox_resume` consumes the snapshot, `sandbox_fork` does not.
-- `sandbox_exec`'s timeout is client-side only: the SDK has no abort and the
-  daemon no exec kill, so a timed-out process may keep running in the guest.
+- `sandbox_exec`'s timeout is the daemon's per-request `timeout_secs`: the guest
+  kills the command's process group, so a timeout leaves nothing running. There
+  is no client-side timer any more.
 - A `SIGKILL` of the server cannot clean up; that is documented, not fixable here.
 - Not yet wired to a publish workflow (no `publish-mcp.yml`); CI builds and tests it.

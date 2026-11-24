@@ -34,7 +34,7 @@ inputs:
     required: false
     default: ""
   timeout:
-    description: Seconds the command may run before it is abandoned and the step fails with exit code 124.
+    description: Seconds the command may run before it is killed in the sandbox and the step fails with exit code 124.
     required: false
     default: "600"
   keep-on-failure:

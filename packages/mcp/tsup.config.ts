@@ -12,7 +12,7 @@ export default defineConfig([
   {
     // Pure helpers as banner-less entries so unit tests import them without
     // starting the stdio server, which index.ts does as a side effect.
-    entry: { config: "src/config.ts", truncate: "src/truncate.ts", errors: "src/errors.ts", session: "src/session.ts", timeout: "src/timeout.ts" },
+    entry: { config: "src/config.ts", truncate: "src/truncate.ts", errors: "src/errors.ts", session: "src/session.ts", "exec-timeout": "src/exec-timeout.ts" },
     format: ["esm"],
     sourcemap: true,
     clean: false,

@@ -17,6 +17,8 @@ export interface ToolError {
   message: string;
   status?: number;
   hint?: string;
+  /** Extra structured fields for kinds that carry data, such as the partial output of a timed-out command. */
+  details?: Record<string, unknown>;
 }
 
 /** Raised by this package's own guards (timeouts, session limits). */
@@ -25,6 +27,7 @@ export class ToolFailure extends Error {
     readonly kind: ToolError["kind"],
     message: string,
     readonly hint?: string,
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -41,7 +44,12 @@ function fromStatus(status: number): { kind: ToolError["kind"]; hint?: string } 
 
 export function toToolError(err: unknown, baseUrl: string | undefined): ToolError {
   if (err instanceof ToolFailure) {
-    return { kind: err.kind, message: err.message, ...(err.hint ? { hint: err.hint } : {}) };
+    return {
+      kind: err.kind,
+      message: err.message,
+      ...(err.hint ? { hint: err.hint } : {}),
+      ...(err.details ? { details: err.details } : {}),
+    };
   }
   if (err instanceof SandkilnApiError) {
     const { kind, hint } = fromStatus(err.status);

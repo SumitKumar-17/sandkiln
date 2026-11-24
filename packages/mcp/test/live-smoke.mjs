@@ -74,6 +74,11 @@ assert.equal(timeout.isError, true);
 assert.equal(timeout.body.error.kind, "timeout");
 step("sandbox_exec timeout", `error.kind=${timeout.body.error.kind}`);
 
+// The limit is enforced in the guest: the command must really be gone, not just abandoned.
+const survivors = await call(client, "sandbox_exec", { sandbox_id: id, command: "sh", args: ["-c", "pgrep -x sleep || true"] });
+assert.equal(survivors.body.stdout.trim(), "", "sleep survived the timeout");
+step("sandbox_exec timeout kills the process", "no sleep left in the guest");
+
 const missing = await call(client, "sandbox_exec", { sandbox_id: "does-not-exist", command: "true" });
 assert.equal(missing.isError, true);
 step("structured error", `kind=${missing.body.error.kind} status=${missing.body.error.status}`);

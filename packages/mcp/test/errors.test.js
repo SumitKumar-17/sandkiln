@@ -33,3 +33,8 @@ test("ToolFailure keeps its kind and hint; unknown errors are internal", () => {
   assert.deepEqual(e, { kind: "timeout", message: "slow", hint: "retry" });
   assert.equal(toToolError(new Error("odd"), undefined).kind, "internal");
 });
+
+test("ToolFailure details are carried into the tool error", () => {
+  const e = toToolError(new ToolFailure("timeout", "slow", "retry", { stdout: "x" }), undefined);
+  assert.deepEqual(e, { kind: "timeout", message: "slow", hint: "retry", details: { stdout: "x" } });
+});

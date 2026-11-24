@@ -63,7 +63,7 @@ Resources: `sandkiln://sandboxes` (live sandboxes) and `sandkiln://status`
 (daemon health).
 
 Failures come back as `isError` results with `{"error": {"kind", "message",
-"status", "hint"}}`; `kind` is one of `invalid_request`, `unauthorized`,
+"status", "hint", "details"}}`; `kind` is one of `invalid_request`, `unauthorized`,
 `not_found`, `conflict`, `rate_limited`, `daemon_error`, `daemon_unreachable`,
 `timeout`, `limit_reached`, `internal`. A command that exits nonzero is a normal
 result, not an error.
@@ -77,9 +77,12 @@ result, not an error.
   server cannot be intercepted, so those sandboxes remain until the daemon's
   idle reaper or an operator removes them.
 - Snapshots are durable by design and outlive the session.
-- `sandbox_exec` has a client-side timeout (default 60 s, max 600 s). On
-  expiry the call returns a `timeout` error but the process may keep running
-  inside the sandbox; the daemon has no exec kill yet.
+- `sandbox_exec` has a timeout enforced inside the sandbox (default 60 s, max
+  600 s, and never above the daemon's `exec_timeout_secs`). On expiry the
+  command and its child processes are killed and the call returns a `timeout`
+  error whose `details` hold the output captured so far, so nothing keeps
+  running. Against a daemon or guest agent that predates this, the limit is
+  not enforced in the guest.
 - Any tool can act on any sandbox id on the daemon, not only the session's own.
   Point the server at a daemon whose contents you are willing to expose to the
   agent, and set `SANDKILN_AUTH_TOKEN` when the daemon is reachable by others.
