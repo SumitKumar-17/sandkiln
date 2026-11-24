@@ -204,6 +204,12 @@
         "tab": "Performance",
         "groups": [
           {
+            "group": "Numbers",
+            "pages": [
+              "performance/current-numbers"
+            ]
+          },
+          {
             "group": "Measuring",
             "pages": [
               "engineering/16-performance-model-and-measurement",

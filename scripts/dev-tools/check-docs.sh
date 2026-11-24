@@ -92,7 +92,7 @@ for name, limit in budgets.items():
             errors.append(f"{name}: {n} lines exceeds the {limit}-line budget")
 
 # 5. Generated artifacts (numbers, charts, product image) match their sources.
-for script in ("make-product-image", "make-logo"):
+for script in ("make-product-image", "make-logo", "make-benchmark-page"):
     r = subprocess.run([sys.executable, f"scripts/dev-tools/{script}.py", "--check"], capture_output=True, text=True)
     if r.returncode != 0:
         errors.append((r.stdout + r.stderr).strip() or f"{script} --check failed")

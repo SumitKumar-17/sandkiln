@@ -30,7 +30,7 @@ Three rules drive everything below:
 | A daemon setting | `core/crates/daemon/src/config/settings.rs` registry; reference rendered by `sandkilnd --config-reference` and `sandkiln.example.toml` (drift-tested) | `docs-site/self-hosting/configuration.mdx` links to it |
 | An HTTP endpoint | `docs-site/api-reference/http-api/<resource>.mdx` | SDK and CLI pages link to it |
 | An SDK or CLI method | its `docs-site/api-reference/<client>/` page | quickstarts show one short example |
-| A measurement | `docs/benchmarks.md` | README, website and posts quote a rounded value and link |
+| A measurement | the recorded result files in `examples/benchmark-suite/results/`. The docs page `performance/current-numbers` and the website's figures are generated from them; `docs/benchmarks.md` holds method and history | README carries none; posts link to the page |
 | A decision, finding or rejected idea | `docs/findings.md` or `docs/design-notes/<area>.md` | code comments link to it |
 | How a mechanism works | `docs-site/internals/<topic>.mdx` | posts tell the story and link |
 | A story with diagrams | `docs-site/engineering/NN-*.md` (the blog, part of the docs site) | internals pages link to it |
