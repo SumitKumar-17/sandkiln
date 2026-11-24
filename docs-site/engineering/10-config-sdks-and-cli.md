@@ -203,7 +203,7 @@ Structure:
 
 - `index.ts` builds the program with the global `--base-url` and `--token` options, calls `registerSandboxCommands`, `registerImageCommands`, `registerDriveCommands` and `registerPoolCommands`, and runs `parseAsync` with a catch-all so an escaped error prints a clean message rather than a stack trace.
 - `commands/shared.ts` holds `clientOptions` (resolving global flags via `optsWithGlobals`), `fail`, and `handleApiError`, which prints `error: <message> (status N)` for a `SandkilnApiError` and exits 1.
-- `commands/sandbox.ts` is the large group. Each subcommand is a thin call into a `Sandbox` static or into `Sandbox.attach(id)`, using a local `attachSandbox` helper.
+- `commands/sandbox/` is the large group, split into `lifecycle`, `exec`, `files` and `network` modules plus shared `helpers`; `index.ts` composes them in the order `kiln sandbox --help` lists them. Each subcommand is a thin call into a `Sandbox` static or into `Sandbox.attach(id)`, using the `attachSandbox` helper.
 - `format.ts` is the logic pulled out for testing without loading `commander`'s argv parsing: tag parsing and list formatting. It is built as its own banner-less bundle entry so tests can import it.
 
 The CLI depends on the SDK's built `dist/`, not its source, so a public SDK change breaks the CLI build until the SDK is rebuilt. That is an expected property of a workspace dependency, not a CLI bug.

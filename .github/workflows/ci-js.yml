@@ -38,6 +38,7 @@ jobs:
       - run: npm run build -w sandkiln
       - run: npm run typecheck -w sandkiln-cli
       - run: npm run build -w sandkiln-cli
+      - run: npm run test -w sandkiln-cli
       - run: npm run typecheck -w sandkiln-mcp
       - run: npm run build -w sandkiln-mcp
       - run: npm run test -w sandkiln-mcp
