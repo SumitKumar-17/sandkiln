@@ -422,7 +422,7 @@ class Sandbox:
         always explicit); `access_key`/`secret_key` are written into a
         `0600` rclone config file inside the guest, never passed as a
         command-line argument. Needs the optional FUSE kernel +
-        rclone-injected rootfs setup described in `SELF_HOSTING.md`;
+        rclone-injected rootfs setup described in `docs-site/self-hosting/manual-setup.mdx`;
         raises `SandkilnApiError` if the guest can't actually mount
         (missing FUSE support, bad credentials, unreachable endpoint).
         Not carried across `resume()`/`fork()`/a restored checkpoint —

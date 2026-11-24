@@ -1,0 +1,27 @@
+---
+title: "kiln status"
+description: Show daemon health and capacity.
+---
+
+## `kiln status`
+
+Prints the daemon's [`GET /status`](/api-reference/http-api/status) document: version and uptime, live sandboxes, snapshots, pools, tap devices free, rootfs clone methods, disk headroom, and any warnings.
+
+| Option | What it does |
+|---|---|
+| `--json` | Print the raw document as JSON instead of the summary. |
+
+Exits `0` when healthy and `2` when there are warnings, so it works as a scripted check.
+
+```text
+$ kiln status
+sandkilnd 0.0.1  up 0m 52s  auth OFF  jailer off
+sandboxes   0 live, 0 created since start
+snapshots   0 held, 0 retired
+pools       0 configured, 0 warm ready
+tap devices 32/32 free
+rootfs      0 reflink, 0 copy clones
+disk        76.9 GiB free of 467.9 GiB  /home/t1000/sandkiln-tools/state
+
+warning: auth_token is unset: the API is open to anyone who can reach it
+```

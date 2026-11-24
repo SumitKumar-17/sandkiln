@@ -7,7 +7,7 @@
 # Deliberately does NOT `setcap` the binary — the installed unit grants
 # CAP_NET_ADMIN via systemd's own AmbientCapabilities= at every start
 # instead, which is what makes this survive a rebuild with no extra step
-# (see the template's comment and SELF_HOSTING.md).
+# (see the template's comment and docs-site/self-hosting/operations.mdx).
 #
 # Usage:
 #   sudo scripts/install-systemd-service.sh <path-to-sandkilnd> [user] [env-file]
@@ -49,7 +49,7 @@ fi
 mkdir -p "$(dirname "$ENV_FILE")"
 if [[ ! -f "$ENV_FILE" ]]; then
   cat > "$ENV_FILE" <<EOF
-# sandkilnd environment — see SELF_HOSTING.md's configuration table for
+# sandkilnd environment — see docs-site/self-hosting/configuration.mdx for
 # every SANDKILN_* variable this daemon reads. Uncomment and set at least
 # SANDKILN_AUTH_TOKEN before exposing this beyond localhost.
 #SANDKILN_AUTH_TOKEN=

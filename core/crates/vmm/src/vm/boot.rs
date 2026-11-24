@@ -83,7 +83,7 @@ pub(super) fn boot(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<Vm
 
     // Separate from the `vm booted` event below: `boot_ms` is the number
     // an operator watches, this breakdown only matters when profiling
-    // (see ROADMAP.md's Benchmarking section).
+    // (see `docs/benchmarks.md`).
     tracing::debug!(
         vm_id = id,
         spawn_us = spawn.as_micros(),

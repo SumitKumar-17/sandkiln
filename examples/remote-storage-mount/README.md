@@ -31,7 +31,7 @@ See `index.js` — it's the whole program.
 A running `sandkilnd` daemon — see
 [`SELF_HOSTING.md`](../../SELF_HOSTING.md) at the repo root. There is no
 hosted service. Mounts additionally need the two pieces of setup in that
-guide's **"Remote storage mounts (optional)"** section, neither of which
+guide's ["Remote storage mounts"](https://sandkiln.mintlify.site/self-hosting/manual-setup#remote-storage-mounts-optional) section, neither of which
 a default install gives you:
 
 - a guest kernel built with `CONFIG_FUSE_FS`
@@ -99,5 +99,5 @@ node index.js
   snapshot captures it along with the rest of guest memory and it keeps
   working.
 - Performance is object-storage performance over FUSE, not local disk —
-  use a drive (`SELF_HOSTING.md`'s drives section) for anything
+  use a drive (see [Drives](https://sandkiln.mintlify.site/concepts/drives)) for anything
   latency-sensitive.

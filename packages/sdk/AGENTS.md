@@ -25,7 +25,7 @@ implements logic the daemon doesn't already have; new behavior goes in
   `readFile`/`writeFile` (validation belongs daemon/guest-agent side).
   `resume`/`fork`/`byName` are static since none acts on an existing
   `Sandbox`; `fork` doesn't consume the snapshot, `resume` does (at most
-  one live fork per snapshot — see daemon's `routes_snapshot.rs`).
+  one live fork per snapshot — see daemon's `http/routes/snapshot.rs`).
   `getOrCreate` returns `{ sandbox, created }`. `stop()` returns
   `{ kept, snapshotId }` (daemon preserves by default; `{ keep: false }`
   for the old destroy behavior). `previewUrl` is pure/network-free,
@@ -39,7 +39,7 @@ implements logic the daemon doesn't already have; new behavior goes in
   `CreateSandboxOptions.drives`, not through `Drive`. `Pool.create` takes
   a caller-given id (config handle, never guest-visible); no "claim"
   method exists — claiming is transparent, done by a plain
-  `Sandbox.create()` matching a configured pool (`daemon/src/pool.rs`).
+  `Sandbox.create()` matching a configured pool (`daemon/src/lifecycle/pool.rs`).
 - **`client.ts`** — `ClientContext`/`resolveClient`, shared `baseUrl`/
   `authToken` resolution (pulled out once `image.ts` needed it too).
 - **`http.ts`** — the one `fetch` call site. Non-2xx throws
@@ -62,7 +62,7 @@ implements logic the daemon doesn't already have; new behavior goes in
   header), then demuxes/muxes a small binary frame (`op` byte + `conn_id`
   length + `conn_id` + payload) against real `net.Socket`s per
   `conn_id`. This exact frame format is shared with the daemon's
-  `routes_tunnel.rs` and the Python SDK's `tunnel.py`/`atunnel.py` —
+  `http/routes/tunnel.rs` and the Python SDK's `tunnel.py`/`atunnel.py` —
   change one, change all three.
 
 ## Testing

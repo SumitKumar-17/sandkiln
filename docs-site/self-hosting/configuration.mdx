@@ -1,0 +1,79 @@
+---
+title: Configuration
+description: How sandkilnd resolves settings, how to inspect them, and what every setting and environment variable controls.
+---
+
+## Resolution order
+
+Settings come from three layers, highest priority first:
+
+1. Environment variable `SANDKILN_<KEY>`, for example `SANDKILN_VCPU_COUNT`.
+2. A config file, `sandkiln.toml`.
+3. Built-in default.
+
+`scripts/setup.sh` writes a starter `sandkiln.toml` at the repo root and never overwrites an existing one. [`sandkiln.example.toml`](https://github.com/SumitKumar-17/sandkiln/blob/main/sandkiln.example.toml) lists every key with its default and a one-line description. The daemon looks for the file in this order: `--config <file>`, `$SANDKILN_CONFIG`, `./sandkiln.toml`, `~/.config/sandkiln/sandkiln.toml`. Once set up, `scripts/sandkilnd-ctl.sh start` needs no environment variables at all.
+
+```toml
+# sandkiln.toml
+base_rootfs = "/mnt/sandkiln-xfs/base.ext4"
+rootfs_dir  = "/mnt/sandkiln-xfs/rootfs"
+exec_timeout_secs = 900
+```
+
+## Inspecting it
+
+The daemon validates everything at startup and reports **all** problems at once, including unknown keys with a "did you mean" hint. Three flags make the configuration inspectable without starting anything:
+
+```bash
+sandkilnd --check-config      # validate; exit 0 (ok) or 2 (invalid)
+sandkilnd --print-config      # every effective setting and where it came from (default/file/env), token redacted
+sandkilnd --config-reference  # every setting with default and description, generated from the code
+```
+
+A config file containing `auth_token` should be `chmod 600`; the daemon warns if other users can read it. `scripts/sandkilnd-ctl.sh` runs `--check-config` before starting, so a typo fails immediately with the real error rather than as a dead daemon and a log line.
+
+The table below is the same data as `sandkilnd --config-reference`. The code is authoritative: `core/crates/daemon/src/config/settings.rs`.
+
+## Environment variables and defaults
+
+The environment variable for a key is `SANDKILN_` plus the upper-cased key.
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `SANDKILN_LISTEN_ADDR` | `127.0.0.1:7777` | HTTP listen address. |
+| `SANDKILN_EXEC_TIMEOUT_SECS` | `600` | Longest a single `exec`, file or filesystem request may wait for the guest's reply. On expiry the caller gets a `504` and the process keeps running in the guest; raise it or use streamed exec. Must be at least 1. |
+| `SANDKILN_FIRECRACKER_BIN` | `~/sandkiln-tools/bin/firecracker` | Path to the Firecracker binary. |
+| `SANDKILN_KERNEL_PATH` | `~/sandkiln-tools/images/vmlinux-5.10.223` | Guest kernel image. Use a FUSE-enabled kernel for [remote storage mounts](/concepts/remote-storage). |
+| `SANDKILN_KERNEL_ARGS` | unset | Extra guest kernel arguments, for example `quiet`. |
+| `SANDKILN_BASE_ROOTFS` | `~/sandkiln-tools/images/ubuntu-22.04.ext4` | Base rootfs cloned per sandbox. **The default is the small test image; override it for a production image.** See [Manual host setup](/self-hosting/manual-setup#point-the-daemon-at-the-image-you-built). |
+| `SANDKILN_VCPU_COUNT` | `2` | vCPUs per sandbox, when a request does not override it. |
+| `SANDKILN_MEM_SIZE_MIB` | `512` | Memory per sandbox, when a request does not override it. |
+| `SANDKILN_MAX_VCPU_COUNT` | `16` | Ceiling on a per-request `vcpu_count` override (`POST /sandboxes`). A request above it, or `0`, is rejected with `400`. |
+| `SANDKILN_MAX_MEM_SIZE_MIB` | `16384` | Ceiling on a per-request `mem_size_mib` override, same semantics. |
+| `SANDKILN_BRIDGE_NAME` | `sktapbr0` | Bridge the daemon creates and manages. |
+| `SANDKILN_BRIDGE_GATEWAY` | `172.16.0.1` | Bridge and gateway IP (a `/24` subnet). Match it when starting the DNS forwarder. |
+| `SANDKILN_UPLINK_IFACE` | auto-detected from the default route | Host interface sandboxes NAT out through. |
+| `SANDKILN_TAP_POOL_PREFIX` | `sktap` | Must match what `create-tap-pool.sh` was run with. |
+| `SANDKILN_TAP_POOL_SIZE` | `32` | Must match what `create-tap-pool.sh` was run with; caps concurrent networked sandboxes. To raise it, re-run the script first ([Upgrades](/self-hosting/operations#upgrades-and-what-to-repeat)). |
+| `SANDKILN_AUTH_TOKEN` | unset (auth disabled) | Bearer token required on `/sandboxes*`, `/drives*`, `/images*` and `/snapshots*`. **Unset means the API is completely open.** Keep the config file `chmod 600`. See [Auth](/concepts/auth) and [Before exposing it beyond localhost](/getting-started/self-hosting#before-exposing-it-beyond-localhost). |
+| `SANDKILN_DRIVES_DIR` | `~/sandkiln-tools/drives` | Where persistent drives are stored. |
+| `SANDKILN_STATE_DIR` | `~/sandkiln-tools/state` | Durable daemon state: held snapshots (`snapshots/`) and retired checkpoints (`snapshot-history/`). These once lived under the OS temp dir, where a reboot or tmp cleaner could silently destroy them; snapshots an older version left there are not migrated. |
+| `SANDKILN_RETAINED_CHECKPOINTS_MAX` | `8` | Time-travel checkpoints kept; the oldest is evicted after each resume. `0` keeps all and can fill the disk. |
+| `SANDKILN_ROOTFS_DIR` | `$SANDKILN_STATE_DIR/rootfs` | Where each sandbox's private writable rootfs copy lives. Put it on the same reflink-capable filesystem as `SANDKILN_BASE_ROOTFS` for near-instant copy-on-write clones; see [Faster creates](/getting-started/self-hosting#faster-creates-reflink-rootfs-clones). |
+| `SANDKILN_IMAGES_DIR` | `~/sandkiln-tools/images-registered` | Where registered images (`POST /images`, `kiln image create`) are stored. See [Custom images](/self-hosting/manual-setup#custom-images). |
+| `SANDKILN_HISTORY_DB_PATH` | `~/sandkiln-tools/history.db` | SQLite database of durable sandbox lifecycle history (`GET /sandboxes/history`). It survives a daemon restart, unlike `GET /sandboxes`. A still-live record found at startup is marked orphaned, because a restart orphans whatever Firecracker process it referred to: the database records that a sandbox existed and how it ended, it cannot bring one back. See [SQLite history store](/internals/sqlite-history-store). |
+| `SANDKILN_IDLE_TIMEOUT_SECS` | unset (disabled) | Auto-**destroy** a sandbox after this many idle seconds (no exec, read or write activity): VM killed, network released, rootfs deleted, state gone for good. `0` also disables it. |
+| `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS` | unset (disabled) | Auto-**suspend** an idle sandbox instead: pause and snapshot it (same as `POST /sandboxes/:id/snapshot`) and free its VM, vCPU and memory, keeping it resumable. `0` also disables it. If both this and `SANDKILN_IDLE_TIMEOUT_SECS` are set, this must be strictly smaller: auto-suspend always gets first attempt at an idle sandbox, and the destroy timeout is a backstop for one whose auto-suspend keeps failing. See [Auto-suspend](/guides/auto-suspend). |
+| `SANDKILN_ARCHIVE_TIMEOUT_SECS` | unset (disabled) | Auto-**archive** a held snapshot (any origin, auto-suspend or manual) after it has sat unresumed this many seconds: moves its `state.snap` and `mem.bin` to `SANDKILN_ARCHIVE_DIR`, off the hot snapshot directory. `0` also disables it. Independent of the two timeouts above, with no ordering requirement. **The rootfs backing file never moves**, because Firecracker bakes its absolute host path into `state.snap` with no override at resume time (confirmed by a real resume failure when an earlier version tried moving it too; see `move_snapshot_files` in `core/crates/daemon/src/snapshot.rs`). So the win is real but partial: `mem.bin` alone is exactly the guest's configured RAM size, often comparable to or larger than the rootfs copy. |
+| `SANDKILN_ARCHIVE_DIR` | `~/sandkiln-tools/archive` | Where the archive timeout moves a snapshot's files. Point it at a real disk, not another tmpfs path, to get the durability and RAM-pressure benefit. Only matters if the timeout is set, but always has a default like `SANDKILN_DRIVES_DIR` and `SANDKILN_IMAGES_DIR`. |
+| `SANDKILN_LOG_FORMAT` | `pretty` | Set to `json` for one JSON object per log line, for log pipelines that parse fields. |
+| `SANDKILN_PREVIEW_TIMEOUT_SECS` | `30` | How long a dev-server preview proxy request waits for the guest before a `504`. |
+| `SANDKILN_JAILER_ENABLED` | unset (disabled) | Boot sandboxes via Firecracker's jailer instead of a direct spawn; accepts `true` or `1`. See [Jailer setup](/self-hosting/jailer). |
+| `SANDKILN_JAILER_BIN` | `~/sandkiln-tools/bin/jailer` | Path to the jailer binary (must be setuid-root). |
+| `SANDKILN_JAILER_CHROOT_BASE_DIR` | `~/sandkiln-tools/jail` | Where per-VM chroots are created. |
+| `SANDKILN_JAILER_UID_GID_BASE` | `600000` | First uid/gid in the range dedicated to jailed VMs. |
+| `SANDKILN_JAILER_POOL_SIZE` | `32` | How many distinct uid/gid pairs, which is the maximum number of concurrent jailed sandboxes. |
+
+Paths accept a leading `~/` and are expanded against `$HOME` at startup, useful when scripting. This means `$HOME` must be correct for whichever user actually runs the process; plain `sudo` resets it to `/root`, which is why checks that need root use `sudo -E` (see [Troubleshooting](/self-hosting/troubleshooting)).
+
+The clone-method counter `rootfs_clone_total{method="reflink"|"copy"}` on `/metrics` makes a silent fallback to full copies visible.

@@ -16,7 +16,7 @@
 #   scripts/sandkilnd-ctl.sh logs [-f]
 #
 # Every SANDKILN_* env var the daemon itself reads (see
-# core/crates/daemon/src/config.rs and SELF_HOSTING.md's configuration
+# core/crates/daemon/src/config.rs and docs-site/self-hosting/configuration.mdx (configuration
 # table) is passed straight through — set them the same way you would to
 # run sandkilnd directly. This script adds exactly two of its own:
 #   SANDKILN_CTL_PID_FILE   default: /tmp/sandkiln-daemon.pid

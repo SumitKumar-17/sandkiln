@@ -108,7 +108,7 @@ sequenceDiagram
 
 Two sets of numbers exist, and they answer different questions.
 
-What was recorded when the change landed, from `ROADMAP.md`. Load test, 4 workers by 5 cycles, 0 errors, shared dev box:
+What was recorded when the change landed, from `docs/benchmarks.md`. Load test, 4 workers by 5 cycles, 0 errors, shared dev box:
 
 | Metric | Before (`std::fs::copy`, serial) | After (`cp --reflink=auto`, concurrent) |
 | --- | --- | --- |

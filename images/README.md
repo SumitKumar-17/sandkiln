@@ -33,8 +33,8 @@ An already-built ext4 rootfs (produced with the scripts above) can be
 registered with the daemon under a name (`POST /images`, `kiln image
 create <id> <path>`) and referenced by a specific `POST /sandboxes` call
 (`image_id`, `kiln sandbox create --image <id>`) instead of the
-daemon-wide `SANDKILN_BASE_ROOTFS` default — see `SELF_HOSTING.md`'s
-"Custom and managed images" and `core/crates/daemon/src/routes_images.rs`.
+daemon-wide `SANDKILN_BASE_ROOTFS` default — see
+`docs-site/getting-started/self-hosting.mdx` and `docs-site/self-hosting/manual-setup.mdx` ("Custom images") and `core/crates/daemon/src/http/routes/images.rs`.
 This does not accept a file upload or build anything; `path` must already
 be a real ext4 rootfs on the daemon's own host.
 

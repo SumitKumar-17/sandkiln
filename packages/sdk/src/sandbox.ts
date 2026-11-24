@@ -267,8 +267,7 @@ export class Sandbox {
    * Needs a global `WebSocket` (any browser, or Node.js >= 22) — the one
    * method on this class that does, since a bidirectional stream needs a
    * different transport than `fetch`. `cols`/`rows` size the terminal
-   * once at session start — no live resize yet (`ROADMAP.md`'s "Dev
-   * servers and live preview"). Auth token goes as `?token=`, same
+   * once at session start — no live resize yet (`docs/design-notes/preview.md`). Auth token goes as `?token=`, same
    * reason as `previewUrl()` — neither runtime's `WebSocket` can set
    * custom headers. */
   pty(options: PtyOptions = {}): WebSocket {
@@ -357,7 +356,7 @@ export class Sandbox {
   /** Mounts an S3-compatible bucket at `options.mountPath` via `rclone
    * mount` — ordinary `readFile()`/`writeFile()` there read/write
    * through. Needs the FUSE kernel + rclone rootfs setup in
-   * `SELF_HOSTING.md`; raises `SandkilnApiError` on a guest-side mount
+   * `docs-site/self-hosting/manual-setup.mdx`; raises `SandkilnApiError` on a guest-side mount
    * failure. Not carried across `resume()`/`fork()` — it's a live guest
    * FUSE process, already captured by Firecracker's own snapshot. */
   async mount(options: MountOptions): Promise<MountInfo> {

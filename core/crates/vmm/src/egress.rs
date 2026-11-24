@@ -16,7 +16,7 @@
 //! can still resolve names, just can't reach past the gateway.
 //!
 //! **Not built**: domain-level rules (needs the DNS proxy to become
-//! source-IP-aware — see `ROADMAP.md`'s "Firewall and egress policy")
+//! source-IP-aware — see `docs/design-notes/egress-firewall.md`)
 //! and port matching (`-p tcp --dport`, a straightforward future
 //! extension). IPv4 only.
 //!

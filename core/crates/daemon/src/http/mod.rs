@@ -18,6 +18,7 @@ use tower_http::trace::TraceLayer;
 pub fn build_router(state: Arc<AppState>) -> Router {
     let sandbox_routes = Router::new()
         .route("/sandboxes", post(routes::sandbox::create_sandbox).get(routes::sandbox::list_sandboxes))
+        .route("/status", get(routes::status::status))
         .route("/sandboxes/history", get(routes::sandbox::sandbox_history))
         .route("/sandboxes/get-or-create", post(routes::sandbox_name::get_or_create_sandbox))
         .route("/sandboxes/by-name/:name", get(routes::sandbox_name::get_sandbox_by_name))

@@ -11,14 +11,14 @@ CI workflow to maintain.
 `docs.json` is the nav and theme config. Navigation is three top-level
 tabs, each its own groups:
 
-- **Docs** — Getting Started, Core Concepts, Guides.
+- **Docs** — Getting Started, Self-Hosting (manual setup, jailer, configuration, operations and security, troubleshooting), Core Concepts, Guides.
 - **API Reference** — HTTP API, JS/TS SDK, Python SDK, CLI, each split
   into `overview` + one page per resource (`sandbox`/`sandboxes`,
   `image`/`images`, `drive`/`drives`, `pool`/`pools`) under
   `api-reference/<section>/`, rather than one long page per client.
 - **Engineering Blog** — Architecture (overview, startup latency, bug
   hunts, SDK/CLI design, testing, the engineering notebook) and
-  Internals (15 mechanism deep-dives).
+  Internals (mechanism deep-dives, one per `internals/*.mdx`).
 
 Every page is `.mdx`; page paths in `docs.json` are root-relative with
 no extension (`"concepts/networking"`, not `"concepts/networking.mdx"`

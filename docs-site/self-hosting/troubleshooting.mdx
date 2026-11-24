@@ -1,0 +1,34 @@
+---
+title: Troubleshooting
+description: Symptoms you are likely to hit while self-hosting sandkiln, with the cause and the fix for each.
+---
+
+Run `scripts/preflight-check.sh` first; it reports most of these before they bite. For the steps behind each fix see [Manual host setup](/self-hosting/manual-setup).
+
+## Setup and permissions
+
+- **`scripts/setup.sh` fails with "a terminal is required to read the password".** It ran non-interactively (for example `ssh host 'cmd'` rather than an interactive session) and one of its `sudo` steps had no TTY to prompt on. Run it from a real interactive shell, or run `sudo -v` first to cache credentials in that session before invoking it non-interactively.
+- **A rebuild-then-restart over SSH cannot prompt for sudo.** Run `sudo scripts/host-setup/allow-passwordless-cap-grant.sh` once, interactively, so `sandkilnd-ctl.sh restart` can grant `CAP_NET_ADMIN` unattended.
+- **`/dev/kvm: permission denied`.** `sudo usermod -aG kvm $USER`, then log in again; group membership does not apply to an already-open session.
+- **"Operation not permitted" on any network call.** You rebuilt the daemon and are running it directly, not under the systemd unit, and did not re-run `sudo scripts/host-setup/grant-net-admin.sh core/target/release/sandkilnd`. Capabilities do not survive a rebuild; `sandkilnd-ctl.sh` and the systemd unit handle it. See [Capabilities](/self-hosting/manual-setup#capabilities).
+- **`preflight-check.sh --root-checks` reports missing binaries you know are installed.** You ran it with plain `sudo`, which resets `$HOME` to `/root` and breaks every `~/sandkiln-tools/...` default path. Use `sudo -E` to preserve your environment.
+
+## Startup
+
+- **`tap devices missing: [...] — run scripts/host-setup/create-tap-pool.sh first` at startup.** `tap_pool_prefix` or `tap_pool_size` (`SANDKILN_TAP_POOL_PREFIX` and `SANDKILN_TAP_POOL_SIZE`) do not match what you created, or the pool was created for a different user than the daemon runs as.
+
+## Sandboxes
+
+- **Create works, but `exec`, `read-file` or `write-file` time out or fail with a vsock connect error.** The guest agent is not baked into the rootfs `base_rootfs` points at. Run `sudo -E scripts/preflight-check.sh --root-checks` to confirm, then see [Base image and guest agent](/self-hosting/manual-setup#base-image-and-guest-agent).
+- **A plain `exec` returns `504`.** The command ran past `exec_timeout_secs` (default 600). The process keeps running in the guest; raise the setting or use streamed exec.
+- **Sandboxes boot but have no outbound network.** Confirm `uplink_iface` detected the right interface (`ip route show default`), and that the DNS forwarder is running (`systemctl status sandkiln-dnsmasq`, or `scripts/host-setup/start-dns-proxy.sh` by hand). Outbound IP connectivity and DNS resolution are independent failure modes, so check both.
+
+## Production image build
+
+- **debootstrap fails on an unknown codename.** Your host's `debootstrap` does not yet know the Ubuntu release `build-universal-image.sh` defaults to. Either `apt-get install --only-upgrade debootstrap`, or pass an older LTS codename explicitly as its third argument (the script's header comment has the exact command).
+- **Disk fills up during the build.** It needs several GiB free for the whole build (the sparse image itself plus package downloads inside the chroot). Free space first rather than letting it fail partway. The script cleans up a partial image on failure, but that does not reduce the headroom the next attempt needs.
+
+## Jailer
+
+- **Sandbox creation fails with a jailer-related error after enabling `jailer_enabled`.** Almost always the setuid bit on the `jailer` binary. Check `ls -la ~/sandkiln-tools/bin/jailer` shows `-rwsr-xr-x` owned by `root`, and re-apply `chown root:root` and `chmod u+s` if you re-ran `install-firecracker.sh` since. If it is set correctly and the jailer still fails, check `mount | grep cgroup2`: the jailer is invoked with `--cgroup-version 2` unconditionally and fails on a host still using the legacy cgroups v1 hierarchy. See [Jailer setup](/self-hosting/jailer).
+- **`400 snapshotting a jailed sandbox is not supported yet`.** Expected. Stop the sandbox instead of snapshotting it if you do not need to resume it.

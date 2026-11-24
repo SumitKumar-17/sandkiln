@@ -77,7 +77,7 @@ nothing under `snapshots/` or `state` knows about HTTP. A new endpoint is a new 
   one name); `drives`/`images` plus `drive_holder()`/`image_holder()`
   ("who holds this" across live sandboxes + held snapshots, the
   mechanism that prevents double-attaching a drive); `pools` (in-memory
-  only, not reconciled from disk — see `pool.rs`); `retired_snapshots`
+  only, not reconciled from disk — see `lifecycle/pool.rs`); `retired_snapshots`
   (time-travel restore) plus `tap_device_holder()`, the same ownership
   check extended to cover a lease-less retired checkpoint and an
   in-flight restore. `image_holder`/`tap_device_holder` share a
@@ -141,7 +141,7 @@ nothing under `snapshots/` or `state` knows about HTTP. A new endpoint is a new 
   CLI arg. No holder-tracking (concurrent mounts of one bucket aren't a
   corruption risk) and no re-application on resume/fork (a mount is a
   live guest FUSE process, captured by Firecracker's own snapshot).
-- **`pool.rs`** — pure pool state/matching logic; see
+- **`lifecycle/pool.rs`** — pure pool state/matching logic; see
   `docs-site/internals/pre-warmed-pools.mdx` for the full design.
   `Pool::notify` wakes `pool_claim::resolve_pool_claim` on a
   `max_count`-bounded pool — condvar-style, every waiter re-checks on
@@ -159,7 +159,7 @@ nothing under `snapshots/` or `state` knows about HTTP. A new endpoint is a new 
 - **`lifecycle/idle_reaper.rs`** — unconditional background task; see
   `docs-site/internals/pre-warmed-pools.mdx`. Runs auto-suspend, then
   destroy, then an independent archive pass each tick.
-- **`snapshot.rs`** — `Snapshot` + durability: atomic `meta.json`
+- **`snapshots/held.rs`** — `Snapshot` + durability: atomic `meta.json`
   write-then-rename, `reconcile()` rebuilds `AppState::snapshots` from
   disk (hot dir + archive dir, filesystem is the source of truth, same
   pattern as `DriveStore::list()`) — a snapshot missing any of its three
@@ -249,7 +249,7 @@ wrong).
 ## Non-obvious things
 
 - New route handlers touching the sandbox map or `vmm` get their own
-  `routes_*.rs` — a shared file is a guaranteed merge-conflict point for
+  its own `http/routes/*.rs` file — a shared file is a guaranteed merge-conflict point for
   parallel agents.
 - The sandbox map lock is `std::sync::Mutex`, held across blocking calls
   inside `spawn_blocking` — never `.await` while holding it.

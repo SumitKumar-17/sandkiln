@@ -23,7 +23,7 @@ EnvironmentFile=-@SANDKILN_ENV_FILE@
 # own startup code (core/crates/daemon/src/main.rs::raise_net_admin_ambient)
 # still runs its `caps::raise(...)` calls either way — they become no-ops
 # when the capability is already ambient, which is exactly what happens
-# here. See SELF_HOSTING.md's "Running as a persistent service" section.
+# here. See docs-site/self-hosting/operations.mdx.
 AmbientCapabilities=CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_ADMIN
 NoNewPrivileges=true

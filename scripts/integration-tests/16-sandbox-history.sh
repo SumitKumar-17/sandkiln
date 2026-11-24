@@ -4,7 +4,7 @@ section "durable sandbox history (survives a daemon restart)"
 # create/destroy/snapshot recording behavior while the daemon is up.
 # Actual across-a-real-restart behavior (orphan-marking a still-live
 # record, leaving already-ended ones untouched) was verified manually;
-# see ROADMAP.md's "Tags and sandbox metadata" section for that result.
+# see `docs/design-notes/tags-and-metadata.md` for that result.
 status="$(req POST /sandboxes "{\"name\":\"it-hist-live-$$\",\"tags\":{\"suite\":\"integration\",\"case\":\"history\"}}")"
 assert_status "create a sandbox to appear in history while still live" 200 "$status"
 SBX_HIST_LIVE="$(extract id < "$WORKDIR/resp.json")"

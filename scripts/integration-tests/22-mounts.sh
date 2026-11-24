@@ -2,7 +2,7 @@ section "remote storage mounts"
 
 # Needs a real S3-compatible endpoint reachable from the guest's bridge
 # network, plus a rootfs with rclone/fusermount3 injected and a
-# CONFIG_FUSE_FS guest kernel (see SELF_HOSTING.md's "Remote storage
+# CONFIG_FUSE_FS guest kernel (see docs-site/self-hosting/manual-setup.mdx ("Remote storage
 # mounts (optional)" section) -- not part of a normal daemon setup, so
 # this whole topic is opt-in, same pattern as 10-jailer.sh's
 # SANDKILN_JAILER_ENABLED gate.

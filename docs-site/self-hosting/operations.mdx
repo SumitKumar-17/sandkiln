@@ -1,0 +1,106 @@
+---
+title: Operations and security
+description: Running sandkilnd with the control script or under systemd, upgrades, stopping, persistent state, and the security posture to know about.
+---
+
+## The control script
+
+`scripts/sandkilnd-ctl.sh start` combines the manual steps into one repeatable command. It builds `sandkilnd` (a no-op if nothing changed), runs `preflight-check.sh` and refuses to start on a `FAIL`, grants `CAP_NET_ADMIN` through `sudo` if the binary lacks it, starts the daemon in the background, and returns only after `/healthz` answers. "The command exited 0" therefore means the daemon is really up, not just that a process was spawned. It passes every `SANDKILN_*` variable through untouched, as running `sandkilnd` directly does, and uses `sandkiln.toml` when present.
+
+```bash
+SANDKILN_AUTH_TOKEN=$(openssl rand -hex 32) scripts/sandkilnd-ctl.sh start   # a token for this run
+scripts/sandkilnd-ctl.sh status      # is it running, is it healthy
+scripts/sandkilnd-ctl.sh logs [-f]   # tail its log
+scripts/sandkilnd-ctl.sh restart     # stop, start, and reap Firecracker processes left orphaned on the way down
+scripts/sandkilnd-ctl.sh stop
+```
+
+It is safe to run repeatedly: `start` on a running daemon prints its PID and exits, and `stop` on a stopped one is a no-op. `start --no-build` skips the build step (you already built it) and `start --no-preflight` skips the check (you already confirmed everything and want it back fast).
+
+Running by hand still works exactly as before: `SANDKILN_AUTH_TOKEN=... core/target/release/sandkilnd` in a foreground shell. The control script is a convenience, not a requirement. For a supervised deployment that survives a reboot, use systemd instead.
+
+To verify a running daemon, use the [quickstart's verify steps](/getting-started/self-hosting#verify) or the integration suite below.
+
+### Automated verification and clients
+
+```bash
+SANDKILN_AUTH_TOKEN=<your-token> scripts/integration-test.sh
+```
+
+This exercises the complete API end to end: sandbox lifecycle, tags, drives (persistence across sandboxes, read-only sharing, conflict detection), snapshot, resume and fork, named sandboxes and persistent-by-default stop, registered images, auth, `/metrics` and error cases. It cleans up everything it creates whether it passes or fails.
+
+Or point a real client at the daemon:
+
+```bash
+npm install sandkiln          # JS/TS SDK
+pip install sandkiln          # Python SDK, mirrors the JS one
+npm install -g sandkiln-cli   # the CLI; the package is sandkiln-cli because the bare name kiln was taken, the command is kiln
+kiln sandbox create --base-url http://127.0.0.1:7777 --token $SANDKILN_AUTH_TOKEN
+```
+
+All three default to the `SANDKILN_DAEMON_URL` and `SANDKILN_AUTH_TOKEN` environment variables, matching the daemon's own naming. Each client's configuration surface is in [JS/TS](/getting-started/js), [Python](/getting-started/python) and the [CLI](/getting-started/cli).
+
+## Running under systemd
+
+```bash
+sudo scripts/install-systemd-service.sh \
+  $(pwd)/core/target/release/sandkilnd <run-as-user> /etc/sandkiln/sandkilnd.env
+sudo systemctl enable --now sandkilnd
+journalctl -u sandkilnd -f
+```
+
+This installs a real systemd unit, from `scripts/sandkilnd.service.template`, that:
+
+- Runs `sandkilnd` as the unprivileged user you specify, not root.
+- Grants `CAP_NET_ADMIN` through `AmbientCapabilities=` ([Capabilities](/self-hosting/manual-setup#capabilities)): no `setcap` step, and no re-granting after a rebuild.
+- Runs `scripts/preflight-check.sh` before every start (`ExecStartPre`), so a bad config or missing prerequisite fails the start with a clear reason in the journal instead of a daemon that starts and then fails every request.
+- Restarts automatically on failure.
+- Reads its `SANDKILN_*` configuration from the env file you point it at, created from a template on first install. Edit it: at minimum set `SANDKILN_AUTH_TOKEN` before exposing the daemon beyond localhost.
+
+Verified directly: a full `sandkilnd` lifecycle (install, start, create, exec and stop a sandbox, `systemctl restart`, a full `scripts/integration-test.sh` run, 43/43 passing) with the binary's file capability stripped entirely, which proves the `AmbientCapabilities=` path works independently of `setcap`.
+
+The guest DNS forwarder is the separate `sandkiln-dnsmasq` unit that `setup.sh` installs, so it comes back on boot without anything extra.
+
+## Upgrades and what to repeat
+
+| You changed | Also do |
+|---|---|
+| daemon, vmm or protocol Rust source | `cargo build --release --workspace`. Under the systemd unit nothing else. Running manually, re-run `scripts/host-setup/grant-net-admin.sh`. |
+| the guest agent (`core/crates/guest-agent`) | Rebuild for the musl target, then **re-inject it into every rootfs image currently in use** (`images/inject-agent.sh`, or `scripts/dev.sh inject-agent [rootfs-path]` for both steps). A rebuilt agent binary on the host does nothing until it is baked into the image `base_rootfs` points at. |
+| the base image or packages added to it | Rebuild it (`images/build-universal-image.sh`), re-inject the agent, and repoint `base_rootfs` if you built under a new path. Running sandboxes keep the image they booted from; only new ones pick up the change. |
+| `tap_pool_size` upward | Re-run `scripts/host-setup/create-tap-pool.sh` with the new count before raising the setting. It is idempotent: existing devices are left alone and only missing ones are created. Otherwise the daemon's startup `ensure_ready()` check fails loudly rather than silently under-provisioning. |
+| Firecracker itself | Re-run `scripts/host-setup/install-firecracker.sh`, optionally pinning `FIRECRACKER_VERSION`, then re-apply the [jailer setuid bit](/self-hosting/jailer#host-steps) if you use it. |
+
+Run `scripts/preflight-check.sh` again after any of these before trusting the result. That is what it exists for.
+
+## Stopping
+
+`SIGTERM` or `SIGINT` (what `sandkilnd-ctl.sh stop` sends) stops accepting connections, gives in-flight requests up to 30 seconds, then snapshots every live sandbox concurrently with a 60 second overall deadline before exiting. Sandboxes run under the [jailer](/self-hosting/jailer#known-limitation) cannot be snapshotted and are destroyed cleanly instead. No Firecracker process is left behind, and snapshotted sandboxes are resumable after the next start. `scripts/restart-test.sh` verifies this against a real daemon.
+
+`sandkilnd-ctl.sh stop` waits 10 seconds before escalating to `SIGKILL`. That is ample for a few sandboxes (3 were snapshotted in 0.75s) but cuts a very large shutdown short.
+
+**After a crash or `SIGKILL`**, the shutdown path is skipped and Firecracker child processes are orphaned: they are not in a process group the daemon tears down on its own exit. If sandboxes seem stuck after an unclean exit, check `pgrep -a firecracker` and clear them with `pkill -x firecracker`, then restart the daemon. Use the exact-name match, never `-f`, which can match an unrelated process (or your own shell) whose command line contains the string. `sandkilnd-ctl.sh restart` reaps them for you.
+
+## Persistent state
+
+Only these outlive a sandbox stop:
+
+- Drives in `drives_dir`, and registered images in `images_dir`.
+- Snapshots under `state_dir/snapshots`, retired checkpoints under `state_dir/snapshot-history`, and archived snapshots in `archive_dir`.
+- The lifecycle history database at `history_db_path`.
+
+Back these up if they matter to you. Snapshots survive a **daemon restart**: the daemon reconciles every valid snapshot directory back into memory at startup (verified live by killing a daemon with `kill -9` mid-session with a snapshot on disk, starting a fresh instance, and resuming it with its data intact). Because `state_dir` defaults to a durable path rather than the OS temp dir, they also survive a host reboot. Running sandboxes do not survive a restart: the daemon's bookkeeping of them is in memory only and their VM processes exit with it, which is why a clean stop snapshots them first.
+
+A sandbox can disappear without an explicit `stop()` or `snapshot()`. With `auto_suspend_timeout_secs` set, an idle sandbox is paused and snapshotted automatically, the same as a manual `snapshot()`: it vanishes from `GET /sandboxes` and a new snapshot takes its place. Find it with `GET /snapshots?source_sandbox_id=<the sandbox id you had>`, then `resume()` or `fork()` it. If auto-suspend fails partway (out of disk, a Firecracker error), the sandbox is stopped and its resources released rather than left half-paused, and no snapshot appears, because there is nothing valid on disk to represent.
+
+**Time-travel checkpoints and their disk cost.** `POST /snapshots/:id/resume` retains the snapshot it consumes by default, as a restorable checkpoint under `GET /snapshots/history`. `POST /snapshots/history/:id/restore` goes back to it later and `DELETE /snapshots/history/:id` reclaims its disk. Each checkpoint costs a full guest-memory dump (comparable to the sandbox's configured RAM) plus a private rootfs copy. Unmanaged, that cost was unbounded: routine testing alone once filled a 468GB disk. `retained_checkpoints_max` (default 8, oldest evicted after each resume) now bounds it; `0` removes the bound. If you do not need to travel back, pass `?retain_history=false` on a resume to keep none. See [Snapshots](/concepts/snapshots) and [Snapshot, resume and fork](/internals/snapshot-resume-fork).
+
+## Security posture
+
+- **Privilege model.** The daemon runs unprivileged with only ambient `CAP_NET_ADMIN`, never as root. Tap device creation needs real root and is a deliberate one-time, out-of-band step (`create-tap-pool.sh`), never something the running daemon does, which keeps its privilege footprint minimal. See [TAP devices and bridge networking](/internals/tap-bridge-networking).
+- **Network isolation between sandboxes.** Every sandbox's tap device has bridge port isolation: a sandbox can reach the gateway and uplink (outbound internet) but not another sandbox's tap on the same bridge. Verified: cross-sandbox traffic fails while gateway and real outbound traffic still work.
+- **Authentication is all-or-nothing.** One shared token, no per-caller scoping yet; per-caller scoping of which sandboxes a token can see is not implemented. Treat any token holder as fully trusted with everything the daemon can do. This is a self-hosted, single-operator daemon, not a multi-tenant identity system. Unset means open.
+- **Isolation inside a sandbox, not only between them.** The production image bakes in multi-agent isolation: separate `agentN` Linux users with private (mode 700) home directories and a deliberate, opt-in `/srv/shared` for cross-agent file sharing within one sandbox. This is about cooperating processes inside one VM and does not replace the VM-level isolation between sandboxes.
+- **Jailer.** Chroot, cgroups v2 resource limits and a dedicated unprivileged uid/gid per VM are available but opt-in and off by default. With it off, every sandbox boots via a direct Firecracker spawn and isolation comes from KVM hardware virtualization plus the network controls above, not jailer hardening on top. Its real chroot, cgroup and uid-drop behavior is unit-tested but not verified against a real jailer on real hardware, and snapshotting a jailed sandbox returns `400`. See [Jailer setup](/self-hosting/jailer) before relying on it for an adversarial multi-tenant workload.
+- **No per-sandbox resource ceiling beyond configuration.** `vcpu_count` and `mem_size_mib` are per-request overrides capped by `max_vcpu_count` and `max_mem_size_mib`. Nothing stops a caller running a sandbox indefinitely except the optional `idle_timeout_secs` (destroy) and `auto_suspend_timeout_secs` (suspend).
+- **Nothing on disk is encrypted at rest by sandkiln.** `drives_dir`, `images_dir`, `archive_dir`, and every snapshot's `mem.bin` (a full dump of guest RAM, including secrets a workload held only in memory) and rootfs clone are plain files, readable by anything with host filesystem access at the level `sandkilnd` runs at. sandkiln cannot close this by encrypting bytes before writing them: Firecracker itself opens and writes `mem.bin` and `state.snap` directly during pause-and-snapshot (`core/crates/vmm/src/vm/snapshot.rs`), so sandkiln's code never holds the plaintext. An application-level scheme would mean decrypting before every Firecracker read and re-encrypting after every write, on top of a key-management story this project does not have and did not want to bolt on half-built. The recommended fix is **filesystem-level encryption**: put `drives_dir`, `images_dir`, `archive_dir` and `state_dir` on an encrypted block device or filesystem (LUKS on Linux is the standard choice). It is an ordinary host-hardening step with no sandkiln involvement, and it covers the attack surface that matters, someone with access to the raw disk.

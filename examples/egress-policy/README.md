@@ -52,7 +52,7 @@ hosted service.
 ## Known limitations
 
 - Only IP/CIDR matching — no domain-level or port-level rules yet (see
-  `ROADMAP.md`'s "Firewall and egress policy" section for what's
+  `docs/design-notes/egress-firewall.md` for what's
   deferred and why).
 - A policy is tied to a sandbox's lease, not carried over on resume/fork
   by any code in this example — it's re-applied automatically by the

@@ -3,6 +3,7 @@ import { registerDriveCommands } from "./commands/drive.js";
 import { registerImageCommands } from "./commands/image.js";
 import { registerPoolCommands } from "./commands/pool.js";
 import { registerSandboxCommands } from "./commands/sandbox.js";
+import { registerStatusCommand } from "./commands/status.js";
 import { fail } from "./commands/shared.js";
 
 const program = new Command();
@@ -16,6 +17,7 @@ registerSandboxCommands(program);
 registerImageCommands(program);
 registerDriveCommands(program);
 registerPoolCommands(program);
+registerStatusCommand(program);
 
 // Every subcommand's own action handler already catches its errors; this
 // is a backstop for anything that escapes one anyway (a bug in a future

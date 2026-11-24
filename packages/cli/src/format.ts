@@ -1,5 +1,15 @@
 import { InvalidArgumentError } from "commander";
-import type { DirEntry, DriveInfo, ExecStreamSession, ImageInfo, MountInfo, PoolInfo, SandboxInfo, SnapshotInfo } from "sandkiln";
+import type {
+  DaemonStatus,
+  DirEntry,
+  DriveInfo,
+  ExecStreamSession,
+  ImageInfo,
+  MountInfo,
+  PoolInfo,
+  SandboxInfo,
+  SnapshotInfo,
+} from "sandkiln";
 
 /**
  * A plain `Error` here crashes with a raw stack trace instead of the
@@ -210,4 +220,32 @@ export function formatExecStreamList(sessions: ExecStreamSession[]): string {
     return "no exec-stream sessions\n";
   }
   return sessions.map(formatExecStreamLine).join("\n") + "\n";
+}
+
+function humanBytes(bytes: number): string {
+  const gib = bytes / 1024 ** 3;
+  return gib >= 1 ? `${gib.toFixed(1)} GiB` : `${Math.round(bytes / 1024 ** 2)} MiB`;
+}
+
+function humanDuration(secs: number): string {
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m ${secs % 60}s`;
+}
+
+export function formatStatus(s: DaemonStatus): string {
+  const lines = [
+    `sandkilnd ${s.version}  up ${humanDuration(s.uptimeSecs)}  auth ${s.authEnabled ? "on" : "OFF"}  jailer ${s.jailerEnabled ? "on" : "off"}`,
+    `sandboxes   ${s.counts.sandboxes} live, ${s.sandboxesCreatedTotal} created since start`,
+    `snapshots   ${s.counts.heldSnapshots} held, ${s.counts.retiredCheckpoints} retired`,
+    `pools       ${s.counts.pools} configured, ${s.counts.poolWarmReady} warm ready`,
+    `tap devices ${s.tapPool.free}/${s.tapPool.size} free`,
+    `rootfs      ${s.rootfsClones.reflink} reflink, ${s.rootfsClones.copy} copy clones`,
+    ...s.disk.map((d) => `disk        ${humanBytes(d.freeBytes)} free of ${humanBytes(d.totalBytes)}  ${d.path}`),
+  ];
+  if (s.warnings.length > 0) {
+    lines.push("", ...s.warnings.map((w) => `warning: ${w}`));
+  }
+  return lines.join("\n") + "\n";
 }

@@ -324,7 +324,7 @@ pub(crate) fn annotate_with_console_log(err: io::Error, log_path: &Path) -> io::
 /// `connect_api_with_retry` and `Vm::call`/`open_pty`/`open_exec_stream`
 /// — both are an "is the other side listening yet" race, previously two
 /// separate fixed-sleep loops. The API-socket one measured a flat
-/// ~20.1ms on every boot before this fix (ROADMAP.md Benchmarking); the
+/// ~20.1ms on every boot before this fix (docs/benchmarks.md); the
 /// vsock one was the same bug, just conditional on actually racing the
 /// agent's startup, which is why it went unnoticed longer.
 /// Like [`retry_with_backoff`], but a failure that reports the request was
@@ -377,7 +377,7 @@ fn retry_with_backoff<T>(
 /// connect itself has no such window, which is what makes polling this
 /// fast safe. The fixed 20ms sleep this replaced measured a flat
 /// ~20.1ms on every boot (more than half of a ~34ms boot) — a quantized
-/// sleep, not real waiting. See ROADMAP.md's Benchmarking section.
+/// sleep, not real waiting. See `docs/benchmarks.md`.
 fn connect_api_with_retry(path: &Path, timeout: Duration) -> io::Result<ApiClient> {
     retry_with_backoff(timeout, Duration::from_micros(200), Duration::from_millis(5), || ApiClient::connect(path)).map_err(|e| {
         io::Error::new(io::ErrorKind::TimedOut, format!("{path:?} never accepted a connection within {timeout:?}: {e}"))

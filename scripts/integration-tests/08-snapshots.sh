@@ -33,8 +33,7 @@ else
     # already-running daemon isn't; live-verified manually instead (a
     # real archive, a real restart confirming it reconciles correctly
     # with archived_at_unix set, and a real resume proving the archived
-    # snapshot is still fully usable) -- see ROADMAP.md's "Persistence
-    # and snapshotting" section for that verification and the real
+    # snapshot is still fully usable) -- see docs/design-notes/snapshots.md for that verification and the real
     # Firecracker finding (the rootfs backing file can never move) it
     # surfaced, same "can't fit a real restart into this suite" tradeoff
     # already made for 16-sandbox-history.sh.

@@ -2,6 +2,7 @@ export { Sandbox } from "./sandbox.js";
 export { Image } from "./image.js";
 export { Drive } from "./drive.js";
 export { Pool, type CreatePoolOptions } from "./pool.js";
+export { getStatus } from "./status.js";
 export { SandkilnApiError } from "./errors.js";
 export type { TunnelHandle, TunnelOptions } from "./tunnel.js";
 export type {
@@ -21,6 +22,7 @@ export type {
   ListSnapshotsOptions,
   MountInfo,
   MountOptions,
+  DaemonStatus,
   PoolInfo,
   PoolOptions,
   PreviewUrlOptions,

@@ -44,6 +44,16 @@
             ]
           },
           {
+            "group": "Self-Hosting",
+            "pages": [
+              "self-hosting/manual-setup",
+              "self-hosting/jailer",
+              "self-hosting/configuration",
+              "self-hosting/operations",
+              "self-hosting/troubleshooting"
+            ]
+          },
+          {
             "group": "Core Concepts",
             "pages": [
               "concepts/sandbox-lifecycle",
@@ -87,7 +97,8 @@
               "api-reference/http-api/sandboxes",
               "api-reference/http-api/drives",
               "api-reference/http-api/images",
-              "api-reference/http-api/pools"
+              "api-reference/http-api/pools",
+              "api-reference/http-api/status"
             ]
           },
           {
@@ -117,7 +128,8 @@
               "api-reference/cli/sandbox",
               "api-reference/cli/image",
               "api-reference/cli/drive",
-              "api-reference/cli/pool"
+              "api-reference/cli/pool",
+              "api-reference/cli/status"
             ]
           }
         ]

@@ -59,6 +59,6 @@ node index.js
   started with one.
 
 See the [Snapshots, resume, and fork](https://sandkiln.mintlify.site/concepts/snapshots)
-docs page, and `ROADMAP.md`'s "Persistence and snapshotting" section at
+docs page, and `docs/design-notes/snapshots.md` at
 the repo root, for the full design — including the pre-warmed pool
 feature this same primitive underpins (see `pool-warm-start/`).

@@ -49,15 +49,18 @@ behavior belongs here, not in `daemon`.
   `network`.
 - **`vm/snapshot.rs`** — `Vm::pause`/`snapshot`/`resume`, `ResumeConfig`.
   `resume` always spawns directly — jailer covers `Vm::boot` only;
-  `daemon::routes_snapshot::snapshot_sandbox` refuses to snapshot a
+  `daemon`'s `http/routes/snapshot.rs` (`snapshot_and_stop`) refuses to snapshot a
   jailed sandbox for this reason.
+- **`rootfs.rs`** — per-sandbox rootfs clone via native `FICLONE` reflink,
+  falling back to a full copy, reporting which happened
+  (`rootfs_clone_total{method}` on `/metrics`).
 - **`jailer.rs`** — chroot, cgroup v2, a dedicated uid/gid per VM.
   `JailerIdPool` (mirrors `network.rs`'s tap/IP pool),
   `link_resource_into_jail` (hard link, falls back to copy across
   filesystems), `build_jailer_args`/`cgroup_limits` (pure, unit tested).
   **Not yet proven on real hardware** — `SANDKILN_JAILER_ENABLED` breaks
   every create unless `jailer` itself is made setuid-root first
-  (`SELF_HOSTING.md`); confirmed live via `Operation not permitted`
+  (`docs-site/self-hosting/manual-setup.mdx`); confirmed live via `Operation not permitted`
   chown-ing a hard-linked file into the chroot before that step.
 - **`network.rs`** — `NetworkManager`/`Lease`: tap pool, bridge
   attachment, IP allocation, port isolation. Pool exists (not on-demand

@@ -81,7 +81,7 @@ impl Metrics {
             rootfs_clones_reflink: AtomicU64::new(0),
             rootfs_clones_copy: AtomicU64::new(0),
             // Spawn to InstanceStart measures ~13ms (criterion 12.6-14.0ms,
-            // ROADMAP.md Benchmarking) — bucketed around that so a regression
+            // docs/benchmarks.md) — bucketed around that so a regression
             // shows up as a bucket shift, not just a mean. Not the time until
             // the guest can run a command (~215ms); that is measured
             // client-side by scripts/bench-report.sh as first_exec_client.
@@ -89,7 +89,7 @@ impl Metrics {
             // Exec latency spans a much wider range: sub-millisecond on an
             // already-open vsock connection, hundreds of ms through the
             // full HTTP path against a freshly booted agent (see
-            // ROADMAP.md's load-test numbers) — bucketed accordingly.
+            // `docs/benchmarks.md` load-test numbers) — bucketed accordingly.
             exec_latency_ms: Histogram::new(&[1.0, 10.0, 50.0, 250.0, 1000.0]),
             // One shared bucket layout across every phase: the phases
             // span roughly 1ms (a CoW rootfs clone) to a few hundred ms
@@ -113,6 +113,14 @@ impl Metrics {
             Reflink => self.rootfs_clones_reflink.fetch_add(1, Ordering::Relaxed),
             Copy => self.rootfs_clones_copy.fetch_add(1, Ordering::Relaxed),
         };
+    }
+
+    pub fn rootfs_clone_counts(&self) -> (u64, u64) {
+        (self.rootfs_clones_reflink.load(Ordering::Relaxed), self.rootfs_clones_copy.load(Ordering::Relaxed))
+    }
+
+    pub fn sandboxes_created(&self) -> u64 {
+        self.sandboxes_created_total.load(Ordering::Relaxed)
     }
 
     pub fn record_boot_duration_ms(&self, ms: f64) {

@@ -20,7 +20,7 @@
 # leg: does the whole real system, wired together, actually behave
 # correctly end to end. Every case here was, at some point, a bug found by
 # doing this exact sequence by hand (see AGENTS.md's gotchas list and
-# ROADMAP.md's Benchmarking section for the history) — codifying it means
+# `docs/benchmarks.md` for the history) — codifying it means
 # the next feature doesn't get to reopen one of these by accident.
 #
 # Usage: scripts/integration-test.sh [base-url]

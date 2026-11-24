@@ -5,8 +5,7 @@
 //! An image is registered from a path to an already-built ext4 rootfs file
 //! already staged on the host filesystem, not accepted as an HTTP upload —
 //! accepting an arbitrary multi-gigabyte file over HTTP is a distinct,
-//! larger problem (see `images/README.md` and `ROADMAP.md`'s "Base and
-//! custom images" section) not attempted here. Registration *copies* that
+//! larger problem (see `images/README.md` and `docs/design-notes/images-and-auth.md`) not attempted here. Registration *copies* that
 //! file into a managed directory (mirroring [`crate::drive::DriveStore`]'s
 //! "one file per resource, filesystem is the source of truth" pattern)
 //! rather than referencing it in place: a later edit, move, or deletion of

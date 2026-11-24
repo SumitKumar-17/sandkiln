@@ -289,7 +289,7 @@ async fn create_sandbox_cold(
             // destination is `std::env::temp_dir()`: reflink silently
             // degrades to a full copy across filesystems, the leading
             // (unverified) explanation for why an XFS experiment showed
-            // no end-to-end win — see ROADMAP.md's Benchmarking section.
+            // no end-to-end win — see `docs/benchmarks.md`.
             let setup_started = Instant::now();
             let ((copy_result, copy_elapsed), (lease_result, lease_elapsed)) = std::thread::scope(|scope| {
                 let copy_handle = scope.spawn(|| span.in_scope(|| timed(|| clone_rootfs(&base_rootfs_source, &rootfs_path, &state.metrics))));

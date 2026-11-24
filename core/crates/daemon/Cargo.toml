@@ -27,6 +27,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tower-http = { version = "0.5", features = ["trace"] }
 uuid = { version = "1", features = ["v4"] }
 caps = "0.5"
+libc = "0.2"
 # For encoding the credentials file `routes_mounts.rs` writes into the
 # guest via `Request::WriteFile` -- every other caller of that request
 # base64-encodes real *file* content on their own side and passes it

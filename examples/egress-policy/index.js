@@ -59,7 +59,7 @@ async function main() {
     await allowedSandbox.stop({ keep: false });
   }
 
-  console.log("\nDone. See ROADMAP.md's \"Firewall and egress policy\" section for the full design.");
+  console.log("\nDone. See docs/design-notes/egress-firewall.md for the full design.");
 }
 
 main().catch((err) => {

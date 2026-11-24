@@ -529,3 +529,38 @@ export interface MountResponseBody {
 export interface ListMountsResponseBody {
   mounts: MountResponseBody[];
 }
+
+/** Wire shape of `GET /status`. */
+export interface DaemonStatusBody {
+  version: string;
+  uptime_secs: number;
+  auth_enabled: boolean;
+  jailer_enabled: boolean;
+  counts: {
+    sandboxes: number;
+    held_snapshots: number;
+    retired_checkpoints: number;
+    pools: number;
+    pool_warm_ready: number;
+  };
+  tap_pool: { size: number; free: number };
+  sandboxes_created_total: number;
+  rootfs_clones: { reflink: number; copy: number };
+  disk: { path: string; total_bytes: number; free_bytes: number }[];
+  warnings: string[];
+}
+
+/** Host health and capacity (`getStatus`). */
+export interface DaemonStatus {
+  version: string;
+  uptimeSecs: number;
+  authEnabled: boolean;
+  jailerEnabled: boolean;
+  counts: { sandboxes: number; heldSnapshots: number; retiredCheckpoints: number; pools: number; poolWarmReady: number };
+  tapPool: { size: number; free: number };
+  sandboxesCreatedTotal: number;
+  rootfsClones: { reflink: number; copy: number };
+  disk: { path: string; totalBytes: number; freeBytes: number }[];
+  /** Conditions to act on; empty when the host is healthy. */
+  warnings: string[];
+}

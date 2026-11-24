@@ -101,7 +101,7 @@ sequenceDiagram
 
 ### Connecting to a socket that is not there yet
 
-Right after `spawn`, Firecracker has not yet created its API socket. The first version of this code slept a fixed 20 ms and then connected. That measured as a flat 20.1 ms on every boot, more than half of a roughly 34 ms boot (ROADMAP.md, Benchmarking): a quantised sleep, not real waiting. It was replaced by retrying the connect itself on an exponential backoff from 200 microseconds to 5 ms:
+Right after `spawn`, Firecracker has not yet created its API socket. The first version of this code slept a fixed 20 ms and then connected. That measured as a flat 20.1 ms on every boot, more than half of a roughly 34 ms boot (`docs/benchmarks.md`): a quantised sleep, not real waiting. It was replaced by retrying the connect itself on an exponential backoff from 200 microseconds to 5 ms:
 
 ```rust
 fn connect_api_with_retry(path: &Path, timeout: Duration) -> io::Result<ApiClient> {

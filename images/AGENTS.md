@@ -52,7 +52,7 @@ cleanup trap on anything that mounts/chroots).
   the env var points at it and the daemon restarts. A single sandbox can
   instead boot from a *registered* image without touching the default
   (see Managed images below).
-- **Managed images**: `routes_images.rs` (`POST/GET /images`,
+- **Managed images**: `http/routes/images.rs` (`POST/GET /images`,
   `DELETE /images/:id`) registers an already-built ext4 rootfs under a
   name, referenced per sandbox via `image_id`
   (`kiln sandbox create --image <id>`). Copies the file into

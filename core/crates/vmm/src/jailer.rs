@@ -1,7 +1,8 @@
 //! Firecracker's jailer: re-execs `firecracker` inside a chroot'd,
 //! cgroup-limited environment under a dedicated unprivileged uid/gid,
-//! instead of `vm::boot`'s default direct spawn. See `ROADMAP.md`'s
-//! "Security hardening" and `SELF_HOSTING.md`'s jailer setup.
+//! instead of `vm::boot`'s default direct spawn. See
+//! `docs/design-notes/security-hardening.md` and the jailer setup in
+//! `docs-site/self-hosting/manual-setup.mdx`.
 //!
 //! **Why the daemon can't do this itself**: chroot(2), setuid/setgid,
 //! `/dev/kvm`/`/dev/net/tun` device nodes, and cgroup management all need

@@ -50,7 +50,7 @@ SDK's calls are occasional, not high-throughput).
   the spec's own published test vector in review, not just "it connects"),
   masked client frames, and the tunnel's own small binary multiplexing
   frame (shared wire format with the JS SDK's `tunnel.ts` and the
-  daemon's `routes_tunnel.rs` — change one, change all three). `tunnel.py`
+  daemon's `http/routes/tunnel.rs` — change one, change all three). `tunnel.py`
   runs its relay loop on a background `threading.Thread`;
   `atunnel.py` mirrors it as an `asyncio.Task`, importing every pure
   encode/decode helper (`_encode_ws_frame`, `_encode_tunnel_frame`,

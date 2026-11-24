@@ -3,15 +3,17 @@ title: Self-hosting quickstart
 description: From a bare Linux host to a running sandkilnd daemon creating real microVMs, with the failures you are likely to hit.
 ---
 
-There is no hosted service. This page is the shortest working path; [`SELF_HOSTING.md`](https://github.com/SumitKumar-17/sandkiln/blob/main/SELF_HOSTING.md) in the repository has every setting, jailer setup and running under systemd.
+There is no hosted sandkiln service. Every instance is self-hosted: you build the daemon, prepare a kernel and rootfs image, wire up host networking and run `sandkilnd` yourself. This page is the shortest tested path from a bare Linux host to a working daemon creating real, isolated microVM sandboxes. Everything here corresponds to a real script, binary or setting in this repository.
+
+The detail lives in [manual host setup](/self-hosting/manual-setup) (what each step does, for customizing or debugging), [jailer setup](/self-hosting/jailer), [configuration](/self-hosting/configuration), [operations and security](/self-hosting/operations) and [troubleshooting](/self-hosting/troubleshooting). The tooling that checks or automates the steps is `scripts/setup.sh`, `scripts/preflight-check.sh`, `scripts/sandkilnd-ctl.sh` and `scripts/install-systemd-service.sh`.
 
 ## Requirements
 
-- Linux x86_64 with `/dev/kvm` readable and writable by your user. Bare metal and nested virtualization both work. If you are not in the owning group: `sudo usermod -aG kvm $USER`, then log in again.
+- Linux x86_64 with `/dev/kvm` readable and writable by your user (check with `ls -la /dev/kvm`). Bare metal and nested virtualization both work. If you are not in the owning group: `sudo usermod -aG kvm $USER`, then log in again. Nothing is verified for aarch64.
 - `sudo`, for one-time host setup only. The daemon never runs as root; it holds only `CAP_NET_ADMIN`. See [TAP devices and bridge networking](/internals/tap-bridge-networking).
-- Rust via [rustup](https://rustup.rs), and `dnsmasq-base` for the guest DNS forwarder. `scripts/setup.sh` adds the musl target and installs `musl-tools` with `apt` if missing.
+- Rust via [rustup](https://rustup.rs), and `dnsmasq-base` for the guest DNS forwarder. `scripts/setup.sh` adds the musl target (`rustup target add x86_64-unknown-linux-musl`) and installs `musl-tools` with `apt` if missing. Node.js 20+ is needed only to build the CLI or SDK from source. The full prerequisite list is in [Manual host setup](/self-hosting/manual-setup#prerequisites).
 
-`scripts/preflight-check.sh` reports what is missing, using the same `SANDKILN_*` variables and defaults as the daemon.
+`scripts/preflight-check.sh` reports what is missing, using the same `SANDKILN_*` variables and defaults as the daemon, so it tells you what is missing before you try to start anything.
 
 ## Setup and start
 
@@ -22,15 +24,15 @@ scripts/setup.sh
 scripts/sandkilnd-ctl.sh start
 ```
 
-`setup.sh` is idempotent. It builds the workspace and the guest agent, installs Firecracker and the jailer into `~/sandkiln-tools/bin`, fetches a test kernel and rootfs, injects the agent, creates the tap device pool, installs the guest DNS forwarder as the `sandkiln-dnsmasq` systemd service (it survives reboots), and grants the daemon `CAP_NET_ADMIN`. It writes `sandkiln.toml` at the repo root (only if absent, so a hand-edited file is never overwritten), which `sandkilnd-ctl.sh` passes to the daemon, so `start` needs no environment variables. `start` validates the config with `sandkilnd --check-config`, runs preflight, builds if needed, and returns only after `/healthz` answers.
+`setup.sh` is idempotent. It builds the workspace and the guest agent, installs Firecracker and the jailer into `~/sandkiln-tools/bin`, fetches a test kernel and rootfs, injects the agent, creates the tap device pool, installs the guest DNS forwarder as the `sandkiln-dnsmasq` systemd service (it survives reboots), and grants the daemon `CAP_NET_ADMIN`. It writes `sandkiln.toml` at the repo root (only if absent, so a hand-edited file is never overwritten), which `sandkilnd-ctl.sh` passes to the daemon, so `start` needs no environment variables. `start` validates the config with `sandkilnd --check-config`, runs preflight, builds if needed, and returns only after `/healthz` answers. The steps `setup.sh` runs, one at a time, are in [Manual host setup](/self-hosting/manual-setup).
 
-The test image is about 300MiB with no language runtime or `ca-certificates`. For an Ubuntu image with current Node.js and Python (needs `sudo`, about 8GiB of disk, several minutes):
+That is a real, working daemon, enough to prove the whole stack end to end, but it boots from Firecracker's small CI test image: about 300MiB with no language runtime or `ca-certificates`. For a real Ubuntu base image with current Node.js and Python (needs `sudo`, about 8GiB of free disk, several minutes):
 
 ```bash
 scripts/setup.sh --production
 ```
 
-Other daemon commands: `scripts/sandkilnd-ctl.sh status | logs [-f] | restart | stop`.
+Other daemon commands (`status`, `logs [-f]`, `restart`, `stop`, and running under systemd) are in [Operations](/self-hosting/operations).
 
 ## Verify
 
@@ -41,36 +43,31 @@ curl -s -X POST http://127.0.0.1:7777/sandboxes -d '{}'
 # {"id":"..."}
 curl -s -X POST http://127.0.0.1:7777/sandboxes/<id>/exec \
   -H 'Content-Type: application/json' \
-  -d '{"command":"echo","args":["hello"]}'
+  -d '{"command":"echo","args":["hello from a real microVM"]}'
+curl -X DELETE http://127.0.0.1:7777/sandboxes/<id>
 ```
+
+If you set an auth token, add `-H "Authorization: Bearer $SANDKILN_AUTH_TOKEN"` to the sandbox calls. For full coverage, run `scripts/integration-test.sh` ([Operations](/self-hosting/operations#automated-verification-and-clients)).
 
 Then continue with [JS/TS](/getting-started/js), [Python](/getting-started/python) or the [CLI](/getting-started/cli).
 
 ## Configuration
 
-Settings resolve in this order: `SANDKILN_<KEY>` environment variable, then `sandkiln.toml`, then the built-in default. The file is found via `sandkilnd --config <file>`, `$SANDKILN_CONFIG`, `./sandkiln.toml`, or `~/.config/sandkiln/sandkiln.toml`, in that order. [`sandkiln.example.toml`](https://github.com/SumitKumar-17/sandkiln/blob/main/sandkiln.example.toml) lists every key with its default.
-
-```bash
-core/target/release/sandkilnd --check-config      # validate; all errors are reported together
-core/target/release/sandkilnd --print-config      # effective value of every setting
-core/target/release/sandkilnd --config-reference  # every setting, with its description
-```
-
-Unknown keys in the file are rejected with a did-you-mean suggestion. A file that contains `auth_token` and is readable by group or others produces a warning: `chmod 600 sandkiln.toml`.
+`sandkilnd` reads `SANDKILN_<KEY>` environment variables, then `sandkiln.toml`, then built-in defaults. `setup.sh` writes a starter file and `sandkilnd-ctl.sh start` passes it to the daemon. Resolution order, the `--check-config`, `--print-config` and `--config-reference` flags, and every setting are in [Configuration](/self-hosting/configuration).
 
 ## Before exposing it beyond localhost
 
-With no `auth_token`, every route except `/healthz` and `/metrics` is open to anyone who can reach the port. The daemon logs a warning at startup. Set a token in `sandkiln.toml` (`auth_token = "..."`, with `chmod 600`) or from the environment:
+With no `auth_token`, every route except `/healthz` and `/metrics` is open: anyone who can reach the port can create sandboxes, read and write files inside them, and delete persistent drives. The daemon logs a warning at startup so this is never silent. Set a token in `sandkiln.toml` (`auth_token = "..."`, with `chmod 600`) or from the environment:
 
 ```bash
 SANDKILN_AUTH_TOKEN=$(openssl rand -hex 32) scripts/sandkilnd-ctl.sh restart
 ```
 
-Clients send it as `Authorization: Bearer <token>`; see [Auth](/concepts/auth). The daemon compares it in constant time. It is one shared secret, with no per-caller scoping.
+Clients send it as `Authorization: Bearer <token>` and a mismatched, missing or malformed header gets `401`; see [Auth](/concepts/auth). The daemon compares it in constant time (`core/crates/daemon/src/auth.rs`). It is one shared secret, with no per-caller scoping; see the [security posture](/self-hosting/operations#security-posture).
 
 ## Stopping the daemon
 
-`SIGTERM` or `SIGINT` (what `sandkilnd-ctl.sh stop` sends) stops accepting connections, gives in-flight requests 30 seconds, then snapshots every live sandbox concurrently, with a 60 second overall deadline. Sandboxes run under the jailer cannot be snapshotted and are destroyed instead. Snapshotted sandboxes are resumable after the next start. `sandkilnd-ctl.sh stop` waits 10 seconds before escalating to `SIGKILL`, which is ample for a few sandboxes (3 were snapshotted in 0.75s) but cuts a very large shutdown short. A `SIGKILL` or crash skips this and leaves Firecracker processes running; `sandkilnd-ctl.sh restart` reaps them.
+`sandkilnd-ctl.sh stop` (or `SIGTERM`) drains in-flight requests and snapshots every live sandbox before exiting. Details, timings and crash cleanup are in [Operations](/self-hosting/operations#stopping).
 
 ## Faster creates: reflink rootfs clones
 
@@ -80,21 +77,12 @@ Each sandbox gets a private copy of the base rootfs. If `SANDKILN_ROOTFS_DIR` is
 sudo scripts/host-setup/create-reflink-volume.sh "$USER" 20
 ```
 
-It mounts the volume (default `/mnt/sandkiln-xfs`), creates `<mountpoint>/rootfs` and hands ownership to that user. Copy your base image onto the same mount (the base image and the clone directory must share the filesystem), then set `base_rootfs = "<mountpoint>/<image>.ext4"` and `rootfs_dir = "<mountpoint>/rootfs"` in `sandkiln.toml` (or the env vars `SANDKILN_BASE_ROOTFS` and `SANDKILN_ROOTFS_DIR`). Check `rootfs_clone_total{method="reflink"}` on `/metrics`; a rising `method="copy"` means the two paths are on different filesystems. The loop mount does not survive a reboot; re-run the script to remount. See [Startup latency](/architecture/startup-latency).
-
-`state_dir` / `SANDKILN_STATE_DIR` (default `~/sandkiln-tools/state`) holds held snapshots and retired checkpoints. Snapshots made by older versions in the OS temp dir are not migrated.
+It mounts the volume (default `/mnt/sandkiln-xfs`), creates `<mountpoint>/rootfs` and hands ownership to that user. Copy your base image onto the same mount (the base image and the clone directory must share the filesystem), then set `base_rootfs = "<mountpoint>/<image>.ext4"` and `rootfs_dir = "<mountpoint>/rootfs"` in `sandkiln.toml` (or the env vars `SANDKILN_BASE_ROOTFS` and `SANDKILN_ROOTFS_DIR`). Check `rootfs_clone_total{method="reflink"}` on `/metrics`; a rising `method="copy"` means the two paths are on different filesystems. The loop mount does not survive a reboot; re-run the script to remount. `preflight-check.sh` reports which filesystem your configured rootfs storage is on. Without reflinks the disk cost is a full rootfs copy per sandbox; with them, per-sandbox storage growth is nil. See [Startup latency](/architecture/startup-latency).
 
 ## Optional: remote storage mounts
 
-Mounting an S3-compatible bucket needs a guest kernel built with `CONFIG_FUSE_FS` and `rclone` plus `fusermount3` in the rootfs. Neither is set up by default. See [Remote storage mounts](/concepts/remote-storage) and the "Remote storage mounts" section of `SELF_HOSTING.md`.
+Mounting an S3-compatible bucket needs a guest kernel built with `CONFIG_FUSE_FS` and `rclone` plus `fusermount3` in the rootfs. Neither is set up by default. See [Remote storage mounts](/concepts/remote-storage) and [Manual host setup](/self-hosting/manual-setup#remote-storage-mounts-optional).
 
 ## Troubleshooting
 
-- **`setup.sh` says a terminal is required for the password:** it ran without a TTY and a `sudo` step needed one. Run it from an interactive shell, or `sudo -v` first.
-- **`/dev/kvm: permission denied`:** add yourself to the `kvm` group and log in again.
-- **"Operation not permitted" on network calls:** you rebuilt `sandkilnd` and ran it directly. Capabilities do not survive a rebuild; use `sandkilnd-ctl.sh`, or run `sudo scripts/host-setup/grant-net-admin.sh core/target/release/sandkilnd`.
-- **`tap devices missing: [...]` at startup:** `tap_pool_prefix` or `tap_pool_size` differ from what `scripts/host-setup/create-tap-pool.sh` created.
-- **A plain `exec` returns 504:** the command ran past `exec_timeout_secs` (default 600). The process keeps running in the guest; raise the setting or use streamed exec.
-- **Create works but `exec` or file calls time out:** the guest agent is not in the configured rootfs. `sudo -E scripts/preflight-check.sh --root-checks` confirms.
-- **No outbound network from a sandbox:** check `ip route show default` picked the right uplink and that `systemctl status sandkiln-dnsmasq` is active. DNS and raw IP are separate failure modes.
-- **`preflight-check.sh --root-checks` reports missing binaries you installed:** plain `sudo` resets `$HOME`. Use `sudo -E`.
+Symptoms and fixes (`/dev/kvm` permissions, "Operation not permitted", missing tap devices, `exec` timeouts, no outbound network, and more) are on [Troubleshooting](/self-hosting/troubleshooting).

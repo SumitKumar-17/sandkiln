@@ -3,8 +3,8 @@ has the exact same name, arguments, and return shape, just `async def`
 and awaited with `_http_async.request` instead of `Sandbox`'s blocking
 `_http.request`. For a caller already running an event loop (an async
 web framework, an async agent runner), this avoids needing a thread
-pool just to use this SDK without blocking it — see `ROADMAP.md`'s
-Client SDKs section for the gap this closes.
+pool just to use this SDK without blocking it — see
+`docs/design-notes/sdks-and-cli.md` for the gap this closes.
 
 Deliberately a separate class, not one class with both sync and async
 methods: the two share no state and mixing them on one class invites

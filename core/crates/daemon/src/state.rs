@@ -68,6 +68,8 @@ pub struct AppState {
     /// by image id, refcounted, since multiple boots can share one image.
     pending_image_boots: Mutex<HashMap<String, u32>>,
     pub metrics: Metrics,
+    /// Daemon start, for `/status` uptime.
+    pub started_at: std::time::Instant,
     /// Reused across every `/preview` request (not built per-request) so
     /// repeat hits on one dev server reuse `hyper-util`'s connection pool.
     pub preview_client: PreviewClient,
@@ -123,6 +125,7 @@ impl AppState {
             name_locks: Mutex::new(HashMap::new()),
             pending_image_boots: Mutex::new(HashMap::new()),
             metrics: Metrics::new(),
+            started_at: std::time::Instant::now(),
             preview_client: build_preview_client(),
             history,
             pools: Mutex::new(HashMap::new()),

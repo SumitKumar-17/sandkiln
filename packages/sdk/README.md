@@ -112,7 +112,7 @@ separate namespaces for persistent drives and pre-warmed snapshot pools.
   `options.mountPath` via `rclone mount`; ordinary `readFile()`/
   `writeFile()` calls against that path then read/write through to the
   bucket. Needs the optional FUSE-capable rootfs setup described in
-  `SELF_HOSTING.md`.
+  `docs-site/self-hosting/manual-setup.mdx`.
 - `sandbox.listMounts()` — lists every remote-storage mount currently
   active in the sandbox.
 - `sandbox.unmount(mountId)` — tears down one mount.
@@ -132,7 +132,7 @@ separate namespaces for persistent drives and pre-warmed snapshot pools.
   snapshot **without** consuming it, so it can be forked or resumed again
   later. Only one live fork of a given snapshot may run at a time — a
   second concurrent `fork()` rejects with a 409 until the first is
-  stopped; see `ROADMAP.md`'s "Persistence and snapshotting" section for
+  stopped; see `docs/design-notes/snapshots.md` for
   why.
 - `Sandbox.listSnapshots(options?)` — lists snapshots.
   `options.sourceSandboxId` narrows this to the (at most one) snapshot

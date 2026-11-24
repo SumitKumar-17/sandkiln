@@ -107,7 +107,7 @@ skipping the test.
 
 - `cargo test --workspace` (from `core/`) — pure logic, no KVM needed.
 - `scripts/integration-test.sh [base-url]` — full daemon API against a
-  real `sandkilnd`, 24 topic files under `scripts/integration-tests/`,
+  real `sandkilnd`, 28 topic files under `scripts/integration-tests/`,
   run concurrently by default. A topic must compare exact id sets, never
   a global count (`18-pool.sh` is the pattern) — concurrent topics make
   global counts flaky. Add a case here for every new HTTP-facing feature.
@@ -154,7 +154,7 @@ sessions, snapshots, resume/suspend/fork, drives, networking, images.
 
 Evidence-driven only: baseline, measure the whole path, find the real
 bottleneck, fix it, re-measure. Record before/after numbers in
-`ROADMAP.md`'s Benchmarking section (directional, one shared dev box —
+`docs/benchmarks.md` (directional, one shared dev box —
 not authoritative).
 
 ## 11. Security

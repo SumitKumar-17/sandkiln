@@ -2,7 +2,7 @@
 # Bakes multi-agent isolation into a rootfs image: N sequential agent user
 # accounts, each with a private home directory, plus a shared group and
 # shared directory for deliberate cross-agent file sharing. See
-# "Multi-agent isolation" in ROADMAP.md.
+# docs/design-notes/security-hardening.md.
 #
 # Called automatically by build-universal-image.sh, but also standalone
 # against any already-built ext4 rootfs image (the same test image fetched

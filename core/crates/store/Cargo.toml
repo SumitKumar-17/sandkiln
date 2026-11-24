@@ -9,7 +9,7 @@ repository.workspace = true
 # "bundled" compiles sqlite from source as part of this crate rather than
 # needing libsqlite3-dev on the host -- consistent with this project's
 # "clone and build" self-hosting story (see root AGENTS.md), no new
-# system package to document in SELF_HOSTING.md.
+# system package to document in docs-site/self-hosting/manual-setup.mdx.
 rusqlite = { version = "0.43", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

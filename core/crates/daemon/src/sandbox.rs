@@ -54,8 +54,8 @@ pub struct Sandbox {
     /// snapshots at claim time (`AppState::name_holder`/`lock_name`).
     /// Carried onto the `Snapshot` a stop produces and back onto the next
     /// `Sandbox` on resume/fork, so the name always resolves to whichever
-    /// record currently represents it — see `ROADMAP.md`'s "Sandbox vs.
-    /// session" note.
+    /// record currently represents it — see `docs/design-notes/pools-and-lineage.md`'s
+    /// "Sandbox vs. session" note.
     pub name: Option<String>,
     /// Open `GET /sandboxes/:id/pty` sessions, checked/incremented under
     /// `AppState::sandboxes`'s lock (`routes::pty::MAX_PTY_SESSIONS_PER_SANDBOX`),
@@ -84,7 +84,7 @@ pub struct Sandbox {
     /// doc comment) on purpose: lineage needs `Some` on both resume and
     /// fork, the opposite shape — reusing that field first made every
     /// resumed sandbox's lineage a dead end, caught live
-    /// (`ROADMAP.md`'s "Snapshot lineage").
+    /// (`docs/design-notes/pools-and-lineage.md`).
     pub parent_snapshot_id: Option<String>,
     /// Active remote-storage mounts (`crate::http::routes::mounts`). Never
     /// re-applied on resume/fork/restore — a mount is a live guest FUSE
