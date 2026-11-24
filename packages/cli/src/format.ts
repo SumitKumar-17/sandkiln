@@ -117,6 +117,24 @@ export function parseNonNegativeInt(flag: string): (value: string) => number {
   };
 }
 
+/** What `kiln sandbox exec` exits with when `--timeout` killed the command,
+ * the same code coreutils `timeout` uses. */
+export const EXEC_TIMEOUT_EXIT_CODE = 124;
+
+/** What the CLI prints and exits with for a command the sandbox killed at its
+ * `--timeout`: the partial output as the command produced it, then a note. */
+export function execTimeoutReport(error: { stdout: string; stderr: string; timeoutSeconds: number }): {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+} {
+  return {
+    stdout: error.stdout,
+    stderr: `${error.stderr}kiln: command timed out after ${error.timeoutSeconds}s and was killed\n`,
+    exitCode: EXEC_TIMEOUT_EXIT_CODE,
+  };
+}
+
 function formatSandboxLine(info: SandboxInfo): string {
   const tags = Object.entries(info.tags)
     .map(([k, v]) => `${k}=${v}`)
