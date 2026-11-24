@@ -4,7 +4,7 @@ from .apool import AsyncPool
 from .asandbox import AsyncSandbox
 from .atunnel import AsyncTunnelHandle
 from .drive import Drive, DriveHolder, DriveInfo
-from .errors import SandkilnApiError
+from .errors import SandkilnApiError, SandkilnExecTimeoutError
 from .image import Image, ImageInfo
 from .pool import Pool, PoolInfo
 from .sandbox import DirEntry, DriveAttachment, ExecResult, MountInfo, Sandbox, SandboxInfo, SnapshotInfo, StopResult
@@ -36,4 +36,5 @@ __all__ = [
     "DaemonStatus",
     "get_status",
     "SandkilnApiError",
+    "SandkilnExecTimeoutError",
 ]

@@ -28,7 +28,8 @@ def request(
         with urllib.request.urlopen(req) as response:
             return _parse_body(response)
     except urllib.error.HTTPError as error:
-        raise SandkilnApiError(error.code, _extract_error_message(error)) from None
+        message, parsed = _read_error(error)
+        raise SandkilnApiError(error.code, message, parsed) from None
     except urllib.error.URLError as error:
         raise SandkilnApiError(0, f"could not reach {base_url}: {error.reason}") from None
 
@@ -40,11 +41,11 @@ def _parse_body(response: Any) -> Any:
     return json.loads(raw)
 
 
-def _extract_error_message(error: urllib.error.HTTPError) -> str:
+def _read_error(error: urllib.error.HTTPError) -> tuple[str, Any]:
     try:
         body = json.loads(error.read())
         if isinstance(body, dict) and isinstance(body.get("error"), str):
-            return body["error"]
+            return body["error"], body
     except (json.JSONDecodeError, UnicodeDecodeError):
         pass
-    return error.reason or f"request failed with status {error.code}"
+    return error.reason or f"request failed with status {error.code}", None
