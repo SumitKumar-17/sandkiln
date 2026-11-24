@@ -168,13 +168,13 @@ fn spawn_jailed_inner(
     // The supervisor (jailer's exec file) runs this as Firecracker, see
     // `crates/jail-supervisor`.
     jailer::copy_binary_into_jail(&config.firecracker_bin, chroot_root, "firecracker")?;
-    let kernel = jailer::link_resource_into_jail(&config.kernel_path, chroot_root, "kernel", false, jail.gid)?;
-    let rootfs = jailer::link_resource_into_jail(&config.rootfs_path, chroot_root, "rootfs.ext4", true, jail.gid)?;
+    let kernel = jailer::link_resource_into_jail(&config.kernel_path, chroot_root, "kernel", false, jail.gid, true)?;
+    let rootfs = jailer::link_resource_into_jail(&config.rootfs_path, chroot_root, "rootfs.ext4", true, jail.gid, true)?;
 
     let mut drive_paths = Vec::with_capacity(config.extra_drives.len());
     for drive in &config.extra_drives {
         let jail_relative_name = format!("{}.ext4", drive.drive_id);
-        let linked = jailer::link_resource_into_jail(&drive.path_on_host, chroot_root, &jail_relative_name, !drive.read_only, jail.gid)?;
+        let linked = jailer::link_resource_into_jail(&drive.path_on_host, chroot_root, &jail_relative_name, !drive.read_only, jail.gid, drive.read_only)?;
         drive_paths.push(linked.in_jail_path);
     }
 

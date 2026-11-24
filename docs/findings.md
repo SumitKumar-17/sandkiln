@@ -327,7 +327,7 @@ no privilege. Verified on the dev box: a jailed create in about 70ms, exec and
 networking work, two concurrent sandboxes, stop removes the jail and cgroup,
 a failed boot (an invalid kernel) leaves no process, jail, cgroup, tap or
 rootfs, `kill -9` of the daemon ends the jailed Firecrackers, and the topic
-`10-jailer` passes. A side effect found on the way: the writable rootfs was
+`10-jailer` passes. Running the whole suite with the jailer on found one more bug: a persistent drive on a different filesystem than the jail base was silently copied into the jail, so writes were lost when the jail was removed; that now fails the create with an explanation. A side effect found on the way: the writable rootfs was
 made world-writable for the jailed uid; it now gets the jail group instead.
 
 ### 33. A guest that shuts itself down left its sandbox listed. FIXED

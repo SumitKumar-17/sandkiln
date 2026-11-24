@@ -156,6 +156,7 @@ pub fn prepare_chroot_dir(chroot_root: &Path) -> io::Result<()> {
 
 /// One resource (kernel image, rootfs, a drive, or a snapshot's
 /// memory/state file) placed inside a VM's chroot.
+#[derive(Debug)]
 pub struct JailedPath {
     /// Where the linked/copied file lives on the host, inside the
     /// chroot — removed automatically when the instance directory is
@@ -174,6 +175,12 @@ pub struct JailedPath {
 /// rootfs specifically), falls back to a copy across filesystem
 /// boundaries (`EXDEV`), same as jailer's own exec-file handling.
 ///
+/// Across filesystems a hard link is impossible. `allow_copy` says whether a
+/// copy is an acceptable substitute: it is for a disposable or read-only
+/// resource, but never for a persistent drive Firecracker writes to, where
+/// the writes would land in a copy that is deleted with the jail and the
+/// drive's data would be silently lost; then this fails instead.
+///
 /// A read-only resource is made world-readable. A `writable` one (the
 /// rootfs, a drive) gets the jail group (`jail_gid`) and group read-write,
 /// never world-writable and never `chown`ed to the per-VM uid: a hard link
@@ -186,6 +193,7 @@ pub fn link_resource_into_jail(
     jail_relative_name: &str,
     writable: bool,
     jail_gid: u32,
+    allow_copy: bool,
 ) -> io::Result<JailedPath> {
     prepare_chroot_dir(chroot_root)?;
     let host_dest = chroot_root.join(jail_relative_name);
@@ -193,8 +201,15 @@ pub fn link_resource_into_jail(
 
     match fs::hard_link(host_source, &host_dest) {
         Ok(()) => {}
-        Err(e) if e.raw_os_error() == Some(EXDEV) => {
+        Err(e) if e.raw_os_error() == Some(EXDEV) && allow_copy => {
             fs::copy(host_source, &host_dest)?;
+        }
+        Err(e) if e.raw_os_error() == Some(EXDEV) => {
+            return Err(io::Error::other(format!(
+                "{} is on a different filesystem than the jail directory, and a copy would lose everything written to it; \
+                 put the jail base directory (jailer_chroot_base_dir) and the drives directory on the same filesystem",
+                host_source.display()
+            )));
         }
         Err(e) => return Err(e),
     }
@@ -577,7 +592,7 @@ mod tests {
         fs::write(&source, b"pretend kernel bytes").unwrap();
         let chroot_root = tmp.path.join("firecracker").join("sandkiln-2").join("root");
 
-        let linked = link_resource_into_jail(&source, &chroot_root, "kernel", false, own_gid(&source)).unwrap();
+        let linked = link_resource_into_jail(&source, &chroot_root, "kernel", false, own_gid(&source), true).unwrap();
 
         assert_eq!(linked.in_jail_path, PathBuf::from("/kernel"));
         assert_eq!(linked.host_path, chroot_root.join("kernel"));
@@ -595,7 +610,7 @@ mod tests {
         fs::write(&source, b"ro").unwrap();
         let chroot_root = tmp.path.join("firecracker").join("sandkiln-3").join("root");
 
-        let linked = link_resource_into_jail(&source, &chroot_root, "rootfs.ext4", false, own_gid(&source)).unwrap();
+        let linked = link_resource_into_jail(&source, &chroot_root, "rootfs.ext4", false, own_gid(&source), true).unwrap();
         let mode = fs::metadata(&linked.host_path).unwrap().permissions().mode();
         assert_eq!(mode & 0o007, 0o004, "read-only resource must be world-readable, not world-writable");
     }
@@ -612,10 +627,36 @@ mod tests {
         fs::write(&source, b"rw").unwrap();
         let chroot_root = tmp.path.join("firecracker").join("sandkiln-4").join("root");
 
-        let linked = link_resource_into_jail(&source, &chroot_root, "rootfs.ext4", true, own_gid(&source)).unwrap();
+        let linked = link_resource_into_jail(&source, &chroot_root, "rootfs.ext4", true, own_gid(&source), true).unwrap();
         let mode = fs::metadata(&linked.host_path).unwrap().permissions().mode();
         assert_eq!(mode & 0o060, 0o060, "writable resource (the rootfs) must be group read+write");
         assert_eq!(mode & 0o002, 0, "and never world-writable");
+    }
+
+    /// A temp directory on a different filesystem than `std::env::temp_dir()`,
+    /// or `None` when the host has only one (then the cross-device case
+    /// cannot be built).
+    fn other_filesystem_dir() -> Option<PathBuf> {
+        let shm = PathBuf::from("/dev/shm");
+        let here = fs::metadata(std::env::temp_dir()).ok()?.dev();
+        (shm.is_dir() && fs::metadata(&shm).ok()?.dev() != here).then_some(shm)
+    }
+
+    #[test]
+    fn across_filesystems_a_copy_is_made_when_allowed_and_refused_when_not() {
+        let Some(other) = other_filesystem_dir() else { return };
+        let source = other.join(format!("sandkiln-exdev-test-{}", std::process::id()));
+        fs::write(&source, b"drive bytes").unwrap();
+        let tmp = TempDir::new("exdev");
+        let root = tmp.path.join("firecracker").join("sandkiln-8").join("root");
+
+        let copied = link_resource_into_jail(&source, &root, "d.ext4", false, own_gid(&source), true).unwrap();
+        assert_ne!(fs::metadata(&source).unwrap().ino(), fs::metadata(&copied.host_path).unwrap().ino());
+
+        let err = link_resource_into_jail(&source, &root, "d2.ext4", true, own_gid(&source), false).unwrap_err();
+        let _ = fs::remove_file(&source);
+        assert!(err.to_string().contains("different filesystem") && err.to_string().contains("jailer_chroot_base_dir"), "{err}");
+        assert!(!root.join("d2.ext4").exists(), "no partial copy may be left behind");
     }
 
     #[test]
@@ -629,7 +670,7 @@ mod tests {
         let original_mode = fs::metadata(&source).unwrap().permissions().mode();
 
         let chroot_root = tmp.path.join("firecracker").join("sandkiln-5").join("root");
-        link_resource_into_jail(&source, &chroot_root, "kernel", false, own_gid(&source)).unwrap();
+        link_resource_into_jail(&source, &chroot_root, "kernel", false, own_gid(&source), true).unwrap();
 
         // Mode bits are only ever widened (adding other-read), never replaced.
         let after_mode = fs::metadata(&source).unwrap().permissions().mode();

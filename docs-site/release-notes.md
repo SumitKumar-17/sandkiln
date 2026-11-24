@@ -31,6 +31,9 @@ Finding 32 is fixed: a jailed sandbox can be created, used and stopped by the un
 - A jailed sandbox's writable rootfs and drives get the jail group with group read-write instead of being world-writable. The pre-existing `jailer_uid_gid_base` now only sizes the uid range; the gid is `jailer_gid`.
 - `scripts/setup.sh` builds and installs the supervisor.
 
+### Fixed
+- A writable persistent drive on a different filesystem than the jail base directory was silently copied into the jail, losing its writes when the jail was removed. The create now fails with an explanation.
+
 ## Jailer: bounded failure and startup self-check — 2026-11-24
 
 Finding 32 (a jailed create hangs) is mitigated, not fixed: the jailer path still cannot create a sandbox, but it now fails fast and says why.
