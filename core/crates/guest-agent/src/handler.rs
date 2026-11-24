@@ -220,12 +220,21 @@ mod tests {
     use std::collections::HashMap;
     use std::os::unix::fs::PermissionsExt;
 
+    /// Runs `command` through the handler. A file a test wrote moments ago can fail
+    /// to exec with ETXTBSY ("Text file busy") when a concurrent test thread forks
+    /// while this one still holds the write handle (the child keeps a copy until it
+    /// execs); the kernel clears it within milliseconds and the agent correctly
+    /// reports it as an error, not 126, so the retry lives in the test helper only.
     fn exec_result(command: &str, timeout_secs: Option<u64>) -> (String, String, i32) {
-        let req = Request::Exec { command: command.to_string(), args: vec![], env: HashMap::new(), timeout_secs };
-        match handle(req) {
-            Response::Exec { stdout, stderr, exit_code } => (stdout, stderr, exit_code),
-            other => panic!("expected Exec, got {other:?}"),
+        for _ in 0..50 {
+            let req = Request::Exec { command: command.to_string(), args: vec![], env: HashMap::new(), timeout_secs };
+            match handle(req) {
+                Response::Exec { stdout, stderr, exit_code } => return (stdout, stderr, exit_code),
+                Response::Error { message } if message.contains("Text file busy") => std::thread::sleep(std::time::Duration::from_millis(20)),
+                other => panic!("expected Exec, got {other:?}"),
+            }
         }
+        panic!("{command} stayed busy for a second")
     }
 
     fn scratch(name: &str) -> std::path::PathBuf {
