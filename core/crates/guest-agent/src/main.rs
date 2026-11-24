@@ -1,4 +1,5 @@
 mod exec_stream;
+mod fixup;
 mod handler;
 mod pty;
 mod tunnel;

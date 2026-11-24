@@ -83,6 +83,17 @@ pub enum Request {
     StopTunnel {
         tunnel_id: String,
     },
+    /// Sent by the daemon after every resume, claim and fork: a restored
+    /// guest wakes with the entropy pool and wall clock it had when the
+    /// snapshot was taken, so clones of one snapshot would otherwise share
+    /// random streams and see a stale clock (the 5.10 guest kernel has no
+    /// automatic reseed after restore). The agent mixes `entropy_base64`
+    /// into the kernel pool, forces a reseed and sets the wall clock.
+    ResumeFixup {
+        unix_secs: u64,
+        unix_nanos: u32,
+        entropy_base64: String,
+    },
 }
 
 /// One entry from a `ListDir` response — enough metadata to distinguish
@@ -197,6 +208,13 @@ mod tests {
         let req = Request::Exec { command: "echo".to_string(), args: vec!["hi".to_string()], env: HashMap::new() };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(json, r#"{"cmd":"exec","command":"echo","args":["hi"],"env":{}}"#);
+    }
+
+    #[test]
+    fn resume_fixup_request_wire_shape() {
+        let req = Request::ResumeFixup { unix_secs: 1, unix_nanos: 2, entropy_base64: "AAEC".to_string() };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"cmd":"resume_fixup","unix_secs":1,"unix_nanos":2,"entropy_base64":"AAEC"}"#);
     }
 
     #[test]

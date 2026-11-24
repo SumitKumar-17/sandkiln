@@ -35,6 +35,25 @@ impl Vm {
     /// Pauses a running microVM. Firecracker requires this before
     /// `/snapshot/create` will accept a request — an un-paused VM's
     /// memory and device state are a moving target.
+    /// Gives a just-restored guest fresh per-clone state: host entropy and the
+    /// host's wall clock (see `Request::ResumeFixup`). Without it every clone
+    /// of one snapshot shares a random stream and a stale clock.
+    pub fn apply_resume_fixup(&self) -> io::Result<()> {
+        let mut entropy = [0u8; 32];
+        std::io::Read::read_exact(&mut std::fs::File::open("/dev/urandom")?, &mut entropy)?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(io::Error::other)?;
+        let request = sandkiln_protocol::Request::ResumeFixup {
+            unix_secs: now.as_secs(),
+            unix_nanos: now.subsec_nanos(),
+            entropy_base64: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, entropy),
+        };
+        match self.call(&request)? {
+            sandkiln_protocol::Response::Ok => Ok(()),
+            sandkiln_protocol::Response::Error { message } => Err(io::Error::other(message)),
+            other => Err(io::Error::other(format!("unexpected fixup response: {other:?}"))),
+        }
+    }
+
     pub fn pause(&self) -> io::Result<()> {
         let age = self.started_at.elapsed();
         if age < super::MIN_GUEST_AGE_BEFORE_PAUSE {

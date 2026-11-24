@@ -212,6 +212,20 @@ only deleted the socket file. After a few hundred VMs the daemon hit its
 `cleanup` now flags the loop and wakes it; a unit test proves the thread exits.
 The daemon also raises its open-file soft limit to the hard limit at startup.
 
+### 28. Clones of one snapshot shared entropy and a stale clock. FIXED
+A restored guest wakes with the random pool and wall clock from snapshot time,
+and the 5.10 guest kernel has no automatic reseed after restore (found by the
+latency research, [latency-floor](design-notes/latency-floor.md)). Two forks
+could generate the same random stream, and a sandbox resumed hours later saw
+old time. The daemon now sends `Request::ResumeFixup` after every resume,
+claim and fork: the guest agent adds 32 bytes of host entropy
+(`RNDADDENTROPY`), forces a reseed (`RNDRESEEDCRNG`) and sets the clock
+(`clock_settime`). Best effort: an older agent that does not know the request
+only logs a warning, so images must be re-injected with the new agent. Topic
+`28-resume-fixup` verifies the clock and the random bytes. The pre-fix
+behaviour was not captured, so the topic is evidence for the fix working, not a
+recorded before/after.
+
 ### 27. Pool claim bookkeeping under full-suite load. OPEN
 One of two full runs after the finding 20 fix failed two `18-pool` checks
 (delete did not find its own warm snapshot; `claimed` read 1 with both

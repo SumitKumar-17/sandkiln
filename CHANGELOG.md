@@ -62,6 +62,7 @@ loosely follows [Keep a Changelog](https://keepachangelog.com/).
 - `kiln doctor`: end-to-end daemon check (reachable, host warnings, then a real create, exec and stop), timed per step; exits 0, 1 or 2.
 
 ### Fixed
+- Clones of one snapshot shared a random stream and a resumed clock was stale. The daemon now sends the guest agent a `ResumeFixup` (host entropy, forced reseed, wall clock) after every resume, claim and fork. Re-inject the guest agent into existing images (`scripts/dev.sh inject-agent`).
 - A resumed guest could die about 0.5s after resume when it had been paused
   right after boot (the flaky pool claims, finding 20). `Vm::pause` now lets a
   fresh guest run for 500ms first; 0 of 180 early-snapshot resumes failed

@@ -293,12 +293,18 @@ pub(crate) async fn resume_vm(
 ) -> std::io::Result<Vm> {
     let state = state.clone();
     spawn_blocking_in_current_span("resume task panicked", move || {
-        Vm::resume(&ResumeConfig {
+        let vm = Vm::resume(&ResumeConfig {
             firecracker_bin: state.config.firecracker_bin.clone(),
             snapshot_path,
             mem_file_path,
             rootfs_override,
-        })
+        })?;
+        // Best effort: an older guest agent does not know the request, and a
+        // resume that otherwise worked is not worth failing over it.
+        if let Err(e) = vm.apply_resume_fixup() {
+            tracing::warn!(error = %e, "post-resume entropy and clock fixup failed");
+        }
+        Ok(vm)
     })
     .await
 }

@@ -27,6 +27,7 @@ ships inside every rootfs image.
   a thread per session (`pty::handle_connection`/
   `exec_stream::handle_connection`) so a long session never blocks the
   next `accept()`.
+- **`fixup.rs`** — `Request::ResumeFixup`: mixes host entropy into the kernel pool (`RNDADDENTROPY`), forces a reseed and sets the wall clock, so clones of one snapshot differ.
 - **`handler.rs`** — each `Request` variant, as thin wrappers over
   `std::process::Command`/`std::fs` plus one raw `libc::chown` (std has
   no equivalent; `libc` over `nix` for one syscall). No path validation
