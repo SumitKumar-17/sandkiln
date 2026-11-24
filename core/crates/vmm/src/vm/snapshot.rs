@@ -175,7 +175,7 @@ impl Vm {
         if let Err(e) = crate::tunnel::listen(&vsock_socket) {
             tracing::warn!(vm_id = id, error = %e, "failed to start tunnel listener on resume; local tunnels unavailable on this sandbox");
         }
-        Ok(Self { id, child, api_socket, vsock_socket, jail_instance_dir: None, started_at: Instant::now() })
+        Ok(Self { id, child, api_socket, vsock_socket, jail: None, started_at: Instant::now() })
     }
 }
 

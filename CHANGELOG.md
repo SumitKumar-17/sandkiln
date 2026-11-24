@@ -12,6 +12,25 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Jailer works — 2026-11-24
+
+Finding 32 is fixed: a jailed sandbox can be created, used and stopped by the unprivileged daemon, which gains no privilege. Design and rejected alternatives: `docs/design-notes/security-hardening.md`.
+
+### Added
+- `sandkiln-firecracker-supervisor` (`core/crates/jail-supervisor`, static musl): jailer's exec file. It opens the jail to the shared jail group, runs Firecracker, and kills it when the daemon closes a pipe, so a jailed VM cannot outlive a crashed daemon.
+- `jailer_gid` (default 600000) and `jailer_supervisor_bin` settings.
+- `scripts/host-setup/prepare-jailer.sh` (jail group, setuid jailer, parent cgroup, chroot base) and an optional group argument to `create-tap-pool.sh` (group-owned taps, which a jailed Firecracker may attach to).
+- The daemon removes each VM's cgroup after it exits and sweeps jails left by a previous process at startup.
+- Integration topic `10-jailer` also runs two concurrent jailed sandboxes and checks they are separate.
+
+### Changed
+- The jailer self-check now runs the supervisor, and also checks the daemon can remove the jail and the cgroup.
+- A jailed sandbox's writable rootfs and drives get the jail group with group read-write instead of being world-writable. The pre-existing `jailer_uid_gid_base` now only sizes the uid range; the gid is `jailer_gid`.
+- `scripts/setup.sh` builds and installs the supervisor.
+
+### Fixed
+- A writable persistent drive on a different filesystem than the jail base directory was silently copied into the jail, losing its writes when the jail was removed. The create now fails with an explanation.
+
 ## Jailer: bounded failure and startup self-check — 2026-11-24
 
 Finding 32 (a jailed create hangs) is mitigated, not fixed: the jailer path still cannot create a sandbox, but it now fails fast and says why.

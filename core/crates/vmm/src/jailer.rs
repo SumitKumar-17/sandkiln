@@ -13,6 +13,18 @@
 //! `jailer` itself setuid-root, a small purpose-built binary, not the
 //! whole daemon.
 //!
+//! **Who owns what, and how the daemon reaches the jail.** Jailer runs the
+//! `--exec-file` as the per-VM uid (distinct per concurrent VM) and the shared
+//! jail group (`JailLaunch::gid`), which the daemon's user belongs to. The
+//! exec file is not Firecracker but `sandkiln-firecracker-supervisor`
+//! (`crates/jail-supervisor`): jailer makes the chroot root mode 0700, and
+//! the supervisor, which owns it, widens it to the jail group before running
+//! Firecracker, so the daemon can reach the API and vsock sockets and remove
+//! the jail afterwards. The supervisor also ends Firecracker when the pipe
+//! the daemon holds to its stdin closes, because the daemon may not signal a
+//! process of another uid. See `docs/design-notes/security-hardening.md` and
+//! finding 32 in `docs/findings.md` for the options weighed.
+//!
 //! **What crosses the chroot boundary**: once jailer calls `chroot()`,
 //! firecracker can't see any host path outside its jail root. Every
 //! referenced file (kernel, rootfs, drives) must exist inside the jail
@@ -38,14 +50,21 @@ const EXDEV: i32 = 18;
 
 /// One VM's fully-resolved jail launch parameters — everything
 /// `vm::boot_inner`/`vm::resume` need to invoke jailer for one microVM.
-/// `uid`/`gid` must come from a [`JailerIdPool`] (or an equivalent
-/// allocation the caller guarantees is unique among concurrently running
-/// jailed VMs); nothing here re-validates that.
+/// `uid` must come from a [`JailerIdPool`] (or an equivalent allocation the
+/// caller guarantees is unique among concurrently running jailed VMs);
+/// nothing here re-validates that.
 #[derive(Clone)]
 pub struct JailLaunch {
     pub jailer_bin: PathBuf,
+    /// Runs in the chroot in place of `firecracker`; see the module docs.
+    /// Its file name must contain "firecracker" (jailer insists).
+    pub supervisor_bin: PathBuf,
     pub chroot_base_dir: PathBuf,
+    /// Per-VM: a distinct uid for every concurrently running jailed VM.
     pub uid: u32,
+    /// Shared by every jailed VM, and the daemon's user must be a member.
+    /// It is what gives the daemon access to the jail and to the tap pool
+    /// (`scripts/host-setup/prepare-jailer.sh`).
     pub gid: u32,
 }
 
@@ -59,9 +78,9 @@ pub struct JailLaunch {
 ///
 /// Configure the range outside normal system/user uids (600000+,
 /// mirroring `/etc/subuid` convention) so a jailed uid never collides
-/// with a real host account. One number serves as both uid and gid —
-/// simpler to reason about, no reason for a VM's group to be shared with
-/// anything else.
+/// with a real host account. Only the uid is per VM; the gid is one shared
+/// jail group (`JailLaunch::gid`), so the isolation between two sandboxes
+/// rests on distinct uids and distinct chroots, not on distinct groups.
 pub struct JailerIdPool {
     free: Mutex<VecDeque<u32>>,
     quarantined: Mutex<Vec<u32>>,
@@ -137,6 +156,7 @@ pub fn prepare_chroot_dir(chroot_root: &Path) -> io::Result<()> {
 
 /// One resource (kernel image, rootfs, a drive, or a snapshot's
 /// memory/state file) placed inside a VM's chroot.
+#[derive(Debug)]
 pub struct JailedPath {
     /// Where the linked/copied file lives on the host, inside the
     /// chroot — removed automatically when the instance directory is
@@ -155,16 +175,25 @@ pub struct JailedPath {
 /// rootfs specifically), falls back to a copy across filesystem
 /// boundaries (`EXDEV`), same as jailer's own exec-file handling.
 ///
-/// Made world-readable (world-writable too for `writable` resources —
-/// the rootfs) rather than `chown`ed to the jail's uid/gid: a hard link
-/// shares one inode with the source, so `chown` would silently change the
-/// *source* file's ownership too (a shared kernel image, another
-/// sandbox's drive). Permission bits scoped to "other" avoid that.
+/// Across filesystems a hard link is impossible. `allow_copy` says whether a
+/// copy is an acceptable substitute: it is for a disposable or read-only
+/// resource, but never for a persistent drive Firecracker writes to, where
+/// the writes would land in a copy that is deleted with the jail and the
+/// drive's data would be silently lost; then this fails instead.
+///
+/// A read-only resource is made world-readable. A `writable` one (the
+/// rootfs, a drive) gets the jail group (`jail_gid`) and group read-write,
+/// never world-writable and never `chown`ed to the per-VM uid: a hard link
+/// shares one inode with the source, so changing its owner would change the
+/// source's too. The group change needs the daemon's user to be a member of
+/// the jail group, which it must be anyway to reach the jail.
 pub fn link_resource_into_jail(
     host_source: &Path,
     chroot_root: &Path,
     jail_relative_name: &str,
     writable: bool,
+    jail_gid: u32,
+    allow_copy: bool,
 ) -> io::Result<JailedPath> {
     prepare_chroot_dir(chroot_root)?;
     let host_dest = chroot_root.join(jail_relative_name);
@@ -172,18 +201,102 @@ pub fn link_resource_into_jail(
 
     match fs::hard_link(host_source, &host_dest) {
         Ok(()) => {}
-        Err(e) if e.raw_os_error() == Some(EXDEV) => {
+        Err(e) if e.raw_os_error() == Some(EXDEV) && allow_copy => {
             fs::copy(host_source, &host_dest)?;
+        }
+        Err(e) if e.raw_os_error() == Some(EXDEV) => {
+            return Err(io::Error::other(format!(
+                "{} is on a different filesystem than the jail directory, and a copy would lose everything written to it; \
+                 put the jail base directory (jailer_chroot_base_dir) and the drives directory on the same filesystem",
+                host_source.display()
+            )));
         }
         Err(e) => return Err(e),
     }
 
-    let other_bits = if writable { 0o006 } else { 0o004 };
     let mut perms = fs::metadata(&host_dest)?.permissions();
-    perms.set_mode(perms.mode() | other_bits);
+    if writable {
+        std::os::unix::fs::chown(&host_dest, None, Some(jail_gid))?;
+        perms.set_mode(perms.mode() | 0o060);
+    } else {
+        perms.set_mode(perms.mode() | 0o004);
+    }
     fs::set_permissions(&host_dest, perms)?;
 
     Ok(JailedPath { host_path: host_dest, in_jail_path: PathBuf::from("/").join(jail_relative_name) })
+}
+
+/// Puts a private copy of an executable in the jail, readable and
+/// executable by every uid. A copy, not a hard link: two jails sharing one
+/// inode would share the binary's page cache, which is a channel between
+/// sandboxes that the per-VM uid and chroot are there to remove (jailer
+/// copies its own exec file for the same reason).
+pub fn copy_binary_into_jail(host_source: &Path, chroot_root: &Path, jail_relative_name: &str) -> io::Result<JailedPath> {
+    prepare_chroot_dir(chroot_root)?;
+    let host_dest = chroot_root.join(jail_relative_name);
+    let _ = fs::remove_file(&host_dest);
+    fs::copy(host_source, &host_dest)?;
+    fs::set_permissions(&host_dest, fs::Permissions::from_mode(0o755))?;
+    Ok(JailedPath { host_path: host_dest, in_jail_path: PathBuf::from("/").join(jail_relative_name) })
+}
+
+/// Where jailer's cgroup v2 hierarchy lives: `<root>/<exec file name>/<id>`.
+const CGROUP_ROOT: &str = "/sys/fs/cgroup";
+
+/// Where jailer puts one VM's cgroup. Jailer never removes it, so every
+/// jailed boot would otherwise leak one for the life of the host.
+pub fn cgroup_dir(supervisor_bin: &Path, jail_instance_id: &str) -> PathBuf {
+    let exec_name = supervisor_bin.file_name().expect("supervisor_bin must have a file name");
+    Path::new(CGROUP_ROOT).join(exec_name).join(jail_instance_id)
+}
+
+/// Removes a finished VM's cgroup. Works for the unprivileged daemon only
+/// when it owns the parent cgroup directory (`prepare-jailer.sh` arranges
+/// that): removing a cgroup needs write access to its parent, not to the
+/// cgroup itself. An already-missing cgroup is success.
+pub fn remove_cgroup(supervisor_bin: &Path, jail_instance_id: &str) -> io::Result<()> {
+    match fs::remove_dir(cgroup_dir(supervisor_bin, jail_instance_id)) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+/// What one startup sweep found.
+#[derive(Debug, Default, PartialEq)]
+pub struct SweepReport {
+    pub removed: Vec<String>,
+    /// Jails that could not be removed, with the reason.
+    pub failed: Vec<(String, String)>,
+}
+
+/// Removes jails (and their cgroups) a previous daemon process left behind.
+/// A jailed VM cannot outlive its daemon (the supervisor ends Firecracker
+/// when the daemon's pipe closes), so at startup every `sandkiln-*` jail is
+/// stale. It also matters for correctness: jail ids restart from 1 with each
+/// process, so a leftover `sandkiln-1` would collide with the next boot.
+pub fn sweep_stale_jails(chroot_base_dir: &Path, supervisor_bin: &Path) -> SweepReport {
+    sweep_stale_jails_in(chroot_base_dir, supervisor_bin, Path::new(CGROUP_ROOT))
+}
+
+fn sweep_stale_jails_in(chroot_base_dir: &Path, supervisor_bin: &Path, cgroup_root: &Path) -> SweepReport {
+    let mut report = SweepReport::default();
+    let exec_name = supervisor_bin.file_name().expect("supervisor_bin must have a file name");
+    let jails = chroot_base_dir.join(exec_name);
+    let Ok(entries) = fs::read_dir(&jails) else { return report };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("sandkiln-") {
+            continue;
+        }
+        match fs::remove_dir_all(entry.path()) {
+            Ok(()) => report.removed.push(name.clone()),
+            Err(e) => report.failed.push((name.clone(), e.to_string())),
+        }
+        // A missing cgroup is the normal case; a busy one means a process
+        // still runs in it, which is reported by the failed jail removal.
+        let _ = fs::remove_dir(cgroup_root.join(exec_name).join(&name));
+    }
+    report
 }
 
 /// cgroup v2 memory ceiling: guest RAM plus headroom for Firecracker's
@@ -229,7 +342,6 @@ pub fn cgroup_limits(mem_size_mib: u32, vcpu_count: u8) -> Vec<String> {
 pub fn build_jailer_args(
     launch: &JailLaunch,
     jail_instance_id: &str,
-    firecracker_bin: &Path,
     cgroup_limits: &[String],
     api_sock_in_jail: &Path,
 ) -> Vec<OsString> {
@@ -237,7 +349,7 @@ pub fn build_jailer_args(
         OsString::from("--id"),
         OsString::from(jail_instance_id),
         OsString::from("--exec-file"),
-        firecracker_bin.as_os_str().to_owned(),
+        launch.supervisor_bin.as_os_str().to_owned(),
         OsString::from("--uid"),
         OsString::from(launch.uid.to_string()),
         OsString::from("--gid"),
@@ -270,38 +382,48 @@ pub fn is_setuid_root(meta: &fs::Metadata) -> bool {
     meta.mode() & 0o4000 != 0 && meta.uid() == 0
 }
 
-/// Turns the result of "can the daemon list the jail root" into the
-/// startup verdict. Pure so the wording and the classification are tested
-/// without a real jailer. A permission error is the known failure of
-/// finding 32 in `docs/findings.md`; anything else is reported as is.
-fn judge_jail_access(access: io::Result<()>, root: &Path, uid: u32) -> Result<(), String> {
+/// Turns the result of "can the daemon use the jail root" into the startup
+/// verdict. Pure so the wording and the classification are tested without a
+/// real jailer. A permission error means the supervisor's widening did not
+/// reach the daemon: the finding 32 failure (`docs/findings.md`).
+fn judge_jail_access(access: io::Result<()>, root: &Path, gid: u32) -> Result<(), String> {
     match access {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Err(format!(
-            "the daemon cannot enter the jail root {} that jailer just created (owned by uid {uid}, mode 0700). \
-             The unprivileged daemon therefore could not reach a jailed Firecracker's API socket, and every jailed create would fail \
-             (finding 32 in docs/findings.md). Turn jailer_enabled off, or see docs-site/self-hosting/jailer.mdx",
+            "the daemon cannot use the jail root {} (finding 32 in docs/findings.md). Jailer makes it mode 0700 and the jail supervisor \
+             opens it to group {gid}, so the daemon's user must be a member of group {gid} in the session that started it \
+             (check `id`; a group added after login is not picked up). Run scripts/host-setup/prepare-jailer.sh, see \
+             docs-site/self-hosting/jailer.mdx. Underlying error: {e}",
             root.display()
         )),
-        Err(e) => Err(format!("cannot inspect the jail root {}: {e}", root.display())),
+        Err(e) => Err(format!("cannot use the jail root {}: {e}", root.display())),
     }
 }
 
+/// What the daemon must be able to do in a jail after the supervisor ran:
+/// enter the root, create and remove an entry in it (teardown deletes the
+/// whole tree the same way).
+fn exercise_jail(root: &Path) -> io::Result<()> {
+    fs::read_dir(root)?;
+    let probe = root.join(".sandkiln-probe");
+    fs::write(&probe, b"")?;
+    fs::remove_file(&probe)
+}
+
 /// Startup probe for `jailer_enabled`: runs the real `jailer` once against a
-/// throwaway jail that runs `firecracker --version` (a static binary, so it runs inside an empty chroot), then checks, as the daemon's own user,
-/// that it can enter the jail root afterwards. That is the exact access a
-/// real boot needs to reach Firecracker's API socket. It also proves, with
-/// one run, the other prerequisites: `jailer` is setuid root, cgroup v2 is
-/// usable, the uid is accepted, the chroot base is writable.
+/// throwaway jail whose supervisor exits immediately (`--self-check`), then
+/// checks, as the daemon's own user, that it can use the jail root, tear the
+/// jail down and remove the cgroup. Those are exactly the accesses a real
+/// boot depends on. One run also proves the other prerequisites: `jailer` is
+/// setuid root, cgroup v2 is usable, the uid is accepted, the chroot base is
+/// writable, the supervisor is a static binary that runs in an empty chroot.
 ///
-/// Why a probe and not a static check: whether the daemon can enter the
-/// jail depends on what jailer does to ownership and modes, which is only
-/// observable by running it as root, and the daemon is deliberately not.
-/// The one thing a probe cannot do is clean up after a failed run: jailer's
-/// files are owned by `probe_uid`, so on the known-bad configuration the
-/// throwaway directory stays (one fixed name, reused by the next probe) and
-/// the error names it.
-pub fn self_check(launch: &JailLaunch, firecracker_bin: &Path) -> Result<(), String> {
+/// Why a probe and not a static check: what the daemon can do in the jail
+/// depends on what jailer does to ownership and modes and on the daemon's
+/// group membership, which is only observable by running it. A failed probe
+/// can leave root-owned files only root can remove (one fixed jail name,
+/// reused by the next probe); the error names it.
+pub fn self_check(launch: &JailLaunch) -> Result<(), String> {
     let meta = fs::metadata(&launch.jailer_bin).map_err(|e| format!("cannot stat jailer binary {}: {e}", launch.jailer_bin.display()))?;
     if !is_setuid_root(&meta) {
         return Err(format!(
@@ -309,27 +431,34 @@ pub fn self_check(launch: &JailLaunch, firecracker_bin: &Path) -> Result<(), Str
             launch.jailer_bin.display()
         ));
     }
-    run_probe(launch, firecracker_bin)
+    if !launch.supervisor_bin.is_file() {
+        return Err(format!(
+            "the jail supervisor {} does not exist; build it with `cargo build --release -p sandkiln-jail-supervisor --target x86_64-unknown-linux-musl` and install it (scripts/host-setup/prepare-jailer.sh)",
+            launch.supervisor_bin.display()
+        ));
+    }
+    run_probe(launch)
 }
 
-/// The probe itself, past the setuid gate: one jailer run, then the access
-/// test. Separate from [`self_check`] so tests can drive it with a stand-in
+/// The probe itself, past the static gates: one jailer run, then the access
+/// tests. Separate from [`self_check`] so tests can drive it with a stand-in
 /// jailer that is not setuid root.
-fn run_probe(launch: &JailLaunch, firecracker_bin: &Path) -> Result<(), String> {
+fn run_probe(launch: &JailLaunch) -> Result<(), String> {
     use std::process::{Command, Stdio};
 
-    let root = chroot_root(&launch.chroot_base_dir, firecracker_bin, SELF_CHECK_INSTANCE);
+    let root = chroot_root(&launch.chroot_base_dir, &launch.supervisor_bin, SELF_CHECK_INSTANCE);
     let instance = instance_dir(&root);
     let _ = fs::remove_dir_all(&instance);
+    let _ = remove_cgroup(&launch.supervisor_bin, SELF_CHECK_INSTANCE);
     prepare_chroot_dir(&root).map_err(|e| format!("cannot create the probe jail under {}: {e}", launch.chroot_base_dir.display()))?;
 
     // Same argv as a real boot (cgroup limits included: jailer cannot move itself
-    // into the shared parent cgroup without them) up to the separator, then a
-    // no-op for Firecracker.
-    let mut args = build_jailer_args(launch, SELF_CHECK_INSTANCE, firecracker_bin, &cgroup_limits(128, 1), Path::new("/api.sock"));
+    // into the shared parent cgroup without them) up to the separator, then the
+    // supervisor's own no-op mode.
+    let mut args = build_jailer_args(launch, SELF_CHECK_INSTANCE, &cgroup_limits(128, 1), Path::new("/api.sock"));
     let separator = args.iter().position(|a| a == "--").expect("build_jailer_args always emits `--`");
     args.truncate(separator + 1);
-    args.push(OsString::from("--version"));
+    args.push(OsString::from("--self-check"));
     let mut child = Command::new(&launch.jailer_bin)
         .args(&args)
         .stdin(Stdio::null())
@@ -358,17 +487,20 @@ fn run_probe(launch: &JailLaunch, firecracker_bin: &Path) -> Result<(), String> 
         return Err(format!("the jailer probe failed ({status}): {}", stderr.trim()));
     }
 
-    let verdict = judge_jail_access(fs::read_dir(&root).map(|_| ()), &root, launch.uid);
-    match &verdict {
-        Ok(()) => {
-            let _ = fs::remove_dir_all(&instance);
-        }
-        Err(_) if fs::remove_dir_all(&instance).is_err() => {
-            return verdict.map_err(|e| format!("{e}. The probe left {} behind (root-owned files inside); remove it with sudo", instance.display()));
-        }
-        Err(_) => {}
+    let verdict = judge_jail_access(exercise_jail(&root), &root, launch.gid);
+    if verdict.is_err() {
+        return verdict.map_err(|e| match fs::remove_dir_all(&instance) {
+            Ok(()) => e,
+            Err(_) => format!("{e}. The probe left {} behind; remove it with sudo", instance.display()),
+        });
     }
-    verdict
+    fs::remove_dir_all(&instance).map_err(|e| format!("cannot remove the probe jail {}: {e}", instance.display()))?;
+    remove_cgroup(&launch.supervisor_bin, SELF_CHECK_INSTANCE).map_err(|e| {
+        format!(
+            "cannot remove the probe's cgroup {}: {e}. The daemon must own the parent cgroup directory so it can remove each VM's cgroup (scripts/host-setup/prepare-jailer.sh)",
+            cgroup_dir(&launch.supervisor_bin, SELF_CHECK_INSTANCE).display()
+        )
+    })
 }
 
 #[cfg(test)]
@@ -400,9 +532,9 @@ mod tests {
     }
 
     #[test]
-    fn chroot_root_follows_firecracker_exec_name_then_id_then_root() {
-        let root = chroot_root(Path::new("/srv/jailer"), Path::new("/usr/bin/firecracker"), "sandkiln-7");
-        assert_eq!(root, PathBuf::from("/srv/jailer/firecracker/sandkiln-7/root"));
+    fn chroot_root_follows_the_exec_file_name_then_id_then_root() {
+        let root = chroot_root(Path::new("/srv/jailer"), Path::new("/opt/sandkiln-firecracker-supervisor"), "sandkiln-7");
+        assert_eq!(root, PathBuf::from("/srv/jailer/sandkiln-firecracker-supervisor/sandkiln-7/root"));
     }
 
     #[test]
@@ -460,7 +592,7 @@ mod tests {
         fs::write(&source, b"pretend kernel bytes").unwrap();
         let chroot_root = tmp.path.join("firecracker").join("sandkiln-2").join("root");
 
-        let linked = link_resource_into_jail(&source, &chroot_root, "kernel", false).unwrap();
+        let linked = link_resource_into_jail(&source, &chroot_root, "kernel", false, own_gid(&source), true).unwrap();
 
         assert_eq!(linked.in_jail_path, PathBuf::from("/kernel"));
         assert_eq!(linked.host_path, chroot_root.join("kernel"));
@@ -478,21 +610,53 @@ mod tests {
         fs::write(&source, b"ro").unwrap();
         let chroot_root = tmp.path.join("firecracker").join("sandkiln-3").join("root");
 
-        let linked = link_resource_into_jail(&source, &chroot_root, "rootfs.ext4", false).unwrap();
+        let linked = link_resource_into_jail(&source, &chroot_root, "rootfs.ext4", false, own_gid(&source), true).unwrap();
         let mode = fs::metadata(&linked.host_path).unwrap().permissions().mode();
         assert_eq!(mode & 0o007, 0o004, "read-only resource must be world-readable, not world-writable");
     }
 
+    /// A group the test user may chgrp to: the group of a file it just created.
+    fn own_gid(file: &Path) -> u32 {
+        fs::metadata(file).unwrap().gid()
+    }
+
     #[test]
-    fn link_resource_into_jail_makes_writable_resources_world_read_write() {
+    fn link_resource_into_jail_makes_writable_resources_group_read_write_never_world_writable() {
         let tmp = TempDir::new("link-writable");
         let source = tmp.path.join("rootfs-rw.ext4");
         fs::write(&source, b"rw").unwrap();
         let chroot_root = tmp.path.join("firecracker").join("sandkiln-4").join("root");
 
-        let linked = link_resource_into_jail(&source, &chroot_root, "rootfs.ext4", true).unwrap();
+        let linked = link_resource_into_jail(&source, &chroot_root, "rootfs.ext4", true, own_gid(&source), true).unwrap();
         let mode = fs::metadata(&linked.host_path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o007, 0o006, "writable resource (the rootfs) must be world read+write");
+        assert_eq!(mode & 0o060, 0o060, "writable resource (the rootfs) must be group read+write");
+        assert_eq!(mode & 0o002, 0, "and never world-writable");
+    }
+
+    /// A temp directory on a different filesystem than `std::env::temp_dir()`,
+    /// or `None` when the host has only one (then the cross-device case
+    /// cannot be built).
+    fn other_filesystem_dir() -> Option<PathBuf> {
+        let shm = PathBuf::from("/dev/shm");
+        let here = fs::metadata(std::env::temp_dir()).ok()?.dev();
+        (shm.is_dir() && fs::metadata(&shm).ok()?.dev() != here).then_some(shm)
+    }
+
+    #[test]
+    fn across_filesystems_a_copy_is_made_when_allowed_and_refused_when_not() {
+        let Some(other) = other_filesystem_dir() else { return };
+        let source = other.join(format!("sandkiln-exdev-test-{}", std::process::id()));
+        fs::write(&source, b"drive bytes").unwrap();
+        let tmp = TempDir::new("exdev");
+        let root = tmp.path.join("firecracker").join("sandkiln-8").join("root");
+
+        let copied = link_resource_into_jail(&source, &root, "d.ext4", false, own_gid(&source), true).unwrap();
+        assert_ne!(fs::metadata(&source).unwrap().ino(), fs::metadata(&copied.host_path).unwrap().ino());
+
+        let err = link_resource_into_jail(&source, &root, "d2.ext4", true, own_gid(&source), false).unwrap_err();
+        let _ = fs::remove_file(&source);
+        assert!(err.to_string().contains("different filesystem") && err.to_string().contains("jailer_chroot_base_dir"), "{err}");
+        assert!(!root.join("d2.ext4").exists(), "no partial copy may be left behind");
     }
 
     #[test]
@@ -506,7 +670,7 @@ mod tests {
         let original_mode = fs::metadata(&source).unwrap().permissions().mode();
 
         let chroot_root = tmp.path.join("firecracker").join("sandkiln-5").join("root");
-        link_resource_into_jail(&source, &chroot_root, "kernel", false).unwrap();
+        link_resource_into_jail(&source, &chroot_root, "kernel", false, own_gid(&source), true).unwrap();
 
         // Mode bits are only ever widened (adding other-read), never replaced.
         let after_mode = fs::metadata(&source).unwrap().permissions().mode();
@@ -541,7 +705,7 @@ mod tests {
     fn judge_jail_access_names_finding_32_on_permission_denied() {
         let verdict = judge_jail_access(Err(io::Error::from(io::ErrorKind::PermissionDenied)), Path::new("/j/root"), 600001);
         let msg = verdict.unwrap_err();
-        assert!(msg.contains("finding 32") && msg.contains("/j/root") && msg.contains("600001"), "{msg}");
+        assert!(msg.contains("finding 32") && msg.contains("/j/root") && msg.contains("group 600001"), "{msg}");
     }
 
     #[test]
@@ -567,14 +731,20 @@ mod tests {
     }
 
     fn probe_launch(tmp: &TempDir, jailer: PathBuf) -> JailLaunch {
-        JailLaunch { jailer_bin: jailer, chroot_base_dir: tmp.path.join("jail"), uid: 600000, gid: 600000 }
+        JailLaunch {
+            jailer_bin: jailer,
+            supervisor_bin: PathBuf::from("/usr/bin/sandkiln-firecracker-supervisor"),
+            chroot_base_dir: tmp.path.join("jail"),
+            uid: 600000,
+            gid: 600000,
+        }
     }
 
     #[test]
     fn self_check_rejects_a_jailer_that_is_not_setuid_root() {
         let tmp = TempDir::new("selfcheck-not-setuid");
         let launch = probe_launch(&tmp, fake_jailer(&tmp.path, "700", 0));
-        let err = self_check(&launch, Path::new("/usr/bin/firecracker")).unwrap_err();
+        let err = self_check(&launch).unwrap_err();
         assert!(err.contains("not setuid root"), "{err}");
     }
 
@@ -582,14 +752,14 @@ mod tests {
     fn self_check_reports_a_missing_jailer_binary() {
         let tmp = TempDir::new("selfcheck-missing");
         let launch = probe_launch(&tmp, tmp.path.join("no-such-jailer"));
-        assert!(self_check(&launch, Path::new("/usr/bin/firecracker")).unwrap_err().contains("cannot stat"));
+        assert!(self_check(&launch).unwrap_err().contains("cannot stat"));
     }
 
     #[test]
     fn probe_reports_the_jailers_own_failure_output() {
         let tmp = TempDir::new("probe-jailer-fails");
         let launch = probe_launch(&tmp, fake_jailer(&tmp.path, "755", 3));
-        let msg = run_probe(&launch, Path::new("/usr/bin/firecracker")).unwrap_err();
+        let msg = run_probe(&launch).unwrap_err();
         assert!(msg.contains("probe failed") && msg.contains("probe-stderr"), "{msg}");
     }
 
@@ -597,7 +767,7 @@ mod tests {
     fn probe_passes_when_the_daemon_can_enter_the_jail_root() {
         let tmp = TempDir::new("probe-ok");
         let launch = probe_launch(&tmp, fake_jailer(&tmp.path, "755", 0));
-        assert!(run_probe(&launch, Path::new("/usr/bin/firecracker")).is_ok());
+        assert!(run_probe(&launch).is_ok());
     }
 
     #[test]
@@ -608,10 +778,10 @@ mod tests {
         }
         let tmp = TempDir::new("probe-bad");
         let launch = probe_launch(&tmp, fake_jailer(&tmp.path, "000", 0));
-        let msg = run_probe(&launch, Path::new("/usr/bin/firecracker")).unwrap_err();
+        let msg = run_probe(&launch).unwrap_err();
         assert!(msg.contains("finding 32"), "{msg}");
         // Let TempDir's drop remove what the stand-in locked.
-        let root = chroot_root(&launch.chroot_base_dir, Path::new("/usr/bin/firecracker"), SELF_CHECK_INSTANCE);
+        let root = chroot_root(&launch.chroot_base_dir, &launch.supervisor_bin, SELF_CHECK_INSTANCE);
         fs::set_permissions(root, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
@@ -637,21 +807,19 @@ mod tests {
         assert!(limits[1].starts_with("cpu.max="));
     }
 
-    #[test]
-    fn build_jailer_args_places_the_separator_before_firecrackers_own_args() {
-        let launch = JailLaunch {
+    fn launch(uid: u32, gid: u32) -> JailLaunch {
+        JailLaunch {
             jailer_bin: PathBuf::from("/usr/bin/jailer"),
+            supervisor_bin: PathBuf::from("/opt/sandkiln-firecracker-supervisor"),
             chroot_base_dir: PathBuf::from("/srv/jailer"),
-            uid: 600001,
-            gid: 600001,
-        };
-        let args = build_jailer_args(
-            &launch,
-            "sandkiln-9",
-            Path::new("/usr/bin/firecracker"),
-            &["memory.max=1073741824".to_string()],
-            Path::new("/api.sock"),
-        );
+            uid,
+            gid,
+        }
+    }
+
+    #[test]
+    fn build_jailer_args_places_the_separator_before_the_supervisors_own_args() {
+        let args = build_jailer_args(&launch(600001, 599000), "sandkiln-9", &["memory.max=1073741824".to_string()], Path::new("/api.sock"));
 
         let separator_index = args.iter().position(|a| a == "--").expect("must contain a -- separator");
         let after: Vec<&OsString> = args[separator_index + 1..].iter().collect();
@@ -659,17 +827,80 @@ mod tests {
 
         let before: Vec<String> = args[..separator_index].iter().map(|a| a.to_string_lossy().into_owned()).collect();
         assert!(before.contains(&"sandkiln-9".to_string()));
-        assert!(before.contains(&"600001".to_string()));
         assert!(before.contains(&"memory.max=1073741824".to_string()));
         assert!(before.contains(&"2".to_string()), "cgroup-version 2 must always be requested");
     }
 
     #[test]
+    fn build_jailer_args_runs_the_supervisor_under_the_vms_uid_and_the_shared_gid() {
+        let args: Vec<String> = build_jailer_args(&launch(600001, 599000), "x", &[], Path::new("/api.sock"))
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let value_after = |flag: &str| args[args.iter().position(|a| a == flag).unwrap() + 1].clone();
+        assert_eq!(value_after("--exec-file"), "/opt/sandkiln-firecracker-supervisor");
+        assert_eq!(value_after("--uid"), "600001");
+        assert_eq!(value_after("--gid"), "599000");
+    }
+
+    #[test]
     fn build_jailer_args_omits_daemonize_and_netns() {
-        let launch = JailLaunch { jailer_bin: PathBuf::from("/usr/bin/jailer"), chroot_base_dir: PathBuf::from("/srv/jailer"), uid: 1, gid: 1 };
-        let args = build_jailer_args(&launch, "sandkiln-1", Path::new("/usr/bin/firecracker"), &[], Path::new("/api.sock"));
+        let args = build_jailer_args(&launch(1, 1), "sandkiln-1", &[], Path::new("/api.sock"));
         let joined: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
         assert!(!joined.contains(&"--daemonize".to_string()));
         assert!(!joined.contains(&"--netns".to_string()));
+    }
+
+    #[test]
+    fn cgroup_dir_follows_the_exec_file_name_then_the_instance_id() {
+        assert_eq!(
+            cgroup_dir(Path::new("/opt/sandkiln-firecracker-supervisor"), "sandkiln-3"),
+            PathBuf::from("/sys/fs/cgroup/sandkiln-firecracker-supervisor/sandkiln-3")
+        );
+    }
+
+    #[test]
+    fn sweep_removes_only_sandkiln_jails_and_their_cgroups() {
+        let tmp = TempDir::new("sweep");
+        let supervisor = Path::new("/opt/sandkiln-firecracker-supervisor");
+        let jails = tmp.path.join("jail").join("sandkiln-firecracker-supervisor");
+        fs::create_dir_all(jails.join("sandkiln-1").join("root")).unwrap();
+        fs::create_dir_all(jails.join("sandkiln-2")).unwrap();
+        fs::create_dir_all(jails.join("someone-elses")).unwrap();
+        let cgroups = tmp.path.join("cg");
+        fs::create_dir_all(cgroups.join("sandkiln-firecracker-supervisor").join("sandkiln-1")).unwrap();
+
+        let mut report = sweep_stale_jails_in(&tmp.path.join("jail"), supervisor, &cgroups);
+        report.removed.sort();
+
+        assert_eq!(report.removed, vec!["sandkiln-1".to_string(), "sandkiln-2".to_string()]);
+        assert!(report.failed.is_empty());
+        assert!(jails.join("someone-elses").exists(), "a directory that is not ours must be left alone");
+        assert!(!jails.join("sandkiln-1").exists());
+        assert!(!cgroups.join("sandkiln-firecracker-supervisor").join("sandkiln-1").exists());
+    }
+
+    #[test]
+    fn sweep_with_no_jail_directory_is_a_no_op() {
+        let tmp = TempDir::new("sweep-empty");
+        let report = sweep_stale_jails_in(&tmp.path, Path::new("/opt/sandkiln-firecracker-supervisor"), &tmp.path);
+        assert_eq!(report, SweepReport::default());
+    }
+
+    #[test]
+    fn removing_a_cgroup_that_is_already_gone_is_success() {
+        assert!(remove_cgroup(Path::new("/opt/no-such-supervisor-for-test"), "sandkiln-1").is_ok());
+    }
+
+    #[test]
+    fn copy_binary_into_jail_makes_a_private_executable_copy() {
+        let tmp = TempDir::new("copy-binary");
+        let source = tmp.path.join("firecracker");
+        fs::write(&source, b"binary").unwrap();
+        let root = tmp.path.join("jail").join("root");
+        let copied = copy_binary_into_jail(&source, &root, "firecracker").unwrap();
+        assert_eq!(copied.in_jail_path, PathBuf::from("/firecracker"));
+        assert_ne!(fs::metadata(&source).unwrap().ino(), fs::metadata(&copied.host_path).unwrap().ino(), "must not share an inode");
+        assert_eq!(fs::metadata(&copied.host_path).unwrap().permissions().mode() & 0o777, 0o755);
     }
 }

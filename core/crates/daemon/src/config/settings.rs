@@ -91,10 +91,12 @@ pub const SETTINGS: &[Setting] = &[
     s("archive_timeout_secs", None, "lifecycle", "Move an unresumed snapshot's state and memory files to `archive_dir` after this many seconds. Unset or 0 disables."),
     s("jailer_enabled", Some("false"), "jailer", "Boot sandboxes under the Firecracker jailer (chroot, cgroups, dedicated uid/gid). `true` or `1` enables."),
     s("jailer_bin", Some("~/sandkiln-tools/bin/jailer"), "jailer", "Path to the jailer binary (setuid root)."),
+    s("jailer_supervisor_bin", Some("~/sandkiln-tools/bin/sandkiln-firecracker-supervisor"), "jailer", "Static helper that runs inside each jail in place of Firecracker, so the unprivileged daemon can reach and stop it."),
+    s("jailer_gid", Some("600000"), "jailer", "The one group shared by every jailed VM; the daemon's user must be a member (scripts/host-setup/prepare-jailer.sh)."),
     s("jailer_chroot_base_dir", Some("~/sandkiln-tools/jail"), "jailer", "Base directory for per-VM chroots; keep on the same filesystem as rootfs and drives."),
-    s("jailer_uid_gid_base", Some("600000"), "jailer", "First uid/gid of the range reserved for jailed VMs."),
+    s("jailer_uid_gid_base", Some("600000"), "jailer", "First uid of the range reserved for jailed VMs (one per concurrent VM)."),
     s("jailer_self_check", Some("true"), "jailer", "At startup, run the real jailer once against a throwaway jail and refuse to start if the daemon could not use the result. Disable only to diagnose a jailer setup."),
-    s("jailer_pool_size", Some("32"), "jailer", "Size of the uid/gid range (max concurrent jailed VMs)."),
+    s("jailer_pool_size", Some("32"), "jailer", "Size of the uid range (max concurrent jailed VMs)."),
 ];
 
 pub fn find(key: &str) -> Option<&'static Setting> {

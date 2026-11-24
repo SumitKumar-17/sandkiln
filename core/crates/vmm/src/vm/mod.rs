@@ -8,6 +8,7 @@
 //! file is the public `Vm` API surface only.
 
 mod boot;
+mod jail_state;
 mod snapshot;
 mod terminate;
 
@@ -117,9 +118,8 @@ pub struct Vm {
     child: Child,
     api_socket: PathBuf,
     vsock_socket: PathBuf,
-    /// `Some(<chroot_base>/<exec>/<id>)` for a jailed boot, removed
-    /// wholesale on `stop()`; `None` for a direct boot.
-    jail_instance_dir: Option<PathBuf>,
+    /// `Some` for a jailed boot; torn down on `stop()`. `None` for a direct boot.
+    jail: Option<jail_state::JailState>,
     /// When this process started running guest code (boot or resume). See
     /// [`MIN_GUEST_AGE_BEFORE_PAUSE`].
     started_at: Instant,
@@ -184,7 +184,7 @@ impl Vm {
     /// direct spawn — the daemon checks this to refuse snapshotting a
     /// jailed sandbox (not yet supported, see `crate::jailer`).
     pub fn is_jailed(&self) -> bool {
-        self.jail_instance_dir.is_some()
+        self.jail.is_some()
     }
 
     /// Control-plane call: sends a request to the guest agent and waits at
@@ -291,6 +291,11 @@ impl Vm {
             }
         }
 
+        // A jailed child runs under another uid and cannot be signalled, so
+        // the supervisor is asked to end it by closing its control pipe.
+        if let Some(jail) = self.jail.as_mut() {
+            jail.request_exit();
+        }
         let termination = terminate::terminate_child(&mut self.child, terminate::REAP_GRACE);
         let _ = std::fs::remove_file(&self.api_socket);
         let _ = std::fs::remove_file(&self.vsock_socket);
@@ -298,17 +303,15 @@ impl Vm {
         // Tears down the whole chroot in one shot. A jailed VM's sockets
         // already live inside it (the removals above are redundant there
         // but needed for a direct boot, where this is `None`).
-        if let Some(dir) = &self.jail_instance_dir {
-            if let Err(e) = std::fs::remove_dir_all(dir) {
-                tracing::warn!(vm_id = self.id, error = %e, dir = %dir.display(), "failed to remove jail instance directory");
-            }
+        if let Some(jail) = &self.jail {
+            jail.teardown(self.id);
         }
         if let terminate::Termination::StillRunning { pid, kill_error } = termination {
             let err = terminate::unkilled_error(pid, kill_error.as_ref(), &format!("could not stop vm {}", self.id));
             tracing::error!(vm_id = self.id, pid, error = %err, "vm process survived stop");
             return Err(err);
         }
-        tracing::info!(vm_id = self.id, jailed = self.jail_instance_dir.is_some(), "vm stopped");
+        tracing::info!(vm_id = self.id, jailed = self.jail.is_some(), "vm stopped");
         Ok(())
     }
 }

@@ -1,35 +1,71 @@
 ---
 title: Jailer setup
-description: Boot sandboxes through Firecracker's jailer for chroot, cgroup v2 limits and a dedicated uid/gid per VM, with the host steps, settings and known limits.
+description: Boot sandboxes through Firecracker's jailer for chroot, cgroup v2 limits and a dedicated uid per VM, with the host steps, settings and known limits.
 ---
 
-By default sandboxes boot via a direct Firecracker process spawn: no chroot, no cgroup limits, and no per-VM uid separation beyond KVM itself and the daemon's own unprivileged-with-ambient-`CAP_NET_ADMIN` posture. Firecracker ships a companion binary, `jailer`, already downloaded into `~/sandkiln-tools/bin` by `install-firecracker.sh`, that re-execs Firecracker inside a chroot, cgroup-v2-limited environment running as a dedicated unprivileged uid/gid. It is opt-in and off by default. For what chroot, cgroups and setuid each do, and why the privileges are split this way, see [The jailer and privilege model](/internals/jailer-privilege-model). For running genuinely untrusted workloads see [Run untrusted code](/guides/run-untrusted-code).
+By default sandboxes boot via a direct Firecracker process spawn: no chroot, no cgroup limits, and no per-VM uid separation beyond KVM itself and the daemon's own unprivileged-with-ambient-`CAP_NET_ADMIN` posture. Firecracker ships a companion binary, `jailer`, already downloaded into `~/sandkiln-tools/bin` by `install-firecracker.sh`, that re-execs Firecracker inside a chroot, cgroup-v2-limited environment running under a dedicated unprivileged uid. It is opt-in and off by default. For what chroot, cgroups and setuid each do, and why the privileges are split this way, see [The jailer and privilege model](/internals/jailer-privilege-model). For running genuinely untrusted workloads see [Run untrusted code](/guides/run-untrusted-code).
+
+## How it fits together
+
+Jailer makes each VM's chroot root mode 0700 and owned by that VM's uid, which the unprivileged daemon cannot enter. Three pieces close the gap without giving the daemon any privilege:
+
+- **A shared jail group** (`jailer_gid`, default `600000`). The daemon's user is a member. Every jailed VM runs under its own uid but this one group.
+- **The jail supervisor**, `sandkiln-firecracker-supervisor`, a small static binary that jailer runs in place of Firecracker. As the VM's own uid it opens the chroot to the jail group, then runs Firecracker. It also kills Firecracker when the daemon closes a pipe to it, which is how the daemon stops a process it may not signal, and why a jailed VM never outlives a crashed daemon.
+- **A group-owned tap pool**, so a Firecracker running as another uid may attach to the daemon's taps.
+
+The design and the options that were rejected are in [Security hardening](https://github.com/SumitKumar-17/sandkiln/blob/main/docs/design-notes/security-hardening.md).
 
 ## Host steps
 
-1. **cgroups v2 must be enabled.** It is the default on any current distribution. Check with `mount | grep cgroup2`: a `cgroup2` mount at `/sys/fs/cgroup` means it is ready. The jailer is invoked with `--cgroup-version 2` unconditionally. A host still on the legacy cgroups v1 hierarchy must switch first; that is a kernel boot parameter and out of scope for this project's tooling.
-2. **Make the `jailer` binary setuid-root.** It needs privileges the daemon deliberately does not have: `chroot(2)`, setuid and setgid to drop to the per-VM uid/gid, creating device nodes for `/dev/kvm` and `/dev/net/tun` inside the jail, and cgroup management. Granting those to the daemon would be most of what root can do and would defeat the unprivileged-daemon posture ([Capabilities](/self-hosting/manual-setup#capabilities)). Instead make the small, purpose-built binary itself setuid-root, the standard way Firecracker's jailer is deployed without running its caller as root:
+1. **cgroups v2 must be enabled.** It is the default on any current distribution. Check with `mount | grep cgroup2`: a `cgroup2` mount at `/sys/fs/cgroup` means it is ready. The jailer is invoked with `--cgroup-version 2` unconditionally.
+2. **Build and install the supervisor.** It must be a static binary because it runs in an otherwise empty chroot:
    ```bash
-   sudo chown root:root ~/sandkiln-tools/bin/jailer
-   sudo chmod u+s ~/sandkiln-tools/bin/jailer
+   cd core
+   cargo build --release -p sandkiln-jail-supervisor --target x86_64-unknown-linux-musl
+   cp target/x86_64-unknown-linux-musl/release/sandkiln-firecracker-supervisor ~/sandkiln-tools/bin/
    ```
-   This does **not** survive a re-run of `scripts/host-setup/install-firecracker.sh`, which overwrites the binary. Re-apply it after any jailer upgrade, the same way `grant-net-admin.sh` must be re-run after every daemon rebuild.
-3. **Enable it:** `jailer_enabled = true`, or `SANDKILN_JAILER_ENABLED=true`.
+   `scripts/setup.sh` does this.
+3. **Run the root steps once.** `prepare-jailer.sh` creates the jail group and adds the daemon's user, makes the jailer setuid-root, makes the daemon's user the owner of the parent cgroup directory (so it can remove each VM's cgroup, which jailer never does), and creates the chroot base:
+   ```bash
+   sudo scripts/host-setup/prepare-jailer.sh "$(whoami)"
+   ```
+   The setuid bit does **not** survive a re-run of `install-firecracker.sh`, which overwrites the binary; re-run the script after any jailer upgrade. The parent cgroup lives under `/sys/fs/cgroup`, which is recreated at boot, so run it again after a reboot (or from a boot-time unit).
+4. **Create the tap pool owned by the group** instead of by the user:
+   ```bash
+   sudo scripts/host-setup/create-tap-pool.sh 32 "$(whoami)" sktap sandkiln-jail
+   ```
+   A pool created for direct boots (owned by a user) is refused by a jailed Firecracker.
+5. **Start the daemon from a session that has the group.** Group membership applies to new login sessions: log in again, or run the daemon with `sg sandkiln-jail -c '...'`. A systemd unit needs `SupplementaryGroups=sandkiln-jail`.
+6. **Enable it:** `jailer_enabled = true`, or `SANDKILN_JAILER_ENABLED=true`.
+
+## Startup self-check
+
+With the jailer enabled the daemon runs the real jailer once at startup against a throwaway jail, then checks as its own user that it can use the jail, remove it and remove the cgroup. It refuses to start, with the reason, when:
+
+- the `jailer` binary is not setuid root;
+- the supervisor is missing, or is not a static binary;
+- cgroup v2 is unusable, or the daemon cannot remove a VM's cgroup (step 3);
+- the daemon's user is not in the jail group in the session that started it (step 5).
+
+`jailer_self_check = false` skips it, only to diagnose. It also sweeps jails a previous daemon process left behind: a jailed VM cannot outlive its daemon, and jail ids restart at 1 with each process.
 
 ## Settings
 
 Everything else has a default (full list in [Configuration](/self-hosting/configuration#environment-variables-and-defaults)):
 
-- `jailer_bin` (`~/sandkiln-tools/bin/jailer`).
+- `jailer_bin` (`~/sandkiln-tools/bin/jailer`) and `jailer_supervisor_bin` (`~/sandkiln-tools/bin/sandkiln-firecracker-supervisor`). The supervisor's file name must contain `firecracker` (jailer insists) and names the parent cgroup.
+- `jailer_gid` (`600000`): the shared jail group.
 - `jailer_chroot_base_dir` (`~/sandkiln-tools/jail`), created automatically at startup if missing. Keep it on the **same filesystem** as `drives_dir` and `rootfs_dir`, so the rootfs and drive files hard-linked into each VM's chroot link instantly instead of falling back to a real copy on every boot.
-- `jailer_uid_gid_base` (`600000`) and `jailer_pool_size` (`32`). Together they reserve `600000..600031` as a dedicated uid/gid range, handed out one distinct pair per concurrently running jailed VM and released on stop. Pick a base outside any real host account's uid: the `/etc/subuid` convention of staying at or above `100000`, and clear of anything `/etc/passwd` already uses. Two jailed VMs ever sharing a uid would let one guest's escaped process interfere with the other's, which defeats the point.
+- `jailer_uid_gid_base` (`600000`) and `jailer_pool_size` (`32`). Together they reserve `600000..600031` as a dedicated uid range, handed out one distinct uid per concurrently running jailed VM and released on stop. Pick a base outside any real host account's uid: the `/etc/subuid` convention of staying at or above `100000`, and clear of anything `/etc/passwd` already uses. Two jailed VMs ever sharing a uid would let one guest's escaped process interfere with the other's, which defeats the point. A uid whose process could not be killed is never reused until the daemon restarts.
 
 Jailer support is a daemon-operator setting. An individual `POST /sandboxes` request cannot opt out, deliberately, so a compromised or malicious API client cannot disable a security boundary the operator turned on.
 
-## Known limitation
+## Known limits
 
-Snapshotting a jailed sandbox is not supported yet: `POST /sandboxes/<id>/snapshot` returns `400`. Resuming a snapshot always uses a direct spawn regardless of whether the jailer is enabled (`core/crates/vmm/src/jailer.rs` has the reason in its module doc comment). A graceful daemon shutdown therefore destroys jailed sandboxes instead of snapshotting them; see [Stopping](/self-hosting/operations#stopping).
+- Snapshotting a jailed sandbox is not supported: `POST /sandboxes/<id>/snapshot` returns `400`, and so does a plain `DELETE` that would preserve the sandbox (`409`; use `?keep=false`). Resuming a snapshot always uses a direct spawn regardless of whether the jailer is enabled. A graceful daemon shutdown therefore destroys jailed sandboxes instead of snapshotting them; see [Stopping](/self-hosting/operations#stopping).
+- A persistent drive that is writable must be on the same filesystem as `jailer_chroot_base_dir`: it is hard-linked into the jail, and a copy would silently lose everything written to it, so a create with such a drive is refused with that explanation. Read-only drives and the rootfs may be copied.
+- Of the integration suite, the topics that need snapshots or warm pools cannot run with the jailer on, and their failures are all `snapshotting a jailed sandbox is not supported yet` (or a pool that never warms): `08-snapshots`, `11-fork`, `16-sandbox-history` (snapshot part), `18-pool`, `19-egress` (snapshot part), `20-snapshot-lineage`, `21-time-travel-restore`, `24-env-vars` (snapshot part), `25-long-running-commands` (snapshot part), `26-snapshot-disk-isolation`, `28-resume-fixup`, `29-snapshots-hold-no-taps`, and the default-stop part of `12-named-sandboxes`. Every other topic passes, including `06-drives` and `10-jailer`.
+- The jail group is shared. Two jailed sandboxes are separated by distinct uids and distinct chroots, not distinct groups, and the group-owned taps mean a Firecracker that is already compromised could open another sandbox's tap. Only the daemon's user should be in the group.
+- A failure in the few milliseconds between jailer making the chroot root private and the supervisor opening it leaves a root-owned directory that only root can remove. The daemon reports its path.
 
-## Recommendation
-
-Do not enable it yet. With `jailer_enabled` set, the daemon runs the real jailer once at startup against a throwaway jail and refuses to start, naming [finding 32](https://github.com/SumitKumar-17/sandkiln/blob/main/docs/findings.md), when it cannot enter the jail root jailer builds (`jailer_self_check`, on by default; set it to `false` only to diagnose). The probe leaves its throwaway directory behind in that case, root-owned: remove it with sudo. Without the check, a create now fails in about 15 seconds with the cause instead of hanging. Run against a real setuid `jailer` on 2026-11-24 (cgroup v2, uid range reserved, binary made setuid-root as above), it does not work: jailer starts Firecracker in its chroot, but the chroot root is mode 0700 and owned by the per-VM uid, so the unprivileged daemon cannot reach the Firecracker API socket inside it, and `POST /sandboxes` hangs without a deadline. Persistent taps owned by the daemon's user would also be refused to a Firecracker running as another uid. The unit tests cover the argument and path logic only. This is [finding 32](https://github.com/SumitKumar-17/sandkiln/blob/main/docs/findings.md); `scripts/integration-tests/10-jailer.sh` cannot pass until it is designed and fixed. Until then the isolation comes from KVM and the network controls alone.
+Verified on the dev box on 2026-11-24 (Linux 6.8, cgroup v2, Firecracker 1.16): a jailed create takes about 70ms, exec and guest networking work, two concurrent sandboxes run under separate uids, a stop removes the jail directory and cgroup, and killing the daemon with `kill -9` ends the jailed Firecrackers.

@@ -140,6 +140,13 @@ else
   bash "$SCRIPT_DIR/host-setup/install-firecracker.sh" "$TOOLS_DIR" || { bad "install-firecracker.sh failed"; exit 1; }
   ok "firecracker installed to $TOOLS_DIR/bin"
 fi
+# The jailer's in-chroot helper must be static (an otherwise empty chroot), so
+# it is built for musl like the guest agent. Harmless unless the jailer is on;
+# see docs-site/self-hosting/jailer.mdx for the root steps that complete it.
+(cd "$CORE_DIR" && cargo build --release -p sandkiln-jail-supervisor --target x86_64-unknown-linux-musl) \
+  || { bad "jail supervisor build failed"; exit 1; }
+install -m 0755 "$CORE_DIR/target/x86_64-unknown-linux-musl/release/sandkiln-firecracker-supervisor" "$TOOLS_DIR/bin/"
+ok "jail supervisor installed to $TOOLS_DIR/bin"
 KERNEL_PATH="$TOOLS_DIR/images/vmlinux-5.10.223"
 
 # ---------------------------------------------------------------------------

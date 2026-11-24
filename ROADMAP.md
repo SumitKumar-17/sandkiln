@@ -30,7 +30,7 @@ a stated gap; **planned** not built.
 | Drives and remote storage | done | Read-only sharing, S3-compatible mounts via rclone in the guest. |
 | Egress policy | partial | IP/CIDR allow and deny per sandbox. No domain or port rules, IPv4 only. |
 | Preview, tunnel, PTY, streamed exec | partial | HTTP preview only (no WebSocket proxy). PTY and exec-stream are in the JS/TS SDK, the Python SDK and the CLI; no live PTY resize, no exec kill. |
-| Security | partial | Bridge isolation, ceilings, rate limits done. Jailer is opt-in and verified not working (finding 32); startup refuses it. No seccomp. |
+| Security | partial | Bridge isolation, ceilings, rate limits done. Jailer is opt-in and verified working on the dev box (finding 32 fixed). No seccomp. No seccomp. |
 | Auth | partial | Single bearer token. Per-token scoping planned. |
 | Images | partial | Register and boot prebuilt ext4 images. No OCI conversion, no managed catalog. |
 | Observability | done | Structured logs, request ids, `/metrics`, JSON logs, console capture. `GET /status` shipped with `kiln status` and SDK `getStatus`/`get_status`. |
@@ -61,8 +61,7 @@ In order, most load-bearing first.
 
 1. **Make the cold path the default-able one.** The init-mode image reaches
    the first command in about 147ms. Mounts, auth, PID 1 shutdown and a real
-   universal image are verified on it; the jailer is blocked by its own bug
-   (finding 32), and guest entropy, the cron/timesyncd loss and the parallel
+   universal image are verified on it; the jailer works (finding 32 fixed), and guest entropy, the cron/timesyncd loss and the parallel
    benchmark remain before it replaces systemd (go/no-go in the
    [latency floor](docs/design-notes/latency-floor.md)). Then per-image warm
    defaults and wake-on-claim replenishment. Plan: [feature plan](docs/design-notes/feature-plan.md).
@@ -84,10 +83,11 @@ In order, most load-bearing first.
    job under `timeout` in the guest instead.
 6. **Reflink by default** for production setups (preflight already warns).
    `create-reflink-volume.sh` is a loop mount; add a systemd mount unit.
-7. **Jailer, for real.** It cannot create a sandbox today (finding 32): decide
-   who owns the chroot and the taps and how the daemon reaches the socket. Also
-   a VM-exit watcher so a guest that shuts itself down is not left listed
-   (finding 33).
+7. **Jailer follow-ups.** It works (finding 32 fixed: supervisor, shared jail
+   group, group-owned taps). Left: snapshots of jailed sandboxes, per-uid taps
+   to close the shared-group tap risk, a boot-time unit for the cgroup
+   delegation. Also a VM-exit watcher so a guest that shuts itself down is not
+   left listed (finding 33, fixed).
 8. **Split oversized daemon files** (finding 6) per AGENTS.md section 2.
 9. **Website:** build and screenshot-review every engineering post.
 10. **Housekeeping:** the dev box XFS volume at `/mnt/sandkiln-xfs` needs

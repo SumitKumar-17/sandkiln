@@ -1,0 +1,15 @@
+[package]
+name = "sandkiln-jail-supervisor"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The name has to contain "firecracker": jailer refuses any other `--exec-file`.
+[[bin]]
+name = "sandkiln-firecracker-supervisor"
+path = "src/main.rs"
+
+[dependencies]
+# umask(2) and kill(2); std has neither.
+libc = "0.2"

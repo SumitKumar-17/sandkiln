@@ -276,7 +276,7 @@ to 117ms, against 26 to 30ms once consumed). A claim now consumes the warm
 snapshot, and the new sandbox starts its own lineage (no dangling parent to the
 consumed snapshot).
 
-### 32. The jailer path cannot create a sandbox: the daemon cannot reach the jailed Firecracker's API socket. Open (failure now bounded and detected at startup)
+### 32. The jailer path cannot create a sandbox: the daemon cannot reach the jailed Firecracker's API socket. FIXED
 Found while validating the init-mode image with the jailer enabled (setuid
 `jailer` copy, cgroup v2, `jailer_enabled = true`, uid range 600000+). Every
 `POST /sandboxes` hung until the client gave up (7 minutes and counting; the
@@ -296,7 +296,7 @@ needs a design (who owns the chroot and the taps, how the daemon reaches the
 socket), not a patch. A hung create also made a graceful daemon stop wait
 out its full 30 seconds.
 
-Mitigated, not fixed. Root cause of the hang, found by reproducing it: the
+First mitigated (bounded failure, startup self-check), then fixed. Root cause of the hang, found by reproducing it: the
 connect to `api.sock` was already bounded (2 seconds), but the failure
 cleanup then did `kill()` and an unbounded `wait()` on a Firecracker running
 as another uid. The unprivileged daemon's SIGKILL is refused with `EPERM`, so
@@ -313,6 +313,22 @@ with the check disabled a create failed in 15.1 seconds with the explanation,
 the lease and rootfs released. Residual: a failed jailed boot leaves a live
 process and a root-owned jail directory that only root can remove (the error
 and a warning name both).
+
+The fix (`docs/design-notes/security-hardening.md` has the options weighed):
+jailer's exec file is now `sandkiln-firecracker-supervisor`
+(`core/crates/jail-supervisor`), which runs in the chroot as the VM's uid and a
+shared jail group, opens the jail to that group, runs Firecracker, and kills it
+when the daemon closes a pipe (the daemon cannot signal another uid, and a VM
+no longer outlives a crashed daemon). The daemon's user is in the jail group,
+the tap pool is group-owned (`create-tap-pool.sh ... <group>`), the daemon owns
+the parent cgroup so it can remove each VM's cgroup, and
+`scripts/host-setup/prepare-jailer.sh` does the root steps. The daemon gained
+no privilege. Verified on the dev box: a jailed create in about 70ms, exec and
+networking work, two concurrent sandboxes, stop removes the jail and cgroup,
+a failed boot (an invalid kernel) leaves no process, jail, cgroup, tap or
+rootfs, `kill -9` of the daemon ends the jailed Firecrackers, and the topic
+`10-jailer` passes. Running the whole suite with the jailer on found one more bug: a persistent drive on a different filesystem than the jail base was silently copied into the jail, so writes were lost when the jail was removed; that now fails the create with an explanation. A side effect found on the way: the writable rootfs was
+made world-writable for the jailed uid; it now gets the jail group instead.
 
 ### 33. A guest that shuts itself down left its sandbox listed. FIXED
 `reboot -f` in a systemd guest, or `kill -TERM 1` in an init-mode guest, ends

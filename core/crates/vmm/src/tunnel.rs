@@ -72,6 +72,9 @@ pub fn listen(vsock_socket: &Path) -> io::Result<()> {
     let path = tunnel_socket_path(vsock_socket);
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path)?;
+    // A jailed Firecracker (another uid, the shared jail group) connects to
+    // this socket, which needs group write; harmless for a direct boot.
+    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o770))?;
     let stop = Arc::new(AtomicBool::new(false));
     stop_flags().lock().unwrap().insert(path, stop.clone());
     LIVE_LISTENERS.fetch_add(1, Ordering::SeqCst);

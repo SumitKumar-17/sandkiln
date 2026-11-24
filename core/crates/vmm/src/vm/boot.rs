@@ -3,13 +3,14 @@
 //! process-spawning and the Firecracker PUT sequence shouldn't sit next
 //! to the public `Vm` API, same reasoning [`super::snapshot`] gives.
 
+use super::jail_state::JailState;
 use super::terminate::{self, Termination};
 use super::{connect_api_with_retry, console_log_stdio, path_str, put_checked, RateLimiter, Vm, VmConfig};
 use crate::jailer::{self, JailLaunch};
 use serde_json::json;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// Everything the API-configuration sequence needs after spawning the
@@ -32,7 +33,7 @@ struct BootTarget {
     /// `/vsock`'s `uds_path` value — same host/in-jail distinction as
     /// `kernel_image_path`.
     vsock_uds_path: PathBuf,
-    jail_instance_dir: Option<PathBuf>,
+    jail: Option<JailState>,
 }
 
 /// Where a boot's wall-clock time went, for the debug-level profiling
@@ -71,18 +72,14 @@ pub(super) fn boot(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<Vm
             // drive copies. Leaving either is a resource leak or an
             // info-disclosure surface, not just untidy state — same
             // cleanup `snapshot::resume` does for the equivalent failure.
+            if let Some(jail) = target.jail.as_mut() {
+                jail.request_exit();
+            }
             let termination = terminate::terminate_child(&mut target.child, terminate::REAP_GRACE);
             let _ = std::fs::remove_file(&target.api_socket);
             let _ = std::fs::remove_file(&target.vsock_socket);
-            if let Some(dir) = &target.jail_instance_dir {
-                if let Err(remove_err) = std::fs::remove_dir_all(dir) {
-                    tracing::warn!(
-                        vm_id = id,
-                        dir = %dir.display(),
-                        error = %remove_err,
-                        "could not remove the jail directory of a failed boot (jailer-owned files need root to delete); remove it by hand"
-                    );
-                }
+            if let Some(jail) = &target.jail {
+                jail.teardown(id);
             }
             if let Termination::StillRunning { pid, kill_error } = termination {
                 return Err(terminate::unkilled_error(pid, kill_error.as_ref(), &e.to_string()));
@@ -116,7 +113,7 @@ pub(super) fn boot(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<Vm
         child: target.child,
         api_socket: target.api_socket,
         vsock_socket: target.vsock_socket,
-        jail_instance_dir: target.jail_instance_dir,
+        jail: target.jail,
     })
 }
 
@@ -137,7 +134,7 @@ fn spawn_direct(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<BootT
         drive_paths: config.extra_drives.iter().map(|d| d.path_on_host.clone()).collect(),
         vsock_uds_path: vsock_socket.clone(),
         vsock_socket,
-        jail_instance_dir: None,
+        jail: None,
     })
 }
 
@@ -147,7 +144,7 @@ fn spawn_direct(config: &VmConfig, id: u64, log_path: &Path) -> io::Result<BootT
 /// leaving on disk.
 fn spawn_jailed(config: &VmConfig, jail: &JailLaunch, id: u64, log_path: &Path) -> io::Result<BootTarget> {
     let jail_id = jailer::jail_instance_id(id);
-    let chroot_root = jailer::chroot_root(&jail.chroot_base_dir, &config.firecracker_bin, &jail_id);
+    let chroot_root = jailer::chroot_root(&jail.chroot_base_dir, &jail.supervisor_bin, &jail_id);
     let instance_dir = jailer::instance_dir(&chroot_root);
 
     match spawn_jailed_inner(config, jail, &jail_id, &chroot_root, log_path) {
@@ -168,13 +165,16 @@ fn spawn_jailed_inner(
 ) -> io::Result<BootTarget> {
     jailer::prepare_chroot_dir(chroot_root)?;
 
-    let kernel = jailer::link_resource_into_jail(&config.kernel_path, chroot_root, "kernel", false)?;
-    let rootfs = jailer::link_resource_into_jail(&config.rootfs_path, chroot_root, "rootfs.ext4", true)?;
+    // The supervisor (jailer's exec file) runs this as Firecracker, see
+    // `crates/jail-supervisor`.
+    jailer::copy_binary_into_jail(&config.firecracker_bin, chroot_root, "firecracker")?;
+    let kernel = jailer::link_resource_into_jail(&config.kernel_path, chroot_root, "kernel", false, jail.gid, true)?;
+    let rootfs = jailer::link_resource_into_jail(&config.rootfs_path, chroot_root, "rootfs.ext4", true, jail.gid, true)?;
 
     let mut drive_paths = Vec::with_capacity(config.extra_drives.len());
     for drive in &config.extra_drives {
         let jail_relative_name = format!("{}.ext4", drive.drive_id);
-        let linked = jailer::link_resource_into_jail(&drive.path_on_host, chroot_root, &jail_relative_name, !drive.read_only)?;
+        let linked = jailer::link_resource_into_jail(&drive.path_on_host, chroot_root, &jail_relative_name, !drive.read_only, jail.gid, drive.read_only)?;
         drive_paths.push(linked.in_jail_path);
     }
 
@@ -184,10 +184,12 @@ fn spawn_jailed_inner(
     let _ = std::fs::remove_file(&vsock_socket);
 
     let cgroup_limits = jailer::cgroup_limits(config.mem_size_mib, config.vcpu_count);
-    let jailer_args = jailer::build_jailer_args(jail, jail_id, &config.firecracker_bin, &cgroup_limits, Path::new("/api.sock"));
+    let jailer_args = jailer::build_jailer_args(jail, jail_id, &cgroup_limits, Path::new("/api.sock"));
 
     let (stdout, stderr) = console_log_stdio(log_path)?;
-    let child = Command::new(&jail.jailer_bin).args(&jailer_args).stdout(stdout).stderr(stderr).spawn()?;
+    // The piped stdin is the supervisor's stop signal (see `JailState`).
+    let mut child = Command::new(&jail.jailer_bin).args(&jailer_args).stdin(Stdio::piped()).stdout(stdout).stderr(stderr).spawn()?;
+    let control = child.stdin.take();
 
     Ok(BootTarget {
         child,
@@ -197,13 +199,17 @@ fn spawn_jailed_inner(
         drive_paths,
         vsock_uds_path: PathBuf::from("/vsock.sock"),
         vsock_socket,
-        jail_instance_dir: Some(jailer::instance_dir(chroot_root)),
+        jail: Some(JailState {
+            instance_dir: jailer::instance_dir(chroot_root),
+            cgroup_dir: jailer::cgroup_dir(&jail.supervisor_bin, jail_id),
+            control,
+        }),
     })
 }
 
 /// How long a jailed boot waits for the API socket to become connectable.
 /// Generous next to the direct path's 2s: jailer first copies the
-/// Firecracker binary into the chroot, creates cgroups and device nodes.
+/// supervisor into the chroot, creates cgroups and device nodes.
 /// Jailer-to-socket is well under a second when it works, so hitting this
 /// means something is wrong, not slow.
 const JAILED_API_TIMEOUT: Duration = Duration::from_secs(10);
@@ -243,21 +249,21 @@ fn wait_for_jailed_api(api_socket: &Path, child: &mut Child, timeout: Duration) 
 }
 
 /// The operator-facing explanation when a jailed Firecracker's API socket
-/// never became reachable. A permission error is the known failure
-/// (finding 32 in `docs/findings.md`): jailer makes the chroot root mode
-/// 0700 and owned by the per-VM uid, so the unprivileged daemon cannot walk
-/// into it to reach `api.sock`, even though Firecracker itself is running
-/// and listening.
+/// never became reachable. A permission error means the daemon is not
+/// allowed into the jail: jailer makes the chroot root mode 0700 and owned
+/// by the per-VM uid, and only the jail supervisor's widening to the jail
+/// group (which the daemon's user must belong to) makes it reachable. That
+/// was finding 32 in `docs/findings.md`.
 fn jailed_api_unreachable_message(api_socket: &Path, timeout: Duration, last_error: &io::Error) -> String {
     let cause = match last_error.kind() {
         io::ErrorKind::PermissionDenied => {
-            "permission denied: the daemon is not allowed to reach the socket inside the jail. The jailer makes the chroot root \
-             owned by the per-VM uid with mode 0700, which the unprivileged daemon cannot traverse (finding 32). Firecracker is \
-             probably running but unreachable"
+            "permission denied: the daemon is not allowed into the jail. The jailer makes the chroot root mode 0700 and the jail \
+             supervisor opens it to the jail group, so the daemon's user must be a member of that group in the session that started \
+             it (check `id`; see scripts/host-setup/prepare-jailer.sh and finding 32 in docs/findings.md)"
         }
         io::ErrorKind::NotFound => {
-            "the socket never appeared: the jailer or Firecracker likely failed to start (a jailer binary that is not setuid root, \
-             cgroup v2 missing, or a bad uid/gid range)"
+            "the socket never appeared: the jailer or the supervisor likely failed to start (a jailer binary that is not setuid root, \
+             cgroup v2 missing, a bad uid range, or a supervisor that is not a static binary); see the console log"
         }
         _ => "the socket exists but refused the connection",
     };
@@ -271,7 +277,7 @@ fn jailed_api_unreachable_message(api_socket: &Path, timeout: Duration, last_err
 /// timeable and keeps the ordering constraints as one readable list.
 fn configure_and_start(config: &VmConfig, target: &mut BootTarget) -> io::Result<BootPhases> {
     let before_socket = Instant::now();
-    let mut api = if target.jail_instance_dir.is_some() {
+    let mut api = if target.jail.is_some() {
         wait_for_jailed_api(&target.api_socket, &mut target.child, JAILED_API_TIMEOUT)?
     } else {
         connect_api_with_retry(&target.api_socket, Duration::from_secs(2))?
@@ -428,13 +434,13 @@ mod jailed_wait_tests {
     #[test]
     fn permission_denied_is_explained_as_the_unreachable_chroot() {
         let msg = jailed_api_unreachable_message(Path::new("/j/root/api.sock"), Duration::from_secs(10), &io::Error::from(io::ErrorKind::PermissionDenied));
-        assert!(msg.contains("finding 32") && msg.contains("0700") && msg.contains("/j/root/api.sock"), "{msg}");
+        assert!(msg.contains("finding 32") && msg.contains("jail group") && msg.contains("/j/root/api.sock"), "{msg}");
     }
 
     #[test]
     fn a_missing_socket_points_at_jailer_startup_failure() {
         let msg = jailed_api_unreachable_message(Path::new("/s"), Duration::from_secs(1), &io::Error::from(io::ErrorKind::NotFound));
-        assert!(msg.contains("never appeared") && msg.contains("setuid"), "{msg}");
+        assert!(msg.contains("never appeared") && msg.contains("setuid") && msg.contains("static"), "{msg}");
     }
 
     #[test]
