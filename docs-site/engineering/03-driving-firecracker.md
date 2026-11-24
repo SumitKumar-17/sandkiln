@@ -11,7 +11,12 @@ A Firecracker microVM is a process. It starts with no configuration, exposes an 
 ```text
 core/crates/vmm/src/
   firecracker_api.rs   hand-rolled HTTP/1.1 client over the API Unix socket
-  jailer.rs            chroot, cgroup v2 and uid/gid setup for jailed launch
+  jailer/              chroot, cgroup v2 and uid/gid setup for jailed launch
+    mod.rs             JailLaunch, build_jailer_args, re-exports
+    ids.rs             JailerIdPool, jail instance ids
+    chroot.rs          the jail tree and linking resources into it
+    cgroup.rs          cgroup limits, removal, the startup sweep
+    selfcheck.rs       the startup probe with the real jailer
   vsock_client.rs      host side of the guest protocol
   vm/
     mod.rs             Vm and VmConfig: the public surface, stop, metadata
@@ -167,9 +172,9 @@ flowchart TD
 **Jailed spawn** is more involved, because after jailer calls `chroot()` Firecracker cannot see any host path outside its jail. So everything it will reference has to exist inside the jail before jailer starts, and every path in the API bodies has to be the in-jail path. `spawn_jailed_inner` (`boot.rs:151-191`) does that:
 
 1. `prepare_chroot_dir` creates `<chroot_base>/<exec name>/<id>/root` and makes it traversable (`o+x`) so lookups by exact name work before jailer applies its own ownership.
-2. `link_resource_into_jail` places the kernel (`/kernel`), rootfs (`/rootfs.ext4`) and each extra drive (`/<drive_id>.ext4`) inside the chroot and returns the in-jail path to put in the API bodies. It hard-links, falling back to a copy on `EXDEV`, and makes the file world-readable (world-writable for writable resources) instead of `chown`ing it, because a hard link shares an inode with its source and a `chown` would silently change the source's ownership (`jailer.rs:134-171`).
+2. `link_resource_into_jail` places the kernel (`/kernel`), rootfs (`/rootfs.ext4`) and each extra drive (`/<drive_id>.ext4`) inside the chroot and returns the in-jail path to put in the API bodies. It hard-links, falling back to a copy on `EXDEV`, and makes the file world-readable (world-writable for writable resources) instead of `chown`ing it, because a hard link shares an inode with its source and a `chown` would silently change the source's ownership (`jailer/chroot.rs`).
 3. `cgroup_limits` derives `memory.max` (guest memory plus a 128 MiB overhead margin, since the ceiling bounds the whole process) and `cpu.max` (`vcpu_count` full cores) from the same numbers already used for `/machine-config`.
-4. `build_jailer_args`, a pure and unit-tested function, assembles the argv, with Firecracker's own arguments after a `--` separator (`jailer.rs:213-242`). It omits `--daemonize`, so jailer execs Firecracker in the same process and the `Child` we hold becomes Firecracker; and it omits `--netns`, since taps come from a shared pool in the daemon's own namespace.
+4. `build_jailer_args`, a pure and unit-tested function, assembles the argv, with Firecracker's own arguments after a `--` separator (`jailer/mod.rs`). It omits `--daemonize`, so jailer execs Firecracker in the same process and the `Child` we hold becomes Firecracker; and it omits `--netns`, since taps come from a shared pool in the daemon's own namespace.
 5. The vsock path given to Firecracker is `/vsock.sock` (in-jail), while the host-side path the daemon connects to is `<chroot_root>/vsock.sock`.
 
 Why jailer at all, rather than doing the chroot in the daemon? `chroot(2)`, `setuid`, device nodes and cgroup management need privileges the daemon deliberately does not hold. The standard answer is a setuid-root `jailer` binary, a small purpose-built program, rather than loosening the daemon's own capabilities. Concurrent jailed VMs must never share a uid (one guest's escaped process could signal or read the other's files), so uid/gid pairs come from a bounded `JailerIdPool` that mirrors the tap pool rather than from hashing an id. Be aware of the current state: the repository's notes mark jailer boot as not yet proven on real hardware, and snapshotting a jailed sandbox is refused, because a snapshot would bake in in-jail paths that would need relinking into a fresh chroot. `resume` always spawns directly. See [the jailer privilege model page](https://sandkiln.mintlify.site/internals/jailer-privilege-model).
