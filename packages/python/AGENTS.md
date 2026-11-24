@@ -1,115 +1,43 @@
-# AGENTS.md — sandkiln (Python SDK)
+# AGENTS.md: sandkiln (Python SDK)
 
-Read root `AGENTS.md` first.
+Read root `AGENTS.md` first. [`sandkiln` on PyPI](https://pypi.org/project/sandkiln/). It mirrors `packages/sdk`
+(same operations, snake_case naming); check the JS SDK first and never let capability drift. Standard library only.
 
-## What this package is
+It ships two parallel APIs: sync (`Sandbox`, `Drive`, `Image`, `Pool` on `urllib`) and asyncio (`AsyncSandbox`,
+`AsyncDrive`, `AsyncImage`, `AsyncPool` on `asyncio.open_connection`). They are deliberately separate classes: a sync call
+in an async context blocks the event loop silently. Async classes re-export the pure dataclasses and body builders
+(`DriveAttachment`, `_build_rate_limit`, `_build_egress`) from the sync modules.
 
-Mirrors `packages/sdk` (JS/TS) exactly — same operations, same daemon,
-Python-idiomatic naming (`run_command`, snake_case). Check the JS SDK
-first before adding anything; the two should never drift in capability.
+## Files (`src/sandkiln/`)
 
-Ships two parallel APIs: sync (`Sandbox`/`Drive`/`Image`/`Pool`, on
-`urllib`) and `asyncio`-native (`AsyncSandbox`/`AsyncDrive`/`AsyncImage`/
-`AsyncPool`, on `asyncio.open_connection` — `_http_async.py`).
-**Deliberately separate class hierarchies, not sync+async methods on one
-class**: a sync call in an async context blocks the event loop silently
-(no exception) — worse than an `AttributeError` from the wrong import.
-Async classes re-export every dataclass/body-building helper from the
-sync modules (`DriveAttachment`, `_build_rate_limit`, `_build_egress`) —
-pure data/formatting, nothing "sync" to mirror.
+- **`sandbox.py`**: `Sandbox`, `ExecResult`, `SandboxInfo`, structurally mirroring `sandbox.ts`. `preview_url` is
+  pure and appends `?token=`.
+- **`image.py`, `drive.py`, `pool.py`, `status.py`**: classmethod-only, mirroring the TS files. Drives attach through
+  `Sandbox.create(drives=...)`. No pool claim method.
+- **`asandbox.py`, `adrive.py`, `aimage.py`, `apool.py`, `astatus.py`**: async mirrors, same names and arguments. Change a sync
+  method, change its mirror the same way.
+- **`_http.py`, `_http_async.py`**: the one `urllib` and `asyncio` call site; same `SandkilnApiError` (`errors.py`).
+  The async client is a minimal HTTP/1.1 implementation, one connection per request.
+- **`tunnel.py`, `atunnel.py`**: the only WebSocket feature, so both hand-roll RFC 6455 (handshake verified against the
+  spec's test vector, masked frames, no fragmentation, which is fine for this protocol's small payloads) and the tunnel's
+  binary frame (shared with `tunnel.ts` and the daemon: change one, change all three). `atunnel.py` imports the pure
+  helpers from `tunnel.py`; only I/O is written twice.
+- **`_config.py`**: env fallback, matching `config.ts`. **`py.typed`**: PEP 561 marker.
 
-Zero runtime dependencies (`urllib`/`asyncio` stdlib only, matching the
-JS SDK's native-`fetch` choice). `_http_async.py` hand-rolls the same
-~90-line minimal HTTP/1.1 shape `sandkiln-vmm` hand-rolls in Rust for
-Firecracker's API — one connection per request, no keep-alive (this
-SDK's calls are occasional, not high-throughput).
+## Invariants
 
-## Files
+- Never name a method after a builtin used in a type hint in the same class. `Sandbox.list()` shadowed `list` in
+  `list[str]` and crashed at import on Python below 3.14 (3.14 defers annotations, so local runs hid it). Keep
+  `from __future__ import annotations` in every file; the package declares `>=3.9`.
+- `Sandbox.attach(id)` makes zero network calls.
 
-- **`sandbox.py`** — `Sandbox`, `ExecResult`/`SandboxInfo`. Mirrors
-  `sandbox.ts` structurally. `preview_url` is pure/network-free, appends
-  the token as `?token=`; unlike the JS SDK, the sandbox id isn't
-  URL-quoted (matches this file's existing convention). `create`'s
-  `image_id` boots from a registered image.
-- **`image.py` / `drive.py` / `pool.py`** — classmethod-only, no instance
-  state, mirroring `image.ts`/`drive.ts`/`pool.ts`. Drive attachment goes
-  through `Sandbox.create`'s `drives` arg (`DriveAttachment`, defined in
-  `sandbox.py`). `pool.py` takes a caller-given id like `image.py`'s
-  `register`; no "claim" method — claiming is transparent via
-  `Sandbox.create()` matching a configured pool.
-- **`asandbox.py`/`adrive.py`/`aimage.py`/`apool.py`** — async mirrors,
-  same names/args/returns, `async def` + awaited. Change a sync method,
-  change its async mirror the same way.
-- **`_http.py` / `_http_async.py`** — the one `urllib.request` /
-  `asyncio.open_connection` call site each; same `SandkilnApiError`
-  shape, different transport.
-- **`tunnel.py` / `atunnel.py`** — `Sandbox.tunnel`/`AsyncSandbox.tunnel`.
-  This package's first (and so far only) WebSocket-based feature, so
-  there's no stdlib client to build on — both hand-roll the whole thing:
-  the RFC 6455 handshake (`Sec-WebSocket-Key`/`-Accept`, verified against
-  the spec's own published test vector in review, not just "it connects"),
-  masked client frames, and the tunnel's own small binary multiplexing
-  frame (shared wire format with the JS SDK's `tunnel.ts` and the
-  daemon's `routes_tunnel.rs` — change one, change all three). `tunnel.py`
-  runs its relay loop on a background `threading.Thread`;
-  `atunnel.py` mirrors it as an `asyncio.Task`, importing every pure
-  encode/decode helper (`_encode_ws_frame`, `_encode_tunnel_frame`,
-  `_expected_accept`, ...) from `tunnel.py` rather than duplicating them —
-  only the actual I/O (blocking socket vs. `asyncio.open_connection`) is
-  written twice, same convention as every other async mirror here. Not
-  fragmentation-aware by design: every payload either side ever sends is
-  far under any size where a real WebSocket implementation would
-  fragment, so a minimal non-fragmenting reader is correct for this
-  specific protocol, not a general-purpose gap.
-- **`_config.py`** — env fallback (`SANDKILN_DAEMON_URL`/
-  `SANDKILN_AUTH_TOKEN`), matching `config.ts` exactly.
-- **`errors.py`** — `SandkilnApiError(status, message)`.
-- **`py.typed`** — empty PEP 561 marker; ships in the wheel automatically
-  via hatchling's package config, no extra `pyproject.toml` entry needed.
+## Testing and release
 
-## The bug that already happened here
+`python packages/python/tests/test_preview_url.py` and `test_status.py` (stdlib `unittest`, run directly; there is no
+`tests/__init__.py`). Minimum bar: `pip install -e .` in a venv, then `python -c "import sandkiln; sandkiln.Sandbox"`
+(what CI runs). Also verify against a real `sandkilnd` as in `packages/sdk/AGENTS.md`, and `python -m build` when
+touching `pyproject.toml`.
 
-**Never name a method the same as a builtin used in a type hint
-elsewhere in the same class.** `Sandbox.list()` shadowed `list` for
-`run_command()`'s `list[str]` hint — crashed at import time on Python
-<3.14 (3.14 defers annotation evaluation per PEP 649 and didn't
-reproduce it; CI on 3.12 did). Fixed with `from __future__ import
-annotations` at the top of every file using `X | None`/`list[X]`/etc. —
-already present everywhere; keep it in new files, and don't trust local
-3.14 testing to catch this class of bug. Also required for real 3.9
-compat (this package declares `requires-python = ">=3.9"`).
-
-## Testing
-
-`tests/test_preview_url.py` (stdlib `unittest`, mirrors the JS SDK's
-`previewUrl.test.js`) covers the one pure logic piece. Run directly
-(`python packages/python/tests/test_preview_url.py`, not `unittest
-discover` — no `tests/__init__.py`). Everything else needs a live daemon.
-
-## Building and verifying
-
-```
-python3 -m venv /tmp/some-venv
-/tmp/some-venv/bin/pip install -e .
-/tmp/some-venv/bin/python3 -c "import sandkiln; sandkiln.Sandbox"
-```
-That import check is the minimum bar (what caught the bug above, what CI
-runs) — not sufficient alone. Verify against a real `sandkilnd` the same
-way as `packages/sdk/AGENTS.md` (swap the Node script for Python).
-`python -m build` (needs `pip install build`) for the actual sdist/wheel
-when touching `pyproject.toml`.
-
-## Non-obvious things
-
-- `Sandbox.attach(id, ...)` does zero network calls, same reasoning as
-  the JS SDK's `attach`.
-
-## Publishing
-
-**Published**: [`sandkiln` on PyPI](https://pypi.org/project/sandkiln/).
-`.github/workflows/publish-python-sdk.yml` triggers on manual dispatch or
-a `py-v*.*.*` tag, builds sdist/wheel, and on a tag push checks the tag
-against `pyproject.toml`'s version before publishing via PyPI OIDC
-trusted publishing (no stored token). To ship: bump `project.version`,
-then push a matching tag or run the workflow manually (manual dispatch
-skips the version-mismatch guard — double-check the bump landed first).
+Publishing: `.github/workflows/publish-python-sdk.yml` runs on manual dispatch or a `py-v*.*.*` tag, checks the tag
+against `pyproject.toml` on tag pushes, and uses PyPI OIDC trusted publishing (no stored token). Bump
+`project.version` first; manual dispatch skips the version guard.
