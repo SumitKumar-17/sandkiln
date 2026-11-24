@@ -28,6 +28,8 @@
 #
 # Env overrides:
 #   UBUNTU_MIRROR   apt/debootstrap mirror (default: http://archive.ubuntu.com/ubuntu)
+#   DEBOOTSTRAP_CACHE  directory to keep downloaded packages in, so a retry
+#                    after a failure does not download everything again
 #   NODE_MAJOR      Node.js major release line to install (default: 24, the
 #                    Active LTS line as of 2026 — bump this as Node's LTS
 #                    line moves on: https://nodejs.org/en/about/previous-releases)
@@ -182,28 +184,26 @@ echo "==> mounting"
 mount -o loop "$OUTPUT" "$MNT"
 
 # ---------------------------------------------------------------------------
-# Bind mounts, before debootstrap runs — its second stage configures
-# packages (dpkg maintainer scripts) inside the chroot via an internal
-# chroot of its own, and those can expect /proc, /dev, /sys to already be
-# there. Standard practice for building a chroot this way. The filesystem
-# is freshly mkfs'd and otherwise completely empty (debootstrap normally
-# creates these directories itself), so mkdir -p them first as mount
-# points.
-# ---------------------------------------------------------------------------
-
-mkdir -p "$MNT/dev" "$MNT/proc" "$MNT/sys" "$MNT/etc"
-mount --bind /dev "$MNT/dev"
-mount --bind /proc "$MNT/proc"
-mount --bind /sys "$MNT/sys"
-cp /etc/resolv.conf "$MNT/etc/resolv.conf"
-
-# ---------------------------------------------------------------------------
 # debootstrap
 # ---------------------------------------------------------------------------
 
 echo "==> debootstrap: $CODENAME from $MIRROR"
+# No bind mounts yet: debootstrap makes its own /dev and /proc, and a /dev bind
+# mounted beforehand makes its `ln -s /proc/self/fd /dev/fd` write through the
+# host's /dev/fd link and fail ("/dev/fd/fd: No such file or directory", seen
+# on an Ubuntu 22.04 host). DEBOOTSTRAP_CACHE keeps the downloaded packages
+# between attempts.
+CACHE_ARGS=()
+[[ -n "${DEBOOTSTRAP_CACHE:-}" ]] && { mkdir -p "$DEBOOTSTRAP_CACHE"; CACHE_ARGS=(--cache-dir="$DEBOOTSTRAP_CACHE"); }
 debootstrap --arch=amd64 --components=main,universe,restricted,multiverse \
-  "$CODENAME" "$MNT" "$MIRROR"
+  ${CACHE_ARGS[@]+"${CACHE_ARGS[@]}"} "$CODENAME" "$MNT" "$MIRROR"
+
+# Now the chroot steps below need /dev, /proc and /sys, and the host's
+# resolver for apt and the Node.js download.
+mount --bind /dev "$MNT/dev"
+mount --bind /proc "$MNT/proc"
+mount --bind /sys "$MNT/sys"
+cp /etc/resolv.conf "$MNT/etc/resolv.conf"
 
 # Full four-component sources so `apt install` works for anything in the
 # Ubuntu archive once a sandbox is running, not just what debootstrap
@@ -306,9 +306,8 @@ rm -rf /var/lib/apt/lists/*
 SETUP_EOF
 chmod +x "$MNT/root/sandkiln-setup.sh"
 
-# debootstrap manages /proc itself internally during its own second stage
-# and may leave it unmounted afterwards — make sure our three bind mounts
-# are actually still there before chrooting in ourselves.
+# debootstrap's own /proc mount may have been replaced or left over: make
+# sure our three bind mounts are there before chrooting in ourselves.
 for sub in dev proc sys; do
   mountpoint -q "$MNT/$sub" || mount --bind "/$sub" "$MNT/$sub"
 done
