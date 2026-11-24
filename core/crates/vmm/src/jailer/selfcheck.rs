@@ -224,15 +224,36 @@ mod tests {
     fn probe_reports_the_jailers_own_failure_output() {
         let tmp = TempDir::new("probe-jailer-fails");
         let launch = probe_launch(&tmp, fake_jailer(&tmp.path, "755", 3));
-        let msg = run_probe(&launch).unwrap_err();
+        let msg = probe_retrying_text_file_busy(&launch).unwrap_err();
         assert!(msg.contains("probe failed") && msg.contains("probe-stderr"), "{msg}");
+    }
+
+    /// Runs the probe against a script this test just wrote. Executing a file that
+    /// was written moments ago can fail with ETXTBSY ("Text file busy") when a
+    /// concurrent test thread forks while this one still has the write handle open
+    /// (the child holds a copy until it execs). The kernel clears it within
+    /// milliseconds, and the real jailer is never a freshly written file, so the
+    /// retry lives in the test only.
+    fn probe_retrying_text_file_busy(launch: &JailLaunch) -> Result<(), String> {
+        let mut result = run_probe(launch);
+        for _ in 0..50 {
+            match &result {
+                Err(msg) if msg.contains("Text file busy") => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    result = run_probe(launch);
+                }
+                _ => break,
+            }
+        }
+        result
     }
 
     #[test]
     fn probe_passes_when_the_daemon_can_enter_the_jail_root() {
         let tmp = TempDir::new("probe-ok");
         let launch = probe_launch(&tmp, fake_jailer(&tmp.path, "755", 0));
-        assert!(run_probe(&launch).is_ok());
+        let result = probe_retrying_text_file_busy(&launch);
+        assert!(result.is_ok(), "{result:?}");
     }
 
     #[test]
