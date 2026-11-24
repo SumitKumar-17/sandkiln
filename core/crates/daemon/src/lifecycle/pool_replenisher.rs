@@ -3,8 +3,10 @@
 //! tick-loop shape as `crate::lifecycle::idle_reaper`.
 
 use crate::lifecycle::pool::PoolConfig;
-use crate::http::routes::sandbox::{create_sandbox_core, CreateSandboxRequest};
-use crate::http::routes::snapshot::{delete_snapshot_by_id, snapshot_and_stop, SnapshotStopError};
+use crate::http::routes::sandbox::CreateSandboxRequest;
+use crate::lifecycle::create::create_sandbox_core;
+use crate::snapshots::ops::delete::delete_snapshot_by_id;
+use crate::snapshots::ops::take::{snapshot_and_stop, SnapshotStopError};
 use crate::state::AppState;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -52,7 +54,7 @@ async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) {
         rate_limit: None,
         // Neither egress nor env is baked into a warm-boot instance -- the
         // claimer's own values (if any) are applied fresh at claim time
-        // instead, see `routes::sandbox::claim_from_pool`.
+        // instead, see `lifecycle::pool_claim::claim_from_pool`.
         egress: None,
         env: HashMap::new(),
     };

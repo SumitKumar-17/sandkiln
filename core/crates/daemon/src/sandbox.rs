@@ -17,12 +17,12 @@ pub struct Sandbox {
     /// releases it. Every other sandbox owns its lease outright.
     pub network: Option<Lease>,
     /// Always this sandbox's own private rootfs clone (fork/restore each
-    /// get a fresh one via `routes::sandbox::clone_rootfs`, never the
+    /// get a fresh one via `lifecycle::create::clone_rootfs`, never the
     /// source's file directly), so `destroy_sandbox_by_id` can always
     /// remove it unconditionally. Forking once shared the source's rootfs
     /// file directly — a real corruption bug (fork, mutate, stop, resume
     /// original: memory disagreed with disk), caught live. See
-    /// `routes::snapshot::fork_snapshot`.
+    /// `snapshots::ops::fork::fork_snapshot_by_id`.
     pub rootfs_path: PathBuf,
     /// Drives attached at creation, with read-only/write mode. Not
     /// touched on stop (drives outlive the sandbox) — removal from

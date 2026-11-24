@@ -998,6 +998,7 @@ dependencies = [
  "futures-util",
  "hyper",
  "hyper-util",
+ "libc",
  "sandkiln-protocol",
  "sandkiln-store",
  "sandkiln-vmm",

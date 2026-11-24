@@ -26,7 +26,7 @@ The per-sandbox rootfs a VM boots from is deliberately ephemeral, cloned fresh a
 
 `sandkiln_vmm::drive::DriveStore` (`core/crates/vmm/src/drive.rs`) manages a directory of drive image files, one per drive, named `<id>.ext4`. Creating one is genuinely simple: allocate a sparse file of the requested size (`file.set_len`, so actual disk usage grows with what the guest writes rather than being reserved up front, the same "let the filesystem do the work" approach the per-sandbox rootfs clone uses), then run `mkfs.ext4` against it. `DriveStore` itself has no idea which sandbox, if any, currently has a drive attached. That tracking lives entirely on the daemon side, in `sandkiln-daemon::state`, because only the daemon has the concept of a running sandbox at all.
 
-The actual exclusivity rule is one small, pure function, `can_attach_read_only` (`core/crates/daemon/src/state.rs`):
+The actual exclusivity rule is one small, pure function, `can_attach_read_only` (`core/crates/daemon/src/state/holders.rs`):
 
 ```rust
 pub fn can_attach_read_only(existing: &[bool], requesting_read_only: bool) -> bool {

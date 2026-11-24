@@ -35,6 +35,7 @@ changes, edit it in one place.
 | [images-and-auth.md](design-notes/images-and-auth.md) | Auth, images, networking, docs and examples |
 | [load-testing.md](design-notes/load-testing.md) | Planned concurrency-ceiling test |
 | [latency-investigation.md](design-notes/latency-investigation.md) | Open latency questions |
+| [feature-plan.md](design-notes/feature-plan.md) | Ordered feature plan: goals, approach and verification per item |
 | [ideas-not-started.md](design-notes/ideas-not-started.md) | Future directions and non-goals |
 
 ## Where each former roadmap section went

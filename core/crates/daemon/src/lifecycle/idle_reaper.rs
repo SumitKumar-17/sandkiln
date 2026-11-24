@@ -2,19 +2,20 @@
 //! snapshots. Full tiered-lifecycle design is written up in
 //! `docs-site/internals/pre-warmed-pools.mdx`; the invariants a reader
 //! editing this file needs: auto-suspend (pause + snapshot, see
-//! `crate::http::routes::snapshot::snapshot_sandbox_by_id`, past
+//! `crate::snapshots::ops::take::snapshot_and_stop`, past
 //! `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS`) must run before destroy (past
 //! `SANDKILN_IDLE_TIMEOUT_SECS`, see `config::Config`'s doc comments for
 //! how the two interact) each tick; archiving (past
 //! `SANDKILN_ARCHIVE_TIMEOUT_SECS`, via
-//! `crate::http::routes::snapshot::archive_snapshot_by_id`) runs regardless of
+//! `crate::snapshots::ops::archive::archive_snapshot_by_id`) runs regardless of
 //! whether either sandbox-side timeout is configured, since it's about a
 //! snapshot's own age, not a live sandbox's idle time; and this task
 //! spawns unconditionally from `main` — same no-op-tick-is-cheap
 //! reasoning `pool_replenisher` already uses.
 
-use crate::http::routes::sandbox::{stop_sandbox_by_id, StopError};
-use crate::http::routes::snapshot::{archive_snapshot_by_id, snapshot_and_stop, ArchiveError, SnapshotBlocked, SnapshotStopError};
+use crate::lifecycle::stop::{stop_sandbox_by_id, StopError};
+use crate::snapshots::ops::archive::{archive_snapshot_by_id, ArchiveError};
+use crate::snapshots::ops::take::{snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
 use crate::state::AppState;
 use std::path::PathBuf;
 use std::sync::Arc;

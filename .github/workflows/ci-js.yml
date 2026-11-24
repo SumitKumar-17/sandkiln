@@ -6,6 +6,7 @@ on:
     paths:
       - "packages/sdk/**"
       - "packages/cli/**"
+      - "packages/mcp/**"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/ci-js.yml"
@@ -14,6 +15,7 @@ on:
     paths:
       - "packages/sdk/**"
       - "packages/cli/**"
+      - "packages/mcp/**"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/ci-js.yml"
@@ -30,9 +32,12 @@ jobs:
           cache: npm
       - run: npm ci
       # sandkiln has to typecheck+build before kiln, which imports it as a
-      # workspace dependency resolved through its built dist/ — verified
+      # workspace dependency resolved through its built dist/ (sandkiln-mcp too) — verified
       # locally that skipping this order breaks kiln's typecheck.
       - run: npm run typecheck -w sandkiln
       - run: npm run build -w sandkiln
       - run: npm run typecheck -w sandkiln-cli
       - run: npm run build -w sandkiln-cli
+      - run: npm run typecheck -w sandkiln-mcp
+      - run: npm run build -w sandkiln-mcp
+      - run: npm run test -w sandkiln-mcp

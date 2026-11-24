@@ -108,7 +108,7 @@ async fn async_main(loaded: config::Loaded) {
     // `net_manager`'s free pool (via `NetworkManager::reserve`, called
     // from `reconcile`) before any live `POST /sandboxes` request can
     // race it for the same tap.
-    let reconciled_snapshots = snapshots::held::reconcile(&net_manager, &config.archive_dir);
+    let reconciled_snapshots = snapshots::held::reconcile::reconcile(&net_manager, &config.archive_dir);
     tracing::info!(count = reconciled_snapshots.len(), "reconciled snapshots from disk");
 
     // Order relative to `reconciled_snapshots` above doesn't matter --

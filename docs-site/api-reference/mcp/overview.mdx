@@ -1,0 +1,67 @@
+---
+title: MCP server
+description: Give AI agents sandkiln sandboxes as Model Context Protocol tools.
+---
+
+`sandkiln-mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server over stdio. An MCP client (an AI agent host) launches it as a subprocess, and the agent then creates sandboxes, runs code, moves files and snapshots state through tools. It is built on the [JS SDK](/api-reference/js-sdk/overview) and talks to the daemon's [HTTP API](/api-reference/http-api/overview).
+
+```bash
+npm install -g sandkiln-mcp   # installs the `sandkiln-mcp` command
+```
+
+## Client configuration
+
+```json
+{
+  "mcpServers": {
+    "sandkiln": {
+      "command": "npx",
+      "args": ["-y", "sandkiln-mcp"],
+      "env": {
+        "SANDKILN_DAEMON_URL": "http://127.0.0.1:7777",
+        "SANDKILN_AUTH_TOKEN": "omit for an unauthenticated local daemon"
+      }
+    }
+  }
+}
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SANDKILN_DAEMON_URL` | `http://127.0.0.1:7777` | Daemon address. |
+| `SANDKILN_AUTH_TOKEN` | unset | Bearer token; see [Auth](/concepts/auth). Never returned by any tool. |
+| `SANDKILN_MCP_MAX_OUTPUT_BYTES` | `32768` | Cap on text returned by one tool call. |
+| `SANDKILN_MCP_MAX_SANDBOXES` | `8` | Most live sandboxes one session may hold. |
+| `SANDKILN_MCP_KEEP_ON_EXIT` | `0` | `1` snapshots leftover sandboxes at exit instead of destroying them. |
+
+## Tools
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `sandbox_create` | `image`, `vcpu`, `mem_mib`, `name`, `tags`, `env`, `egress` (`allow_all`/`deny_all`), `allow_cidrs` | `sandbox_id` |
+| `sandbox_exec` | `sandbox_id`, `command`, `args`, `env`, `timeout_seconds` (default 60, max 600) | `exit_code`, `stdout`, `stderr`, truncation flags and total sizes |
+| `sandbox_write_file` | `sandbox_id`, `path`, `content`, `encoding` (`utf8`/`base64`) | `bytes_written` (4 MiB limit) |
+| `sandbox_read_file` | `sandbox_id`, `path`, `max_bytes` | `content` as `utf8` or `base64`, `total_bytes`, `truncated` |
+| `sandbox_list_dir` | `sandbox_id`, `path` | up to 500 entries with type, size, mode, mtime |
+| `sandbox_snapshot` | `sandbox_id` | `snapshot_id`; the sandbox id is retired |
+| `snapshot_list` | `source_sandbox_id` | held snapshots and the live fork of each |
+| `sandbox_resume` | `snapshot_id` | new `sandbox_id`; the snapshot is consumed |
+| `sandbox_fork` | `snapshot_id` | new `sandbox_id`; the snapshot is kept (one live fork at a time) |
+| `sandbox_stop` | `sandbox_id`, `keep` (default `false`) | `kept`, `snapshot_id` |
+| `sandbox_list` | `tags` | live sandboxes, flagging those this session created |
+| `daemon_status` | none | [`GET /status`](/api-reference/http-api/status) document |
+
+Resources: `sandkiln://sandboxes` and `sandkiln://status`.
+
+`sandbox_exec` runs the command directly, not through a shell; use `command: "sh"`, `args: ["-c", "..."]` for pipes. A nonzero exit code is a normal result. Output past the cap keeps its head and tail with a marker between.
+
+## Errors
+
+A failure is an `isError` result whose text is `{"error": {"kind", "message", "status", "hint"}}`. `kind` is one of `invalid_request`, `unauthorized`, `not_found`, `conflict`, `rate_limited`, `daemon_error`, `daemon_unreachable`, `timeout`, `limit_reached`, `internal`; `hint` says what to try next.
+
+## Cleanup and safety
+
+- Sandboxes the session created, resumed or forked are destroyed when the client disconnects or the server receives `SIGTERM` or `SIGINT`. `SIGKILL` cannot be intercepted; those sandboxes stay until an operator removes them.
+- Snapshots are durable and outlive the session.
+- The `sandbox_exec` timeout is client-side. A timed-out process may keep running inside the sandbox, because the daemon has no exec kill yet.
+- Tools accept any sandbox id on the daemon, not only the session's own. Use an auth token whenever the daemon is reachable by others, and pass `egress: "deny_all"` for code that must stay offline.

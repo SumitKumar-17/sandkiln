@@ -49,7 +49,7 @@ behavior belongs here, not in `daemon`.
   `network`.
 - **`vm/snapshot.rs`** — `Vm::pause`/`snapshot`/`resume`, `ResumeConfig`.
   `resume` always spawns directly — jailer covers `Vm::boot` only;
-  `daemon`'s `http/routes/snapshot.rs` (`snapshot_and_stop`) refuses to snapshot a
+  `daemon`'s `snapshots/ops/take.rs` (`snapshot_and_stop`) refuses to snapshot a
   jailed sandbox for this reason.
 - **`rootfs.rs`** — per-sandbox rootfs clone via native `FICLONE` reflink,
   falling back to a full copy, reporting which happened

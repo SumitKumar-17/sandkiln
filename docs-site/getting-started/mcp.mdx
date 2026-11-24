@@ -1,0 +1,22 @@
+---
+title: "First sandbox: MCP"
+description: Let an AI agent use sandkiln sandboxes through the Model Context Protocol.
+---
+
+Add the server to your MCP client's configuration, pointing at a running daemon:
+
+```json
+{
+  "mcpServers": {
+    "sandkiln": {
+      "command": "npx",
+      "args": ["-y", "sandkiln-mcp"],
+      "env": { "SANDKILN_DAEMON_URL": "http://127.0.0.1:7777" }
+    }
+  }
+}
+```
+
+Restart the client and ask the agent to run some code in a sandbox. Behind the scenes it calls `sandbox_create`, then `sandbox_exec`, `sandbox_write_file` and `sandbox_read_file`, then `sandbox_stop`. Anything it forgets to stop is destroyed when the client disconnects.
+
+The full tool list, environment variables, error kinds and safety notes are in the [MCP server reference](/api-reference/mcp/overview).

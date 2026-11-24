@@ -7,7 +7,7 @@
 //! promises: it snapshots each live sandbox, and only destroys the ones that
 //! structurally cannot be snapshotted (jailed ones).
 
-use crate::http::routes::sandbox::{stop_sandbox_by_id, StopError};
+use crate::lifecycle::stop::{stop_sandbox_by_id, StopError};
 use crate::state::AppState;
 use futures_util::future::join_all;
 use std::sync::Arc;

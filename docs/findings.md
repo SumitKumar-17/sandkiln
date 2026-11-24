@@ -156,9 +156,13 @@ and scripts that read the daemon's effective config.
 
 ## Code structure
 
-### 6. Large files mixing concerns. Open
-`routes_sandbox.rs` 946, `routes_snapshot.rs` 931, `snapshot.rs` 897,
-`state.rs` 834 lines. Split per AGENTS.md section 2.
+### 6. Large files mixing concerns. Fixed
+The sandbox and snapshot routes each mixed HTTP handlers with the lifecycle
+operations, and `held.rs` and `state.rs` each mixed several concerns. The
+operations moved to `snapshots/ops/` (take, resume, fork, delete, archive) and
+`lifecycle/` (`create`, `create_options`, `stop`); the routes keep DTOs and thin
+handlers. `held.rs` split into `held`, `held/reconcile` and a shared
+`snapshots/layout`; `state.rs` into `state`, `state/holders` and `state/naming`.
 
 ### 19. Daemon `src/` was 36 flat files. Fixed
 `main.rs` held the whole router. Now `http/routes`, `lifecycle`,

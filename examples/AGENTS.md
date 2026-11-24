@@ -48,6 +48,12 @@ user would actually write.
   machine, opens a tunnel with `sandbox.tunnel()`, then `curl`s it from
   **inside** the sandbox and confirms the exact bytes came back — the
   reverse of `dev-server-preview/`.
+- `benchmark-suite/` — TypeScript (Node >= 22.18, no build step). Client-side
+  benchmarks against any daemon: create, first command, exec, snapshot, fork,
+  resume, parallel create; JSON/Markdown output, `compare` mode, node:test
+  unit tests for the pure modules, and a committed sample under `results/`.
+  Reads `/status` directly because the SDK's `getStatus` is newer than the
+  pinned 0.12.0. Run via `scripts/dev.sh bench-suite`.
 
 ## Conventions
 

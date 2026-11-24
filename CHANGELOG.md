@@ -12,6 +12,26 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Examples — 2026-11-24
+
+### Added
+- `examples/benchmark-suite`: a reproducible client-side benchmark (create,
+  first command, exec round trip, snapshot, fork, resume, parallel create)
+  with JSON and Markdown output, a `compare` mode that flags regressions, a
+  committed sample result, and `scripts/dev.sh bench-suite`.
+
+## sandkiln-mcp 0.1.0 — 2026-11-24
+
+### Added
+- `packages/mcp`: a Model Context Protocol server over stdio that exposes
+  sandboxes to AI agents. Tools: `sandbox_create`, `sandbox_exec`,
+  `sandbox_write_file`, `sandbox_read_file`, `sandbox_list_dir`,
+  `sandbox_snapshot`, `snapshot_list`, `sandbox_resume`, `sandbox_fork`,
+  `sandbox_stop`, `sandbox_list`, `daemon_status`; resources
+  `sandkiln://sandboxes` and `sandkiln://status`. Output is size-bounded,
+  errors are structured, and sandboxes a session created are destroyed when it
+  ends. Reference: [MCP server](docs-site/api-reference/mcp/overview.mdx).
+
 ## Daemon & core — 2026-11-24
 
 ### Added

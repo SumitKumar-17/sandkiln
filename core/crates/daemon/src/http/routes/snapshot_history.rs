@@ -79,7 +79,7 @@ pub struct RestoreSnapshotHistoryResponse {
 
 /// RAII for `try_reserve_pending_tap_restore`/`release_pending_tap_restore`
 /// — releases on drop, covering every exit path. Mirrors
-/// `routes::sandbox::PendingImageBootGuard`.
+/// `lifecycle::create::PendingImageBootGuard`.
 struct PendingTapRestoreGuard {
     state: Arc<AppState>,
     tap_device: String,
@@ -151,14 +151,14 @@ pub(crate) async fn restore_snapshot_history_by_id(state: Arc<AppState>, id: Str
         let source = retired.rootfs_path.clone();
         let dest = new_rootfs_path.clone();
         let state = state.clone();
-        move || crate::http::routes::sandbox::clone_rootfs(&source, &dest, &state.metrics)
+        move || crate::lifecycle::create::clone_rootfs(&source, &dest, &state.metrics)
     })
     .await
     .map_err(AppError::from)?;
 
     // `Some(clone)`: the restored VM writes to its own disk, never the retired
     // checkpoint's, which must stay pristine so it can be restored again.
-    let result = crate::http::routes::snapshot::resume_vm(
+    let result = crate::snapshots::ops::resume::resume_vm(
         &state,
         retired.snapshot_path.clone(),
         retired.mem_file_path.clone(),

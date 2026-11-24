@@ -18,13 +18,19 @@ src/
   http/              mod.rs build_router; auth.rs error.rs request_id.rs
     routes/          one file per API resource (sandbox, exec, fs, logs, pty, preview, tunnel,
                      mounts, drives, images, pool, snapshot, snapshot_history, metrics, ...)
-  lifecycle/         idle_reaper.rs pool.rs pool_claim.rs pool_replenisher.rs shutdown.rs
-  snapshots/         held.rs (live resumable snapshots) retired.rs (lease-free checkpoints)
-  state.rs sandbox.rs storage.rs metrics.rs log_session.rs tracing_util.rs
+  lifecycle/         create.rs create_options.rs stop.rs idle_reaper.rs pool.rs pool_claim.rs
+                     pool_replenisher.rs shutdown.rs
+  snapshots/         held.rs + held/reconcile.rs (live resumable snapshots) retired.rs (lease-free
+                     checkpoints) layout.rs (shared on-disk layout) ops/ (take resume fork delete archive)
+  state.rs + state/  AppState; holders.rs (who holds a drive/image/tap) naming.rs (names + name locks)
+  sandbox.rs storage.rs metrics.rs log_session.rs tracing_util.rs
 ```
 
 Dependency direction: `http` and `lifecycle` call into `state`/`snapshots`/`sandkiln-vmm`;
-nothing under `snapshots/` or `state` knows about HTTP. A new endpoint is a new file in
+`snapshots/` and `state` hold no routing or request parsing (the operations return
+`AppError` so a route can pass it straight through). Route files keep extraction,
+validation and response shaping; the lifecycle logic lives in `lifecycle/` and
+`snapshots/ops/`. A new endpoint is a new file in
 `http/routes/` plus one line in `http/mod.rs`'s `build_router`.
 
 ## Files
@@ -67,14 +73,17 @@ nothing under `snapshots/` or `state` knows about HTTP. A new endpoint is a new 
 - **`lifecycle/shutdown.rs`** — on SIGTERM/SIGINT: stop accepting, grace period
   for in-flight requests, then snapshot every live sandbox (destroy the ones that
   cannot be snapshotted). Verified by `scripts/restart-test.sh`.
-- **`state.rs`** — `AppState`: config, `NetworkManager`, optional
+- **`state.rs` / `state/`** — `state.rs` is `AppState` itself plus
+  `AttachedDrive`/`Mount`; `state/holders.rs` and `state/naming.rs` extend it
+  (re-exported from `state`). `AppState`: config, `NetworkManager`, optional
   `JailerIdPool`, in-memory `Mutex<HashMap<String, Sandbox>>` (the
   daemon's entire live-state notion — doesn't survive a restart, and per
   `sandkiln-store`'s own doc comment can't realistically be re-adopted).
   `AppState::history` is the separate durable "did this exist and how
-  did it end" answer. Also owns: naming (`name_holder`/`resolve_name`,
-  live wins over snapshot; `lock_name` serializes concurrent claims of
-  one name); `drives`/`images` plus `drive_holder()`/`image_holder()`
+  did it end" answer. Also owns: naming (`state/naming.rs`:
+  `name_holder`/`resolve_name`, live wins over snapshot; `lock_name`
+  serializes concurrent claims of one name); `drives`/`images` plus
+  `drive_holders()`/`image_holder()` (`state/holders.rs`)
   ("who holds this" across live sandboxes + held snapshots, the
   mechanism that prevents double-attaching a drive); `pools` (in-memory
   only, not reconciled from disk — see `lifecycle/pool.rs`); `retired_snapshots`
@@ -99,27 +108,35 @@ nothing under `snapshots/` or `state` knows about HTTP. A new endpoint is a new 
   so a resumed sandbox stays snapshottable, while lineage needs `Some`
   on both), and `env` (unlike `egress`, identical on resume *and* fork —
   plain data, no external resource to protect).
-- **`http/routes/sandbox.rs`** — create/list/stop/history.
-  `create_sandbox_cold` times the rootfs clone and network lease each on
-  their own thread (`timed` + `thread::scope`) and records sub-phases via
-  `metrics::CreatePhase` — filter with `RUST_LOG=sandkilnd=debug` (the
-  **binary** name; `sandkiln_daemon` matches nothing).
-  `stop_sandbox_by_id()` is the shared stop path (used by `DELETE` and
-  `idle_reaper`): defaults to snapshot-then-stop,
-  `destroy_sandbox_by_id()` reached via `?keep=false` or as the correct
-  fallback for a fork (nothing to preserve) or a jailed sandbox (can't
-  snapshot). Both release a stopped sandbox's `source_pool_id` slot back
-  to its pool. `create_sandbox_core()` is the shared boot logic (also
-  used by `get_or_create_sandbox`): resolves name-uniqueness, which
-  rootfs to clone, reserves a pending-image-boot claim around the clone
-  so a concurrent `DELETE /images/:id` can't race it, and tries a
-  pre-warmed pool claim first when the request has no `drives`/
-  `rate_limit`. `resolve_egress_policy` validates every CIDR up front
-  (`400` naming the bad one); unlike `drives`/`rate_limit`, egress
-  doesn't disqualify a pool claim (it's host-side iptables applied after
-  boot, not baked into Firecracker state) — fatal-on-failure for a fresh
-  create/claim, loud-warning-only for resume/fork (destroying a
-  one-way-operation success over an iptables hiccup would be worse).
+- **`http/routes/sandbox.rs`** — create/list/stop/history: the request/response
+  DTOs (`CreateSandboxRequest` and friends), listing, history, query parsing
+  and thin handlers over `lifecycle/create.rs` and `lifecycle/stop.rs`.
+- **`lifecycle/create.rs`** — the create path. `create_sandbox_core()` is the
+  shared boot logic (also used by `get_or_create_sandbox` and the pool
+  replenisher): resolves drive conflicts and resource overrides, tries a
+  pre-warmed pool claim first when the request has no `drives`/`rate_limit`,
+  and falls back to `create_sandbox_cold`, which times the rootfs clone and
+  network lease each on their own thread (`timed` + `thread::scope`) and
+  records sub-phases via `metrics::CreatePhase` — filter with
+  `RUST_LOG=sandkilnd=debug` (the **binary** name; `sandkiln_daemon` matches
+  nothing). `PendingImageBootGuard` reserves a pending-image-boot claim around
+  the clone so a concurrent `DELETE /images/:id` can't race it. `clone_rootfs`
+  is the one way any mutating sandbox gets its own disk. Egress doesn't
+  disqualify a pool claim (it's host-side iptables applied after boot, not
+  baked into Firecracker state) — fatal-on-failure for a fresh create/claim,
+  loud-warning-only for resume/fork (destroying a one-way-operation success
+  over an iptables hiccup would be worse).
+- **`lifecycle/create_options.rs`** — pure validation of the optional create
+  knobs: `resolve_resource_override`, `resolve_rate_limit`,
+  `resolve_egress_policy` (validates every CIDR up front, `400` naming the bad
+  one) and `first_duplicate`.
+- **`lifecycle/stop.rs`** — `stop_sandbox_by_id()` is the shared stop path
+  (used by `DELETE`, `idle_reaper` and `shutdown`): defaults to
+  snapshot-then-stop, `destroy_sandbox_by_id()` reached via `?keep=false` or as
+  the correct fallback for a fork (nothing to preserve) or a jailed sandbox
+  (can't snapshot). Both release a stopped sandbox's `source_pool_id` slot back
+  to its pool. `StopOutcome`/`StopError` carry no HTTP type; the route maps
+  `StopError::CannotPreserve` through its own `cannot_preserve_error`.
 - **`http/routes/sandbox_name.rs`** — `GET /sandboxes/by-name/:name` (live
   only; a name held by a snapshot is `409`, not a silent resume) and
   `POST /sandboxes/get-or-create` (race-safe under `lock_name`).
@@ -152,22 +169,26 @@ nothing under `snapshots/` or `state` knows about HTTP. A new endpoint is a new 
   (`Warm`/`ColdSlot`/`NoPool`), `PoolClaimGuard` (RAII commit-or-release),
   `claim_from_pool` (resume + health check + bounded `Vm::update_metadata`
   retry for the MMDS settling-window race). Split out of
-  `http/routes/sandbox.rs` once claiming pushed it past a defensible size.
+  `lifecycle/create.rs` once claiming pushed it past a defensible size.
 - **`http/routes/pool.rs`** — pool *configuration* only (`max_count`, rejects
   explicit `0` — omit for unbounded). `DELETE` wakes queued waiters first
   so they fail clearly instead of timing out on a pool that's gone.
 - **`lifecycle/idle_reaper.rs`** — unconditional background task; see
   `docs-site/internals/pre-warmed-pools.mdx`. Runs auto-suspend, then
   destroy, then an independent archive pass each tick.
-- **`snapshots/held.rs`** — `Snapshot` + durability: atomic `meta.json`
-  write-then-rename, `reconcile()` rebuilds `AppState::snapshots` from
-  disk (hot dir + archive dir, filesystem is the source of truth, same
-  pattern as `DriveStore::list()`) — a snapshot missing any of its three
-  files is treated as a crash-mid-write and skipped with a warning.
-  `Snapshot.egress`/`parent_snapshot_id` are `#[serde(default)]` for
+- **`snapshots/held.rs` / `snapshots/held/reconcile.rs`** — `Snapshot` +
+  durability: atomic `meta.json` write-then-rename, and `reconcile()` rebuilds
+  `AppState::snapshots` from disk (hot dir + archive dir, filesystem is the
+  source of truth, same pattern as `DriveStore::list()`) — a snapshot missing
+  any of its three files is treated as a crash-mid-write and skipped with a
+  warning. `Snapshot.egress`/`parent_snapshot_id` are `#[serde(default)]` for
   forward compat. `move_snapshot_files` **never touches `rootfs_path`** —
   its absolute host path is baked into `state.snap` itself, moving it
   breaks every future resume/fork (proved live).
+- **`snapshots/layout.rs`** — where a snapshot directory lives (hot root,
+  archive root), the three fixed filenames, `write_atomically` and `move_file`;
+  shared by `held` and `retired`. `snapshots/test_support.rs` is the
+  `cfg(test)` fixture (`TempDir`, `test_network`).
 - **`snapshots/retired.rs`** — `RetiredSnapshot` (time-travel restore):
   resuming retires a snapshot here instead of deleting it, restorable
   repeatedly. Holds a bare `NetworkConfig`, not a live `Lease` — nothing
@@ -179,20 +200,29 @@ nothing under `snapshots/` or `state` knows about HTTP. A new endpoint is a new 
   fresh and reserves a new lease. Resulting sandbox:
   `source_snapshot_id: None`, `parent_snapshot_id: Some(checkpoint)` —
   restoring doesn't consume it.
-- **`http/routes/drives.rs` / `http/routes/snapshot.rs`** — the real mechanics
-  (`snapshot_and_stop`, `resume_snapshot_by_id`, `delete_snapshot_by_id`,
-  `archive_snapshot_by_id`, all `pub(crate)`) live here, reused
-  everywhere else in the crate so there's exactly one definition of each
-  operation. `check_snapshottable` refuses a jailed sandbox (can never be
-  resumed correctly) or a fork (doesn't own its lease outright).
+- **`snapshots/ops/`** — the real mechanics, one file per operation, all
+  `pub(crate)` and reused everywhere else in the crate so there's exactly one
+  definition of each: `take.rs` (`snapshot_and_stop`, `check_snapshottable`,
+  `SnapshotStopError`), `resume.rs` (`resume_snapshot_by_id`, `resume_vm`,
+  `retire_snapshot_files`), `fork.rs` (`fork_snapshot_by_id`), `delete.rs`
+  (`delete_snapshot_by_id`), `archive.rs` (`archive_snapshot_by_id`,
+  `ArchiveError`); `mod.rs` holds `check_no_live_fork`, the guard behind
+  resume/fork/delete. `check_snapshottable` refuses a jailed sandbox (can never
+  be resumed correctly) or a fork (doesn't own its lease outright).
   `resume_snapshot_by_id`'s `retain_history: bool` defaults to retiring
   (not deleting) the checkpoint — falls back to delete-and-reuse as a
   loud warning, not a fatal error, if retiring fails after the VM already
-  resumed. `fork_snapshot()` clones the rootfs BEFORE resuming and resumes onto the
-  clone via `ResumeConfig::rootfs_override`, so the snapshot's own disk is never
-  written (a resumed VM otherwise writes the host path baked into the snapshot:
-  a real corruption bug, regression test topic 26). Retain-history resume and
-  history restore do the same; `retained_checkpoints_max` caps retired checkpoints.
+  resumed. `fork_snapshot_by_id()` clones the rootfs BEFORE resuming and resumes
+  onto the clone via `ResumeConfig::rootfs_override`, so the snapshot's own disk
+  is never written (a resumed VM otherwise writes the host path baked into the
+  snapshot: a real corruption bug, regression test topic 26). Retain-history
+  resume and history restore do the same; `retained_checkpoints_max` caps
+  retired checkpoints.
+- **`http/routes/snapshot.rs`** — the snapshot resource's routing, DTOs
+  (`SnapshotSummary`, responses), `?retain_history=` / list-filter query
+  parsing and thin handlers over `snapshots/ops/`. The design notes for
+  snapshot/resume/fork sit in this file's module doc.
+- **`http/routes/drives.rs`** — drive create/list/delete; `DriveAttachment`.
 - **`http/routes/metrics.rs`** — unauthenticated like `/healthz` (operational
   data, not sandbox data).
 - **`http/routes/preview.rs`** — reverse-proxies to

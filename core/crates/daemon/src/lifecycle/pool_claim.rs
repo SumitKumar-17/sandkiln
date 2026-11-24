@@ -1,13 +1,13 @@
 //! Resolving and executing a `POST /sandboxes` request against a
-//! configured pre-warmed pool — split out of `http/routes/sandbox.rs` (claiming
+//! configured pre-warmed pool — split out of `lifecycle/create.rs` (claiming
 //! is a distinct concern from configuring/replenishing, same reasoning as
 //! `lifecycle/pool_replenisher.rs`'s own split, even with no HTTP route of its own:
-//! `routes::sandbox::create_sandbox_core` is the only caller). See
+//! `lifecycle::create::create_sandbox_core` is the only caller). See
 //! `crate::lifecycle::pool` for the feature's overall shape.
 
 use crate::http::error::AppError;
 use crate::http::routes::sandbox::CreateSandboxRequest;
-use crate::http::routes::snapshot::resume_snapshot_by_id;
+use crate::snapshots::ops::resume::resume_snapshot_by_id;
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
 use std::sync::Arc;
