@@ -1,33 +1,18 @@
 # sandkiln interactive terminal
 
-A minimal reference example of interactive terminal access: open a live,
-bidirectional shell session inside an isolated sandkiln sandbox from your
-own terminal, using the published `sandkiln` npm package's
-`Sandbox.pty()` — not a toy snippet.
+Open a live shell inside a sandbox from your own terminal with `Sandbox.pty()`, the same way `kiln sandbox pty` does.
 
 ## What it does
 
-1. Creates a sandbox with `Sandbox.create()`.
-2. Opens a real, interactive shell inside it with `sandbox.pty()` — this
-   returns a plain `WebSocket`, not a promise of one result; the session
-   stays open until the remote shell exits (or the connection drops).
-3. Puts this process's own stdin into raw mode and wires it straight to
-   the WebSocket, and writes everything the shell sends back straight to
-   stdout — the same shape `kiln sandbox pty` itself uses internally.
-4. On `exit`/Ctrl+D (the shell ending, which closes the WebSocket) or
-   Ctrl+C (delivered to the *remote* shell, not this process — raw mode
-   means Node never intercepts it), stops the sandbox with
-   `sandbox.stop()`.
+1. Creates a sandbox and opens a shell with `pty()`, which returns a `WebSocket` that stays open until the shell exits.
+2. Puts stdin in raw mode, wires it to the socket and writes the shell's output to stdout.
+3. On `exit`/Ctrl+D, or Ctrl+C (delivered to the remote shell, since raw mode stops Node intercepting it), calls `stop()`.
 
-See `index.js` — it's the whole program.
+The whole program is `index.js`.
 
 ## Requirements
 
-A running `sandkilnd` daemon reachable from this machine — see
-[`SELF_HOSTING.md`](../../SELF_HOSTING.md) at the repo root for how to
-stand one up. There is no hosted service. Needs a real TTY to run
-interactively (piping stdin still works for scripted input, just without
-raw-mode keystroke passthrough).
+A running `sandkilnd` daemon ([`SELF_HOSTING.md`](../../SELF_HOSTING.md)). There is no hosted service. It needs a real TTY to be interactive; piped stdin works without raw-mode passthrough.
 
 ## Run it
 
@@ -39,18 +24,11 @@ node index.js
 
 ## Configuration
 
-- `SANDKILN_DAEMON_URL` — base URL of the daemon. Defaults to
-  `http://127.0.0.1:7777`.
-- `SANDKILN_AUTH_TOKEN` — auth token, only needed if the daemon was
-  started with one. When set, `Sandbox.pty()` appends it to the
-  WebSocket URL as a `?token=` query parameter automatically, since
-  neither browsers' nor Node's native `WebSocket` constructor can set a
-  custom `Authorization` header.
+- `SANDKILN_DAEMON_URL`: daemon base URL (default `http://127.0.0.1:7777`).
+- `SANDKILN_AUTH_TOKEN`: only needed if the daemon has a token.
 
-## Known limitations
+## Notes
 
-- No live resize — `cols`/`rows` size the session once, at open time.
-  Resizing your terminal after that won't reach the remote shell.
-- A per-sandbox concurrent-session cap (64) is enforced by the daemon;
-  irrelevant for this single-session example, but worth knowing if
-  you're scripting many sessions against one sandbox.
+- With an auth token set, `pty()` appends it as `?token=` because `WebSocket` cannot set headers.
+- No live resize: `cols` and `rows` apply once at open.
+- The daemon caps concurrent sessions at 64 per sandbox.
