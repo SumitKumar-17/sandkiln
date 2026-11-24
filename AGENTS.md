@@ -109,7 +109,7 @@ skipping the test.
 
 - `cargo test --workspace` (from `core/`) — pure logic, no KVM needed.
 - `scripts/integration-test.sh [base-url]` — full daemon API against a
-  real `sandkilnd`, 33 topic files under `scripts/integration-tests/`,
+  real `sandkilnd`, 34 topic files under `scripts/integration-tests/`,
   run concurrently by default. A topic must compare exact id sets, never
   a global count (`18-pool.sh` is the pattern) — concurrent topics make
   global counts flaky. Add a case here for every new HTTP-facing feature.
