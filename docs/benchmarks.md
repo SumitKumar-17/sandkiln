@@ -133,7 +133,7 @@ moving the interface setup out of `ip=`.
 
 Two measurement traps hit on the way, both recorded because they are easy to
 repeat: (1) a first pair of init runs showed `create_call` 98ms instead of
-22ms and a total of 222ms, a 3-4ms-per-MB full copy of the image, because
+22ms and a total of 222ms, a full copy of the 300MB image on every create, because
 registering an image copies it into `images_dir`, which was on the ext4 root
 volume (no reflink); those two runs are discarded (`rootfs_clones.copy` rose
 by 60). (2) The suite measures create plus first command, so a faster `create`
