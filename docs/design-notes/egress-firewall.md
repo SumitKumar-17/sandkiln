@@ -7,26 +7,18 @@
 whatever `deny_cidrs` subtracts) or `deny_all` (nothing outbound except
 `allow_cidrs`).
 
-How it is enforced (`sandkiln_vmm::egress`):
-- One dedicated iptables chain per sandbox, named from its tap device, with
-  a single jump rule inserted ahead of the bridge-wide `FORWARD ACCEPT` so
-  only that sandbox is affected.
-- Within the chain: all `deny_cidrs`, then all `allow_cidrs`, then the base
-  mode's default. First match wins, so deny beats allow on overlap with no
-  special-casing.
-- Rules match only traffic leaving via the uplink interface. Gateway-bound
-  traffic (DNS to the bridge IP) never transits the uplink, so it is
-  structurally exempt: even `deny_all` with an empty allowlist can still
-  resolve names but reaches nothing past the gateway.
-- A policy is tied to the lease, not the VM. Applied when a lease goes live
-  (boot, pool claim, resume, fork), removed when the lease is released
-  (destroy or deleting a held snapshot). A snapshot-and-stop leaves the
-  chain dormant but intact, like the tap.
-- Persists through snapshot, resume and fork, re-applied from the
-  snapshot's retained policy each time (iptables state does not survive a
-  host reboot). A re-apply failure on resume or fork is a loud warning, not
-  fatal: both are hard to redo, and this is a best-effort hardening layer,
-  the same framing as the jailer.
+How it is enforced (one dedicated iptables chain per sandbox, deny rules
+before allow rules so deny wins on overlap, uplink-scoped rules so gateway
+DNS is structurally exempt, the policy tied to the lease and re-applied
+idempotently on resume and fork): see
+[the egress internals page](../../docs-site/internals/egress-iptables.mdx).
+Not on that page:
+- A re-apply failure on resume or fork is a loud warning, not fatal: both are
+  hard to redo, and this is a best-effort hardening layer, the same framing as
+  the jailer.
+- A snapshot-and-stop leaves the chain dormant but intact, like the tap; it
+  is removed only when the lease is released (destroy, or deleting a held
+  snapshot).
 
 Verified live: `deny_all` blocks an unlisted LAN destination; an
 `allow_cidrs` entry reopens it; a `deny_cidrs` entry blocks one destination
@@ -41,17 +33,24 @@ route, so a LAN address was used.
 SDK and CLI: `Sandbox.create({ egress })` / `getOrCreate({ egress })`
 (JS/TS), `egress_mode`/`egress_allow_cidrs`/`egress_deny_cidrs` kwargs
 (Python), `--egress-mode <allow_all|deny_all>` with repeatable
-`--allow-cidr`/`--deny-cidr` (CLI). Reference project:
+`--allow-cidr`/`--deny-cidr` (CLI), live-verified end to end in all three with a real LAN address (pinged
+with no policy, blocked under `deny_all`, reachable again with a matching
+`allow_cidrs`). It was daemon-HTTP-only first, the same deliberate
+first-slice cut as pool `max_count`. Reference project:
 `examples/egress-policy`.
 
 ## Hot-path fix
 
-`egress::apply` spawned one `iptables` per rule (a 6-CIDR policy meant 9
-spawns, about 8.3ms per create). It now loads one `iptables-restore
---noflush`; only the two shared-`FORWARD` rules remain separate calls (a
-`-C` check, and `-I` only when missing). Measured 8.3ms to 3.1ms (-63%),
-over 17 fresh creates. A new `egress_apply` create-phase metric (recorded
-only when a policy is requested) makes the cost visible.
+The `iptables-restore --noflush` batching is explained on the
+[egress internals page](../../docs-site/internals/egress-iptables.mdx)
+(8.3ms to 3.1ms, -63%, a new `egress_apply` phase metric). Not on that page:
+measured over 17 fresh creates as the
+`create_phase_duration_ms{phase="egress_apply"}` delta with a 6-CIDR policy
+(9 spawns before, about 3 after: one `iptables-restore` plus the two shared
+`FORWARD` calls). It was flagged as a real, unmeasured cost by the same audit
+that found the `Vm::call` retry bug (see [findings](../findings.md),
+finding 11). Unit tests and clippy clean; full integration suite 300/300 at
+the time, including `19-egress.sh`.
 
 ## Deferred
 

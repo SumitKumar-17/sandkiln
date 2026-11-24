@@ -6,10 +6,11 @@ reattached to a new one.
 ## Read-only shared drives
 
 A drive attached read-only may be attached to any number of sandboxes at
-once. A read-write attachment, existing or requested, still needs a single
-exclusive holder. `AppState::drive_holders()` tracks every holder and
-whether each is read-only; `can_attach_read_only()` is the pure rule. It
-covers held snapshots as well as live sandboxes.
+once; a read-write attachment still needs a single exclusive holder. The
+rule (`can_attach_read_only()`, `AppState::drive_holders()`) is on the
+[drives internals page](../../docs-site/internals/drives.mdx); it covers held
+snapshots as well as live sandboxes, and any read-write case behaves exactly
+as before read-only sharing existed.
 
 ## SDK and CLI
 
@@ -20,25 +21,23 @@ covers held snapshots as well as live sandboxes.
 ## Remote storage mounts
 
 `POST/GET/DELETE /sandboxes/:id/mounts` mounts an S3-compatible bucket via
-`rclone mount` running entirely inside the guest. No new wire protocol: it
-chains the existing `Mkdir`/`WriteFile`/`Chmod`/`Exec` requests (see
-`routes_mounts.rs`).
+`rclone mount` running entirely inside the guest, with no new wire protocol
+(see `routes_mounts.rs` and the
+[FUSE and rclone internals page](../../docs-site/internals/fuse-rclone-mounts.mdx),
+which covers the chained requests, the `0600` credentials file, the
+`mountpoint -q` verification and why nothing is re-applied on resume).
 
-Prerequisites a stock setup lacks:
-- A guest kernel with `CONFIG_FUSE_FS` (Firecracker's default configs omit
-  it and guest kernels cannot load modules): `images/build-guest-kernel.sh`.
-- `rclone` and `fusermount3` in the rootfs:
-  `images/inject-rclone.sh`, `scripts/dev.sh inject-rclone`. See
-  `SELF_HOSTING.md`, "Remote storage mounts (optional)".
-
-Credentials reach the guest as a `0600` rclone config via
-`WriteFile`+`Chmod`, never as a command-line argument. There is no
-re-application on resume, fork or restore: a mount is a live guest FUSE
-process captured by the Firecracker snapshot with the rest of memory.
+Prerequisites a stock setup lacks: a guest kernel with `CONFIG_FUSE_FS`
+(`images/build-guest-kernel.sh`) and `rclone`/`fusermount3` in the rootfs
+(`images/inject-rclone.sh`, `scripts/dev.sh inject-rclone`). See
+`SELF_HOSTING.md`, "Remote storage mounts (optional)".
 
 SDK and CLI: `Sandbox.mount()/listMounts()/unmount()` (JS/TS),
 `mount()/list_mounts()/unmount()` (Python), `kiln sandbox
-mount|mounts|unmount`. Verified live for the empty-list case and a clean
+mount|mounts|unmount`. Mounts were daemon-HTTP-only for a while: `examples/remote-storage-mount`
+called the three routes with raw `fetch()` until the SDK/CLI surface landed.
+Verified live against a real daemon for the empty-list case (`listMounts()`
+on a mount-free sandbox) and a clean
 `SandkilnApiError` against an unreachable endpoint. A full success needs a
 real S3-compatible endpoint the dev box lacks (same caveat as
 `scripts/integration-tests/22-mounts.sh`).

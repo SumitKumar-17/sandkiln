@@ -8,14 +8,14 @@ sandbox, seven sessions.
 
 | Feature | Behavior |
 | --- | --- |
-| Snapshot/resume | `POST /sandboxes/:id/snapshot`, `POST /snapshots/:id/resume`. Full memory and disk saved; resume skips boot and dependency install. `Sandbox.snapshot()`/`resume()` in both SDKs, `kiln sandbox snapshot|resume`. Works with drives attached. |
-| Durable across daemon restart | Metadata written atomically beside the state/memory files and reconciled at startup. The held tap device is reserved out of the pool before the daemon accepts creates, preventing a double-lease race. Not durable across a host reboot unless `SANDKILN_STATE_DIR` is persistent (see `SELF_HOSTING.md`). |
+| Snapshot/resume | `POST /sandboxes/:id/snapshot`, `POST /snapshots/:id/resume`. Full memory and disk saved; resume skips boot and dependency install. `Sandbox.snapshot()`/`resume()` in both SDKs, `kiln sandbox snapshot|resume`. Works with drives attached (live-verified repeatedly). |
+| Durable across daemon restart | Metadata written atomically beside the state/memory files and reconciled at startup. The held tap device is reserved out of the pool before the daemon accepts creates, preventing a double-lease race. Verified live: killed a daemon with a snapshot on disk, started a fresh instance, resumed it, data intact. Snapshot storage originally lived under `$TMPDIR`, so it is not durable across a host reboot unless `SANDKILN_STATE_DIR` is persistent (see `SELF_HOSTING.md`). |
 | Persistent by default | `DELETE /sandboxes/:id` auto-snapshots (`stop_sandbox_by_id(..., keep: true)`). `?keep=false` (`kiln sandbox rm --destroy`) destroys. A jailed sandbox cannot be preserved and falls back to destroy. The idle reaper's destroy pass uses the same default. |
-| Named sandboxes | `name` on create/resume/fork (1-64 chars, `[A-Za-z0-9_-]`, unique among live sandboxes). `GET /sandboxes/by-name/:name` (live only; 409 pointing at get-or-create if the name resolves to a held snapshot). `POST /sandboxes/get-or-create` returns if live, resumes if snapshotted, creates otherwise, race-safe under a per-name lock. |
-| Auto-suspend on idle | `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS` pauses and snapshots a quiet sandbox using the same path as the manual route. `SANDKILN_IDLE_TIMEOUT_SECS` (plain destroy), if also set, must be strictly longer and acts as a backstop. `GET /snapshots?source_sandbox_id=<id>` finds what a sandbox became (`listSnapshots()`, `kiln sandbox snapshots --source`). |
+| Named sandboxes | `name` on create/resume/fork (1-64 chars, `[A-Za-z0-9_-]`, unique among live sandboxes). `GET /sandboxes/by-name/:name` (live only; 409 pointing at get-or-create if the name resolves to a held snapshot). `POST /sandboxes/get-or-create` returns if live, resumes if snapshotted, creates otherwise, race-safe under a per-name lock, so two concurrent callers claiming the same new name cannot both win. A name carries through snapshot/resume/fork when re-specified. SDK: `Sandbox.getOrCreate()`/`byName()` in both SDKs; CLI: `kiln sandbox get-or-create|get`, `--name` on `create`/`ls`/`resume`/`fork`. |
+| Auto-suspend on idle | `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS` pauses and snapshots a quiet sandbox using the same pause-and-snapshot path as the manual route, composed into the idle reaper rather than built as a new mechanism; it frees the VM and network resources while keeping state resumable. `SANDKILN_IDLE_TIMEOUT_SECS` (plain destroy), if also set, must be strictly longer and acts as a backstop for a sandbox whose auto-suspend keeps failing, not a competing timer. `GET /snapshots?source_sandbox_id=<id>` finds what a sandbox became (`listSnapshots()`, `kiln sandbox snapshots --source`). |
 | Fork (partial) | `POST /snapshots/:id/fork` boots a new sandbox without consuming the snapshot. At most one live fork per snapshot (`Snapshot::forked_into`, enforced for resume, fork, delete and snapshot; a second is 409). |
 | Time-travel restore | Resume retires its checkpoint into `GET /snapshots/history` instead of deleting it. `POST /snapshots/history/:id/restore` restores it any number of times; `DELETE /snapshots/history/:id` reclaims it; `?retain_history=false` opts out. Sequential, not branching. |
-| Archive tier | `SANDKILN_ARCHIVE_TIMEOUT_SECS` moves a held snapshot's `state.snap`/`mem.bin` to `SANDKILN_ARCHIVE_DIR` once unresumed that long. Applies to any held snapshot. `GET /snapshots` reports `archived_at_unix`. Daemon-operator config only. |
+| Archive tier | `SANDKILN_ARCHIVE_TIMEOUT_SECS` moves a held snapshot's `state.snap`/`mem.bin` to `SANDKILN_ARCHIVE_DIR` once unresumed that long. Applies to any held snapshot however it arose (auto-suspend or a manual snapshot), independent of whether auto-suspend or `idle_timeout` are configured. `GET /snapshots` reports `archived_at_unix`. Daemon-operator config only, no SDK or CLI surface, same as `idle_timeout`/`auto_suspend_timeout`. Live-verified: a snapshot archived after a short timeout, files confirmed moved, a daemon restart reconciling it back with `archived: true` and no false-alarm warnings, and a full resume afterward (write-file, snapshot, archive, resume, read-file round-trip) proving an archived snapshot is as usable as a hot one. |
 | Retention cap | `retained_checkpoints_max` (default 8), oldest retired checkpoint evicted after each resume. |
 
 Lineage (parent pointers) and warm pools are in
@@ -23,14 +23,18 @@ Lineage (parent pointers) and warm pools are in
 
 ## Why fork is single-live
 
-Firecracker has no verified way to give two live descendants of one
-snapshot independent rootfs backing files or guest IP/MAC; both are frozen
-into the snapshotted state. Real parallel branches (and fan-out cloning of
-one snapshot into several sandboxes) need either a verified per-fork drive
-override plus a way to change guest identity, or a live-memory-clone design.
-Fan-out is the same unsolved problem restated, not a separate item. The
-rootfs half is now solved by `rootfs_override` (finding 21 in
-[findings](../findings.md)); the network identity half is not.
+The reason (no verified way to give two live descendants of one snapshot
+independent guest IP/MAC, both frozen into the snapshotted state) and the
+mechanism are on the
+[snapshot internals page](../../docs-site/internals/snapshot-resume-fork.mdx).
+Not on that page: real parallel branches (see
+`core/crates/daemon/src/routes_snapshot.rs`'s module doc comment) and fan-out
+cloning of one snapshot into several sandboxes need either a verified per-fork
+drive override plus a way to change guest identity, or a from-scratch
+live-memory-clone design. Fan-out is the same unsolved problem restated, not a
+separate item. The rootfs half is now solved by `rootfs_override` (finding 21
+in [findings](../findings.md)); the network identity half is not. Genuinely
+open.
 
 ## Time-travel restore rules
 
@@ -41,7 +45,8 @@ rootfs half is now solved by `rootfs_override` (finding 21 in
   one-live-descendant rule across a lineage's full history.
 - A restored sandbox owns everything (fresh network lease, private rootfs
   clone), so unlike a fork it stays snapshottable and starts a new branch.
-- Surface: daemon HTTP API only, no SDK or CLI yet.
+- Same constraint that rules out true parallel branching (two checkpoints of one lineage live at once): the guest's IP/MAC cannot be changed post hoc without in-guest cooperation the guest agent lacks. Out of scope for that reason, not by choice.
+- Surface: daemon HTTP API only, no SDK or CLI yet, same as snapshot lineage. (Egress policy was once cited as the same kind of gap; both SDKs and the CLI now wrap it.)
 
 ## Bugs found while building
 
@@ -50,8 +55,13 @@ rootfs half is now solved by `rootfs_override` (finding 21 in
   fork, resume the original, and the marker came back mutated. Fixed by
   giving every fork a private copy (`clone_rootfs`); the deeper form of the
   same bug was finding 21.
-- **Unbounded retention filled a 468GB disk.** Fixed by
-  `DELETE /snapshots/history/:id`, then the retention cap (finding 24).
+- **Unbounded retention filled a 468GB disk.** Retaining every resume's
+  checkpoint by default has an unbounded cost: a full guest-memory dump plus a
+  private rootfs copy, forever. Routine manual verification while building
+  this filled the dev-box disk. `DELETE /snapshots/history/:id` was added in
+  response (not in the original design), then the retention cap (finding 24)
+  replaced the deferred expiry policy. Operator guidance: `SELF_HOSTING.md`,
+  "Time-travel restore and its disk cost".
 
 ## Archive: a Firecracker constraint
 
