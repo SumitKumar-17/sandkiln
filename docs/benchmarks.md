@@ -46,7 +46,7 @@ Guest-side reference, one `dmesg` capture (2026-11-24, default image, 5.10.223 g
 The same word ("boot", "create", "first command") names different intervals in
 different tools. Read a figure against this table before comparing it with
 another. The long version is
-[engineering post 29](../website/src/content/engineering/29-what-a-start-latency-number-means.md).
+[engineering post 29](../docs-site/engineering/29-what-a-start-latency-number-means.md).
 
 | Figure | Interval it covers | Excludes | Statistic and source |
 | --- | --- | --- | --- |
@@ -102,7 +102,7 @@ plus `--reflink=auto`, 211ms (p95 577ms, 5.38 cycles/sec, exec mean 366ms,
 delete mean 131ms) after. Throughput is flat because `create` is only one
 phase of a cycle; samples are small and the box is shared. The `create`
 improvement was later shown to be capped by the 4ms lease: see
-[engineering post 20](../website/src/content/engineering/20-opt-concurrent-clone-and-lease.md).
+[engineering post 20](../docs-site/engineering/20-opt-concurrent-clone-and-lease.md).
 Predates the socket-wait and retry fixes and has not been cleanly re-run.
 
 ## Reproduce these numbers
@@ -153,6 +153,18 @@ How to read it:
 - **Back to back** exposes the limit: 20 creates in a row drain the 2 warm instances (the first two hit, with a 24ms minimum) and the rest are cold while the pool refills, so the median is cold. A bigger `default_warm_count` or more spacing moves that boundary; it is a capacity setting, not a cap on speed.
 - One paced sample was a 140.6ms create (the maximum); it is left in, cause not established.
 - Cost: each warm instance is a held full-RAM snapshot on disk (512 MiB by default) and one guest address, and every claim triggers a replacement boot and snapshot in the background (replenishment pauses when addresses or disk run low, see `default_warm_count`).
+
+### Replenish on claim (2026-11-24)
+
+The pool replenisher now wakes the moment a claim drains a pool (it used to wait for a fixed 2-second tick) and refills up to two instances in parallel. Recorded with `examples/benchmark-suite` (`--only create --iterations 20`, `2026-11-24T1950-*` files under `examples/benchmark-suite/results/`):
+
+| Pause between creates | create to first command, median (p95) |
+| --- | --- |
+| 4000 ms | 25.9ms (38.8) |
+| 1500 ms | 27.2ms (49.5) |
+| none, 20 back to back | 227.5ms (343.0); mostly cold, a pool of 2 cannot cover a burst of 20 |
+
+There is no measurement of the 1500 ms case before this change, so no speedup is claimed for it; the table only records where the pool now keeps up. The product page reads its figure from the newest `warm-pool-on-paced` result.
 
 ## Init-mode image: the agent as PID 1 (2026-11-24)
 
@@ -222,10 +234,10 @@ socket-wait fix. The phases sum to 167.33ms, so the breakdown is complete.
 | Network lease (concurrent) | 4.36ms | about 0.1% of critical path |
 
 Narrative and reasoning for each phase: the
-[performance model post](../website/src/content/engineering/16-performance-model-and-measurement.md),
-the [rootfs clone post](../website/src/content/engineering/17-opt-rootfs-reflink-clone.md),
-the [socket wait post](../website/src/content/engineering/18-opt-boot-socket-wait.md)
-and the [history store post](../website/src/content/engineering/19-opt-history-store-wal.md).
+[performance model post](../docs-site/engineering/16-performance-model-and-measurement.md),
+the [rootfs clone post](../docs-site/engineering/17-opt-rootfs-reflink-clone.md),
+the [socket wait post](../docs-site/engineering/18-opt-boot-socket-wait.md)
+and the [history store post](../docs-site/engineering/19-opt-history-store-wal.md).
 Kept here because they set decisions:
 - The lease is about 4.4ms (three `ip`/`bridge` calls at about 1.4ms each) and
   runs concurrently with the clone, so it adds about 0.17ms to the critical
@@ -242,8 +254,8 @@ XFS) but end-to-end create stayed at 160-170ms, and the first explanation
 (the copy hidden behind the network lease, which is only about 4ms) was wrong.
 The real cause was `clone_rootfs` always writing into `temp_dir()` on ext4.
 Finding 4 fixed it (187ms to 17.9ms). The full story is
-[engineering post 17](../website/src/content/engineering/17-opt-rootfs-reflink-clone.md)
-and [post 20](../website/src/content/engineering/20-opt-concurrent-clone-and-lease.md).
+[engineering post 17](../docs-site/engineering/17-opt-rootfs-reflink-clone.md)
+and [post 20](../docs-site/engineering/20-opt-concurrent-clone-and-lease.md).
 `scripts/preflight-check.sh` warns when the base image and `rootfs_dir` do
 not share a reflink filesystem. The XFS run moved only `SANDKILN_BASE_ROOTFS`
 and the destination stayed on ext4, so a clone could never reflink; the
@@ -262,7 +274,7 @@ conclusion. That is finding 4 (the setting shipped as `SANDKILN_ROOTFS_DIR`).
 Covered in [startup latency](../docs-site/architecture/startup-latency.mdx)
 (first exec 420-460ms cold vs 3-5ms later vs 4-18ms resumed, the open
 question of blocking `create()` until the agent answers) and
-[engineering post 28](../website/src/content/engineering/28-opt-guest-boot-time.md).
+[engineering post 28](../docs-site/engineering/28-opt-guest-boot-time.md).
 Kept here: every benchmark before this finding stopped at `InstanceStart` or
 `create()` returning, and the earlier pool framing (70-200ms vs 160-200ms)
 compared only `create()` returning. `first_exec_client` in
@@ -278,7 +290,7 @@ a flat `sleep(100ms)`; they now share one `retry_with_backoff` helper (1ms to
 20ms for vsock) with `connect_api_with_retry`. The A/B showed first exec at
 420-460ms for both versions: a real fix, invisible next to guest startup.
 That led to the finding below. See
-[engineering post 18](../website/src/content/engineering/18-opt-boot-socket-wait.md).
+[engineering post 18](../docs-site/engineering/18-opt-boot-socket-wait.md).
 
 ## Verification notes from the socket-wait fix
 

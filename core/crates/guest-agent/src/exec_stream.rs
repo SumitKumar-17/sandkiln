@@ -47,14 +47,20 @@ pub fn handle_connection(mut stream: VsockStream) {
     {
         Ok(c) => c,
         Err(e) => {
-            let msg = format!("exec-stream: failed to spawn {}: {e}\n", handshake.command);
+            let (exit_code, msg) = spawn_failure_event(&handshake.command, &e);
             let _ = send_event(&mut stream, &ExecStreamEvent::Stderr { data_base64: base64_encode(msg.as_bytes()) });
-            let _ = send_event(&mut stream, &ExecStreamEvent::Exit { exit_code: -1 });
+            let _ = send_event(&mut stream, &ExecStreamEvent::Exit { exit_code });
             return;
         }
     };
 
     pump_and_wait(stream, &mut child);
+}
+
+/// Same convention as a plain exec: 127/126 and a shell-style line when the
+/// command cannot be started, the old generic message and -1 for anything else.
+fn spawn_failure_event(command: &str, err: &std::io::Error) -> (i32, String) {
+    crate::handler::spawn_failure(command, err).unwrap_or_else(|| (-1, format!("exec-stream: failed to spawn {command}: {err}\n")))
 }
 
 fn read_handshake(stream: &mut VsockStream) -> std::io::Result<sandkiln_protocol::ExecStreamHandshake> {
@@ -119,5 +125,33 @@ fn pump_reader(mut reader: impl Read, tx: mpsc::Sender<ExecStreamEvent>, is_stdo
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spawn_err(command: &str) -> std::io::Error {
+        Command::new(command).stdout(Stdio::null()).spawn().unwrap_err()
+    }
+
+    #[test]
+    fn missing_command_exits_127_with_a_readable_line() {
+        let (code, msg) = spawn_failure_event("sk-no-such-command", &spawn_err("sk-no-such-command"));
+        assert_eq!((code, msg.as_str()), (127, "sk-no-such-command: command not found\n"));
+    }
+
+    #[test]
+    fn directory_exits_126() {
+        let (code, msg) = spawn_failure_event("/tmp", &spawn_err("/tmp"));
+        assert_eq!((code, msg.as_str()), (126, "/tmp: Is a directory\n"));
+    }
+
+    #[test]
+    fn other_errors_keep_minus_one_and_the_cause() {
+        let (code, msg) = spawn_failure_event("x", &std::io::Error::from_raw_os_error(libc::ENOMEM));
+        assert_eq!(code, -1);
+        assert!(msg.starts_with("exec-stream: failed to spawn x: "), "{msg}");
     }
 }

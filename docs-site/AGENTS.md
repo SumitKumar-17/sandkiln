@@ -8,21 +8,29 @@ CI workflow to maintain.
 
 ## Structure
 
-`docs.json` is the nav and theme config. Navigation is three top-level
+`docs.json` is the nav and theme config. Navigation is five top-level
 tabs, each its own groups:
 
-- **Docs** — Getting Started, Self-Hosting (manual setup, jailer, configuration, operations and security, troubleshooting), Core Concepts, Guides.
-- **API Reference** — HTTP API, JS/TS SDK, Python SDK, CLI, each split
-  into `overview` + one page per resource (`sandbox`/`sandboxes`,
-  `image`/`images`, `drive`/`drives`, `pool`/`pools`) under
-  `api-reference/<section>/`, rather than one long page per client.
-- **Engineering Blog** — Architecture (overview, startup latency, bug
-  hunts, SDK/CLI design, testing, the engineering notebook) and
-  Internals (mechanism deep-dives, one per `internals/*.mdx`).
+- **Docs**: Getting Started, Self-Hosting (manual setup, jailer,
+  configuration, operations and security, troubleshooting), Core Concepts,
+  Guides.
+- **API Reference**: HTTP API, JS/TS SDK, Python SDK, CLI, MCP server, each
+  split into `overview` + one page per resource under `api-reference/<section>/`.
+- **Architecture**: Overview, How it works (posts 02-10), Crate tour (11-15),
+  Internals (one `internals/*.mdx` page per mechanism).
+- **Performance**: Measuring (the performance model, what a latency number
+  means, the benchmark suite, startup latency) and Optimizations (one post per
+  measured change).
+- **Case studies**: Correctness (bugs: symptom, evidence, root cause, fix),
+  Agents and CI, Bug hunts and notes.
 
-Every page is `.mdx`; page paths in `docs.json` are root-relative with
-no extension (`"concepts/networking"`, not `"concepts/networking.mdx"`
-or `"/concepts/networking"`).
+The engineering posts are plain Markdown in `engineering/NN-*.md` (plain `.md`
+so prose may contain `<` and `{`), each with a short `sidebarTitle`; they are
+placed in the tabs above by topic, not by number. Everything else is `.mdx`.
+Page paths in `docs.json` are root-relative with no extension
+(`"concepts/networking"`, not `"concepts/networking.mdx"` or
+`"/concepts/networking"`). Validate with `npx mint validate` and
+`npx mint broken-links` (run on the dev box).
 
 ## Conventions
 

@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "website/**"
+      # The page's numbers are read from the recorded benchmark runs at build time.
+      - "examples/benchmark-suite/results/**"
       - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
 
@@ -18,11 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,9 +30,8 @@ jobs:
       - uses: actions/configure-pages@v5
       # GitHub Pages serves this as a project page (a subpath, not the domain
       # root), so ASTRO_BASE drives asset/link paths instead of being
-      # hardcoded — see website/astro.config.mjs. Docs are a separate
-      # Mintlify project (docs-site/) deployed independently; nothing here
-      # touches them.
+      # hardcoded, see website/astro.config.mjs. The docs are a separate
+      # Mintlify project (docs-site/) deployed independently.
       - name: Build site
         working-directory: website
         run: |
@@ -44,5 +42,15 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: website/dist
+
+  # A separate job: deploying from the same job that uploaded the artifact
+  # intermittently failed to find it ("No artifacts named github-pages").
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v4

@@ -13,7 +13,7 @@ The first fix set a 3-second read and write timeout on every stream. Any unrespo
 
 ## Problem 2: the fix was applied to the wrong thing
 
-That 3-second bound is right for control-plane calls and wrong for user commands. A command that stays silent for more than 3 seconds, such as `sleep 4`, hit the timeout. `Vm::call` then retried on any I/O error, including after the request had already been sent, so the command ran a second time. `echo run >> f; sleep 4` left `run` twice in `f`, and the caller received an error after about 6.5 seconds. Details: [Long-running exec](https://sandkiln.vercel.app/engineering/26-correctness-long-running-exec/).
+That 3-second bound is right for control-plane calls and wrong for user commands. A command that stays silent for more than 3 seconds, such as `sleep 4`, hit the timeout. `Vm::call` then retried on any I/O error, including after the request had already been sent, so the command ran a second time. `echo run >> f; sleep 4` left `run` twice in `f`, and the caller received an error after about 6.5 seconds. Details: [Long-running exec](https://sandkiln.mintlify.site/engineering/01-system-overview/26-correctness-long-running-exec/).
 
 ## What changed
 

@@ -102,6 +102,10 @@ pub struct AppState {
     /// gets a clear `409` instead of silently racing the first for
     /// connections.
     pub tunnels: Mutex<HashMap<String, std::sync::mpsc::Receiver<sandkiln_vmm::tunnel::TunnelConnection>>>,
+    /// Wakes the pool replenisher ahead of its tick: a claim drained a pool or
+    /// a pool was created. `notify_one` keeps a permit, so a wake that lands
+    /// while it is busy is not lost.
+    pub replenish_wake: tokio::sync::Notify,
 }
 
 
@@ -136,6 +140,7 @@ impl AppState {
             history,
             pools: Mutex::new(HashMap::new()),
             tunnels: Mutex::new(HashMap::new()),
+            replenish_wake: tokio::sync::Notify::new(),
         }
     }
 

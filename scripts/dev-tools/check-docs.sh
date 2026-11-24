@@ -31,7 +31,15 @@ for f in files:
             if re.match(r"(https?:|mailto:|#)", target):
                 continue
             path = target.split("#")[0]
-            if path and not (f.parent / path).exists():
+            if not path:
+                continue
+            if path.startswith("/"):
+                # Absolute links are routes on the docs site (Mintlify).
+                base = Path("docs-site") / path.lstrip("/")
+                found = any(base.with_suffix(ext).exists() for ext in (".mdx", ".md")) or (base / "index.mdx").exists() or base.is_file()
+                if f.parts[0] == "docs-site" and not found:
+                    errors.append(f"{f}:{n}: broken docs route {target}")
+            elif not (f.parent / path).exists():
                 errors.append(f"{f}:{n}: broken link {target}")
 
 # 2. docs-site pages and docs.json agree.
@@ -48,11 +56,11 @@ def walk(node):
             if k in node:
                 walk(node[k])
 walk(nav.get("navigation", nav))
-pages = {str(p.relative_to("docs-site").with_suffix("")) for p in Path("docs-site").rglob("*.mdx")}
+pages = {str(p.relative_to("docs-site").with_suffix("")) for ext in ("*.mdx", "*.md") for p in Path("docs-site").rglob(ext) if p.name != "AGENTS.md"}
 for p in sorted(pages - listed):
-    errors.append(f"docs-site/{p}.mdx is not in docs.json")
+    errors.append(f"docs-site/{p} is not in docs.json")
 for p in sorted(x for x in listed - pages if "/" in x or x == "index"):
-    if not Path(f"docs-site/{p}.mdx").exists():
+    if not (Path(f"docs-site/{p}.mdx").exists() or Path(f"docs-site/{p}.md").exists()):
         errors.append(f"docs.json lists missing page {p}")
 
 # 3. Banned wording.
@@ -82,6 +90,12 @@ for name, limit in budgets.items():
         n = len(p.read_text().splitlines())
         if n > limit:
             errors.append(f"{name}: {n} lines exceeds the {limit}-line budget")
+
+# 5. Generated artifacts (numbers, charts, product image) match their sources.
+for script in ("make-product-image", "make-logo", "make-benchmark-page"):
+    r = subprocess.run([sys.executable, f"scripts/dev-tools/{script}.py", "--check"], capture_output=True, text=True)
+    if r.returncode != 0:
+        errors.append((r.stdout + r.stderr).strip() or f"{script} --check failed")
 
 for e in errors:
     print("FAIL", e)

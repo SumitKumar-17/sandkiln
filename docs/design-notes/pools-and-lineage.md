@@ -13,7 +13,7 @@ detail lives (read these, they are not repeated here):
   vs cold 160-200ms, 25-100x to first exec, the 1-in-3 to 2-in-3 resume
   failure rate, the 10.3s vs 5.4s `force_stop` fallback, `max_count` queueing
   with 30s then 503, `PoolClaimGuard` and the bounded 3-attempt retry):
-  [engineering post 21](../../website/src/content/engineering/21-opt-pool-prewarming.md).
+  [engineering post 21](../../docs-site/engineering/21-opt-pool-prewarming.md).
 - The MMDS re-init after resume:
   [MMDS internals page](../../docs-site/internals/mmds.mdx).
 

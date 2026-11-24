@@ -76,8 +76,11 @@ fn read_handshake(stream: &mut VsockStream) -> std::io::Result<PtyHandshake> {
 fn exec_shell() -> ! {
     let shell = if std::path::Path::new("/bin/bash").exists() { "/bin/bash" } else { "/bin/sh" };
     let err = Command::new(shell).exec();
-    eprintln!("pty: exec {shell} failed: {err}");
-    std::process::exit(1);
+    // The pty is the user's terminal: say what a shell would, and leave the
+    // same status (127/126) a failed exec leaves anywhere else.
+    let (code, line) = crate::handler::spawn_failure(shell, &err).unwrap_or_else(|| (1, format!("pty: exec {shell} failed: {err}\n")));
+    eprint!("{line}");
+    std::process::exit(code);
 }
 
 /// Copies bytes both directions between `stream` and `pty` until either

@@ -111,7 +111,12 @@ impl Pool {
     }
 
     pub fn needs_replenish(&self) -> bool {
-        (self.warm.len() as u32) < self.effective_warm_target()
+        self.warm_deficit() > 0
+    }
+
+    /// How many warm instances short of its target this pool is.
+    pub fn warm_deficit(&self) -> usize {
+        self.effective_warm_target().saturating_sub(self.warm.len() as u32) as usize
     }
 
     pub fn push_warm(&mut self, snapshot_id: String) {
@@ -159,6 +164,20 @@ mod tests {
         assert_eq!((c.id.as_str(), c.image_id.clone(), c.vcpu_count, c.mem_size_mib, c.warm_count, c.max_count), ("default", None, 2, 1024, 3, None));
         assert_eq!(c.key(), PoolKey { image_id: None, vcpu_count: 2, mem_size_mib: 1024 });
         assert!(default_pool_config(2, 1024, 0).is_none());
+    }
+
+    #[test]
+    fn warm_deficit_counts_instances_short_of_the_target_and_respects_max_count() {
+        let mut pool = Pool::new(config()); // warm_count 2
+        assert_eq!(pool.warm_deficit(), 2);
+        pool.push_warm("a".to_string());
+        assert_eq!(pool.warm_deficit(), 1);
+        pool.push_warm("b".to_string());
+        assert_eq!((pool.warm_deficit(), pool.needs_replenish()), (0, false));
+
+        let mut capped = Pool::new(PoolConfig { max_count: Some(1), ..config() });
+        capped.record_claim(); // one live instance uses the whole ceiling
+        assert_eq!(capped.warm_deficit(), 0);
     }
 
     fn config() -> PoolConfig {

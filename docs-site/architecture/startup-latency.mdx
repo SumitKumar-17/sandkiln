@@ -3,7 +3,7 @@ title: Startup latency
 description: Where a cold sandbox create spends its time, what a reflink rootfs clone changes, and why a pre-warmed pool is the lever for time-to-first-command.
 ---
 
-**Claim:** the latency a caller feels is the time from `POST /sandboxes` to the first successful command, and it was 413ms on a cold sandbox before guest boot was trimmed, 214.5ms after (2026-11-24, `scripts/bench-report.sh 20`, `first_exec_client`). The `POST` itself returns earlier than that: it takes 187.5ms when the per-sandbox rootfs is a full byte copy on ext4 and 17.9ms when the rootfs directory shares a reflink-capable filesystem (XFS) with the base image. The rootfs clone, not VM boot or networking, is the cost of the `POST`; the guest's own boot is the cost of the first command. See [Guest boot time](https://sandkiln.vercel.app/engineering/28-opt-guest-boot-time/).
+**Claim:** the latency a caller feels is the time from `POST /sandboxes` to the first successful command, and it was 413ms on a cold sandbox before guest boot was trimmed, 214.5ms after (2026-11-24, `scripts/bench-report.sh 20`, `first_exec_client`). The `POST` itself returns earlier than that: it takes 187.5ms when the per-sandbox rootfs is a full byte copy on ext4 and 17.9ms when the rootfs directory shares a reflink-capable filesystem (XFS) with the base image. The rootfs clone, not VM boot or networking, is the cost of the `POST`; the guest's own boot is the cost of the first command. See [Guest boot time](https://sandkiln.mintlify.site/engineering/01-system-overview/28-opt-guest-boot-time/).
 
 ## Evidence
 

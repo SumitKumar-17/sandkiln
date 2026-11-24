@@ -7,18 +7,18 @@ The long-form architecture write-ups live on the project website, one post per s
 
 | Post | Covers |
 | --- | --- |
-| [System overview](https://sandkiln.vercel.app/engineering/01-system-overview/) | Crate boundaries and who owns what |
-| [The vsock protocol and guest agent](https://sandkiln.vercel.app/engineering/02-vsock-protocol-and-guest-agent/) | Framing, messages, exec/PTY/stream, the tunnel exception |
-| [Driving Firecracker](https://sandkiln.vercel.app/engineering/03-driving-firecracker/) | `Vm::boot`, API socket retry, jailer mode |
-| [The create path and rootfs provisioning](https://sandkiln.vercel.app/engineering/04-create-path-and-rootfs/) | Phases, reflink clone, failure unwinding |
-| [Networking](https://sandkiln.vercel.app/engineering/05-networking/) | Tap pool, bridge isolation, NAT, egress chains |
-| [Snapshots, resume and fork](https://sandkiln.vercel.app/engineering/06-snapshots-resume-fork/) | File layout, lineage, time-travel restore |
-| [Pre-warmed pools](https://sandkiln.vercel.app/engineering/07-pre-warmed-pools/) | Replenisher, claim, health check |
-| [Daemon internals](https://sandkiln.vercel.app/engineering/08-daemon-internals/) | `AppState`, ownership, idle reaper, metrics |
-| [Persistence and history](https://sandkiln.vercel.app/engineering/09-persistence-and-history/) | The sqlite store, orphan reconciliation |
-| [Config, SDKs and CLI](https://sandkiln.vercel.app/engineering/10-config-sdks-and-cli/) | Client design and how a change propagates |
+| [System overview](https://sandkiln.mintlify.site/engineering/01-system-overview/01-system-overview/) | Crate boundaries and who owns what |
+| [The vsock protocol and guest agent](https://sandkiln.mintlify.site/engineering/01-system-overview/02-vsock-protocol-and-guest-agent/) | Framing, messages, exec/PTY/stream, the tunnel exception |
+| [Driving Firecracker](https://sandkiln.mintlify.site/engineering/01-system-overview/03-driving-firecracker/) | `Vm::boot`, API socket retry, jailer mode |
+| [The create path and rootfs provisioning](https://sandkiln.mintlify.site/engineering/01-system-overview/04-create-path-and-rootfs/) | Phases, reflink clone, failure unwinding |
+| [Networking](https://sandkiln.mintlify.site/engineering/01-system-overview/05-networking/) | Tap pool, bridge isolation, NAT, egress chains |
+| [Snapshots, resume and fork](https://sandkiln.mintlify.site/engineering/01-system-overview/06-snapshots-resume-fork/) | File layout, lineage, time-travel restore |
+| [Pre-warmed pools](https://sandkiln.mintlify.site/engineering/01-system-overview/07-pre-warmed-pools/) | Replenisher, claim, health check |
+| [Daemon internals](https://sandkiln.mintlify.site/engineering/01-system-overview/08-daemon-internals/) | `AppState`, ownership, idle reaper, metrics |
+| [Persistence and history](https://sandkiln.mintlify.site/engineering/01-system-overview/09-persistence-and-history/) | The sqlite store, orphan reconciliation |
+| [Config, SDKs and CLI](https://sandkiln.mintlify.site/engineering/01-system-overview/10-config-sdks-and-cli/) | Client design and how a change propagates |
 
-The case studies (tags `optimization` and `correctness`) start at post 17 and include [snapshot disk corruption](https://sandkiln.vercel.app/engineering/27-correctness-snapshot-disk-corruption/), [long-running exec](https://sandkiln.vercel.app/engineering/26-correctness-long-running-exec/) and [guest boot time](https://sandkiln.vercel.app/engineering/28-opt-guest-boot-time/).
+The case studies (tags `optimization` and `correctness`) start at post 17 and include [snapshot disk corruption](https://sandkiln.mintlify.site/engineering/01-system-overview/27-correctness-snapshot-disk-corruption/), [long-running exec](https://sandkiln.mintlify.site/engineering/01-system-overview/26-correctness-long-running-exec/) and [guest boot time](https://sandkiln.mintlify.site/engineering/01-system-overview/28-opt-guest-boot-time/).
 
 On this site, the measured-latency write-ups are [Startup latency and the pre-warmed pool](/architecture/startup-latency) and [Bounded vsock calls](/architecture/bug-hunt-vsock-timeout). Per-mechanism pages with captured requests are under [Internals](/internals/vsock-wire-protocol).
 

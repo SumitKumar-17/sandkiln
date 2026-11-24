@@ -56,7 +56,7 @@ API call and doing memory allocation and kernel load during configuration
 
 | Cost | Evidence | Source |
 | --- | --- | --- |
-| Serial console output | Each byte is a trapped UART write; 70ms in the NSDI setup, about 90ms here | NSDI paper above; [engineering post 28](../../website/src/content/engineering/28-opt-guest-boot-time.md) |
+| Serial console output | Each byte is a trapped UART write; 70ms in the NSDI setup, about 90ms here | NSDI paper above; [engineering post 28](../../docs-site/engineering/28-opt-guest-boot-time.md) |
 | Pre-created `/dev/loopN` | 124ms `loop_init` here (our measurement, fixed by `loop.max_loop=1`) | post 28 |
 | Driver probing and legacy device timeouts | 900ms on a distro kernel; near zero on a minimal config | NSDI paper |
 | Static IP via `ip=` | 18.7ms `ip_auto_config` here, about 20ms in NSDI | NSDI paper; post 28 |
