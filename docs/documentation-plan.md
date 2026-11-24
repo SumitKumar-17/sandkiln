@@ -15,8 +15,8 @@ Three rules drive everything below:
 | Surface | Audience | Owns | Must not contain |
 | --- | --- | --- | --- |
 | `README.md` | First-time visitor on GitHub | Pitch, one diagram, headline numbers, quick start, a link table | Feature lists, SDK walkthroughs, build steps, config detail |
-| Website (`website/`) | Evaluator | Positioning, feature grid, performance page, engineering posts | Reference material, setup steps |
-| `docs-site/` | User and operator | Concepts, guides, API/SDK/CLI reference, self-hosting, internals | Measurements history, decisions, roadmap |
+| Website (`website/`) | Evaluator | One page: what it is, one install command, a real session, four measured numbers, links to the docs | Anything technical: architecture, reference, setup detail, posts |
+| `docs-site/` (Mintlify) | User, operator, engineer | Concepts, guides, API/SDK/CLI reference, self-hosting, internals, and the engineering blog (`docs-site/engineering/`) | Measurements history, decisions, roadmap |
 | `docs/` | Maintainer | Findings, benchmarks, design notes, these plans | User how-tos |
 | `ROADMAP.md` | Maintainer, contributor | Status table (done, partial, planned), ordered next steps | History, measurements, design reasoning |
 | `CHANGELOG.md` | Upgrader | What changed per release | Explanations (link to docs) |
@@ -33,7 +33,7 @@ Three rules drive everything below:
 | A measurement | `docs/benchmarks.md` | README, website and posts quote a rounded value and link |
 | A decision, finding or rejected idea | `docs/findings.md` or `docs/design-notes/<area>.md` | code comments link to it |
 | How a mechanism works | `docs-site/internals/<topic>.mdx` | posts tell the story and link |
-| A story with diagrams | `website/src/content/engineering/NN-*.md` | internals pages link to it |
+| A story with diagrams | `docs-site/engineering/NN-*.md` (the blog, part of the docs site) | internals pages link to it |
 | What changed | `CHANGELOG.md` | none |
 | What is planned | `ROADMAP.md` status table; detail in `docs/design-notes/ideas-not-started.md` | none |
 
@@ -44,7 +44,7 @@ Three rules drive everything below:
 - **Internals** (`docs-site/internals/`): the mechanism, the invariant it protects, the failure mode it prevents, a diagram if it has moving parts.
 - **Design note** (`docs/design-notes/`): context, decision, alternatives rejected and why, verification record, open questions.
 - **Finding** (`docs/findings.md`): symptom, root cause, fix, status (fixed, open, note).
-- **Post** (`website/src/content/engineering/`): one subsystem or optimisation, structure, pattern, diagram, what was measured.
+- **Post** (`docs-site/engineering/`, plain Markdown so prose can contain `<` and `{`): one subsystem or optimisation, structure, pattern, diagram, what was measured.
 
 ## Size budgets
 

@@ -14,6 +14,8 @@ const base = process.env.ASTRO_BASE || "/";
 const site = process.env.ASTRO_SITE || "https://sumitkumar-17.github.io";
 
 export default defineConfig({
+  // Off: the minifier strips the single space between a word and an inline link.
+  compressHTML: false,
   base,
   site,
   trailingSlash: "always",

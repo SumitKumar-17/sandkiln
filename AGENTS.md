@@ -23,8 +23,8 @@ packages/cli/            kiln CLI, wraps the JS/TS SDK
 packages/mcp/            sandkiln-mcp, MCP server (stdio) over the JS/TS SDK
 images/                  rootfs/kernel build + agent-injection scripts
 scripts/                 dev-box bootstrap, daemon lifecycle, tests
-website/                 marketing pages only, Astro, deployed via GitHub Pages
-docs-site/               full docs, Mintlify project — sandkiln.mintlify.site
+website/                 the one-page product site, Astro, deployed via GitHub Pages
+docs-site/               docs + engineering blog, Mintlify project — sandkiln.mintlify.site
 examples/                runnable reference projects — see examples/AGENTS.md
 ```
 

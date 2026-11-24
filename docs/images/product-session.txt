@@ -1,0 +1,10 @@
+$ id=$(kiln sandbox create)
+# its own kernel, not the host's
+$ kiln sandbox exec $id -- uname -sr
+Linux 5.10.223
+$ kiln sandbox exec $id -- sh -c 'echo hello from a microVM > /tmp/note'
+# a copy of the whole machine: memory and disk
+$ snap=$(kiln sandbox snapshot $id)
+$ copy=$(kiln sandbox fork $snap)
+$ kiln sandbox exec $copy -- cat /tmp/note
+hello from a microVM

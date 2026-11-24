@@ -1,42 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 485" width="1000" height="485" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
-<title id="t">sandkiln measured latencies</title><desc id="d">Horizontal bar chart on a logarithmic millisecond axis: time to first command 413 ms before and 214.5 ms after, cold create 187.5 ms on ext4 and 17.9 ms on a reflinked filesystem, InstanceStart 12.6 to 14.0 ms, resumed first command 18 ms before and 8.4 ms after, resume from snapshot 3.7 to 4.0 ms, exec round trip about 245 microseconds.</desc>
-<style>.h{font-size:13px;font-weight:700;fill:#768390}.s{font-size:12px;fill:#768390}.g{stroke:#768390;stroke-opacity:.35;stroke-width:1}.b{fill:#8b949e}.a{fill:#d9822b}</style>
-<text x="20" y="28" class="h" font-size="17">Measured latency (ms, log scale, lower is better)</text>
-<line class="g" x1="300" y1="48" x2="300" y2="395"/>
-<text x="300" y="415" text-anchor="middle" class="s">0.1 ms</text>
-<line class="g" x1="430" y1="48" x2="430" y2="395"/>
-<text x="430" y="415" text-anchor="middle" class="s">1 ms</text>
-<line class="g" x1="560" y1="48" x2="560" y2="395"/>
-<text x="560" y="415" text-anchor="middle" class="s">10 ms</text>
-<line class="g" x1="690" y1="48" x2="690" y2="395"/>
-<text x="690" y="415" text-anchor="middle" class="s">100 ms</text>
-<line class="g" x1="820" y1="48" x2="820" y2="395"/>
-<text x="820" y="415" text-anchor="middle" class="s">1000 ms</text>
-<text x="288" y="86" text-anchor="end" class="h">Time to first command, cold</text>
-<rect class="b" x="300" y="60" width="470.1" height="20" rx="3"/>
-<text x="778.1" y="74" class="s">413 ms (before)</text>
-<rect class="a" x="300" y="84" width="433.1" height="20" rx="3"/>
-<text x="741.1" y="98" class="s">214.5 ms (after)</text>
-<text x="288" y="138" text-anchor="end" class="h">Cold create, ext4 full-copy rootfs</text>
-<rect class="a" x="300" y="124" width="425.5" height="20" rx="3"/>
-<text x="733.5" y="138" class="s">187.5 ms</text>
-<text x="288" y="178" text-anchor="end" class="h">Cold create, reflinked rootfs (XFS)</text>
-<rect class="a" x="300" y="164" width="292.9" height="20" rx="3"/>
-<text x="600.9" y="178" class="s">17.9 ms</text>
-<text x="288" y="218" text-anchor="end" class="h">Firecracker spawn to InstanceStart</text>
-<rect class="a" x="300" y="204" width="276.1" height="20" rx="3"/>
-<text x="584.1" y="218" class="s">12.6-14.0 ms</text>
-<text x="288" y="270" text-anchor="end" class="h">Resumed first command</text>
-<rect class="b" x="300" y="244" width="293.2" height="20" rx="3"/>
-<text x="601.2" y="258" class="s">18 ms (before)</text>
-<rect class="a" x="300" y="268" width="250.2" height="20" rx="3"/>
-<text x="558.2" y="282" class="s">8.4 ms (after)</text>
-<text x="288" y="322" text-anchor="end" class="h">Resume from snapshot</text>
-<rect class="a" x="300" y="308" width="206.1" height="20" rx="3"/>
-<text x="514.1" y="322" class="s">3.7-4.0 ms</text>
-<text x="288" y="362" text-anchor="end" class="h">exec round trip, open vsock</text>
-<rect class="a" x="300" y="348" width="50.6" height="20" rx="3"/>
-<text x="358.6" y="362" class="s">242-248 us</text>
-<text x="20" y="448" class="s">One shared dev box (Intel i9-13900K, Firecracker v1.16.1), small samples, directional only. Method and sources: docs/benchmarks.md.</text>
-<rect class="b" x="20" y="462" width="12" height="10"/><text x="38" y="471" class="s">before</text><rect class="a" x="95" y="462" width="12" height="10"/><text x="113" y="471" class="s">current</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="326" viewBox="0 0 760 326" role="img" aria-label="Bar chart on a log scale: create to first command takes 26.4 ms with a warm pool and 234 ms cold">
+<g font-family="'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace">
+<rect width="760" height="326" fill="#151515"/>
+<rect x="0.5" y="0.5" width="759" height="325" fill="none" stroke="#3a3835"/>
+<text x="32" y="34" font-size="13" fill="#8f8b84">measured latency, medians, log scale (lower is better)</text>
+<line x1="282.0" y1="56" x2="282.0" y2="262" stroke="#3a3835"/>
+<text x="282.0" y="282" font-size="12" fill="#8f8b84" text-anchor="middle">1 ms</text>
+<line x1="404.0" y1="56" x2="404.0" y2="262" stroke="#3a3835"/>
+<text x="404.0" y="282" font-size="12" fill="#8f8b84" text-anchor="middle">10 ms</text>
+<line x1="526.0" y1="56" x2="526.0" y2="262" stroke="#3a3835"/>
+<text x="526.0" y="282" font-size="12" fill="#8f8b84" text-anchor="middle">100 ms</text>
+<line x1="648.0" y1="56" x2="648.0" y2="262" stroke="#3a3835"/>
+<text x="648.0" y="282" font-size="12" fill="#8f8b84" text-anchor="middle">1000 ms</text>
+<text x="32" y="82" font-size="13" fill="#ece9e3">create to first command, warm pool</text>
+<rect x="282" y="70" width="173.4" height="16" fill="#8fa3e8"/>
+<text x="728" y="83" font-size="13" fill="#ece9e3" text-anchor="end">26.4 ms</text>
+<text x="32" y="122" font-size="13" fill="#b9b5ad">create to first command, cold</text>
+<rect x="282" y="110" width="289.0" height="16" fill="#b9b5ad"/>
+<text x="728" y="123" font-size="13" fill="#ece9e3" text-anchor="end">234 ms</text>
+<text x="32" y="162" font-size="13" fill="#b9b5ad">resume a snapshot</text>
+<rect x="282" y="150" width="136.4" height="16" fill="#b9b5ad"/>
+<text x="728" y="163" font-size="13" fill="#ece9e3" text-anchor="end">13.1 ms</text>
+<text x="32" y="202" font-size="13" fill="#b9b5ad">first command after a resume</text>
+<rect x="282" y="190" width="97.2" height="16" fill="#b9b5ad"/>
+<text x="728" y="203" font-size="13" fill="#ece9e3" text-anchor="end">6.3 ms</text>
+<text x="32" y="242" font-size="13" fill="#b9b5ad">command in a running sandbox</text>
+<rect x="282" y="230" width="29.8" height="16" fill="#b9b5ad"/>
+<text x="728" y="243" font-size="13" fill="#ece9e3" text-anchor="end">1.8 ms</text>
+<text x="32" y="312" font-size="11" fill="#8f8b84">one shared i9-13900K box, n=20 per metric; sources: examples/benchmark-suite/results/</text>
+</g>
 </svg>

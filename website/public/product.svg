@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="352" viewBox="0 0 760 352" role="img" aria-label="A terminal session: create a sandbox, run a command in it, snapshot it and fork the snapshot">
+<rect width="760" height="352" fill="#151515"/>
+<rect x="0.5" y="0.5" width="759" height="351" fill="none" stroke="#3a3835"/>
+<text x="32" y="30" font-family="'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="13" fill="#8f8b84">sandkiln</text>
+<line x1="0" y1="44" x2="760" y2="44" stroke="#3a3835"/>
+<g font-family="'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="15">
+<text x="32" y="64"><tspan fill="#8fa3e8">$ </tspan><tspan fill="#ece9e3">id=$(kiln sandbox create)</tspan></text>
+<text x="32" y="90" fill="#8f8b84"># its own kernel, not the host&#x27;s</text>
+<text x="32" y="116"><tspan fill="#8fa3e8">$ </tspan><tspan fill="#ece9e3">kiln sandbox exec $id -- uname -sr</tspan></text>
+<text x="32" y="142" fill="#b9b5ad">Linux 5.10.223</text>
+<text x="32" y="168"><tspan fill="#8fa3e8">$ </tspan><tspan fill="#ece9e3">kiln sandbox exec $id -- sh -c &#x27;echo hello from a microVM &gt; /tmp/note&#x27;</tspan></text>
+<text x="32" y="194" fill="#8f8b84"># a copy of the whole machine: memory and disk</text>
+<text x="32" y="220"><tspan fill="#8fa3e8">$ </tspan><tspan fill="#ece9e3">snap=$(kiln sandbox snapshot $id)</tspan></text>
+<text x="32" y="246"><tspan fill="#8fa3e8">$ </tspan><tspan fill="#ece9e3">copy=$(kiln sandbox fork $snap)</tspan></text>
+<text x="32" y="272"><tspan fill="#8fa3e8">$ </tspan><tspan fill="#ece9e3">kiln sandbox exec $copy -- cat /tmp/note</tspan></text>
+<text x="32" y="298" fill="#b9b5ad">hello from a microVM</text>
+</g>
+</svg>

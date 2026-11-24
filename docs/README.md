@@ -6,7 +6,7 @@ the short current-state view.
 
 Single source of truth: user-facing and mechanism docs live in `docs-site/`
 (Mintlify: concepts, internals, architecture, API reference) and narrative
-write-ups in `website/src/content/engineering/` (posts 01-28). Files here link
+write-ups in `docs-site/engineering/` (posts 01-28). Files here link
 to those instead of repeating them and keep only what they do not carry
 (decisions, caveats, verification records, open questions). When a fact
 changes, edit it in one place.

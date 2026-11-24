@@ -1,22 +1,77 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Header from "../components/Header.astro";
-import Hero from "../components/Hero.astro";
-import IsolationModel from "../components/IsolationModel.astro";
-import FeatureGrid from "../components/FeatureGrid.astro";
-import CodeExample from "../components/CodeExample.astro";
-import ExploreMore from "../components/ExploreMore.astro";
 import Footer from "../components/Footer.astro";
+
+import numbers from "../data/numbers.json";
+
+const DOCS = "https://sandkiln.mintlify.site";
+const setup = [
+  "git clone https://github.com/SumitKumar-17/sandkiln",
+  "cd sandkiln && scripts/setup.sh",
+  "scripts/sandkilnd-ctl.sh start",
+];
 ---
 
 <BaseLayout>
-  <Header active="home" />
+  <Header />
   <main>
-    <Hero />
-    <IsolationModel />
-    <FeatureGrid />
-    <CodeExample />
-    <ExploreMore />
+    <div class="shell">
+      <section class="hero">
+        <h1>Sandboxes for agents</h1>
+        <p class="lede">
+          sandkiln runs untrusted and AI-generated code in its own
+          <a href={`${DOCS}/concepts/sandbox-lifecycle`}>microVMs</a>, on hardware you control.
+          A sandbox answers its first command in about {numbers.warm_create_to_first_command_ms} ms from a warm pool, and can be
+          <a href={`${DOCS}/concepts/snapshots`}>snapshotted, forked and resumed</a>.
+          Use it from <a href={`${DOCS}/getting-started/js`}>TypeScript</a>,
+          <a href={`${DOCS}/getting-started/python`}>Python</a>, the
+          <a href={`${DOCS}/getting-started/cli`}>CLI</a>, an
+          <a href={`${DOCS}/getting-started/mcp`}>MCP server</a> or a
+          <a href={`${DOCS}/guides/run-ci-jobs-in-a-sandbox`}>GitHub Action</a>.
+        </p>
+
+        <div class="command">
+          <pre id="setup">{setup.map((line) => (<><span class="prompt">$ </span>{line}{"\n"}</>))}</pre>
+          <button class="copy" type="button" data-copy={setup.join("\n")}>copy</button>
+        </div>
+        <p class="note">
+          Self-hosted: you run the daemon on a Linux machine with KVM.
+          <a href={`${DOCS}/getting-started/self-hosting`}>Setup guide</a>.
+        </p>
+      </section>
+
+      <section class="section" aria-labelledby="use">
+        <h2 id="use">Create, run, fork</h2>
+        <div class="shot-wrap"><img
+          class="shot"
+          src={`${import.meta.env.BASE_URL}product.svg`}
+          width="760"
+          height="352"
+          alt="A terminal session. kiln sandbox create makes a sandbox; uname reports its own Linux 5.10.223 kernel; a file is written; the sandbox is snapshotted and the snapshot forked; the fork reads back the file: hello from a microVM."
+        /></div>
+        <p class="note">
+          A real session, not a mock-up. The same calls from
+          <a href={`${DOCS}/getting-started/js`}>TypeScript</a> and
+          <a href={`${DOCS}/getting-started/python`}>Python</a>. How the speed is measured:
+          <a href={`${DOCS}/engineering/29-what-a-start-latency-number-means`}>what a start-latency number means</a>.
+        </p>
+      </section>
+    </div>
   </main>
   <Footer />
 </BaseLayout>
+
+<script>
+  document.querySelectorAll<HTMLButtonElement>(".copy").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(button.dataset.copy ?? "");
+        button.textContent = "copied";
+      } catch {
+        button.textContent = "press ctrl+c";
+      }
+      setTimeout(() => (button.textContent = "copy"), 1600);
+    });
+  });
+</script>

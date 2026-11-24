@@ -144,9 +144,71 @@
         ]
       },
       {
-        "tab": "Engineering Blog",
+        "tab": "Engineering",
         "icon": "newspaper",
         "groups": [
+          {
+            "group": "How it works",
+            "pages": [
+              "engineering/01-system-overview",
+              "engineering/02-vsock-protocol-and-guest-agent",
+              "engineering/03-driving-firecracker",
+              "engineering/04-create-path-and-rootfs",
+              "engineering/05-networking",
+              "engineering/06-snapshots-resume-fork",
+              "engineering/07-pre-warmed-pools",
+              "engineering/08-daemon-internals",
+              "engineering/09-persistence-and-history",
+              "engineering/10-config-sdks-and-cli"
+            ]
+          },
+          {
+            "group": "Crate tour",
+            "pages": [
+              "engineering/11-crate-protocol",
+              "engineering/12-crate-guest-agent",
+              "engineering/13-crate-vmm",
+              "engineering/14-crate-store",
+              "engineering/15-crate-daemon"
+            ]
+          },
+          {
+            "group": "Performance",
+            "pages": [
+              "engineering/16-performance-model-and-measurement",
+              "engineering/17-opt-rootfs-reflink-clone",
+              "engineering/18-opt-boot-socket-wait",
+              "engineering/19-opt-history-store-wal",
+              "engineering/20-opt-concurrent-clone-and-lease",
+              "engineering/21-opt-pool-prewarming",
+              "engineering/22-opt-bounded-vsock-io",
+              "engineering/23-opt-snapshot-cost-analysis",
+              "engineering/24-opt-other-measured-wins",
+              "engineering/25-opt-snapshot-stop-force-stop",
+              "engineering/28-opt-guest-boot-time",
+              "engineering/29-what-a-start-latency-number-means",
+              "engineering/32-a-benchmark-you-can-rerun",
+              "engineering/34-making-a-create-a-resume",
+              "engineering/35-the-agent-as-pid-1"
+            ]
+          },
+          {
+            "group": "Correctness",
+            "pages": [
+              "engineering/26-correctness-long-running-exec",
+              "engineering/27-correctness-snapshot-disk-corruption",
+              "engineering/30-correctness-resume-settling-race",
+              "engineering/31-correctness-clone-entropy-and-clock",
+              "engineering/36-snapshots-without-taps",
+              "engineering/37-a-timeout-that-kills-the-process"
+            ]
+          },
+          {
+            "group": "Agents and CI",
+            "pages": [
+              "engineering/33-agents-and-ci"
+            ]
+          },
           {
             "group": "Architecture",
             "pages": [
@@ -181,5 +243,10 @@
         ]
       }
     ]
+  },
+  "logo": {
+    "light": "/images/logo-light.svg",
+    "dark": "/images/logo-dark.svg",
+    "href": "https://sandkiln.vercel.app"
   }
 }

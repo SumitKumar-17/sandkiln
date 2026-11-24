@@ -1,1536 +1,169 @@
-@import "./tokens.css";
+/* sandkiln website: one dark theme, two typefaces, one column.
+   Geist for headings, JetBrains Mono for everything you read.
+   Colour is deliberately scarce: one link blue, hairlines, and two greys. */
 
-/* ============================================================ base */
+:root {
+  --ground: #151515;
+  --well: #1c1b1a;
+  --ink: #ece9e3;
+  --ink-2: #b9b5ad;
+  --ink-3: #8f8b84;
+  --rule: #3a3835;
+  --link: #8fa3e8;
+  --link-hover: #b4c1f2;
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
+  --sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --measure: 64ch;
+  --gutter: clamp(1.25rem, 5vw, 2rem);
+  color-scheme: dark;
 }
 
-html {
-  text-size-adjust: 100%;
-  scroll-behavior: smooth;
-  scroll-padding-top: 96px;
-}
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
   background: var(--ground);
   color: var(--ink);
-  font-family: var(--mono);
-  font-size: var(--t-body);
-  line-height: 1.75;
-  font-synthesis-weight: none;
-  font-feature-settings: "liga" 0;
+  font: 400 0.9375rem/1.75 var(--mono);
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
-::selection {
-  background: var(--flare-solid);
-  color: var(--flare-ink);
-}
+a { color: var(--link); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--link) 45%, transparent); text-underline-offset: 0.28em; text-decoration-thickness: 1px; }
+a:hover { color: var(--link-hover); text-decoration-color: currentColor; }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
 
-h1,
-h2,
-h3,
-h4 {
-  margin: 0;
-  font-weight: 600;
-  text-wrap: balance;
-}
+::selection { background: color-mix(in srgb, var(--link) 35%, transparent); }
 
-p {
-  margin: 0;
-}
+.shell { width: 100%; max-width: 46rem; margin-inline: auto; padding-inline: var(--gutter); }
 
-svg {
-  display: block;
-}
+/* ---------- masthead ---------- */
+.masthead { padding-block: 1.75rem; }
+.masthead .shell { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; }
+.wordmark { display: inline-flex; align-items: center; gap: 0.6rem; font: 500 1.0625rem/1 var(--sans); letter-spacing: -0.01em; color: var(--ink); text-decoration: none; }
+.wordmark:hover { color: var(--ink); }
+.nav { display: flex; gap: 1.5rem; font-size: 0.875rem; }
+.nav a { color: var(--ink-2); text-decoration: none; }
+.nav a:hover, .nav a[aria-current="page"] { color: var(--ink); }
 
-a {
-  color: inherit;
-}
+/* ---------- headings ---------- */
+h1, h2, h3 { font-family: var(--sans); font-weight: 500; letter-spacing: -0.02em; color: var(--ink); line-height: 1.12; margin: 0; }
+h1 { font-size: clamp(2.5rem, 7vw, 3.75rem); }
+h2 { font-size: 1.5rem; }
+h3 { font-size: 1.125rem; letter-spacing: -0.01em; line-height: 1.3; }
 
-/* The accent is spent on measurements and on one phrase per headline, so a
-   link inside a paragraph is marked by its underline rather than by turning
-   the sentence amber. The underline carries the hue instead. */
-.prose a {
-  text-decoration: underline;
-  text-decoration-color: var(--flare-soft);
-  text-underline-offset: 0.22em;
-  text-decoration-thickness: 1px;
-  transition: text-decoration-color var(--motion) var(--ease), color var(--motion) var(--ease);
-}
+p { margin: 0; }
+.lede { max-width: var(--measure); color: var(--ink-2); }
 
-.prose a:hover {
-  color: var(--flare);
-  text-decoration-color: var(--flare);
-}
+/* ---------- home ---------- */
+.hero { padding-block: clamp(3rem, 10vw, 6rem) 3rem; display: grid; grid-template-columns: minmax(0, 1fr); gap: 2rem; justify-items: start; }
+.hero .lede { color: var(--ink); font-size: 1rem; line-height: 1.8; }
 
-:where(a, button, summary, [tabindex]):focus-visible {
-  outline: 2px solid var(--flare);
-  outline-offset: 3px;
-  border-radius: 0;
-}
-
-code {
-  font-family: var(--mono);
-}
-
-::-webkit-scrollbar {
-  height: 10px;
-  width: 10px;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--rule-strong);
-}
-
-::-webkit-scrollbar-track {
-  background: var(--well);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
-  }
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-  }
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-/* ============================================================ layout shell */
-
-.shell {
+.command {
   width: 100%;
-  max-width: var(--shell);
-  margin: 0 auto;
-  padding-inline: var(--s-6);
-}
-
-@media (max-width: 640px) {
-  .shell {
-    padding-inline: var(--s-5);
-  }
-}
-
-.band {
-  padding-block: var(--section-y);
-}
-
-/* Section separation is silence. A rule appears only where it marks real
-   structure — never as a divider between every band, which is what flattens
-   a page into identical stacked slabs. */
-.band-ruled {
-  border-top: 1px solid var(--rule);
-}
-
-/* The shared grid: a narrow index rail carrying the section name, and the
-   content column. This is what replaces an accent-coloured label repeated
-   above every heading — the category is expressed by position instead. */
-.grid {
-  display: grid;
-  grid-template-columns: var(--rail) minmax(0, 1fr);
-  gap: var(--rail-gap);
-  align-items: start;
-}
-
-.rail {
-  position: sticky;
-  top: 104px;
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-  text-decoration: none;
-  padding-top: var(--s-2);
-  border-top: 1px solid var(--rule-strong);
-  transition: color var(--motion) var(--ease), border-color var(--motion) var(--ease);
-}
-
-a.rail:hover {
-  color: var(--flare);
-  border-top-color: var(--flare);
-}
-
-@media (max-width: 1100px) {
-  .grid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--s-5);
-  }
-  .rail {
-    position: static;
-    justify-self: start;
-    padding-inline-end: var(--s-6);
-  }
-}
-
-.col > * + * {
-  margin-top: var(--s-6);
-}
-
-.lede {
-  font-size: var(--t-lead);
-  color: var(--ink-2);
-  max-width: var(--measure);
-}
-
-/* ============================================================ headlines
-
-   Two terse lines, each its own block so a narrow screen wraps inside a line
-   rather than fighting a hard break, with one phrase carrying the accent. */
-
-/* 34ch: the longest written line is 31 mono characters, and a measure that
-   re-wraps a written line into two throws away the two-line shape the copy
-   is built on. */
-.head {
-  font-size: var(--t-h2);
-  line-height: 1.16;
-  letter-spacing: -0.035em;
-  font-weight: 600;
-  max-width: 34ch;
-}
-
-.head .l {
-  display: block;
-}
-
-.flare {
-  color: var(--flare);
-  font-style: normal;
-}
-
-.scroller {
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-}
-
-/* ============================================================ masthead */
-
-.masthead {
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  background: var(--ground);
-  border-bottom: 1px solid var(--rule);
-}
-
-.masthead-in {
   display: flex;
-  align-items: center;
-  gap: var(--s-6);
-  min-height: 64px;
-  padding-block: var(--s-3);
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--rule);
+  padding: 1.1rem 1.1rem 1.1rem 1.4rem;
 }
-
-.wordmark {
-  font-size: 1rem;
-  font-weight: 700;
-  letter-spacing: -0.05em;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.wordmark .stop {
-  color: var(--flare);
-}
-
-.nav {
-  display: flex;
-  gap: var(--s-5);
-  margin-left: auto;
-  font-size: var(--t-sm);
-}
-
-.nav a {
-  text-decoration: none;
-  color: var(--ink-2);
-  padding-block: var(--s-1);
-  border-bottom: 1px solid transparent;
-  transition: color var(--motion) var(--ease), border-color var(--motion) var(--ease);
-}
-
-.nav a:hover {
-  color: var(--ink);
-}
-
-.nav a[aria-current="page"] {
-  color: var(--ink);
-  border-bottom-color: var(--flare);
-}
-
-.icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
+.command pre { margin: 0; overflow-x: auto; font: inherit; font-size: 0.9rem; line-height: 1.85; white-space: pre; align-self: center; }
+.command .prompt { color: var(--link); user-select: none; }
+.copy {
+  align-self: flex-start;
   flex: none;
-  padding: 0;
-  background: transparent;
-  color: var(--ink-2);
+  background: none;
+  color: var(--ink-3);
   border: 1px solid var(--rule);
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 0.55rem 1rem;
   cursor: pointer;
-  transition: color var(--motion) var(--ease), border-color var(--motion) var(--ease);
 }
+.copy:hover { color: var(--ink); border-color: var(--ink-3); }
+.note { color: var(--ink-3); font-size: 0.875rem; max-width: var(--measure); }
 
-.icon-btn:hover {
-  color: var(--flare);
-  border-color: var(--flare);
-}
+.section { padding-block: clamp(2.5rem, 7vw, 4rem); display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; justify-items: start; }
+.section > p { max-width: var(--measure); color: var(--ink-2); }
 
-/* Below the nav breakpoint the marketing pages would otherwise have no
-   navigation at all. A <details> disclosure keeps that free of JavaScript
-   and keyboard-operable by default. */
-.menu {
-  display: none;
-  margin-left: auto;
-  position: relative;
-}
-
-.menu > summary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--rule);
-  color: var(--ink-2);
-  cursor: pointer;
-  list-style: none;
-}
-
-.menu > summary::-webkit-details-marker {
-  display: none;
-}
-
-.menu[open] > summary {
-  color: var(--flare);
-  border-color: var(--flare);
-}
-
-.menu-sheet {
-  position: absolute;
-  right: 0;
-  top: calc(100% + var(--s-3));
-  min-width: 208px;
-  background: var(--ground);
-  border: 1px solid var(--rule-strong);
-  display: flex;
-  flex-direction: column;
-}
-
-.menu-sheet a {
-  padding: var(--s-3) var(--s-4);
-  text-decoration: none;
-  font-size: var(--t-sm);
-  color: var(--ink-2);
-  border-bottom: 1px solid var(--rule);
-}
-
-.menu-sheet a:last-child {
-  border-bottom: none;
-}
-
-.menu-sheet a:hover {
-  background: var(--well);
-  color: var(--ink);
-}
-
-.menu-sheet a[aria-current="page"] {
-  color: var(--flare);
-}
-
-@media (max-width: 900px) {
-  .nav {
-    display: none;
-  }
-  .menu {
-    display: block;
-    margin-left: 0;
-  }
-  /* With .nav gone the auto margin goes with it, so the two controls need
-     to claim the gap themselves or they bunch up against the wordmark. */
-  .theme-toggle {
-    margin-left: auto;
-  }
-  .masthead-in {
-    gap: var(--s-2);
-  }
-}
-
-/* ============================================================ buttons */
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-3);
-}
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-  font-family: var(--mono);
-  font-size: var(--t-xs);
-  font-weight: 500;
-  line-height: 1;
-  padding: 14px var(--s-5);
-  text-decoration: none;
-  border: 1px solid var(--rule-strong);
-  color: var(--ink);
-  background: transparent;
-  cursor: pointer;
-  transition: background-color var(--motion) var(--ease), border-color var(--motion) var(--ease),
-    color var(--motion) var(--ease);
-}
-
-/* Accent-filled. The previous system reserved its hue for data and filled
-   this with ink; this one spends the accent freely, and the single control
-   a reader is meant to press is where that reads loudest. */
-.btn-primary {
-  background: var(--flare-solid);
-  border-color: var(--flare-solid);
-  color: var(--flare-ink);
-  font-weight: 600;
-}
-
-.btn-primary:hover {
-  background: transparent;
-  color: var(--flare);
-}
-
-.btn-quiet:hover {
-  border-color: var(--flare);
-  color: var(--flare);
-}
-
-/* ============================================================ hero */
-
-.hero {
-  padding-block: clamp(48px, 6vw, 96px) clamp(72px, 9vw, 140px);
-}
-
-/* 24ch, because the headline is written as two lines and mono sets wide: a
-   narrower measure breaks each written line into two rendered ones and the
-   shape the copy was written for disappears. */
-.hero h1 {
-  font-size: var(--t-display);
-  line-height: 1.02;
-  letter-spacing: -0.055em;
-  font-weight: 700;
-  max-width: 24ch;
-}
-
-.hero h1 .l {
-  display: block;
-}
-
-.hero-sub {
-  font-size: var(--t-lead);
-  color: var(--ink-2);
-  max-width: 54ch;
-  margin-top: var(--s-5);
-}
-
-.hero-fine {
-  font-size: var(--t-sm);
-  color: var(--ink-3);
-  max-width: 58ch;
-  margin-top: var(--s-3);
-}
-
-.hero .actions {
-  margin-top: var(--s-6);
-}
-
-/* Stretched across the full column the console becomes a mostly-empty black
-   slab — in light mode that reads as a rendering fault rather than as a
-   terminal. 75% is not an arbitrary crop: the gauge grid below it is four
-   equal columns of the same width, so the console's right edge lands exactly
-   on the fourth column's left edge. Only applies while .hero-visual is still
-   stacked under the text (see .hero-layout below) — once it moves beside the
-   text as its own column, that column's own width is already the right
-   crop, and 75% of *it* would just reopen the same gap one level in. */
-.hero-console {
-  margin-top: clamp(40px, 5vw, 72px);
-}
-
-@media (min-width: 900px) and (max-width: 999px) {
-  .hero-console {
-    max-width: 75%;
-  }
-}
-
-/* Below this, the visual (console + gauges) stacks under the text, full
-   width, exactly as it always has. This kicks in as soon as there's
-   enough width for the headline's two authored lines (`.hero h1 .l`,
-   ~22ch at --t-display's own large size, not the body font-size a `ch`
-   here would otherwise be measured against) to stay on one line each
-   beside a console/gauges column -- `--t-display` itself is already
-   pinned at its clamp ceiling (3.5rem) for any viewport this wide, so
-   the text column's own width need doesn't change between this
-   breakpoint and a much wider one; only the gauge column does, handled
-   below by reflowing 4-across to 2x2 rather than by pushing the
-   breakpoint out to whatever width keeps 4-across comfortable (that
-   width turned out to be 1600px, well past the ~1440px a large share
-   of real laptop screens actually render at -- caught live by testing
-   at 1440px, not by picking a threshold from the math alone). Widens
-   .hero's own shell rather than the site-wide --shell, since every
-   other page's content is fine at 1180px -- only this row has two
-   things that both want real width side by side. */
-@media (min-width: 1180px) {
-  .hero-layout {
-    max-width: 1500px;
-    display: grid;
-    grid-template-columns: minmax(0, 680px) minmax(0, 1fr);
-    gap: var(--s-8);
-    align-items: start;
-  }
-  /* A grid item's default min-width is `auto`, not 0 -- it won't shrink
-     narrower than its content's own intrinsic width. `.tty pre` inside
-     here is deliberately `white-space: pre` (a console line shouldn't
-     wrap mid-token), which gives it a wide intrinsic width, so without
-     this the whole row was overflowing the viewport at wider column
-     widths -- caught live at 1180px, not visible at 1440px+ where the
-     column happens to already be wider than the console's natural
-     width. `.tty pre`'s own `overflow-x: auto` is what actually absorbs
-     the excess, scrolling inside the console instead of blowing out the
-     page -- this just lets the grid track get narrow enough to need it. */
-  .hero-visual {
-    min-width: 0;
-  }
-  .hero-console {
-    margin-top: 0;
-    max-width: 100%;
-  }
-}
-
-/* Between the side-by-side breakpoint and 1600px, the gauge column is
-   too narrow for 4 across without the values colliding into their
-   neighbors -- confirmed live, not assumed. 2x2 fits comfortably at
-   every width in this range; 4-across returns once the column is wide
-   enough to earn it back. */
-@media (min-width: 1180px) and (max-width: 1599px) {
-  .hero-visual .gauges {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .hero-visual .gauge-val {
-    font-size: 1.5rem;
-  }
-}
-
-@media (min-width: 1600px) {
-  /* --t-stat is a vw-relative clamp, sized for the gauges spanning most of
-     a 1180px shell -- correct there, but this column is now a *fixed*
-     ~756px regardless of viewport, and vw keeps growing past 1600px
-     whether or not this column does. A fixed size (not vw-based) is the
-     only one that can't eventually outgrow a column of fixed width, and
-     was caught by an actual overlap, not by inspection -- two of these
-     four values collided into their neighbor's the first time this
-     rendered past 1600px. */
-  .hero-visual .gauge-val {
-    font-size: 1.7rem;
-  }
-}
-
-/* ============================================================ panels */
-
-/* Plates, not cards: a fill difference and a hairline. No shadow is defined
-   anywhere in this stylesheet, and none should be added. */
-.panel {
-  background: var(--well);
-  border: 1px solid var(--rule);
-  min-width: 0;
-}
-
-.panel-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 2px var(--s-6);
-  padding: var(--s-3) var(--s-4);
-  border-bottom: 1px solid var(--rule);
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-}
-
-/* ============================================================ gauges
-
-   Four small multiples of one log axis, not four decorated numbers. Every
-   track runs 100µs to 1s with a tick per decade, so the marks are directly
-   comparable across columns — which is what makes two orders of magnitude
-   between an exec round-trip and a full create visible rather than merely
-   stated. A range is drawn as a range, so a tight measurement renders as a
-   tight mark and a wide one cannot be mistaken for a point. */
-
-.gauges {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  border-top: 1px solid var(--rule-strong);
-}
-
-.gauge {
-  padding: var(--s-5) var(--s-5) var(--s-5) 0;
-  border-bottom: 1px solid var(--rule);
-  min-width: 0;
-}
-
-.gauge-label {
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-}
-
-.gauge-val {
-  font-size: var(--t-stat);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.05em;
-  color: var(--flare);
-  margin-top: var(--s-2);
-  white-space: nowrap;
-}
-
-.gauge-val .u {
-  font-size: 0.46em;
-  font-weight: 500;
-  letter-spacing: 0;
-  color: var(--ink-3);
-  margin-left: 3px;
-}
-
-.gauge-track {
-  position: relative;
-  height: 8px;
-  margin-top: var(--s-4);
-  border-bottom: 1px solid var(--rule-strong);
-}
-
-.gauge-decade {
-  position: absolute;
-  bottom: 0;
-  width: 1px;
-  height: 4px;
-  background: var(--rule-strong);
-}
-
-.gauge-mark {
-  position: absolute;
-  top: 0;
-  height: 8px;
-  min-width: 8px;
-  background: var(--flare-solid);
-}
-
-/* A run that recorded one figure rather than a range gets a hairline tick
-   instead of a block, so the shape of the mark says which kind it is
-   without the reader having to re-read the number. It has to be min-width,
-   not width: markStyle writes an inline `width:0.00%` for a point, and an
-   inline declaration beats any class — which is why this mark rendered at
-   zero pixels, invisible, until it was caught in a screenshot. */
-.gauge-mark-point {
-  min-width: 2px;
-}
-
-.gauge-src {
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-  margin-top: var(--s-3);
-  line-height: 1.5;
-}
-
-.gauge-legend {
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-  margin-top: var(--s-3);
-}
-
-@media (max-width: 900px) {
-  .gauges {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  /* Two per row means a one-line label sits beside a two-line one; without
-     room for two lines here the figures beside each other stop sharing a
-     baseline. Two lines at the inherited 1.75 line-height is 3.5em. */
-  .gauge-label {
-    min-height: 3.5em;
-  }
-}
-
-@media (max-width: 460px) {
-  .gauge-val {
-    font-size: 1.3rem;
-  }
-}
-
-/* ============================================================ tty
-
-   The darkest surface on the site, in both themes, because it quotes a real
-   serial console. Monochrome amber phosphor: dim for the traffic, full
-   foreground for the lines that matter, accent for the ones that mean the
-   sandbox is alive. */
-
-.tty {
-  position: relative;
-  background: var(--tty-bg);
-  color: var(--tty-fg);
-  border: 1px solid var(--rule-strong);
-  font-size: var(--t-xs);
-  line-height: 1.8;
-  min-width: 0;
-}
-
-/* Every real boot line here is wider than the box at every width this ships
-   at (`.tty pre` deliberately never wraps — see below), so this isn't a rare
-   edge case needing a hint, it's the normal state. Without this, a line
-   stopping mid-word at the box's hard right edge reads as a layout bug, not
-   as "scroll for more" — caught live from a real screenshot, not assumed.
-   Fades to the box's own background, not transparent-to-white, so it works
-   identically in both themes. */
-.tty::after {
-  content: "";
-  position: absolute;
-  top: 1px;
-  right: 1px;
-  bottom: 1px;
-  width: 28px;
-  background: linear-gradient(to right, transparent, var(--tty-bg));
-  pointer-events: none;
-}
-
-/* Wraps to two rows on a phone rather than letting both labels wrap inside
-   their own half of a bar too narrow to hold them side by side. */
-.tty-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--s-1) var(--s-4);
-  padding: var(--s-3) var(--s-5);
-  border-bottom: 1px solid #1a1611;
-  font-size: var(--t-micro);
-  color: var(--tty-dim);
-}
-
-.tty-head .live {
-  color: var(--tty-flare);
-}
-
-/* A console line is not prose: wrapping one mid-token turns a boot log into
-   noise. It scrolls instead, which is what the real thing does. A persistent
-   thin scrollbar (not the OS default, which auto-hides on macOS/mobile until
-   actively scrolling) is the other half of making that legible — without it
-   there's no visible sign this is scrollable at all, only the fade above. */
-.tty pre {
+/* ---------- code ---------- */
+pre { font-family: var(--mono); }
+.code, .prose pre, .section pre.astro-code {
   margin: 0;
-  padding: var(--s-5);
-  white-space: pre;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: thin;
-  scrollbar-color: var(--tty-dim) transparent;
-}
-
-.tty pre::-webkit-scrollbar {
-  height: 6px;
-}
-
-.tty pre::-webkit-scrollbar-thumb {
-  background: var(--tty-dim);
-  border-radius: 3px;
-}
-
-.tty pre::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.tty .dim {
-  color: var(--tty-dim);
-}
-
-.tty .sig {
-  color: var(--tty-fg);
-  font-weight: 500;
-}
-
-.tty .ok {
-  color: var(--tty-flare);
-}
-
-/* The hero console is the one place worth dramatizing a real boot: the
-   actual sequence is ~10ms end to end, too fast to read a single line of,
-   so each line reveals staggered by --d instead of all at once -- closer
-   to how the real console output actually arrives than a static block of
-   text pretending to be a live boot log. Plays once on load, not looped:
-   a boot happens once, and replaying it forever would read as decoration
-   rather than as the thing it's depicting. */
-.cl {
-  opacity: 0;
-  animation: cl-in 0.5s var(--ease) forwards;
-  animation-delay: var(--d, 0s);
-}
-
-@keyframes cl-in {
-  from { opacity: 0; transform: translateY(2px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .cl {
-    opacity: 1;
-    animation: none;
-    transform: none;
-  }
-}
-
-@media (min-width: 720px) {
-  .tty {
-    font-size: 0.8125rem;
-  }
-  .tty pre {
-    padding: var(--s-6);
-  }
-}
-
-@media (min-width: 1180px) {
-  .tty {
-    font-size: 0.9375rem;
-  }
-}
-
-/* ============================================================ matrix */
-
-.matrix {
   width: 100%;
-  border-collapse: collapse;
-  font-size: var(--t-sm);
-  min-width: 600px;
-}
-
-.matrix th,
-.matrix td {
-  text-align: left;
-  padding: var(--s-4);
-  border-bottom: 1px solid var(--rule);
-  vertical-align: top;
-}
-
-.matrix thead th {
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-  font-weight: 500;
-  border-bottom-color: var(--rule-strong);
-}
-
-.matrix tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.matrix td:first-child {
-  color: var(--ink-3);
-  font-size: var(--t-xs);
-  white-space: nowrap;
-  width: 1%;
-}
-
-/* The accent marks a whole column here rather than a single value: the
-   table's job is to separate two models, so the header carries it too or the
-   column reads as six unrelated highlights. */
-.matrix td.ours,
-.matrix thead th:last-child {
-  color: var(--flare);
-  font-weight: 500;
-}
-
-/* ============================================================ status marks
-
-   One hue, three fills. A third colour for "planned" would compete with the
-   only hue the system has, and the filled/half/hollow scale is legible
-   without consulting a key. */
-
-.mark {
-  width: 9px;
-  height: 9px;
-  flex: none;
-  display: inline-block;
-}
-
-.mark-done {
-  background: var(--flare-solid);
-}
-
-.mark-partial {
-  background: linear-gradient(to right, var(--flare-solid) 50%, transparent 50%);
-  box-shadow: inset 0 0 0 1px var(--flare-soft);
-}
-
-.mark-planned {
-  box-shadow: inset 0 0 0 1px var(--rule-strong);
-}
-
-/* ============================================================ manifest */
-
-.tally {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-2) var(--s-5);
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-}
-
-.tally-item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-}
-
-.tally-n {
-  color: var(--flare);
-  font-weight: 600;
-}
-
-.surface-groups > * + * {
-  margin-top: var(--s-7);
-}
-
-.sgroup-head {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  padding-bottom: var(--s-2);
-  border-bottom: 1px solid var(--rule-strong);
-  font-size: var(--t-micro);
-  color: var(--ink-2);
-}
-
-.sgroup-n {
-  color: var(--flare);
-  font-weight: 600;
-}
-
-.sgroup-note {
-  margin-left: auto;
-  color: var(--ink-3);
-  text-align: right;
-}
-
-.sgroup-list {
-  list-style: none;
-  margin: 0;
-  padding: var(--s-4) 0 0;
-  columns: 3;
-  column-gap: var(--s-6);
-  font-size: var(--t-sm);
-  color: var(--ink-2);
-}
-
-.sgroup-list li {
-  break-inside: avoid;
-  padding-block: 5px;
-}
-
-@media (max-width: 900px) {
-  .sgroup-list {
-    columns: 2;
-  }
-}
-
-@media (max-width: 560px) {
-  .sgroup-list {
-    columns: 1;
-  }
-}
-
-/* ============================================================ code */
-
-/* Follows the theme, matching the docs' own code blocks. Highlighting runs
-   on the shared syntax roles, so a sample here and a sample in the docs mark
-   the same things the same way. */
-.codeblock {
-  background: var(--well);
-  border: 1px solid var(--rule);
-  color: var(--ink);
-  font-size: var(--t-xs);
-  line-height: 1.85;
   overflow-x: auto;
-  min-width: 0;
-}
-
-.codeblock pre {
-  margin: 0;
-  padding: var(--s-5);
-}
-
-.codeblock .c {
-  color: var(--syn-comment);
-}
-
-.codeblock .k {
-  color: var(--syn-keyword);
-}
-
-.codeblock .s {
-  color: var(--syn-string);
-}
-
-.codeblock .n {
-  color: var(--syn-name);
-  font-weight: 500;
-}
-
-/* Sized to the longest line the samples actually contain, for the same
-   reason the hero console is: a panel stretched well past its content reads
-   as a layout accident. */
-.codegroup {
-  max-width: 820px;
-}
-
-.tabs {
-  display: flex;
-  gap: 0;
-  border-bottom: 1px solid var(--rule);
-}
-
-.tab {
-  font-family: var(--mono);
-  font-size: var(--t-micro);
-  padding: var(--s-3) var(--s-4);
-  background: transparent;
-  color: var(--ink-3);
-  border: none;
-  border-bottom: 1px solid transparent;
-  margin-bottom: -1px;
-  cursor: pointer;
-  transition: color var(--motion) var(--ease), border-color var(--motion) var(--ease);
-}
-
-.tab:hover {
-  color: var(--ink-2);
-}
-
-.tab[aria-selected="true"] {
-  color: var(--flare);
-  border-bottom-color: var(--flare);
-  font-weight: 600;
-}
-
-.tabpanel[hidden] {
-  display: none;
-}
-
-/* ============================================================ jump list */
-
-.jump {
-  border-top: 1px solid var(--rule-strong);
-}
-
-.jump a {
-  display: grid;
-  grid-template-columns: 128px minmax(0, 1fr);
-  gap: var(--s-2) var(--s-5);
-  align-items: baseline;
-  padding: var(--s-5) var(--s-3);
-  text-decoration: none;
-  border-bottom: 1px solid var(--rule);
-  transition: background-color var(--motion) var(--ease);
-}
-
-.jump a:hover {
-  background: var(--well);
-}
-
-.jump-kind {
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-  transition: color var(--motion) var(--ease);
-}
-
-.jump a:hover .jump-kind {
-  color: var(--flare);
-}
-
-.jump-name {
-  font-size: var(--t-sm);
-  color: var(--ink);
-}
-
-@media (max-width: 640px) {
-  .jump a {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-/* ============================================================ page hero */
-
-.page-hero {
-  padding-block: clamp(48px, 6vw, 88px) clamp(48px, 6vw, 88px);
-}
-
-/* Same reason as .head's 34ch: the longest written line here is 25 mono
-   characters, and a narrower measure re-wraps it. */
-.page-hero h1 {
-  font-size: var(--t-title);
-  line-height: 1.08;
-  letter-spacing: -0.045em;
-  font-weight: 700;
-  max-width: 28ch;
-}
-
-.page-hero h1 .l {
-  display: block;
-}
-
-.page-hero .lede {
-  margin-top: var(--s-5);
-}
-
-/* A page-hero's own text tops out around 600-650px even at --t-title's
-   largest size, well short of the 1180px shell -- on a wide viewport that
-   left a plain, unfilled gap next to it. Fixed with real content instead
-   of a decorative filler: a page-hero-nav is an actual "on this page"
-   jump list built from the same #id anchors each page's own .rail links
-   already point at, so it's never invented structure, just this
-   information surfaced a second time in a place it's actually useful --
-   before scrolling past the content it lists, not only alongside it. */
-@media (min-width: 1180px) {
-  .page-hero-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(200px, 300px);
-    gap: var(--s-6);
-  }
-}
-
-.page-hero-nav {
-  display: none;
-}
-
-@media (min-width: 1180px) {
-  .page-hero-nav {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-3);
-    padding-top: var(--s-2);
-    margin-top: 2px;
-    border-top: 1px solid var(--rule-strong);
-  }
-  .page-hero-nav a {
-    font-size: var(--t-micro);
-    color: var(--ink-3);
-    text-decoration: none;
-    transition: color var(--motion) var(--ease);
-  }
-  .page-hero-nav a:hover {
-    color: var(--flare);
-  }
-}
-
-/* ============================================================ crate stack */
-
-/* Not numbered: five crates are a dependency stack, not a sequence, so the
-   useful structural fact is what each one talks to — which the `uses` column
-   states outright. */
-.crate {
-  display: grid;
-  grid-template-columns: 210px minmax(0, 1fr) 176px;
-  gap: var(--s-2) var(--s-5);
-  padding: var(--s-5) 0;
-  border-bottom: 1px solid var(--rule);
-  align-items: baseline;
-}
-
-.crate-name {
-  font-size: var(--t-xs);
-  font-weight: 600;
-  color: var(--flare);
-}
-
-.crate-role {
-  font-size: var(--t-sm);
-  color: var(--ink-2);
-}
-
-.crate-uses {
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-  text-align: right;
-}
-
-.crate-legend {
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-  padding-block: 0 var(--s-2);
-  border-bottom-color: var(--rule-strong);
-}
-
-.crate-legend .crate-name {
-  color: var(--ink-3);
-  font-weight: 400;
-}
-
-@media (max-width: 900px) {
-  .crate {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .crate-uses {
-    text-align: left;
-  }
-  /* A column legend for a layout that no longer has columns is just three
-     stray words. */
-  .crate-legend {
-    display: none;
-  }
-}
-
-/* ============================================================ steps */
-
-/* 01–04 is kept here and nowhere else on the site: the boot lifecycle
-   genuinely is a sequence. */
-.steps {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--s-5);
-}
-
-@media (max-width: 860px) {
-  .steps {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 520px) {
-  .steps {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.step {
-  border-top: 1px solid var(--rule-strong);
-  padding-top: var(--s-3);
-}
-
-.step-n {
-  font-size: var(--t-micro);
-  color: var(--flare);
-  font-weight: 600;
-}
-
-.step h3 {
-  font-size: var(--t-sm);
-  font-weight: 600;
-  margin-top: var(--s-2);
-}
-
-.step p {
-  font-size: var(--t-xs);
-  color: var(--ink-2);
-  margin-top: var(--s-2);
-  line-height: 1.65;
-}
-
-/* ============================================================ metrics */
-
-.subhead {
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-  padding-bottom: var(--s-2);
-  border-bottom: 1px solid var(--rule-strong);
-}
-
-.subhead + * {
-  margin-top: 0 !important;
-}
-
-/* Four explicit columns for four figures: auto-fit fitted three and orphaned
-   the fourth onto a row of its own. */
-.metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0 var(--s-5);
-}
-
-@media (max-width: 1000px) {
-  .metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 520px) {
-  .metrics {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.metric {
-  padding: var(--s-5) 0;
-  border-bottom: 1px solid var(--rule);
-}
-
-.metric-label {
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-}
-
-/* Sized so the widest recorded range (309.6–335.0ms) sets on one line: a
-   measured range broken across two lines stops reading as one figure. */
-.metric-val {
-  font-variant-numeric: tabular-nums;
-  font-size: clamp(1.2rem, 0.8rem + 0.95vw, 1.5rem);
-  font-weight: 600;
-  letter-spacing: -0.05em;
-  color: var(--flare);
-  margin-top: var(--s-3);
-  white-space: nowrap;
-}
-
-.metric-val .u {
-  font-size: 0.5em;
-  font-weight: 500;
-  color: var(--ink-3);
-  letter-spacing: 0;
-  margin-left: 2px;
-}
-
-.metric-ctx {
-  font-size: var(--t-xs);
-  color: var(--ink-2);
-  margin-top: var(--s-3);
-  line-height: 1.6;
-  max-width: 34ch;
-}
-
-/* ============================================================ data table */
-
-.datatable {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--t-xs);
-  font-variant-numeric: tabular-nums;
-  min-width: 460px;
-}
-
-.datatable th,
-.datatable td {
-  padding: var(--s-3) var(--s-4);
-  border-bottom: 1px solid var(--rule);
-  text-align: right;
-}
-
-.datatable th {
-  color: var(--ink-3);
-  font-size: var(--t-micro);
-  font-weight: 500;
-  border-bottom-color: var(--rule-strong);
-}
-
-.datatable th:first-child,
-.datatable td:first-child {
-  text-align: left;
-  color: var(--ink-2);
-}
-
-.datatable tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.datatable td:not(:first-child) {
-  color: var(--flare);
-}
-
-/* A dash is the absence of a measurement, so it must not be dressed as one. */
-.datatable .nil {
-  color: var(--ink-3);
-}
-
-.fine {
-  font-size: var(--t-xs);
-  color: var(--ink-3);
-  line-height: 1.65;
-  max-width: var(--measure);
-}
-
-/* ============================================================ finding */
-
-/* A left axis rule rather than a tinted box: the same structural device the
-   rest of the page uses, so a result reads as part of the record. Solid
-   means settled; dashed means still open — the distinction is the rule's
-   shape rather than a second hue. */
-.finding {
-  border-left: 2px solid var(--flare);
-  padding-left: var(--s-5);
-  max-width: var(--measure);
-}
-
-.finding > * + * {
-  margin-top: var(--s-4);
-}
-
-.finding p {
-  font-size: var(--t-sm);
-  color: var(--ink-2);
-  line-height: 1.7;
-}
-
-.finding .term {
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.finding b {
-  color: var(--flare);
-  font-weight: 600;
-}
-
-.finding-open {
-  border-left-style: dashed;
-  border-left-color: var(--rule-strong);
-}
-
-.finding code,
-.lede code,
-.fine code,
-.rdesc code,
-.metric-ctx code {
-  font-size: 0.92em;
-  color: var(--ink);
-  background: var(--well-2);
-  padding: 1px 5px;
-}
-
-/* ============================================================ roadmap */
-
-.col > .rgroup + .rgroup {
-  margin-top: var(--s-8);
-}
-
-.rail-toc {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-}
-
-.rail-toc a {
-  color: var(--ink-3);
-  text-decoration: none;
-  transition: color var(--motion) var(--ease);
-}
-
-.rail-toc a:hover {
-  color: var(--flare);
-}
-
-@media (max-width: 1100px) {
-  .rail-toc {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: var(--s-2) var(--s-4);
-  }
-}
-
-.rgroup-head {
-  font-size: var(--t-micro);
-  color: var(--ink-2);
-  font-weight: 500;
-  padding-bottom: var(--s-2);
-  border-bottom: 1px solid var(--rule-strong);
-  scroll-margin-top: 104px;
-}
-
-.rrow {
-  display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 100px;
-  gap: var(--s-1) var(--s-5);
-  padding: var(--s-4) 0;
-  border-bottom: 1px solid var(--rule);
-  align-items: baseline;
-}
-
-.rrow:last-child {
-  border-bottom: none;
-}
-
-.rname {
-  font-size: var(--t-sm);
-  font-weight: 600;
-}
-
-.rdesc {
-  font-size: var(--t-xs);
-  line-height: 1.65;
-  color: var(--ink-2);
-  max-width: 62ch;
-}
-
-.rstat {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-  justify-content: flex-end;
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-  white-space: nowrap;
-}
-
-@media (max-width: 820px) {
-  .rrow {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .rstat {
-    justify-content: flex-start;
-  }
-}
-
-/* ============================================================ footer */
-
-.foot {
-  border-top: 1px solid var(--rule);
-  padding-block: var(--s-7) var(--s-8);
-}
-
-.foot-in {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: var(--s-4);
-  font-size: var(--t-micro);
-  color: var(--ink-3);
-}
-
-.foot-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-4);
-}
-
-.foot-links a {
-  text-decoration: none;
-  transition: color var(--motion) var(--ease);
-}
-
-.foot-links a:hover {
-  color: var(--flare);
-}
-
-.foot-version {
-  color: var(--flare);
-}
-
-.foot-github {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-1);
+  padding: 1.15rem 1.4rem;
+  border: 1px solid var(--rule);
+  background: var(--well) !important;
+  font-size: 0.875rem;
+  line-height: 1.75;
+  tab-size: 2;
+}
+.code code, .prose pre code { font: inherit; background: none; padding: 0; border: 0; }
+
+.shot-wrap { width: 100%; overflow-x: auto; }
+.shot { display: block; width: 100%; min-width: 38rem; height: auto; }
+
+/* ---------- footer ---------- */
+.foot { padding-block: 4rem 3rem; color: var(--ink-3); font-size: 0.8125rem; }
+.foot .shell { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.75rem 2rem; }
+.foot nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; }
+.foot a { color: var(--ink-3); text-decoration: none; }
+.foot a:hover { color: var(--ink); }
+
+/* ---------- blog index ---------- */
+.page-head { padding-block: clamp(2.5rem, 8vw, 4.5rem) 2rem; display: grid; gap: 1.25rem; }
+.post-list { list-style: none; margin: 0; padding: 0 0 3rem; }
+.post-list li { border-top: 1px solid var(--rule); }
+.post-list li:last-child { border-bottom: 1px solid var(--rule); }
+.post-list a { display: grid; gap: 0.35rem; padding-block: 1.4rem; text-decoration: none; color: inherit; }
+.post-title { font: 500 1.125rem/1.35 var(--sans); letter-spacing: -0.01em; color: var(--ink); }
+.post-summary { color: var(--ink-3); font-size: 0.875rem; line-height: 1.7; max-width: var(--measure); }
+.post-list a:hover .post-title { color: var(--link); }
+
+/* ---------- blog post ---------- */
+.post { padding-bottom: 4rem; }
+.post header { padding-block: clamp(2rem, 7vw, 3.5rem) 1.5rem; display: grid; gap: 1rem; }
+.post h1 { font-size: clamp(2rem, 5.5vw, 2.75rem); line-height: 1.12; }
+.back { font-size: 0.875rem; }
+.meta { color: var(--ink-3); font-size: 0.8125rem; }
+.toc { display: grid; gap: 0.4rem; padding: 0 0 2rem; font-size: 0.8125rem; border-bottom: 1px solid var(--rule); margin-bottom: 2rem; }
+.toc a { color: var(--ink-3); text-decoration: none; }
+.toc a:hover { color: var(--ink); }
+
+.prose { max-width: 100%; color: var(--ink-2); }
+.prose > * + * { margin-top: 1.25rem; }
+.prose p, .prose ul, .prose ol { max-width: 68ch; }
+.prose h2 { margin-top: 3rem; font-size: 1.5rem; scroll-margin-top: 1.5rem; color: var(--ink); }
+.prose h3 { margin-top: 2rem; color: var(--ink); }
+.prose strong { color: var(--ink); font-weight: 500; }
+.prose ul, .prose ol { padding-left: 1.4rem; }
+.prose li + li { margin-top: 0.4rem; }
+.prose :not(pre) > code { background: var(--well); border: 1px solid var(--rule); padding: 0.08em 0.4em; font-size: 0.875em; color: var(--ink); }
+.prose blockquote { margin-inline: 0; padding-left: 1.25rem; border-left: 1px solid var(--rule); color: var(--ink-2); }
+.prose hr { border: 0; border-top: 1px solid var(--rule); margin-block: 2.5rem; }
+.prose table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; display: block; overflow-x: auto; }
+.prose th, .prose td { text-align: left; vertical-align: top; padding: 0.65rem 1rem 0.65rem 0; border-bottom: 1px solid var(--rule); }
+.prose th { color: var(--ink); font-weight: 500; }
+.prose img { max-width: 100%; }
+
+.diagram { margin: 0; padding: 1.5rem; border: 1px solid var(--rule); background: var(--well); overflow-x: auto; }
+.diagram svg { display: block; margin-inline: auto; max-width: 100%; height: auto; }
+
+.pager { display: flex; justify-content: space-between; gap: 2rem; margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--rule); font-size: 0.875rem; }
+.pager .next { margin-left: auto; text-align: right; }
+
+@media (max-width: 34rem) {
+  .command { flex-direction: column; padding: 1rem; }
+  .command pre { align-self: stretch; }
+  .copy { align-self: stretch; }
+  .nav { gap: 1.1rem; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a, .copy { transition: color 0.15s ease, border-color 0.15s ease; }
 }
