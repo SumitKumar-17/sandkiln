@@ -135,12 +135,13 @@ fi
 # concurrently against one shared daemon (see scripts/integration-test.sh),
 # so another topic's own snapshot churn happening in this same window
 # must not make this assertion flaky in either direction.
+# Only this pool's own snapshots, found by the tag the replenisher puts on them.
+# Comparing every snapshot would also count the default warm pool's churn (its
+# warm snapshots are claimed and replaced all the time while the suite runs).
 snapshot_ids() {
-  if command -v jq >/dev/null 2>&1; then
-    jq -r '.snapshots[]?.id // empty' < "$WORKDIR/resp.json"
-  else
-    grep -o '"id":"[^"]*"' "$WORKDIR/resp.json" | sed -E 's/"id":"([^"]*)"/\1/'
-  fi
+  python3 -c 'import sys, json
+pool = sys.argv[1]
+print("\n".join(s["id"] for s in json.load(sys.stdin)["snapshots"] if (s.get("tags") or {}).get("sandkiln.pool") == pool))' "it-pool-$$" < "$WORKDIR/resp.json"
 }
 
 req GET /snapshots >/dev/null
