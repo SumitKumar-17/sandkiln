@@ -43,6 +43,11 @@
 #                                (which needs debug logs for finer detail than
 #                                /metrics exposes).
 #
+#   bench-suite [args...]        examples/benchmark-suite: client-side suite (create, first
+#                                command, exec, snapshot, fork, resume, parallel) against any
+#                                daemon; `bench-suite compare A.json B.json` diffs two results.
+#                                Installs deps on first use; needs Node >= 22.18.
+#
 # Guest agent (after any protocol/guest-agent/vmm change):
 #   inject-agent [rootfs-path]   builds sandkiln-guest-agent for the musl
 #                                 target, then `sudo images/inject-agent.sh`
@@ -141,6 +146,12 @@ case "$subcommand" in
     ;;
   restart-test)
     exec "$SCRIPT_DIR/restart-test.sh" "$@"
+    ;;
+  bench-suite)
+    suite="$REPO_ROOT/examples/benchmark-suite"
+    command -v npm >/dev/null || { echo "bench-suite: node/npm not found (needs Node >= 22.18)" >&2; exit 1; }
+    [ -d "$suite/node_modules" ] || (cd "$suite" && npm install --silent)
+    cd "$suite" && exec node src/cli.ts "$@"
     ;;
   inject-agent)
     rootfs="${1:-${SANDKILN_BASE_ROOTFS:-$HOME/sandkiln-tools/images/ubuntu-22.04.ext4}}"

@@ -1,0 +1,38 @@
+{
+  "name": "sandkiln-mcp",
+  "version": "0.1.0",
+  "description": "Model Context Protocol server that gives AI agents sandkiln microVM sandboxes as tools (stdio transport).",
+  "license": "MIT",
+  "author": "Sumit Kumar",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SumitKumar-17/sandkiln.git",
+    "directory": "packages/mcp"
+  },
+  "type": "module",
+  "bin": {
+    "sandkiln-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run build",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "sandkiln": "0.12.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  }
+}
