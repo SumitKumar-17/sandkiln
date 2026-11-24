@@ -151,7 +151,7 @@ case "$subcommand" in
     suite="$REPO_ROOT/examples/benchmark-suite"
     command -v npm >/dev/null || { echo "bench-suite: node/npm not found (needs Node >= 22.18)" >&2; exit 1; }
     [ -d "$suite/node_modules" ] || (cd "$suite" && npm install --silent)
-    cd "$suite" && exec node src/cli.ts "$@"
+    exec node "$suite/src/cli.ts" "$@"
     ;;
   inject-agent)
     rootfs="${1:-${SANDKILN_BASE_ROOTFS:-$HOME/sandkiln-tools/images/ubuntu-22.04.ext4}}"

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { type Args, USAGE, parseCli } from "./args.ts";
 import { BENCHMARKS } from "./benchmarks/index.ts";
 import { compareResults, hasRegression, renderCompare } from "./compare.ts";
@@ -28,6 +29,10 @@ async function main(args: Args): Promise<number> {
       return hasRegression(rows) ? 1 : 0;
     }
     case "run": {
+      // Check output paths before a multi-minute run, not after it.
+      for (const out of [args.jsonOut, args.markdownOut]) {
+        if (out !== null && !existsSync(dirname(out))) throw new Error(`output directory does not exist: ${dirname(out)}`);
+      }
       let pending: (() => Promise<void>) | undefined;
       for (const sig of ["SIGINT", "SIGTERM"] as const) {
         process.on(sig, () => void (pending?.() ?? Promise.resolve()).finally(() => process.exit(130)));
