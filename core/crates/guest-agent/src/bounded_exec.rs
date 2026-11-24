@@ -33,6 +33,10 @@ const KILL_SETTLE: Duration = Duration::from_secs(2);
 pub enum Outcome {
     Finished { stdout: Vec<u8>, stderr: Vec<u8>, status: ExitStatus },
     TimedOut { stdout: Vec<u8>, stderr: Vec<u8> },
+    /// The command could not be started (missing, not executable, ...). Kept
+    /// apart from `Err`, which is a failure of the wait itself, so the caller
+    /// can apply the shell exit-code convention to a spawn failure only.
+    SpawnFailed(std::io::Error),
 }
 
 enum Done {
@@ -56,7 +60,7 @@ fn run_with_grace(
     kill_settle: Duration,
 ) -> std::io::Result<Outcome> {
     let deadline = Instant::now() + timeout;
-    let mut child = Command::new(command)
+    let spawned = Command::new(command)
         .args(args)
         .envs(env)
         .stdin(Stdio::null())
@@ -65,7 +69,11 @@ fn run_with_grace(
         // setpgid(0, 0) in the child: pgid == pid, so the group can be
         // signalled as one and cannot include the agent itself.
         .process_group(0)
-        .spawn()?;
+        .spawn();
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(e) => return Ok(Outcome::SpawnFailed(e)),
+    };
     let pgid = Pid::from_raw(child.id() as i32);
 
     let stdout_buf = SharedBuf::default();
@@ -251,8 +259,10 @@ mod tests {
     }
 
     #[test]
-    fn unspawnable_command_is_an_error_not_a_timeout() {
-        let err = run("/definitely/not/a/command", &[], &HashMap::new(), Duration::from_secs(1)).unwrap_err();
+    fn unspawnable_command_is_a_spawn_failure_not_a_timeout() {
+        let Outcome::SpawnFailed(err) = run("/definitely/not/a/command", &[], &HashMap::new(), Duration::from_secs(1)).unwrap() else {
+            panic!("expected SpawnFailed")
+        };
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 }

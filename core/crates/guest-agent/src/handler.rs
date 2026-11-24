@@ -37,6 +37,32 @@ pub fn handle(req: Request) -> Response {
     }
 }
 
+/// Shell convention for a command that could not be started: 127 when it
+/// does not exist, 126 when it exists but cannot be executed. Returns the exit
+/// code and the line a shell would print, or `None` for any other error (out of
+/// memory, too many processes, ...): those are real failures of the agent's
+/// own, not a verdict on the command, and stay `Response::Error`.
+pub(crate) fn spawn_failure(command: &str, err: &std::io::Error) -> Option<(i32, String)> {
+    let (code, reason) = match (err.kind(), err.raw_os_error()) {
+        (std::io::ErrorKind::NotFound, _) if !command.contains('/') => (127, "command not found".to_string()),
+        (std::io::ErrorKind::NotFound, _) | (_, Some(libc::ENOTDIR)) => (127, "No such file or directory".to_string()),
+        // exec(2) on a directory fails with EACCES; a shell says what is wrong.
+        (std::io::ErrorKind::PermissionDenied, _) if std::path::Path::new(command).is_dir() => (126, "Is a directory".to_string()),
+        (std::io::ErrorKind::PermissionDenied, _) => (126, "Permission denied".to_string()),
+        (_, Some(libc::ENOEXEC)) => (126, "Exec format error".to_string()),
+        _ => return None,
+    };
+    Some((code, format!("{command}: {reason}\n")))
+}
+
+/// Maps a failed spawn to a normal exec result where the convention applies.
+fn spawn_failed(command: &str, err: std::io::Error) -> Response {
+    match spawn_failure(command, &err) {
+        Some((exit_code, stderr)) => Response::Exec { stdout: String::new(), stderr, exit_code },
+        None => Response::Error { message: err.to_string() },
+    }
+}
+
 fn exec(command: &str, args: &[String], env: &std::collections::HashMap<String, String>) -> Response {
     match Command::new(command).args(args).envs(env).output() {
         Ok(out) => Response::Exec {
@@ -44,7 +70,7 @@ fn exec(command: &str, args: &[String], env: &std::collections::HashMap<String, 
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
             exit_code: out.status.code().unwrap_or(-1),
         },
-        Err(e) => Response::Error { message: e.to_string() },
+        Err(e) => spawn_failed(command, e),
     }
 }
 
@@ -59,6 +85,7 @@ fn exec_bounded(command: &str, args: &[String], env: &std::collections::HashMap<
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
             stderr: String::from_utf8_lossy(&stderr).into_owned(),
         },
+        Ok(Outcome::SpawnFailed(e)) => spawn_failed(command, e),
         Err(e) => Response::Error { message: e.to_string() },
     }
 }
@@ -184,5 +211,118 @@ fn truncate(path: &str, size: u64) -> Response {
     match std::fs::OpenOptions::new().write(true).open(path).and_then(|f| f.set_len(size)) {
         Ok(()) => Response::Ok,
         Err(e) => Response::Error { message: e.to_string() },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn exec_result(command: &str, timeout_secs: Option<u64>) -> (String, String, i32) {
+        let req = Request::Exec { command: command.to_string(), args: vec![], env: HashMap::new(), timeout_secs };
+        match handle(req) {
+            Response::Exec { stdout, stderr, exit_code } => (stdout, stderr, exit_code),
+            other => panic!("expected Exec, got {other:?}"),
+        }
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("sk-handler-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn missing_command_is_127_with_a_shell_style_message() {
+        for timeout in [None, Some(5)] {
+            let (stdout, stderr, code) = exec_result("sk-no-such-command", timeout);
+            assert_eq!((stdout.as_str(), code), ("", 127), "timeout {timeout:?}");
+            assert_eq!(stderr, "sk-no-such-command: command not found\n");
+        }
+    }
+
+    #[test]
+    fn missing_path_is_127_naming_the_path() {
+        for timeout in [None, Some(5)] {
+            let (_, stderr, code) = exec_result("/definitely/not/here", timeout);
+            assert_eq!(code, 127);
+            assert_eq!(stderr, "/definitely/not/here: No such file or directory\n");
+        }
+    }
+
+    #[test]
+    fn path_through_a_non_directory_is_127() {
+        let (_, _, code) = exec_result("/etc/passwd/child", None);
+        assert_eq!(code, 127);
+    }
+
+    #[test]
+    fn directory_is_126() {
+        for timeout in [None, Some(5)] {
+            let (_, stderr, code) = exec_result("/tmp", timeout);
+            assert_eq!(code, 126);
+            assert_eq!(stderr, "/tmp: Is a directory\n");
+        }
+    }
+
+    #[test]
+    fn non_executable_file_is_126() {
+        let dir = scratch("noexec");
+        let file = dir.join("data.txt");
+        std::fs::write(&file, "echo hi\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        for timeout in [None, Some(5)] {
+            let (_, stderr, code) = exec_result(file.to_str().unwrap(), timeout);
+            assert_eq!(code, 126, "timeout {timeout:?}");
+            assert!(stderr.ends_with(": Permission denied\n"), "{stderr}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn executable_that_is_not_a_valid_binary_is_126() {
+        let dir = scratch("badfmt");
+        let file = dir.join("bad");
+        std::fs::write(&file, [0u8, 1, 2, 3, 4, 5, 6, 7]).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (_, stderr, code) = exec_result(file.to_str().unwrap(), None);
+        assert_eq!(code, 126);
+        assert!(stderr.ends_with(": Exec format error\n"), "{stderr}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_script_whose_interpreter_is_missing_is_127() {
+        let dir = scratch("shebang");
+        let file = dir.join("script");
+        std::fs::write(&file, "#!/no/such/interpreter\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (_, _, code) = exec_result(file.to_str().unwrap(), None);
+        assert_eq!(code, 127);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_real_exit_code_127_from_a_running_command_is_untouched() {
+        let req = Request::Exec { command: "sh".into(), args: vec!["-c".into(), "echo out; echo err >&2; exit 127".into()], env: HashMap::new(), timeout_secs: None };
+        let Response::Exec { stdout, stderr, exit_code } = handle(req) else { panic!("expected Exec") };
+        assert_eq!((stdout.as_str(), stderr.as_str(), exit_code), ("out\n", "err\n", 127));
+    }
+
+    #[test]
+    fn other_spawn_errors_stay_errors() {
+        let oom = std::io::Error::from_raw_os_error(libc::ENOMEM);
+        assert_eq!(spawn_failure("x", &oom), None);
+        let again = std::io::Error::from_raw_os_error(libc::EAGAIN);
+        assert_eq!(spawn_failure("x", &again), None);
+    }
+
+    #[test]
+    fn nul_byte_in_the_command_stays_an_error() {
+        // Not a verdict on a command that exists or not: the request is malformed.
+        let req = Request::Exec { command: "a\0b".into(), args: vec![], env: HashMap::new(), timeout_secs: None };
+        assert!(matches!(handle(req), Response::Error { .. }));
     }
 }
