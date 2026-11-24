@@ -18,8 +18,8 @@ rootfs, directional only.
    is bounded by the memory-file mapping and the first guest page faults:
    single-digit milliseconds.
 2. sandkiln's cold path (214.5ms to first command) is not limited by the
-   host. Host work is about 16ms. About 125ms is systemd userspace (not Firecracker's 125ms init bound, a different quantity) and about 70ms is
-   kernel plus agent start (derived, see below). The gap to a well-built cold
+   host. Host work is about 16ms. About 125ms is systemd userspace (not Firecracker's 125ms init bound, a different quantity) and about 80-107ms is
+   kernel plus agent start (measured, see below). The gap to a well-built cold
    path is **guest userspace**, not Firecracker.
 3. sandkiln's warm path (resume 4ms, first exec 8.4ms) is already close to
    the documented restore floor. What is missing is making it the default
