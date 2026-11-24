@@ -9,7 +9,7 @@ const OP_OPEN = 0;
 const OP_DATA = 1;
 const OP_CLOSE = 2;
 
-function encodeFrame(op: number, connId: string, payload: Uint8Array): Uint8Array {
+function encodeFrame(op: number, connId: string, payload: Uint8Array): Uint8Array<ArrayBuffer> {
   const connIdBytes = new TextEncoder().encode(connId);
   const frame = new Uint8Array(2 + connIdBytes.length + payload.length);
   frame[0] = op;
