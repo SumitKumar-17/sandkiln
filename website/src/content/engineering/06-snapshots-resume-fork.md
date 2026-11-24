@@ -90,7 +90,7 @@ classDiagram
     RetiredSnapshot ..> Sandbox : restore, not consumed
 ```
 
-The key distinction is `Lease` versus `NetworkConfig`. A `Snapshot` holds a real `Lease` (the tap and octet are reserved out of the free pools while it exists). A `RetiredSnapshot` holds a bare `NetworkConfig` and a `host_octet`, so sitting in history reserves nothing. A lease is only taken at restore time. This is why history can grow without exhausting the tap pool.
+The key distinction is `Lease` versus `NetworkConfig`. A `Snapshot` holds a real `Lease` (the tap and octet are reserved out of the free pools while it exists). A `RetiredSnapshot` holds a bare `NetworkConfig` and a `host_octet`, so sitting in history reserves nothing. A lease is only taken at restore time. This is why history can grow without exhausting the tap pool. Held snapshots no longer reserve a tap either, only an address: see [snapshots without taps](/engineering/36-snapshots-without-taps).
 
 `Sandbox` carries two lineage-flavoured fields that look redundant and are not:
 

@@ -32,7 +32,7 @@ Because there is a single bridge, the NAT, DNS and firewall setup each target ex
 
 ## Why a tap pool
 
-Creating a new tap device is a `TUNSETIFF` ioctl on `/dev/net/tun`. In practice that does not work under an ambient `CAP_NET_ADMIN`; it needs real root. Attaching an existing tap to a bridge, bringing a link up, and creating the bridge itself are netlink operations, and those do work. The daemon deliberately never runs as root, so it cannot create taps on demand.
+Creating a new tap device is a `TUNSETIFF` ioctl on `/dev/net/tun`. In practice that does not work under an ambient `CAP_NET_ADMIN`; it needs real root. Attaching an existing tap to a bridge, bringing a link up, and creating the bridge itself are netlink operations, and those do work. The daemon deliberately never runs as root, so it cannot create taps on demand. A tap is held only while a VM runs, and a snapshot keeps just its address: see [snapshots without taps](/engineering/36-snapshots-without-taps).
 
 The resolution is to split the work by privilege. `scripts/host-setup/create-tap-pool.sh` runs once as root and creates `N` persistent taps owned by the daemon's user:
 

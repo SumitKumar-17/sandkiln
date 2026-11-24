@@ -187,4 +187,4 @@ SANDKILN_INTEGRATION_TEST_ONLY=18-pool scripts/integration-test.sh
 
 To measure the failure rate yourself, run the example repeatedly and count the fallbacks. The daemon log line `pool-claimed sandbox failed its post-resume health check` appears once per failed claim. Treat any rate you get as a measurement of your own host's kernel, KVM and CPU combination, not a general property of Firecracker.
 
-What this case study does not establish: the memory and disk cost of a pool at scale, and whether the 25 to 100 times figure holds for guests heavier than the default image.
+What this case study does not establish: the memory and disk cost of a pool at scale, and whether the 25 to 100 times figure holds for guests heavier than the default image. Pools became the default create path later: see [making a create a resume](/engineering/34-making-a-create-a-resume).
