@@ -18,8 +18,7 @@ import type { CreatePoolRequestBody, ListPoolsResponseBody, PoolInfo, PoolOption
  * (warm + claimed) a pool's profile may have at once; a claim arriving
  * at that ceiling with nothing warm queues daemon-side (up to 30s)
  * before the underlying `Sandbox.create()` call rejects with a `503`.
- * See `ROADMAP.md`'s "Persistence and snapshotting" section, "Pre-warmed
- * snapshot pool", for the full design.
+ * See `docs/design-notes/pools-and-lineage.md` for the full design.
  */
 export class Pool {
   /**

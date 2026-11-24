@@ -59,14 +59,14 @@ Published boot numbers have moved, and both sets are real:
 
 | When | Cold boot | Exec round trip | Snapshot take | Notes |
 | --- | --- | --- | --- | --- |
-| Earlier published runs (ROADMAP.md Benchmarking) | 10.5 to 10.9 ms | 220 to 250 us | about 322 ms (309.6 to 335.0 ms) | earlier kernel and box load |
+| Earlier published runs (`docs/benchmarks.md`) | 10.5 to 10.9 ms | 220 to 250 us | about 322 ms (309.6 to 335.0 ms) | earlier kernel and box load |
 | Re-measured 2026-11-23 (criterion, kernel 6.8) | 12.6 to 14.0 ms | 242 to 248 us | 485 to 727 ms | same box, different load state |
 
 Neither row is time to first command. That figure is higher because it includes the guest kernel and userspace: 413.25 ms before and 214.5 ms after the guest boot change, with `first_exec_resumed` going from 18 ms to 8.4 ms and the create total from 18.4 ms to 16.4 ms (`bench-report.sh 20`, 2026-11-24).
 
 Resume from snapshot was re-measured in the same criterion run at 3.7 to 4.0 ms. The reflink create has the same old-and-new pairing: a mean of 17.9 ms in the first reflink run and 18.4 ms in the re-measurement (20 sequential cold creates through `scripts/bench-report.sh`, rootfs on a reflink filesystem), itemized further down.
 
-Both rows are directional, one shared box each time, and neither is authoritative. Cold boot differs by a couple of milliseconds, which fits a different kernel and a different background load. The snapshot take difference is larger, and ROADMAP.md already explains why: `snapshot_take` writes the guest's whole memory to disk synchronously, and on a box that is also somebody's working desktop it is far more exposed to disk contention than the other benches. The right reading is a load-dependent range, not a single figure.
+Both rows are directional, one shared box each time, and neither is authoritative. Cold boot differs by a couple of milliseconds, which fits a different kernel and a different background load. The snapshot take difference is larger, and docs/benchmarks.md already explains why: `snapshot_take` writes the guest's whole memory to disk synchronously, and on a box that is also somebody's working desktop it is far more exposed to disk contention than the other benches. The right reading is a load-dependent range, not a single figure.
 
 ## `/metrics`: the daemon's own breakdown
 

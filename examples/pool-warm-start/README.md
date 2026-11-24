@@ -30,6 +30,6 @@ node index.js
 
 ## Notes
 
-- Several attempts because resuming has a real Firecracker/KVM failure mode on the dev box (the restored guest kernel can panic early; roughly 1 in 3 to 2 in 3 resumes). A single run would mislead either way. See `ROADMAP.md`.
+- Several attempts because resuming has a real Firecracker/KVM failure mode on the dev box (the restored guest kernel can panic early; roughly 1 in 3 to 2 in 3 resumes). A single run would mislead either way. See `docs/design-notes/pools-and-lineage.md`.
 - No `maxCount` is set, so a claim with nothing warm falls through to a cold create. `Pool.create(id, { maxCount })` adds a ceiling with queueing.
 - Pool configuration is in daemon memory only; re-run `Pool.create()` after a restart.

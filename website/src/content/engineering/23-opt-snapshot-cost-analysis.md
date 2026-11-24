@@ -6,7 +6,7 @@ tags: ["optimization", "snapshots", "vmm", "benchmarking", "analysis"]
 updated: 2026-11-24
 ---
 
-This post is different from the others in the series. No snapshot-take optimization has shipped. There is no before and after. What exists is a set of measurements of the cost, a partial explanation of where it comes from, and a short list of candidate techniques that are recorded in `ROADMAP.md` as planned or "worth doing eventually". The value of writing it down is to keep the baseline honest, so that a future change can be judged against something real, and to separate what is measured from what is hypothesized.
+This post is different from the others in the series. No snapshot-take optimization has shipped. There is no before and after. What exists is a set of measurements of the cost, a partial explanation of where it comes from, and a short list of candidate techniques that are recorded in `docs/design-notes/latency-investigation.md` as planned or "worth doing eventually". The value of writing it down is to keep the baseline honest, so that a future change can be judged against something real, and to separate what is measured from what is hypothesized.
 
 Items in `sandkiln-vmm` carry `path:line` references verified against the current tree. Daemon items are cited the same way, for example `snapshot_and_stop` in `core/crates/daemon/src/http/routes/snapshot.rs`.
 
@@ -36,7 +36,7 @@ The recorded readings, by date:
 
 | Date | Reading | Conditions | Source |
 | --- | --- | --- | --- |
-| Early (before 2026-09-14) | 309.6 to 335.0ms, mean about 322ms | Criterion, quiet moment on a shared desktop-class dev box | `ROADMAP.md` Benchmarking |
+| Early (before 2026-09-14) | 309.6 to 335.0ms, mean about 322ms | Criterion, quiet moment on a shared desktop-class dev box | `docs/benchmarks.md` |
 | 2026-09-14 | 552.7ms | `scripts/bench-report.sh --with-criterion`, 20 iterations, box in active use | commit `119f008` |
 | 2026-09-14 | 560 to 915ms | Isolated `cargo bench -- snapshot_take`, criterion reports no change from prior run (p=0.14) | commit `119f008` |
 | 2026-11-23 | 485 to 727ms | Criterion, this box, kernel 6.8, re-measured | lead's re-measurement for this series |

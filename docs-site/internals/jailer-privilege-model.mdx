@@ -56,7 +56,7 @@ date: <date>
 The daemon's own startup log states which path is active for the whole process, not per request, since this is a boot-time configuration choice, not something a caller selects per sandbox:
 
 ```bash
-jailer-based sandbox boot disabled (SANDKILN_JAILER_ENABLED not set) -- sandboxes boot via a direct Firecracker process spawn, see ROADMAP.md's Security hardening section
+jailer-based sandbox boot disabled (SANDKILN_JAILER_ENABLED not set) -- sandboxes boot via a direct Firecracker process spawn, see `docs/design-notes/security-hardening.md`
 ```
 
 Turning jailer on (`SANDKILN_JAILER_ENABLED=1`) without first making the `jailer` binary setuid-root reproduces the real failure documented above: every create fails with a `500` and the guest console log shows jailer's own `Operation not permitted` trying to `chown` a file into the chroot. That failure is the concrete, live evidence behind "not yet proven on real hardware" above, not a hypothetical caveat.

@@ -125,7 +125,7 @@ The `Vm::force_stop` method (`vm/mod.rs:244`), added in `f6c74d1`, is the third 
 
 ## Result
 
-Everything here was observed live and recorded in a commit message, in `ROADMAP.md`, or in the `cc5573f` regression test. The numbers are directional, from one shared dev box.
+Everything here was observed live and recorded in a commit message, in `docs/benchmarks.md`, or in the `cc5573f` regression test. The numbers are directional, from one shared dev box.
 
 | Scenario | Before the timeout | After |
 | --- | --- | --- |

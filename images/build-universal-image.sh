@@ -5,7 +5,7 @@
 # replaces the stripped-down Firecracker CI test image (fetched by
 # fetch-test-image.sh) as SANDKILN_BASE_ROOTFS — that test image is missing
 # even ca-certificates and was never meant to back real sandboxes. See
-# "Base and custom images" in ROADMAP.md.
+# docs/design-notes/images-and-auth.md.
 #
 # Needs sudo: debootstrap, loop-mounting the image, and chroot operations
 # all require real root, the same as scripts/host-setup/create-tap-pool.sh and

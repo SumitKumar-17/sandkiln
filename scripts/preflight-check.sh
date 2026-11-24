@@ -175,7 +175,7 @@ if [ -f "$IMAGE_TO_CHECK" ]; then
   # an instant, space-free FICLONE reflink when the base image and
   # `rootfs_dir` share one CoW-capable filesystem (XFS, Btrfs), a full byte
   # copy otherwise. The copy is ~70% of a cold create (187ms vs ~18ms on the
-  # dev box, ROADMAP.md Benchmarking), so this is worth a loud warning, but
+  # dev box, `docs/benchmarks.md`), so this is worth a loud warning, but
   # not a failure: it still works, just slower.
   ROOTFS_DIR="$(expand_home "$(cfg rootfs_dir "${SANDKILN_ROOTFS_DIR:-$(cfg state_dir '~/sandkiln-tools/state')/rootfs}")")"
   base_fstype="$(df --output=fstype "$(dirname "$IMAGE_TO_CHECK")" 2>/dev/null | tail -1 | tr -d '[:space:]')"

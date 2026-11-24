@@ -10,7 +10,7 @@ import { Pool, Sandbox } from "sandkiln";
 // panic on restore) that a well-behaved pool claim detects with a
 // post-resume health check and transparently falls back from -- safely,
 // but at the cost of a few extra seconds instead of the fast path. See
-// ROADMAP.md's "Persistence and snapshotting" section for the full
+// `docs/design-notes/pools-and-lineage.md` for the full
 // finding. Reporting only a lucky fast run would overstate what to
 // expect; reporting several runs shows both outcomes honestly.
 

@@ -46,7 +46,7 @@ assert_contains "pool list includes the configured pool" "$pools_body" "it-pool-
 # A plain create with no drives/rate_limit and the pool's own (default)
 # resource config matches and claims -- fast enough to distinguish from a
 # cold create, though this doesn't assert a specific number (see
-# ROADMAP.md's Benchmarking section for real measured numbers; a
+# `docs/benchmarks.md` for real measured numbers; a
 # shared, variable-load dev box makes a hard latency assertion flaky).
 status="$(req POST /sandboxes "{\"name\":\"it-pool-claim-$$\",\"tags\":{\"suite\":\"integration\",\"case\":\"pool\"}}")"
 assert_status "claim a sandbox from the pool" 200 "$status"

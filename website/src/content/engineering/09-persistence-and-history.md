@@ -148,7 +148,7 @@ fn configure_for_write_latency(conn: &Connection) -> rusqlite::Result<()> {
 
 (`core/crates/store/src/lib.rs:148`.)
 
-Sqlite's defaults (`journal_mode=DELETE`, `synchronous=FULL`) fsync twice per write, once for the rollback journal and once for the database file. On a cold create's critical path that measured about 9.24 ms, around 5.5 percent of the create, according to the benchmarking section of `ROADMAP.md`. An isolated A/B of 20 sequential writes on the same disk recorded in the same section measured:
+Sqlite's defaults (`journal_mode=DELETE`, `synchronous=FULL`) fsync twice per write, once for the rollback journal and once for the database file. On a cold create's critical path that measured about 9.24 ms, around 5.5 percent of the create, according to `docs/benchmarks.md`. An isolated A/B of 20 sequential writes on the same disk recorded in the same section measured:
 
 | Settings | Mean per write |
 | --- | --- |

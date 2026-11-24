@@ -44,8 +44,7 @@ class Pool:
     itself matches a plain create (no `drives`, no `rate_limit`) against
     every configured pool by `image_id`/`vcpu_count`/`mem_size_mib` and
     resumes a warm snapshot automatically when one is ready - there's no
-    separate "create from pool" call. See ROADMAP.md's "Persistence and
-    snapshotting" section (Pre-warmed snapshot pool) in the sandkiln
+    separate "create from pool" call. See docs/design-notes/pools-and-lineage.md in the sandkiln
     repository for the full design, including a real, non-rare failure
     mode a claim's own post-resume health check protects against.
     """

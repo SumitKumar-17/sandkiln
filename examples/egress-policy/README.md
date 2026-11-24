@@ -30,5 +30,5 @@ EGRESS_EXAMPLE_TARGET_IP=<ip> node index.js
 
 ## Notes
 
-- IP and CIDR rules only; no domain or port matching yet (see `ROADMAP.md`).
+- IP and CIDR rules only; no domain or port matching yet (see `docs/design-notes/egress-firewall.md`).
 - The daemon re-applies a policy on resume and fork; this script does nothing for that.

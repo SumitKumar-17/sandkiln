@@ -6,7 +6,7 @@ section "per-sandbox egress (outbound network) policy"
 # see egress.rs's module doc comment -- so it can't be used to prove
 # blocking), which this suite can't assume exists on every machine it
 # runs on. That behavior was verified by hand against the real dev box
-# instead (see ROADMAP.md's Firewall and egress policy entry). What's
+# instead (see `docs/design-notes/egress-firewall.md`). What's
 # covered here, host-agnostically: request validation, that a policy
 # doesn't break normal sandbox use, and that it survives snapshot/resume
 # and fork without error.

@@ -44,7 +44,7 @@
 #     live before the snapshot was taken) -- measured ~4-18ms, a
 #     ~25-100x difference `first_exec_client` alone would never surface,
 #     since a cold-only run has nothing to compare it against.
-# See ROADMAP.md's Benchmarking section for the full write-up of both.
+# See `docs/benchmarks.md` for the full write-up of both.
 #
 # Usage: scripts/bench-report.sh [iterations] [base-url] [--with-criterion] [--markdown]
 # Example: scripts/bench-report.sh 20 http://127.0.0.1:7777 --with-criterion --markdown
@@ -55,10 +55,10 @@
 # default since it takes noticeably longer and needs real Firecracker
 # assets (SANDKILN_BENCH_FIRECRACKER_BIN/_KERNEL_PATH/_ROOTFS_PATH, same
 # defaults as `scripts/dev.sh bench`).
-# --markdown prints a ready-to-paste table in ROADMAP.md's own style, in
+# --markdown prints a ready-to-paste table in docs/benchmarks.md's own style, in
 # addition to the plain report -- specifically to close the gap that let
 # a real re-measurement land in the website/docs without ever being
-# copied into ROADMAP.md's own Benchmarking section: one command now
+# copied into docs/benchmarks.md: one command now
 # produces the exact text meant to go in both places, instead of numbers
 # transcribed by hand into some but not all of them.
 
@@ -339,7 +339,7 @@ fi
 
 if [ "$MARKDOWN" -eq 1 ]; then
   echo
-  echo "=== markdown (paste into ROADMAP.md / the website) ==="
+  echo "=== markdown (paste into docs/benchmarks.md / the website) ==="
   echo
   echo "| phase | n | mean |"
   echo "| --- | --- | --- |"

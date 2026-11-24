@@ -8,7 +8,7 @@ updated: 2026-11-24
 
 A pre-warmed pool trades idle capacity for startup latency: the daemon boots, snapshots and stops a few sandboxes ahead of time, and a plain `POST /sandboxes` resumes one instead of cold-booting. The mechanism is described in another post in this series. This one is about the evidence: what was measured, what that measurement does and does not support, and where the honest answer is "we do not know".
 
-Code is cited with `path:line` references, verified against the current tree: the claim logic lives in `core/crates/daemon/src/lifecycle/pool_claim.rs`, the background filler in `core/crates/daemon/src/lifecycle/pool_replenisher.rs`, and the pool state in `core/crates/daemon/src/lifecycle/pool.rs`. Every number below comes from `ROADMAP.md`, `CHANGELOG.md`, the docs-site startup-latency page, or a commit message, and each is labelled with how it was obtained.
+Code is cited with `path:line` references, verified against the current tree: the claim logic lives in `core/crates/daemon/src/lifecycle/pool_claim.rs`, the background filler in `core/crates/daemon/src/lifecycle/pool_replenisher.rs`, and the pool state in `core/crates/daemon/src/lifecycle/pool.rs`. Every number below comes from `docs/benchmarks.md`, `CHANGELOG.md`, the docs-site startup-latency page, or a commit message, and each is labelled with how it was obtained.
 
 ## Problem and how it was found
 
