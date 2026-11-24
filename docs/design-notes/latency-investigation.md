@@ -24,7 +24,8 @@ documented fact could answer them.
    cold starts (150ms to 2s), so there was no evidence of a gain to chase. After counting through to first command, the
    remaining floor is about 125ms of systemd userspace (`dev-vda.device`
    107ms, `fcnet.service` 45ms), so a purpose-built init or trimmed image is
-   now the next lever for time to first command. 
+   now the next lever for time to first command. The stage-by-stage gap
+   analysis and ranked levers are in [latency floor](latency-floor.md).
 5. **Memory compression during snapshot-take.** One academic result reports
    up to 4.5x smaller snapshots and 55% faster restoration. Much further
    out; only after items 1-3.

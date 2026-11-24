@@ -83,6 +83,14 @@ package's `AGENTS.md`, the Rust/TS/Python comments), each batch reviewed
 for correctness rather than trusted on a mechanical substitution. Not
 attempted so far for that reason.
 
+## sandkilnd inside a GitHub-hosted runner
+
+Running the daemon itself on a hosted runner (topology C in
+[ci-integration.md](ci-integration.md)) depends on `/dev/kvm` being exposed
+and usable there, which GitHub does not support, and on a published guest
+kernel and rootfs, which do not exist. Not attempted; CI jobs use a remote or
+self-hosted daemon instead.
+
 ## Not planned
 
 - GPU passthrough or access in a sandbox. Firecracker has no GPU device

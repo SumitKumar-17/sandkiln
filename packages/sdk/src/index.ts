@@ -3,6 +3,7 @@ export { Image } from "./image.js";
 export { Drive } from "./drive.js";
 export { Pool, type CreatePoolOptions } from "./pool.js";
 export { getStatus } from "./status.js";
+export { downloadDir, uploadDir, type TransferOptions, type TransferResult, type TransferTarget } from "./transfer.js";
 export { SandkilnApiError } from "./errors.js";
 export type { TunnelHandle, TunnelOptions } from "./tunnel.js";
 export type {

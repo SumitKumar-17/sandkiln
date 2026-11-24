@@ -35,6 +35,7 @@ a stated gap; **planned** not built.
 | JS/TS SDK, Python SDK (sync and async), CLI | done | Published to npm and PyPI (`sandkiln`, `sandkiln-cli`). Gaps are the ones named in the rows above. |
 | MCP server (`sandkiln-mcp`) | partial | Stdio server with 12 tools and 2 resources, verified against a live daemon. Not published yet (no release workflow); exec timeout is client-side only. |
 | Docs site, website, examples | done | Ten runnable examples. |
+| GitHub Actions integration | partial | `sandkiln-run` action and example verified against a real daemon; not yet run on GitHub. Daemon inside a hosted runner is not supported ([note](docs/design-notes/ci-integration.md)). |
 | Load testing | planned | Concurrency-ceiling ramp, see [load testing](docs/design-notes/load-testing.md). |
 | Multi-node, regions | planned | Deliberately last. |
 | GPU, desktop automation, git-native filesystem | planned / not planned | See [ideas not started](docs/design-notes/ideas-not-started.md). |
@@ -65,7 +66,8 @@ In order, most load-bearing first.
    [latency investigation](docs/design-notes/latency-investigation.md).
 4. **Guest userspace boot.** About 125ms of systemd (`dev-vda.device`
    107ms, `fcnet.service` 45ms) is the remaining floor to first command: a
-   purpose-built init or trimmed image.
+   purpose-built init or trimmed image. Ranked levers and goals:
+   [latency floor](docs/design-notes/latency-floor.md).
 5. **MCP server** so agents drive sandboxes directly, and a per-request exec
    timeout that also kills the guest process (today the process keeps
    running after a 504).

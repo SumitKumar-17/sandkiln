@@ -1,0 +1,33 @@
+# The same job on a self-hosted runner that is also the KVM host: sandkilnd
+# listens on loopback there, so no secret or public endpoint is needed.
+# Copy this file to .github/workflows/ of your repo.
+name: Test in a microVM (self-hosted runner)
+
+on:
+  # Not pull_request: a self-hosted runner executing untrusted pull-request
+  # workflows is a persistent foothold on your host. Trigger it from trusted
+  # events, or gate pull requests behind a required approval.
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: [self-hosted, linux, kvm]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run the sample project's tests in a sandbox
+        uses: ./.github/actions/sandkiln-run
+        with:
+          daemon-url: http://127.0.0.1:7777
+          auth-token: ${{ secrets.SANDKILN_AUTH_TOKEN }}
+          working-directory: examples/github-actions/sample-project
+          egress: deny_all
+          command: python3 -m unittest discover -v tests

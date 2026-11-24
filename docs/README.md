@@ -27,6 +27,7 @@ changes, edit it in one place.
 | [pools-and-lineage.md](design-notes/pools-and-lineage.md) | Warm pools, resume failures, snapshot lineage |
 | [drives-and-storage.md](design-notes/drives-and-storage.md) | Drives, read-only sharing, remote storage mounts |
 | [egress-firewall.md](design-notes/egress-firewall.md) | Per-sandbox egress policy |
+| [ci-integration.md](design-notes/ci-integration.md) | GitHub Actions: KVM on hosted runners, three topologies, the `sandkiln-run` action |
 | [security-hardening.md](design-notes/security-hardening.md) | Isolation, jailer, limits, rate limiting, encryption at rest |
 | [preview.md](design-notes/preview.md) | Preview proxy, tunnel, PTY, streamed exec |
 | [tags-and-metadata.md](design-notes/tags-and-metadata.md) | History store, metadata service |
@@ -35,6 +36,7 @@ changes, edit it in one place.
 | [images-and-auth.md](design-notes/images-and-auth.md) | Auth, images, networking, docs and examples |
 | [load-testing.md](design-notes/load-testing.md) | Planned concurrency-ceiling test |
 | [latency-investigation.md](design-notes/latency-investigation.md) | Open latency questions |
+| [latency-floor.md](design-notes/latency-floor.md) | Lowest achievable start latency, stage-by-stage gap analysis, ranked levers, goals |
 | [feature-plan.md](design-notes/feature-plan.md) | Ordered feature plan: goals, approach and verification per item |
 | [ideas-not-started.md](design-notes/ideas-not-started.md) | Future directions and non-goals |
 

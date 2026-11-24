@@ -1,0 +1,58 @@
+---
+title: Run CI jobs in a sandbox
+description: Use the sandkiln-run GitHub Action to test untrusted pull-request code inside a microVM instead of on the runner.
+---
+
+CI runs code that changes with every pull request. The `sandkiln-run` composite action runs it in a fresh microVM with no outbound network, then destroys the VM, so the runner only checks out and uploads the code.
+
+## What you need
+
+A reachable `sandkilnd`. GitHub-hosted runners are clients only: GitHub documents nested virtualization as "not officially supported", and no published guest kernel or rootfs exists for starting a daemon inside a job. The [design note](https://github.com/SumitKumar-17/sandkiln/blob/main/docs/design-notes/ci-integration.md) has the research and the three topologies.
+
+| Topology | Runner | Daemon | Use when |
+| --- | --- | --- | --- |
+| Remote daemon | any | HTTPS, with an `auth_token` | You already host a daemon and want any runner to use it |
+| Self-hosted runner | on the KVM host | `http://127.0.0.1:7777` | You operate the host and want no public endpoint |
+| Daemon in a hosted runner | hosted | inside the job | Not supported |
+
+<Warning>
+Never expose a daemon without an `auth_token`: anyone who can reach it can run code on your host. Put it behind TLS, store the token as a secret, and restrict by IP or a private tunnel where the runner's address is stable.
+</Warning>
+
+## Use the action
+
+Store `SANDKILN_DAEMON_URL` and `SANDKILN_AUTH_TOKEN` as repository secrets, then:
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/sandkiln-run
+        with:
+          daemon-url: ${{ secrets.SANDKILN_DAEMON_URL }}
+          auth-token: ${{ secrets.SANDKILN_AUTH_TOKEN }}
+          egress: deny_all
+          timeout: "300"
+          command: python3 -m unittest discover -v tests
+```
+
+The step fails with the command's exit code, streams its output, and exposes `sandbox-id` and `exit-code`. A final step always destroys the sandbox. Set `keep-on-failure: "true"` to keep it for debugging, then remove it with `kiln sandbox rm <id> --destroy`. Sandboxes carry `github-run` and `github-repo` tags, so `kiln sandbox ls` shows orphans.
+
+## Safe defaults
+
+- `egress` defaults to `deny_all`; allow specific CIDRs with `allow-cidrs`.
+- `.git` is never uploaded, because checkout can leave a credential there.
+- Fork pull requests get no secrets, so skip them rather than switching to `pull_request_target`, unless nothing from the pull request runs on the runner.
+- Do not trigger a self-hosted runner from fork pull requests on a public repository.
+
+## Limits
+
+- The workspace is uploaded as one `tar.gz` through the file API, so exclude build output with `exclude`.
+- The timeout is enforced by the client; the daemon has no exec kill, so the process stops when the sandbox is destroyed.
+- The image needs `sh` and `tar`.
+
+The action's [reference](https://github.com/SumitKumar-17/sandkiln/blob/main/.github/actions/sandkiln-run/README.md) lists every input, and the [example](https://github.com/SumitKumar-17/sandkiln/tree/main/examples/github-actions) has both workflows and a sample project. The workflows were checked with `actionlint` and the action's script against a real daemon; they have not yet run on GitHub itself.
