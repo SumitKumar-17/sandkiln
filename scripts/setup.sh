@@ -180,7 +180,7 @@ step "inject the guest agent into the image"
 # mount this used before. That matters specifically for a re-run against an
 # image an *earlier* checkout on this host already provisioned: with no
 # passwordless sudo configured for this checkout's own paths (the common
-# case — see SELF_HOSTING.md section 13), a mount-based check would itself
+# case — see docs-site/self-hosting/troubleshooting.mdx), a mount-based check would itself
 # hang on a password prompt (or fail outright over a non-interactive shell)
 # on every single re-run, even when there's nothing left to do.
 AGENT_ALREADY_BAKED=0

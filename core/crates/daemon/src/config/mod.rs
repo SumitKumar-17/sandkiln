@@ -18,7 +18,7 @@ use std::time::Duration;
 /// setting, not a per-request field — letting a caller opt out would
 /// defeat a boundary the operator turned on. See `sandkiln_vmm::jailer`
 /// for the mechanism and why `jailer` itself needs setuid-root
-/// (`SELF_HOSTING.md`).
+/// (`docs-site/self-hosting/configuration.mdx`).
 pub struct JailerHostConfig {
     pub jailer_bin: PathBuf,
     pub chroot_base_dir: PathBuf,
@@ -107,7 +107,7 @@ pub struct Config {
     /// `crate::snapshots::held::move_snapshot_files`). Partial, not complete:
     /// `mem.bin` alone is often comparable to or larger than the rootfs
     /// copy, so this still meaningfully cuts hot-storage usage. Also not
-    /// `ROADMAP.md`'s originally-sketched remote-storage tier — still a
+    /// the originally-sketched remote-storage tier — still a
     /// local path, just a separately configured one.
     pub archive_timeout: Option<Duration>,
     /// Archived snapshots' home — meaningful only with `archive_timeout`

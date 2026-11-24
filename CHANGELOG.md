@@ -14,6 +14,13 @@ loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## Daemon & core — 2026-11-24
 
+### Added
+- `GET /status`: one authenticated document with version, uptime, object
+  counts, tap devices free, disk headroom for the state and rootfs volumes,
+  rootfs clone methods, and plain-language warnings. Clients: `getStatus()`
+  (JS), `get_status()` (Python, sync and async), `kiln status` (exits 2 on
+  warnings). Integration topic `27-status`.
+
 ### Fixed
 - A command silent for more than 3 seconds returned an error after ~6.5s **and
   ran twice**: the 3s control-plane vsock timeout applied to user commands and

@@ -30,3 +30,15 @@ sandbox = Sandbox.create(base_url="https://daemon.internal:7777", auth_token=os.
 # SANDKILN_AUTH_TOKEN=...
 same_sandbox = Sandbox.create()
 ```
+
+## Daemon status
+
+`get_status(base_url=None, auth_token=None)` returns host health and capacity as a frozen `DaemonStatus` dataclass; `sandkiln.astatus.get_status` is the `asyncio` version. See [`GET /status`](/api-reference/http-api/status).
+
+```python
+from sandkiln import get_status
+
+status = get_status()
+if status.warnings:
+    print(status.warnings)
+```

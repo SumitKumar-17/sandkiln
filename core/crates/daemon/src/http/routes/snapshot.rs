@@ -1,7 +1,7 @@
 //! Snapshot/resume/fork: save a running sandbox's full state (memory +
 //! device state) to disk and stop it, then boot a *new* sandbox straight
 //! from that save point instead of a fresh rootfs+kernel boot. See
-//! `ROADMAP.md`'s "Persistence and snapshotting" section for the full
+//! `docs/design-notes/snapshots.md` for the full
 //! design. Own module/router since it only touches `state.sandboxes`/
 //! `state.snapshots`, nothing in `routes.rs`.
 //!

@@ -1,0 +1,32 @@
+---
+title: Status
+description: Host health and capacity in one document.
+---
+
+## `GET /status`
+
+Operator view of the daemon. Behind the bearer token (unlike `/metrics`) because it names host paths and capacity. For time series use [`/metrics`](/api-reference/http-api/overview); this is the "is it healthy right now?" answer.
+
+| Field | Meaning |
+|---|---|
+| `version`, `uptime_secs` | Daemon build version and seconds since start. |
+| `auth_enabled`, `jailer_enabled` | Whether `auth_token` is set and whether sandboxes boot under the jailer. |
+| `counts` | `sandboxes` (live), `held_snapshots`, `retired_checkpoints`, `pools`, `pool_warm_ready`. |
+| `tap_pool` | `size` (configured) and `free` (leasable now). |
+| `sandboxes_created_total` | Creates since daemon start. |
+| `rootfs_clones` | `reflink` and `copy` clone counts since start. |
+| `disk` | `path`, `total_bytes`, `free_bytes` for the state and rootfs volumes (one entry if they share a path). |
+| `warnings` | Plain-language conditions to act on; empty when healthy. |
+
+### Warnings
+
+- No free tap devices (only when a pool is configured).
+- Under 5 GiB free on the state or rootfs volume.
+- Every rootfs clone was a byte copy, meaning `rootfs_dir` is not on a reflink filesystem.
+- `auth_token` is unset.
+
+```bash
+curl -s -H "Authorization: Bearer $SANDKILN_AUTH_TOKEN" http://127.0.0.1:7777/status
+```
+
+Clients: `getStatus()` ([JS](/api-reference/js-sdk/overview)), `get_status()` ([Python](/api-reference/python-sdk/overview)), [`kiln status`](/api-reference/cli/status).

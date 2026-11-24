@@ -147,7 +147,7 @@ async fn async_main(loaded: config::Loaded) {
         None => {
             tracing::info!(
                 "jailer-based sandbox boot disabled (SANDKILN_JAILER_ENABLED not set) — \
-                 sandboxes boot via a direct Firecracker process spawn, see ROADMAP.md's Security hardening section"
+                 sandboxes boot via a direct Firecracker process spawn, see `docs/design-notes/security-hardening.md`"
             );
         }
     }

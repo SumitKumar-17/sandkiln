@@ -122,7 +122,7 @@ sandbox.stop()
   forked or resumed again later. Only one live fork of a given snapshot
   may run at a time — a second concurrent `fork()` raises
   `SandkilnApiError` with status 409 until the first is stopped; see
-  `ROADMAP.md`'s "Persistence and snapshotting" section for why.
+  `docs/design-notes/snapshots.md` for why.
 - `Sandbox.list_snapshots(source_sandbox_id=None, base_url=None, auth_token=None)`
   — lists snapshots. `source_sandbox_id` narrows this to the (at most one)
   snapshot taken from that original sandbox id — the way to find out

@@ -1,5 +1,5 @@
 //! Retired snapshot checkpoints — the durable record behind "time-travel
-//! restore" (`ROADMAP.md`'s "Persistence and snapshotting"). Without this,
+//! restore" (`docs/design-notes/snapshots.md`). Without this,
 //! `resume_snapshot_by_id` deletes what it resumes and the new sandbox
 //! takes over the exact same rootfs file, making "restore an earlier
 //! point" structurally impossible once you've moved forward.

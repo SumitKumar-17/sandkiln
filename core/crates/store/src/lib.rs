@@ -10,7 +10,7 @@
 //! an *unclean* daemon exit (SIGKILL, crash, power loss) orphans
 //! every live sandbox's Firecracker process unconditionally, confirmed via
 //! `scripts/sandkilnd-ctl.sh`'s own best-effort orphan-cleanup step and
-//! `SELF_HOSTING.md`'s troubleshooting section. An orderly stop
+//! `docs-site/self-hosting/troubleshooting.mdx`. An orderly stop
 //! (SIGTERM/SIGINT) snapshots live sandboxes first instead, so those survive
 //! a restart as snapshots. A `Snapshot` (see `sandkiln-daemon::snapshot`)
 //! is the only thing that actually resumes into a working sandbox after
@@ -130,8 +130,8 @@ impl HistoryStore {
     /// Default sqlite settings (`journal_mode=DELETE`,
     /// `synchronous=FULL`) fsync twice per write — once for the rollback
     /// journal, once for the main database file — which measured at
-    /// ~9.24ms on a real create's critical path (see `ROADMAP.md`'s
-    /// Benchmarking section), a real cost for a store this code already
+    /// ~9.24ms on a real create's critical path (see
+    /// `docs/benchmarks.md`), a real cost for a store this code already
     /// treats as best-effort (`record_created`'s caller only warns on
     /// error, never fails the request over it — see
     /// `http/routes/sandbox.rs`). WAL mode fsyncs the write-ahead log, not the

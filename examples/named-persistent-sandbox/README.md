@@ -61,7 +61,7 @@ the same named sandbox across a genuinely separate process.
 - `SANDKILN_AUTH_TOKEN` — auth token, only needed if the daemon was
   started with one.
 
-See `ROADMAP.md`'s "Persistence and snapshotting" section at the repo
+See `docs/design-notes/snapshots.md` at the repo
 root for the full design, including how this interacts with
 auto-suspend (an idle named sandbox can be snapshotted by the daemon on
 its own, with the name still resolving to it afterward).

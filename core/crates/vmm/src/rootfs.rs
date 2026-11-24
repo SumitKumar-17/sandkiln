@@ -5,7 +5,7 @@
 //! reflink-capable filesystem (XFS, Btrfs), and an in-kernel byte copy
 //! otherwise. The method is *returned*, never hidden: a silent fallback to a
 //! full copy is indistinguishable from "slow disk" in latency numbers, which
-//! is exactly how an earlier benchmark was misread (see ROADMAP.md).
+//! is exactly how an earlier benchmark was misread (see docs/benchmarks.md).
 
 use std::fs::{self, File, OpenOptions};
 use std::io;

@@ -154,7 +154,7 @@ sessions, snapshots, resume/suspend/fork, drives, networking, images.
 
 Evidence-driven only: baseline, measure the whole path, find the real
 bottleneck, fix it, re-measure. Record before/after numbers in
-`ROADMAP.md`'s Benchmarking section (directional, one shared dev box —
+`docs/benchmarks.md` (directional, one shared dev box —
 not authoritative).
 
 ## 11. Security

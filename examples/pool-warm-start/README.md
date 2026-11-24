@@ -73,6 +73,6 @@ node index.js
 - Pool configuration lives only in the daemon's memory, not durable
   across a restart — re-run `Pool.create()` afterward if you need it back.
 
-See `ROADMAP.md`'s "Persistence and snapshotting" section at the repo
+See `docs/design-notes/snapshots.md` at the repo
 root for the full design, including a related finding (MMDS not
 surviving snapshot/restore) not covered by this example.

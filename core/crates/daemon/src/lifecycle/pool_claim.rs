@@ -128,7 +128,7 @@ impl Drop for PoolClaimGuard {
 /// was built that happened to **1 in 3 to 2 in 3** resumes; re-measured on
 /// 2026-11-24 it is rare: 0 of 160 resume cycles in isolated and 4-way
 /// parallel loops, and 2 to 3 of ~320 checks in the full parallel
-/// integration suite. Root cause still unknown (ROADMAP.md, finding 20), so
+/// integration suite. Root cause still unknown (docs/findings.md, finding 20), so
 /// the check stays. A failed check is treated as "the warm snapshot was
 /// bad": clean up and fall through to a normal cold create (see caller),
 /// never hand back a corpse id. `destroy_unhealthy_claim` uses

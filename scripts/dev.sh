@@ -146,7 +146,7 @@ case "$subcommand" in
     exec sudo "$REPO_ROOT/images/inject-agent.sh" "$agent_bin" "$rootfs"
     ;;
   inject-rclone)
-    rclone_bin="${1:?path to a static rclone binary required -- see SELF_HOSTING.md's remote storage mounts section}"
+    rclone_bin="${1:?path to a static rclone binary required -- see docs-site/self-hosting/manual-setup.mdx}"
     rootfs="${2:-${SANDKILN_BASE_ROOTFS:-$HOME/sandkiln-tools/images/ubuntu-22.04.ext4}}"
     echo "==> injecting rclone + fusermount3 into $rootfs (needs sudo)"
     exec sudo "$REPO_ROOT/images/inject-rclone.sh" "$rclone_bin" "$rootfs"

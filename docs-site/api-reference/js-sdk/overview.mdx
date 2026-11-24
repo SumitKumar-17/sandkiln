@@ -28,3 +28,14 @@ const sandbox = await Sandbox.create({
 // SANDKILN_AUTH_TOKEN=...
 const sameSandbox = await Sandbox.create();
 ```
+
+## Daemon status
+
+`getStatus(options?)` returns host health and capacity (counts, tap devices, disk, `warnings`) as a typed `DaemonStatus`. See [`GET /status`](/api-reference/http-api/status).
+
+```ts
+import { getStatus } from "sandkiln";
+
+const status = await getStatus();
+if (status.warnings.length > 0) console.warn(status.warnings);
+```

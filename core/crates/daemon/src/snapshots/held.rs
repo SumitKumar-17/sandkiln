@@ -74,7 +74,7 @@ pub struct Snapshot {
     /// from, if any (`None` = cold-booted, a lineage root). A *parent*
     /// pointer, not a live reference — may point at a since-deleted
     /// snapshot, in which case `GET /snapshots?parent_snapshot_id=` just
-    /// ends the chain there. See `ROADMAP.md`'s "Snapshot lineage" entry
+    /// ends the chain there. See `docs/design-notes/pools-and-lineage.md`
     /// for why a walkable pointer, not a fuller ancestry tree, is the
     /// deliberately narrow first slice.
     pub parent_snapshot_id: Option<String>,
@@ -199,8 +199,8 @@ pub fn archive_snapshot_dir(archive_root: &Path, snapshot_id: &str) -> PathBuf {
 /// `state.snap` itself with no override at resume time, so moving it
 /// breaks every future resume/fork — confirmed by a real resume failure
 /// when an earlier version of this function moved it too. See the
-/// website's Persistence model architecture page (or `ROADMAP.md`'s
-/// "Persistence and snapshotting" section, tiered idle lifecycle entry)
+/// website's Persistence model architecture page (or
+/// `docs/design-notes/snapshots.md`, tiered idle lifecycle entry)
 /// for the full incident and the general rootfs-is-a-path-not-a-value
 /// invariant it follows from. Archiving only relocates the two files
 /// that genuinely can move, `state.snap` and `mem.bin`.
