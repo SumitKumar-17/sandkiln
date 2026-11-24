@@ -17,7 +17,7 @@
 
 use crate::http::error::AppError;
 use crate::http::routes::sandbox::{create_sandbox_core, CreateSandboxRequest};
-use crate::http::routes::snapshot::resume_snapshot_by_id;
+use crate::snapshots::ops::resume::resume_snapshot_by_id;
 use crate::state::{AppState, NameResolution};
 use axum::extract::{Path, State};
 use axum::Json;

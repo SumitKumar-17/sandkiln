@@ -4,7 +4,8 @@
 
 use crate::lifecycle::pool::PoolConfig;
 use crate::http::routes::sandbox::{create_sandbox_core, CreateSandboxRequest};
-use crate::http::routes::snapshot::{delete_snapshot_by_id, snapshot_and_stop, SnapshotStopError};
+use crate::snapshots::ops::delete::delete_snapshot_by_id;
+use crate::snapshots::ops::take::{snapshot_and_stop, SnapshotStopError};
 use crate::state::AppState;
 use std::collections::HashMap;
 use std::sync::Arc;

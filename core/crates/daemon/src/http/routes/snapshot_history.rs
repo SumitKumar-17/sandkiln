@@ -158,7 +158,7 @@ pub(crate) async fn restore_snapshot_history_by_id(state: Arc<AppState>, id: Str
 
     // `Some(clone)`: the restored VM writes to its own disk, never the retired
     // checkpoint's, which must stay pristine so it can be restored again.
-    let result = crate::http::routes::snapshot::resume_vm(
+    let result = crate::snapshots::ops::resume::resume_vm(
         &state,
         retired.snapshot_path.clone(),
         retired.mem_file_path.clone(),

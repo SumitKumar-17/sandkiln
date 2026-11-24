@@ -7,7 +7,7 @@
 
 use crate::http::error::AppError;
 use crate::http::routes::sandbox::CreateSandboxRequest;
-use crate::http::routes::snapshot::resume_snapshot_by_id;
+use crate::snapshots::ops::resume::resume_snapshot_by_id;
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
 use std::sync::Arc;

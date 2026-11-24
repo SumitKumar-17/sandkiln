@@ -6,7 +6,7 @@
 use crate::http::error::AppError;
 use crate::lifecycle::pool::{Pool, PoolConfig};
 use crate::http::routes::sandbox::resolve_resource_override;
-use crate::http::routes::snapshot::delete_snapshot_by_id;
+use crate::snapshots::ops::delete::delete_snapshot_by_id;
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;

@@ -7,7 +7,7 @@ use crate::http::error::AppError;
 use crate::metrics::CreatePhase;
 use crate::lifecycle::pool_claim::{claim_from_pool, resolve_pool_claim, MAX_POOL_CLAIM_ATTEMPTS, PoolClaim, PoolClaimGuard};
 use crate::http::routes::drives::DriveAttachment;
-use crate::http::routes::snapshot::{snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
+use crate::snapshots::ops::take::{snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
 use crate::sandbox::Sandbox;
 use crate::state::{can_attach_read_only, describe_drive_holders, AppState, AttachedDrive};
 use crate::tracing_util::spawn_blocking_in_current_span;

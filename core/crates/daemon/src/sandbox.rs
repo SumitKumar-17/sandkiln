@@ -22,7 +22,7 @@ pub struct Sandbox {
     /// remove it unconditionally. Forking once shared the source's rootfs
     /// file directly — a real corruption bug (fork, mutate, stop, resume
     /// original: memory disagreed with disk), caught live. See
-    /// `routes::snapshot::fork_snapshot`.
+    /// `snapshots::ops::fork::fork_snapshot_by_id`.
     pub rootfs_path: PathBuf,
     /// Drives attached at creation, with read-only/write mode. Not
     /// touched on stop (drives outlive the sandbox) — removal from

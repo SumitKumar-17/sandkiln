@@ -4,4 +4,5 @@
 //! understand the other's invariants.
 
 pub mod held;
+pub mod ops;
 pub mod retired;
