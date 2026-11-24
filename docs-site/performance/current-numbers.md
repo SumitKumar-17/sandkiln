@@ -49,6 +49,30 @@ Every create boots a microVM.
 
 Run `2026-11-24-warm-pool-off-paced-i9-13900K.json`, 2026-11-24, daemon 0.0.1, guest kernel 5.10.223.
 
+## Create to first command, cold, default image (systemd)
+
+Pool disabled, so every create boots a microVM; run alternately with the init-mode image below on the same daemon.
+
+| Measurement | Median | p95 | Min | Max | Runs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| create call returns | 23.0 ms | 26.3 ms | 19.2 ms | 26.5 ms | 20 |
+| first command after create returns | 213 ms | 236 ms | 200 ms | 238 ms | 20 |
+| create to first command | 237 ms | 257 ms | 223 ms | 259 ms | 20 |
+
+Run `2026-11-24T2030-default-image-cold-r3-i9-13900K.json`, 2026-11-24, daemon 0.0.1, guest kernel 5.10.223.
+
+## Create to first command, cold, init-mode image (agent as PID 1)
+
+The same run with an image whose `/sbin/init` is the guest agent, so systemd never starts. Opt-in per image, not the default.
+
+| Measurement | Median | p95 | Min | Max | Runs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| create call returns | 23.5 ms | 26.5 ms | 18.9 ms | 26.8 ms | 20 |
+| first command after create returns | 123 ms | 133 ms | 113 ms | 135 ms | 20 |
+| create to first command | 144 ms | 159 ms | 133 ms | 160 ms | 20 |
+
+Run `2026-11-24T2030-init-image-cold-r3-i9-13900K.json`, 2026-11-24, daemon 0.0.1, guest kernel 5.10.223.
+
 ## Snapshots, resume, fork, commands and parallel creates
 
 Measured with the default pool's replenishment idle.
