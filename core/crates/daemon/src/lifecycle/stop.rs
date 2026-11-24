@@ -106,7 +106,9 @@ async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopO
                 state.network.release(network);
             }
             if let Some(fork) = sandbox.fork_network {
-                sandkiln_vmm::egress::remove(fork.guest_ip, fork.tap.device(), state.network.uplink());
+                if fork.has_egress_chain {
+                    sandkiln_vmm::egress::remove(fork.guest_ip, fork.tap.device(), state.network.uplink());
+                }
                 state.network.release_tap(fork.tap);
             }
             // Every `Sandbox` owns a private rootfs outright (a fork
