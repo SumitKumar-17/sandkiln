@@ -1,0 +1,52 @@
+---
+title: Configuration
+description: How sandkilnd resolves settings, how to inspect them, and the settings that need a decision.
+---
+
+## Resolution order
+
+Highest priority first:
+
+1. Environment variable `SANDKILN_<KEY>`, for example `SANDKILN_VCPU_COUNT`.
+2. `sandkiln.toml`.
+3. Built-in default.
+
+The file is located by `--config <file>`, then `$SANDKILN_CONFIG`, `./sandkiln.toml`, `~/.config/sandkiln/sandkiln.toml`. `scripts/setup.sh` writes a starter file at the repo root and never overwrites one. Paths accept a leading `~/`, expanded against `$HOME` of the user running the daemon.
+
+```toml
+# sandkiln.toml
+base_rootfs = "/mnt/sandkiln-xfs/base.ext4"
+rootfs_dir  = "/mnt/sandkiln-xfs/rootfs"
+exec_timeout_secs = 900
+```
+
+## Inspecting it
+
+```bash
+sandkilnd --check-config      # validate; exit 0 ok, 2 invalid; all problems reported at once
+sandkilnd --print-config      # every effective setting and its source (default/file/env), token redacted
+sandkilnd --config-reference  # every setting with default and description, generated from the code
+```
+
+Unknown keys are rejected with a did-you-mean hint. `sandkiln.example.toml` at the repo root lists every key with its default. The code is authoritative: `core/crates/daemon/src/config/settings.rs`. `sandkilnd-ctl.sh` runs `--check-config` before starting.
+
+## Settings that need a decision
+
+| Setting | Why it matters |
+|---|---|
+| `auth_token` | Unset leaves every route except `/healthz` and `/metrics` open. Keep the file `chmod 600`. See [Auth](/concepts/auth). |
+| `base_rootfs` | Defaults to the small test image. Point it at your production image. |
+| `kernel_path` | Use a FUSE-enabled kernel if you want [remote storage mounts](/concepts/remote-storage). |
+| `rootfs_dir` | Put it on the same reflink-capable filesystem as `base_rootfs` for near-instant clones. `/metrics` reports `rootfs_clone_total{method="reflink"\|"copy"}`. |
+| `state_dir` | Held snapshots (`snapshots/`) and retired checkpoints (`snapshot-history/`). Default `~/sandkiln-tools/state`. Snapshots an older version left under the OS temp dir are not migrated. |
+| `retained_checkpoints_max` | Time-travel checkpoints kept (default 8, oldest evicted after each resume). `0` keeps all and can fill the disk. |
+| `exec_timeout_secs` | A plain `exec` past this returns `504`; the process keeps running in the guest. Must be at least 1. |
+| `max_vcpu_count`, `max_mem_size_mib` | Ceilings on per-request overrides; a request above them, or `0`, gets `400`. |
+| `tap_pool_prefix`, `tap_pool_size` | Must match what `create-tap-pool.sh` created; `tap_pool_size` caps concurrent networked sandboxes. |
+| `uplink_iface` | Defaults to the interface of the default route. |
+| `idle_timeout_secs` | Destroys an idle sandbox for good. Unset or `0` disables. |
+| `auto_suspend_timeout_secs` | Suspends (snapshots) an idle sandbox instead. Must be strictly less than `idle_timeout_secs` when both are set, so suspend gets the first attempt and destroy is a backstop. See [Auto-suspend](/guides/auto-suspend). |
+| `archive_timeout_secs`, `archive_dir` | Moves an unresumed snapshot's `state.snap` and `mem.bin` to `archive_dir`. The rootfs backing file never moves, because Firecracker bakes its absolute path into `state.snap`. Point `archive_dir` at a real disk. |
+| `history_db_path` | SQLite lifecycle history behind `GET /sandboxes/history`. A restart marks still-live records orphaned. See [SQLite history store](/internals/sqlite-history-store). |
+| `jailer_*` | See [Manual host setup](/self-hosting/manual-setup#jailer-optional). |
+| `log_format` | `json` for log pipelines. |

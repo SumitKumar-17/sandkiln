@@ -1,0 +1,101 @@
+---
+title: Manual host setup
+description: The steps scripts/setup.sh automates, one at a time, for when you need to customize a step or debug one that failed.
+---
+
+[Self-hosting quickstart](/getting-started/self-hosting) runs everything with `scripts/setup.sh`. This page is what that script does, step by step. Run `scripts/preflight-check.sh` at any point to see what is still missing.
+
+## Prerequisites
+
+- Linux x86_64 only. Nothing here has been built or verified for aarch64.
+- `/dev/kvm` readable and writable by the daemon's user. Bare metal and nested virtualization both work.
+- `sudo` for one-time host setup. The daemon never runs as root.
+- Rust (stable, via `rustup`), the `x86_64-unknown-linux-musl` target and `musl-tools` for the guest agent.
+- `debootstrap` and `ubuntu-keyring` for a production rootfs (`sudo apt install debootstrap ubuntu-keyring`), plus about 6GiB of free disk for the build. The test image needs under 500MiB.
+- Node.js 20+ only to build the CLI or SDK from source.
+
+## Build, Firecracker and kernel
+
+```bash
+cd core && cargo build --release --workspace          # sandkilnd -> core/target/release/sandkilnd
+scripts/host-setup/install-firecracker.sh ~/sandkiln-tools   # firecracker + jailer into ~/sandkiln-tools/bin
+images/fetch-test-image.sh ~/sandkiln-tools/images           # kernel vmlinux-5.10.223 + a small test rootfs
+```
+
+Pin another Firecracker release with `FIRECRACKER_VERSION=v1.16.1`. The workspace build does not include the guest agent, which targets musl.
+
+## Base image and guest agent
+
+A rootfs must contain the guest agent (`sandkiln-agent`) running as a systemd service, or sandboxes boot but every `exec`, `read-file` and `write-file` times out on a vsock connection nobody is listening on. This applies to every rootfs you use.
+
+```bash
+scripts/dev.sh inject-agent [rootfs-path]   # build for musl, then inject (needs sudo)
+```
+
+`rootfs-path` defaults to `SANDKILN_BASE_ROOTFS`, else the daemon default `~/sandkiln-tools/images/ubuntu-22.04.ext4`. The two halves separately: `cargo build --release -p sandkiln-guest-agent --target x86_64-unknown-linux-musl`, then `images/inject-agent.sh <agent-binary> <rootfs>`.
+
+Two rootfs choices:
+
+- **Test image** from `fetch-test-image.sh`: about 300MiB, no `ca-certificates`, Node.js or Python. Enough to prove the setup, not to back real workloads.
+- **Production image**: `sudo images/build-universal-image.sh ~/sandkiln-tools/images/universal.ext4`. Current Ubuntu LTS, Node.js LTS, Python 3, common tooling, systemd and the multi-agent users (`setup-multi-agent-users.sh` runs last). Needs sudo and 6GiB by default; the script header lists its arguments and overrides.
+
+Then point the daemon at the image you built, because it will not warn you otherwise: `base_rootfs` defaults to the small test image. `scripts/preflight-check.sh` warns when it does, and `sudo -E scripts/preflight-check.sh --root-checks` verifies the agent is baked into the configured image.
+
+Every create clones the base rootfs. On XFS or Btrfs this is a reflink clone; on ext4 it is a full copy. See [Self-hosting quickstart](/getting-started/self-hosting#faster-creates-reflink-rootfs-clones) for the measured difference.
+
+## Remote storage mounts (optional)
+
+Needed only for `POST /sandboxes/:id/mounts` (see [Remote storage](/concepts/remote-storage)).
+
+- A guest kernel with `CONFIG_FUSE_FS`. Firecracker's CI kernels lack it and guests cannot load modules. Build one with `images/build-guest-kernel.sh 5.10.223 ~/sandkiln-tools/images/vmlinux-5.10.223-fuse` (needs `build-essential flex bison libelf-dev bc`) and set `kernel_path`. It replaces the kernel for every sandbox, so you can use it always.
+- `rclone` and `fusermount3` in the rootfs: `scripts/dev.sh inject-rclone <static-rclone-binary> [rootfs-path]`. `fusermount3` is copied from the host's `/bin/fusermount3` (install `fuse3` if missing).
+
+## Custom images
+
+Register extra rootfs images with `kiln image create <id> <path>` (or `POST /images`), then pick one per sandbox. See [Images](/concepts/images) and [Custom image](/guides/custom-image). The file must already be an ext4 rootfs on the daemon host; it is copied into `images_dir`. The daemon cannot verify the guest agent is present (that needs root), so responses carry `guest_agent_verified: false`. Check the file yourself first:
+
+```bash
+sudo -E scripts/preflight-check.sh --root-checks --rootfs-image <path>
+```
+
+`DELETE /images/:id` refuses while a live sandbox, in-flight boot or held snapshot references the image.
+
+## Networking
+
+The daemon creates and manages the bridge itself. You create, once and as root, a pool of tap devices:
+
+```bash
+sudo scripts/host-setup/create-tap-pool.sh 32 $(whoami) sktap
+```
+
+This makes `sktap0` to `sktap31` owned by your user. Keep `tap_pool_size` equal to the count. Creating a tap needs real root (a `TUNSETIFF` ioctl); the daemon's ambient `CAP_NET_ADMIN` only covers netlink operations on existing devices, so it only leases and attaches pre-made ones. See [TAP devices and bridge networking](/internals/tap-bridge-networking).
+
+Guests need a DNS forwarder to the host's resolver. `setup.sh` installs it as the `sandkiln-dnsmasq` systemd service; by hand: `sudo scripts/host-setup/start-dns-proxy.sh 172.16.0.1` (match `bridge_gateway`).
+
+`scripts/dev-tools/setup-tap-network.sh` is an older single-tap tool used only by `scripts/dev-tools/boot-test-vm.sh`. Do not run it for a normal setup.
+
+## Capabilities
+
+The daemon needs `CAP_NET_ADMIN` (tap attach, bridge, iptables) and runs unprivileged otherwise. Two ways to grant it:
+
+- **Direct run:** `sudo scripts/host-setup/grant-net-admin.sh core/target/release/sandkilnd`. A file capability does not survive a rebuild; repeat it after every build or network calls fail with "Operation not permitted". `sandkilnd-ctl.sh` does this for you.
+- **systemd:** the unit uses `AmbientCapabilities=`, so rebuilds need no extra step.
+
+Either way, `raise_net_admin_ambient` in `core/crates/daemon/src/main.rs` lifts the permitted capability into the inheritable and ambient sets so `ip` and `iptables` children inherit it.
+
+## Jailer (optional)
+
+By default sandboxes spawn Firecracker directly. The jailer re-execs it in a chroot with cgroup v2 limits and a dedicated uid/gid per VM. Background: [jailer and privilege model](/internals/jailer-privilege-model).
+
+1. cgroups v2 must be active (`mount | grep cgroup2`). The jailer is always invoked with `--cgroup-version 2`.
+2. The jailer needs privileges the daemon lacks (chroot, setuid, device nodes, cgroups), so make that one binary setuid-root rather than widen the daemon:
+   ```bash
+   sudo chown root:root ~/sandkiln-tools/bin/jailer
+   sudo chmod u+s ~/sandkiln-tools/bin/jailer
+   ```
+   Re-apply after every `install-firecracker.sh` run, which overwrites it.
+3. Set `jailer_enabled = true` (`SANDKILN_JAILER_ENABLED=true`).
+
+Related settings: `jailer_chroot_base_dir` (keep it on the same filesystem as `rootfs_dir` and `drives_dir` so files hard-link into each chroot), and `jailer_uid_gid_base` (default 600000) with `jailer_pool_size` (default 32), which reserve a uid/gid range handed out one pair per running jailed VM. Pick a base clear of any real account. Two jailed VMs sharing a uid defeats the purpose.
+
+Jailing is an operator setting; an API request cannot opt out. Limitations: snapshotting a jailed sandbox returns `400`, and resume always uses a direct spawn. Unit tests pass, but chroot, cgroup and uid-drop behavior against a real jailer has not been verified on real hardware, so test it (`ps` shows the VM under its dedicated uid; run `scripts/integration-test.sh`) before trusting it with adversarial multi-tenant workloads.

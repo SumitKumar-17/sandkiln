@@ -3,7 +3,7 @@ title: Self-hosting quickstart
 description: From a bare Linux host to a running sandkilnd daemon creating real microVMs, with the failures you are likely to hit.
 ---
 
-There is no hosted service. This page is the shortest working path; [`SELF_HOSTING.md`](https://github.com/SumitKumar-17/sandkiln/blob/main/SELF_HOSTING.md) in the repository has every setting, jailer setup and running under systemd.
+There is no hosted service. This page is the shortest working path; [`SELF_HOSTING.md`](https://github.com/SumitKumar-17/sandkiln/blob/main/SELF_HOSTING.md) in the repository links to the detailed pages: [manual host setup](/self-hosting/manual-setup), [configuration](/self-hosting/configuration) and [operations and security](/self-hosting/operations).
 
 ## Requirements
 
@@ -86,7 +86,7 @@ It mounts the volume (default `/mnt/sandkiln-xfs`), creates `<mountpoint>/rootfs
 
 ## Optional: remote storage mounts
 
-Mounting an S3-compatible bucket needs a guest kernel built with `CONFIG_FUSE_FS` and `rclone` plus `fusermount3` in the rootfs. Neither is set up by default. See [Remote storage mounts](/concepts/remote-storage) and the "Remote storage mounts" section of `SELF_HOSTING.md`.
+Mounting an S3-compatible bucket needs a guest kernel built with `CONFIG_FUSE_FS` and `rclone` plus `fusermount3` in the rootfs. Neither is set up by default. See [Remote storage mounts](/concepts/remote-storage) and [Manual host setup](/self-hosting/manual-setup#remote-storage-mounts-optional).
 
 ## Troubleshooting
 

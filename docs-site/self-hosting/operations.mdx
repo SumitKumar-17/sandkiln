@@ -1,0 +1,71 @@
+---
+title: Operations and security
+description: Running sandkilnd under systemd, upgrades, troubleshooting, persistent state, and the security posture to know about.
+---
+
+## Running under systemd
+
+```bash
+sudo scripts/install-systemd-service.sh \
+  $(pwd)/core/target/release/sandkilnd <run-as-user> /etc/sandkiln/sandkilnd.env
+sudo systemctl enable --now sandkilnd
+journalctl -u sandkilnd -f
+```
+
+The unit (from `scripts/sandkilnd.service.template`) runs the daemon as the given unprivileged user, grants `CAP_NET_ADMIN` through `AmbientCapabilities=` (no `setcap`, nothing to redo after a rebuild), runs `scripts/preflight-check.sh` before each start, restarts on failure, and reads `SANDKILN_*` from the env file, which is created from a template on first install. Set `SANDKILN_AUTH_TOKEN` in it before exposing the daemon beyond localhost. The guest DNS forwarder is the separate `sandkiln-dnsmasq` unit that `setup.sh` installs.
+
+## Upgrades and what to repeat
+
+| You changed | Also do |
+|---|---|
+| daemon, vmm or protocol source | `cargo build --release --workspace`. Under systemd nothing else; for direct runs, re-run `grant-net-admin.sh`. |
+| the guest agent | Rebuild for musl and re-inject into every rootfs in use (`scripts/dev.sh inject-agent [rootfs]`). A rebuilt binary on the host does nothing until it is in the image. |
+| the base image | Rebuild, re-inject the agent, repoint `base_rootfs` if the path changed. Running sandboxes keep their old image. |
+| `tap_pool_size` upward | Re-run `create-tap-pool.sh` with the new count (idempotent) before raising the setting. |
+| Firecracker | Re-run `install-firecracker.sh`, then re-apply the jailer setuid bit if you use it. |
+
+Run `scripts/preflight-check.sh` afterwards.
+
+## Stopping
+
+`SIGTERM` stops accepting requests, gives in-flight ones 30 seconds, then snapshots every live sandbox (60 second deadline). Jailed sandboxes are destroyed instead. `scripts/restart-test.sh` verifies this against a real daemon. After a crash or `SIGKILL`, Firecracker processes are orphaned: check `pgrep -a firecracker`, clear them with `pkill -x firecracker` (exact name, never `-f`), then restart. `sandkilnd-ctl.sh restart` reaps them too.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `setup.sh`: "a terminal is required to read the password" | A `sudo` step had no TTY. Run interactively, or `sudo -v` first. |
+| "Operation not permitted" on network calls | Direct run after a rebuild. Re-run `grant-net-admin.sh`, or use systemd. |
+| `tap devices missing: [...]` at startup | `tap_pool_prefix`/`tap_pool_size` differ from what you created, or the pool belongs to another user. |
+| Create works, `exec` or file calls time out | Guest agent missing from the rootfs. `sudo -E scripts/preflight-check.sh --root-checks`. |
+| No outbound network in a sandbox | Check `ip route show default` against `uplink_iface`, and that `sandkiln-dnsmasq` is running. DNS and raw IP fail independently. |
+| `/dev/kvm: permission denied` | `sudo usermod -aG kvm $USER`, then log in again. |
+| `--root-checks` reports missing binaries you installed | Plain `sudo` resets `$HOME`. Use `sudo -E`. |
+| Production image build: unknown codename | Upgrade `debootstrap` or pass an older LTS codename as the third argument (see the script header). |
+| Production image build: disk full | It needs several GiB free for the whole build. Free space first. |
+| Create fails after enabling the jailer | Check `ls -la ~/sandkiln-tools/bin/jailer` shows `-rwsr-xr-x root`, and `mount \| grep cgroup2` for cgroups v2. |
+| `400 snapshotting a jailed sandbox is not supported yet` | Expected. Stop the sandbox instead. |
+
+## Persistent state
+
+Only these outlive a sandbox stop:
+
+- Drives in `drives_dir`, registered images in `images_dir`.
+- Snapshots under `state_dir/snapshots`, retired checkpoints under `state_dir/snapshot-history`, archived snapshots in `archive_dir`.
+- The lifecycle history database at `history_db_path`.
+
+Snapshots survive a daemon restart (the daemon reconciles valid snapshot directories at startup, verified after a `kill -9`). Running sandboxes do not: their VMs exit with the daemon, which is why a clean stop snapshots them first. Back up the directories above if they matter.
+
+A sandbox can disappear without an explicit `stop()` or `snapshot()`: with `auto_suspend_timeout_secs` set, an idle one is snapshotted. Find the result with `GET /snapshots?source_sandbox_id=<id>`, then resume or fork it. If auto-suspend fails partway (disk full, Firecracker error) the sandbox is stopped and its resources released, and no snapshot appears.
+
+Time-travel checkpoints cost a full guest-memory dump plus a rootfs copy each. `retained_checkpoints_max` bounds that. Delete explicitly with `DELETE /snapshots/history/:id`, or pass `?retain_history=false` on a resume to keep none.
+
+## Security posture
+
+- **Privilege:** the daemon is unprivileged with only ambient `CAP_NET_ADMIN`. Tap creation is a one-time root step outside the daemon.
+- **Sandbox-to-sandbox isolation:** each tap has bridge port isolation. A sandbox reaches the gateway and uplink but not another sandbox, verified by a failing cross-sandbox probe with gateway and outbound traffic still working.
+- **Authentication:** one shared token, all or nothing, no per-caller scoping. Treat any holder as fully trusted. Unset means open.
+- **Inside a sandbox:** the production image creates separate `agentN` users with mode 700 homes and an opt-in `/srv/shared`. This separates cooperating processes in one VM and does not replace VM isolation.
+- **Jailer:** opt-in, off by default. With it off, isolation comes from KVM plus the network controls. See [Manual host setup](/self-hosting/manual-setup#jailer-optional) for its status.
+- **Resource limits:** vCPU and memory are per-request overrides capped by `max_vcpu_count` and `max_mem_size_mib`. Nothing bounds how long a sandbox runs except the optional idle and auto-suspend timeouts.
+- **No encryption at rest:** drives, images, archives and every snapshot (`mem.bin` is a full RAM dump, secrets included) are plain files. Firecracker writes them directly, so sandkiln cannot encrypt them itself. Put `drives_dir`, `images_dir`, `archive_dir` and `state_dir` on an encrypted filesystem such as LUKS.
