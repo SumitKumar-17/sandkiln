@@ -47,24 +47,19 @@ else
   assert_contains "and answers normally" "$(cat "$WORKDIR/resp.json")" "still fine"
 
   # Make the mount preconditions fail deterministically on this throwaway
-  # sandbox whatever the image ships: move rclone aside (remembering where it
-  # was), then remove the FUSE device node.
-  req POST "/sandboxes/$SBX_SPAWN/exec" '{"command":"sh","args":["-c","p=$(command -v rclone) && { echo \"$p\" > /tmp/sk-rclone-path; mv \"$p\" \"$p.off\"; }; true"]}' >/dev/null
+  # sandbox whatever the image ships: move rclone aside if the image has one.
+  req POST "/sandboxes/$SBX_SPAWN/exec" '{"command":"sh","args":["-c","p=$(command -v rclone) && mv \"$p\" \"$p.off\"; true"]}' >/dev/null
   MOUNT_BODY='{"bucket":"b","endpoint":"http://127.0.0.1:1","access_key":"k","secret_key":"s","mount_path":"/mnt/sk-spawn"}'
   status="$(req POST "/sandboxes/$SBX_SPAWN/mounts" "$MOUNT_BODY")"
   assert_status "mounting without rclone is a 400" 400 "$status"
   assert_contains "the error names the missing rclone binary" "$(cat "$WORKDIR/resp.json")" "rclone binary"
 
-  req POST "/sandboxes/$SBX_SPAWN/exec" '{"command":"sh","args":["-c","[ -f /tmp/sk-rclone-path ] && p=$(cat /tmp/sk-rclone-path) && mv \"$p.off\" \"$p\"; rm -f /dev/fuse; true"]}' >/dev/null
-  req POST "/sandboxes/$SBX_SPAWN/exec" '{"command":"sh","args":["-c","[ -f /tmp/sk-rclone-path ] && echo yes || echo no"]}' >/dev/null
-  had_rclone="$(extract stdout < "$WORKDIR/resp.json" | tr -d '[:space:]')"
+  # A stub rclone satisfies the binary check, so the next refusal can only be
+  # about FUSE.
+  req POST "/sandboxes/$SBX_SPAWN/exec" '{"command":"sh","args":["-c","printf \"#!/bin/sh\\nexit 0\\n\" > /usr/local/bin/rclone; chmod 755 /usr/local/bin/rclone; rm -f /dev/fuse"]}' >/dev/null
   status="$(req POST "/sandboxes/$SBX_SPAWN/mounts" "$MOUNT_BODY")"
-  assert_status "mounting without /dev/fuse (or rclone) is a 400" 400 "$status"
-  if [ "$had_rclone" = yes ]; then
-    assert_contains "the error names the missing /dev/fuse" "$(cat "$WORKDIR/resp.json")" "/dev/fuse"
-  else
-    echo "  skip - this image has no rclone to put back, so the /dev/fuse message is not reachable"
-  fi
+  assert_status "mounting without /dev/fuse is a 400" 400 "$status"
+  assert_contains "the error names the missing /dev/fuse" "$(cat "$WORKDIR/resp.json")" "/dev/fuse"
   status="$(req GET "/sandboxes/$SBX_SPAWN/mounts")"
   assert_eq "a refused mount leaves no mount behind" '{"mounts":[]}' "$(tr -d '[:space:]' < "$WORKDIR/resp.json")"
 fi
