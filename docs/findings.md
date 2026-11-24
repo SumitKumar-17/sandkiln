@@ -226,13 +226,48 @@ only logs a warning, so images must be re-injected with the new agent. Topic
 behaviour was not captured, so the topic is evidence for the fix working, not a
 recorded before/after.
 
+### 29. Held snapshots pinned a tap device each. FIXED
+A snapshot kept its whole network lease, tap included, and `DELETE
+/sandboxes/:id` keeps a snapshot by default, so with a 32-tap pool the 33rd
+snapshot made every create fail with "no free tap devices" (found by a stress
+test). Only the guest's IP and MAC are frozen in the memory image; the tap is a
+host-side port, and Firecracker v1.16.1 can repoint a restored interface
+(`network_overrides: [{iface_id, host_dev_name}]` on `PUT /snapshot/load`,
+confirmed in its API spec and live). The lease is now two: an `IpLease`
+(address, MAC, host octet; owned by a running sandbox or a held snapshot) and a
+`TapLease` (owned only by a running VM). Snapshot, fork, resume, pool claim and
+checkpoint restore all leased a tap at resume time and pass it as the override;
+stop and snapshot return it. Consequences handled: egress chains are keyed by
+tap, so they are removed when a snapshot is taken and applied to the new tap on
+resume; the per-tap "pending restore" set is gone, because a checkpoint
+restore now claims its IP atomically from the free pool (`try_reserve_ip`),
+which still lets exactly one of two sibling checkpoints restore; a saved tap
+name in old `meta.json` files is ignored, so a restart with a smaller or
+renamed pool works. A drained pool is now `503`, and `/status` reports tap
+usage, IP usage and held-snapshot counts with early warnings. Held snapshots
+are now bounded by the /24 (253 addresses), not the tap pool.
+
+Verified live on a 32-tap pool: 40 snapshots created, all succeeded, 0 taps
+used; 8 resumed concurrently on distinct taps with working gateway traffic; a
+`deny_all` sandbox resumed onto a different tap (and a fork on a third) still
+could not reach an address outside the bridge that a control sandbox reached;
+daemon restart reconciled all snapshots and they resumed. Topic
+`29-snapshots-hold-no-taps` covers it (38 snapshots on a 32-tap pool). Resume
+now also attaches a tap (about 4ms of `ip`/`bridge` calls): end to end resume
+measured 13.6 and 14.4ms median against 13.1ms recorded before, within the
+noise of a shared box.
+
 ### 27. Pool claim bookkeeping under full-suite load. OPEN
 One of two full runs after the finding 20 fix failed two `18-pool` checks
 (delete did not find its own warm snapshot; `claimed` read 1 with both
 sandboxes stopped); the other run was 346/346 and isolated runs are 3/3. It
 points at pool slot accounting (`record_claim`/`record_release`) racing a
 fallback path, not at resume health. Next: reproduce with the parallel loop
-plus pool create/claim/stop, log claim and release per pool id.
+plus pool create/claim/stop, log claim and release per pool id. Seen again
+while verifying finding 29: 18-pool failed 1 of 6 isolated runs and 2 of 2 full
+runs (one check each, the same two symptoms), on a quiet daemon. A likely
+contributor to chase: the replenisher boots its warm instance through the same
+pool-matching create path, so it counts as a claim until it is snapshotted.
 
 ### 8. Stale copies on the remote box. Note
 The remote box holds stale copies (`docs/architecture`, worktrees).

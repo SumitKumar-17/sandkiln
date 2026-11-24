@@ -11,7 +11,7 @@ sandbox, seven sessions.
 | Feature | Behavior |
 | --- | --- |
 | Snapshot/resume | `POST /sandboxes/:id/snapshot`, `POST /snapshots/:id/resume`. Full memory and disk saved; resume skips boot and dependency install. `Sandbox.snapshot()`/`resume()` in both SDKs, `kiln sandbox snapshot|resume`. Works with drives attached (live-verified repeatedly). |
-| Durable across daemon restart | Metadata written atomically beside the state/memory files and reconciled at startup. The held tap device is reserved out of the pool before the daemon accepts creates, preventing a double-lease race. Verified live: killed a daemon with a snapshot on disk, started a fresh instance, resumed it, data intact. Snapshot storage originally lived under `$TMPDIR`, so it is not durable across a host reboot unless `SANDKILN_STATE_DIR` is persistent (see `SELF_HOSTING.md`). |
+| Durable across daemon restart | Metadata written atomically beside the state/memory files and reconciled at startup. The held snapshot's guest IP (not a tap, which a snapshot does not hold) is reserved out of the pool before the daemon accepts creates, preventing a double-lease race; a saved tap name from an older daemon is ignored. Verified live: killed a daemon with a snapshot on disk, started a fresh instance, resumed it, data intact. Snapshot storage originally lived under `$TMPDIR`, so it is not durable across a host reboot unless `SANDKILN_STATE_DIR` is persistent (see `SELF_HOSTING.md`). |
 | Persistent by default | `DELETE /sandboxes/:id` auto-snapshots (`stop_sandbox_by_id(..., keep: true)`). `?keep=false` (`kiln sandbox rm --destroy`) destroys. A jailed sandbox cannot be preserved and falls back to destroy. The idle reaper's destroy pass uses the same default. |
 | Named sandboxes | `name` on create/resume/fork (1-64 chars, `[A-Za-z0-9_-]`, unique among live sandboxes). `GET /sandboxes/by-name/:name` (live only; 409 pointing at get-or-create if the name resolves to a held snapshot). `POST /sandboxes/get-or-create` returns if live, resumes if snapshotted, creates otherwise, race-safe under a per-name lock, so two concurrent callers claiming the same new name cannot both win. A name carries through snapshot/resume/fork when re-specified. SDK: `Sandbox.getOrCreate()`/`byName()` in both SDKs; CLI: `kiln sandbox get-or-create|get`, `--name` on `create`/`ls`/`resume`/`fork`. |
 | Auto-suspend on idle | `SANDKILN_AUTO_SUSPEND_TIMEOUT_SECS` pauses and snapshots a quiet sandbox using the same pause-and-snapshot path as the manual route, composed into the idle reaper rather than built as a new mechanism; it frees the VM and network resources while keeping state resumable. `SANDKILN_IDLE_TIMEOUT_SECS` (plain destroy), if also set, must be strictly longer and acts as a backstop for a sandbox whose auto-suspend keeps failing, not a competing timer. `GET /snapshots?source_sandbox_id=<id>` finds what a sandbox became (`listSnapshots()`, `kiln sandbox snapshots --source`). |
@@ -35,17 +35,18 @@ cloning of one snapshot into several sandboxes need either a verified per-fork
 drive override plus a way to change guest identity, or a from-scratch
 live-memory-clone design. Fan-out is the same unsolved problem restated, not a
 separate item. The rootfs half is now solved by `rootfs_override` (finding 21
-in [findings](../findings.md)); the network identity half is not. Genuinely
-open.
+in [findings](../findings.md)); the network identity half is not (a fork now leases its own tap, but
+two live forks would still present one IP/MAC). Genuinely open.
 
 ## Time-travel restore rules
 
 - Restoring an old checkpoint does not destroy what came after it; those
   stay in history, like descendants of an old commit after a checkout.
 - Restore refuses (409, naming the holder) while anything sharing that
-  checkpoint's frozen network identity is live or held. This generalizes the
+  checkpoint's frozen guest IP is live or held (the tap is not part of the
+  identity: every restore leases a free one). This generalizes the
   one-live-descendant rule across a lineage's full history.
-- A restored sandbox owns everything (fresh network lease, private rootfs
+- A restored sandbox owns everything (its IP, a tap leased at restore time, private rootfs
   clone), so unlike a fork it stays snapshottable and starts a new branch.
 - Same constraint that rules out true parallel branching (two checkpoints of one lineage live at once): the guest's IP/MAC cannot be changed post hoc without in-guest cooperation the guest agent lacks. Out of scope for that reason, not by choice.
 - Surface: daemon HTTP API only, no SDK or CLI yet, same as snapshot lineage. (Egress policy was once cited as the same kind of gap; both SDKs and the CLI now wrap it.)

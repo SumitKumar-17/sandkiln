@@ -10,8 +10,9 @@
 
 Operator health: `GET /status` (with `kiln status` and SDK `getStatus`/
 `get_status`) shipped. As designed it reports version, uptime, live, held and
-retired counts, pools, tap pool total and free
-(`NetworkManager::free_tap_devices`), free bytes for `state_dir` and
+retired counts, pools, tap pool total, free and in use, the sandbox IP pool with
+how many addresses held snapshots keep (`NetworkManager::free_tap_count`,
+`free_ip_count`), free bytes for `state_dir` and
 `rootfs_dir`, `rootfs_clone_total`, the exec timeout, and the auth and
 jailer flags, exposed through `AppState`. Remaining: `kiln doctor` and a
 dashboard page on the same endpoint (a dashboard of sandboxes, pools, drives

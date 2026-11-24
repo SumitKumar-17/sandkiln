@@ -31,9 +31,9 @@ Shipped as `Request::ResumeFixup`; verified by integration topic `28-resume-fixu
 A resumed sandbox answers its first command in about 8ms against 214ms cold, so the biggest user-visible win is not a faster boot but never booting on the request path. Add a `default_pool_warm_count` setting that keeps warm instances of the default profile ready without the operator creating a pool, replenished in the background, and report warm hits and misses in `/status` and `/metrics`.
 Verify: benchmark suite first-command latency with the setting on and off; pool exhaustion falls back to cold create.
 
-### 3. Snapshots must not hold a tap device each (Use and scale, high)
+### 3. Snapshots must not hold a tap device each (Use and scale, shipped)
 A held snapshot keeps its tap lease, and `DELETE` keeps a snapshot by default, so 32 snapshots exhaust a 32-tap pool and every create fails (found while stress-testing). The guest only needs a tap at resume. Firecracker can repoint a restored network interface (`network_overrides` on snapshot load), so release the tap at snapshot time and lease any free one at resume; keep the guest IP and MAC frozen. Surface held-snapshot tap usage in `/status` and warn before exhaustion.
-Verify: create 100 snapshots on a 32-tap pool; resume succeeds; integration topic for it.
+Shipped: the lease is split into an `IpLease` (kept by a snapshot) and a `TapLease` (held only while a VM runs), resume repoints the interface with `network_overrides`, and `/status` reports `tap_pool.in_use`, `ip_pool` and warnings. Held snapshots are now bounded by the sandbox /24 (253 addresses) and disk, not by taps. Verified: 40 snapshots on a 32-tap pool, concurrent resumes, deny_all egress after a tap change, restart reconcile, topic `29-snapshots-hold-no-taps` (see finding 29). Not done: 100 snapshots (the /24 allows 253 but each full-RAM checkpoint costs its memory size on disk), and widening the /24 or giving a snapshot an IP only on demand.
 
 ### 4. Cold path: custom minimal init and trimmed kernel (Latency, high)
 About 125ms of the 214ms is guest systemd userspace (not to be confused with Firecracker's 125ms init bound). Replace it with the guest agent as PID 1 (mounts, network from kernel args, then serve), drop unneeded kernel features, and signal readiness over vsock instead of polling. Target and levers are in the research note.

@@ -40,6 +40,8 @@ Log filter note: it is the binary name, `RUST_LOG=sandkilnd=debug`, not
 
 ## What each number measures
 
+Guest-side reference, one `dmesg` capture (2026-11-24, default image, 5.10.223 guest): kernel clocksource switched to `tsc` at 0.022s, `systemd[1]` started at 0.107s of guest uptime. Firecracker's 125ms bound is for `InstanceStart` to init starting, so this guest is inside it; our 214ms to first command is a different, longer span.
+
 The same word ("boot", "create", "first command") names different intervals in
 different tools. Read a figure against this table before comparing it with
 another. The long version is

@@ -125,13 +125,13 @@ number it is an estimate from the cited components and says so.
 | Rootfs clone and lease | 0.08ms, tap about 3.5ms concurrent | same | none | done (reflink, pre-created tap pool) |
 | `InstanceStart` | about 13ms | about 5-13ms | kernel load and VM/vCPU creation inside the call | measure first (strace timing), few levers |
 | Create call total | 16-18ms | 10-15ms | the rows above | none worth the effort |
-| Kernel boot | about 70ms (derived: 214.5 - 16 - 125, includes 18.7ms `ip_auto_config`, agent connect) | 40-60ms estimate, **unverified**: the spec bound is 125ms to init with serial off and a minimal kernel | CI kernel config (5.10.223, broad drivers); static `ip=` costs about 20ms | trimmed kernel config; configure the interface from the agent instead of `ip=` (moves cost, may overlap) |
+| Kernel boot | about 80-107ms (measured: guest `dmesg` on 2026-11-24 shows `systemd[1]` starting at 0.107s guest uptime, and the init-mode agent starts at 80-110ms; includes 18.7ms `ip_auto_config`). The earlier derived 70ms (214.5 - 16 - 125) was too low | 40-60ms estimate, **unverified**: the spec bound is 125ms to init with serial off and a minimal kernel | CI kernel config (5.10.223, broad drivers); static `ip=` costs about 20ms | trimmed kernel config; configure the interface from the agent instead of `ip=` (moves cost, may overlap) |
 | Init and userspace | about 125ms systemd (`dev-vda.device` 107ms, `fcnet.service` 45ms) | under 10ms with the agent as PID 1, **unverified** estimate | a general init waiting on udev device units and running network setup for a guest that needs one process | custom minimal PID 1 that mounts `/proc /sys /dev`, starts the agent, configures the NIC |
 | Agent ready | polled with 1-20ms backoff, bounded 5s | event-driven | a poll interval adds up to 20ms of overshoot per retry; invisible next to systemd, visible once init is fast | guest connects out to the host over vsock when ready (host listens on the vsock UDS port), create blocks until that signal |
 | First exec | 245us warm connection; first one folds in connect | about 0.3-1ms | none | none |
 | **Total to first command** | **214.5ms** | **cold goal below** | guest userspace | see ranking |
 
-The 70ms kernel figure is derived from separate boots and does not sum
+The earlier 70ms kernel figure was derived from separate boots and did not sum
 exactly (post 28 says so for its 197ms/125ms split too). Re-measure with
 `initcall_debug` after the init change, because removing systemd also
 removes work that currently overlaps with kernel tail.
