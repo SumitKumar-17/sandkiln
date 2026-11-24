@@ -208,9 +208,9 @@ clock fixup, and pools (pool creates and claims go through the same image).
 The same suite on the default image passed 352 of 353 on its one run; the
 failure was `18-pool`'s "deleting the pool also cleaned up exactly its own
 warm snapshot (expected 1, got 2)", which passed on rerun on both images (a
-flake against another job's snapshots on the shared box). Not covered: remote
-storage mounts (`22-mounts` skips without a FUSE kernel and an object-store
-endpoint), auth, and the jailer topic (not enabled on this daemon).
+flake against another job's snapshots on the shared box). That run did not cover
+remote storage mounts, auth or the jailer; the later run below does, except the
+jailer.
 By hand on the init image: PID 1 is the agent, mounts match the systemd list
 minus the systemd-private ones, `lo` is up, a double-forked orphan leaves no
 zombie, and killing the agent is survived (init respawns it and the next exec
@@ -244,7 +244,12 @@ on a FUSE kernel with `rclone` baked into the image and a local
 integration suite, 32 topics, 457 passed and 1 failed. The failure was
 `29-snapshots-hold-no-taps` returning `503 no free tap devices` because this
 daemon had only 6 taps and the suite ran two topics at once; the topic alone
-passed 17 of 17. The jailer topic was not runnable (see finding 32). Orderly
+passed 17 of 17. The jailer topic was not runnable (see finding 32).
+A second full run on a real universal image built with
+`build-universal-image.sh --agent ... --init` (Ubuntu 22.04, Node 24, Python 3.10,
+4 agent users) passed 443 of 444 with the same single tap-pool miss (17 of 17
+alone); in that guest `LANG`, users, sudo, node, python, git, DNS, HTTPS, `npm view`
+and a pip-style HTTPS fetch behaved as in the systemd variant of the same image. Orderly
 daemon shutdown with three live init-mode sandboxes (`scripts/restart-test.sh`
 with `SANDKILN_INTEGRATION_TEST_IMAGE`): all three snapshotted, every Firecracker
 child exited, all three came back as snapshots and one resumed and ran a command.

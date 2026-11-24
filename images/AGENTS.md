@@ -28,8 +28,10 @@ cleanup trap on anything that mounts/chroots).
   `SANDKILN_BASE_ROOTFS` from scratch with `debootstrap`: Ubuntu + current
   Node.js LTS + Python 3 + common CLI tooling + a working systemd init, as
   an ext4 image. Replaces `fetch-test-image.sh`'s stripped CI test image
-  for anything real — that one is missing even `ca-certificates`. Calls
-  `setup-multi-agent-users.sh` automatically as its last step. See "Base
+  for anything real — that one is missing even `ca-certificates`. Takes
+  `--agent <binary> [--init]` to inject the guest agent as its final step
+  (systemd service, or PID 1 with `--init`). Calls
+  `setup-multi-agent-users.sh` automatically before that. See "Base
   and custom images" in `ROADMAP.md`.
 - `setup-multi-agent-users.sh` — bakes multi-agent isolation into a
   rootfs: N sequential agent user accounts, each a private home

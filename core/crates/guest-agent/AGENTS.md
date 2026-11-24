@@ -33,9 +33,10 @@ ships inside every rootfs image.
   `getpid() == 1` only (a stray local run can never mount over a host);
   `setup.rs` mounts `/proc /sys /dev/pts /dev/shm /run /tmp` and cgroup2,
   makes the `/dev/fd`/`stdin`/`stdout`/`stderr` links, sets the hostname,
-  brings `lo` up, resets the environment to what the systemd service had
-  (`LANG`, `PATH`), sets `RLIMIT_NOFILE` and disables Ctrl-Alt-Del's instant
-  reset; `supervisor.rs` forks the agent as a child, reaps with
+  brings `lo` up, sets `RLIMIT_NOFILE` and disables Ctrl-Alt-Del's instant
+  reset; `environment.rs` resets the environment to what the systemd service had: `PATH`, and the image's own locale
+  (`/etc/locale.conf`, then `/etc/default/locale`) with `C.UTF-8` only when the image has none;
+  `supervisor.rs` forks the agent as a child, reaps with
   `waitpid(-1)`, restarts the agent with capped backoff if it dies, and on
   SIGTERM/SIGINT/SIGUSR1/SIGUSR2 syncs and restarts the guest (Firecracker
   exits on reset). The agent is a child, not PID 1 itself, so the reaper

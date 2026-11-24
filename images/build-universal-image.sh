@@ -328,7 +328,12 @@ cat > "$MNT/etc/hosts" <<EOF
 EOF
 
 # Build-time resolv.conf (copied from the host above) is replaced here with
-# the guest's actual runtime nameserver — see GUEST_NAMESERVER above.
+# the guest's actual runtime nameserver — see GUEST_NAMESERVER above. The
+# systemd package leaves /etc/resolv.conf as a symlink into /run, and a write
+# through it lands in a directory that is a tmpfs at runtime: the guest would
+# have no resolver file at all under the agent-as-PID-1 mode, and only
+# systemd-resolved's fallback servers under systemd. A plain file works in both.
+rm -f "$MNT/etc/resolv.conf"
 cat > "$MNT/etc/resolv.conf" <<EOF
 nameserver $GUEST_NAMESERVER
 EOF

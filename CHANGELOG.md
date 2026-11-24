@@ -12,6 +12,26 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Init-mode image validation — 2026-11-24
+
+Work to find out whether the init-mode image (agent as PID 1) can become the default. It cannot yet; see the go/no-go list in `docs/design-notes/latency-floor.md`.
+
+### Added
+- `images/build-universal-image.sh --agent <binary> [--init]` injects the guest agent as its last step, as a systemd service or as PID 1; `scripts/dev.sh inject-agent --init`.
+- Integration topic `32-guest-supervision` (agent restart after `SIGKILL`, zombie reaping with a positive control, `SIGTERM` to PID 1 on init-mode images), and `scripts/restart-test.sh` takes an image and counts only its own daemon's Firecracker children, so it is safe on a box with other daemons.
+- Cold-path results for both images, three alternated runs of 20 with the warm pool off, in `examples/benchmark-suite/results/` and on the generated numbers page: 231.7ms against 147.5ms median create to first command (n=60 each).
+
+### Changed
+- PID 1 takes `LANG`/`LC_*` from the image's `/etc/locale.conf` or `/etc/default/locale` and falls back to `C.UTF-8`, so an init-mode guest sees the same locale as the systemd one (`init/environment.rs`).
+
+### Fixed
+- `build-universal-image.sh` failed in debootstrap on an Ubuntu 22.04 host because `/dev` was bind-mounted before it ran; the binds now come after it. `DEBOOTSTRAP_CACHE` keeps packages between retries.
+- The universal image's `/etc/resolv.conf` was a dangling symlink into `/run`, so an init-mode guest had no resolver at all (and a systemd one only its fallback servers). It is now a plain file naming the bridge gateway.
+
+### Found, not fixed
+- The jailer cannot create a sandbox on a real jailer (finding 32): the unprivileged daemon cannot reach the jailed Firecracker's API socket and `POST /sandboxes` hangs. The jailer docs now say not to use it.
+- A guest that shuts itself down leaves its sandbox listed with a dead VM until deleted (finding 33), on both image kinds.
+
 ## Exec error clarity — 2026-11-24
 
 Found by running every example. Daemon and guest agent; the SDKs, CLI and MCP server needed no change and gained tests.

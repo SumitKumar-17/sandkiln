@@ -157,7 +157,7 @@ reconnect or the health check is **not measured**; measure before acting.
 
 | # | Lever | Path | Expected gain | Effort | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Custom minimal init as PID 1 running the agent, replacing systemd | cold | about 100-120ms of the 125ms (estimate) | medium: init in the guest-agent crate or a tiny sibling, image build script, NIC setup moved in | **built, opt-in per image, measured**: median to first command 232ms to 147ms (n=30 x 2 against 4 default runs), goal 110ms not met; remaining time is mostly the kernel. Not the default yet (see below). `images/inject-agent.sh --init` |
+| 1 | Custom minimal init as PID 1 running the agent, replacing systemd | cold | about 100-120ms of the 125ms (estimate) | medium: init in the guest-agent crate, image build script, NIC setup moved in | **built, opt-in per image, measured twice**: median to first command 231.7ms to 147.5ms (n=60 each, pool off, alternated), goal 110ms not met; remaining time is mostly the kernel. Validated for default status below, **not yet the default**. `images/inject-agent.sh --init`, `images/build-universal-image.sh --agent ... --init` |
 | 2 | Pool as the default create path, with a refill policy, so `create` is a resume | both | cold users see 214ms to about 15-20ms; the largest user-visible win | medium: default profile, sizing, eviction, honest metrics for misses | partial: pools exist, opt-in per profile |
 | 3 | Per-clone fixups on claim: entropy reseed, clock set, hostname/id, boot id | warm | no latency gain, a correctness prerequisite for lever 2 | small-medium: agent RPC plus daemon call in the claim flow | done: `Request::ResumeFixup`, sent after every resume, claim and fork (finding 28) |
 | 4 | Agent-initiated vsock readiness signal; `create` can block until ready | cold | about 0-20ms, and makes "200 means ready" true | small | not started: needs a daemon and vmm change (host listens on the vsock UDS, create waits) which was outside the init change; with init mode the poll starts at 1ms and the agent starts at 80-110ms of guest uptime, so the headroom is probably small, but it is unmeasured |
@@ -185,18 +185,34 @@ the kernel, which is lever 5 and the `ip=` interface bring-up. Milestone A's
 userspace" holds only if the kernel stage is ignored.
 
 The init-mode image is the recommended path for production latency today, as
-an opt-in image (`inject-agent.sh --init` on a copy, registered under a name),
-and the full integration suite passes on it (353/353). Before it can become
-the default image: (1) run the remote-mounts topic with a FUSE kernel and an
-object store on it; (2) decide what to do about images that depend on systemd
-units (`build-universal-image.sh` images: services such as cron, ssh or a
-user's own units do not start, `systemctl poweroff` has no manager); (3) make
-`build-universal-image.sh` and `scripts/dev.sh inject-agent` take `--init` so
-the image is reproducible rather than a hand-made copy; (4) apply the same to
-the pool and the `kiln doctor` path and re-run the parallel benchmark on an
-idle box; (5) look at guest entropy at cold boot (an init-mode guest has no
-systemd seeding the pool; the kernel's own jitter entropy covered the tests,
-but crypto-heavy first commands are unmeasured).
+an opt-in image. The list of what had to be shown before it could be the
+default was worked through on 2026-11-24 on a private daemon (own bridge and
+taps, warm pool off, auth on); status of each:
+
+| # | Gap | Result |
+| --- | --- | --- |
+| 1 | Remote mounts on it | **Done.** FUSE kernel, `rclone` baked into the init image, local `rclone serve s3` on the bridge gateway: `22-mounts` 14 of 14. The 300MB CI image has no room for the 85MB `rclone`; the copy had to be grown first. |
+| 2 | Images that depend on systemd units | **Decided and documented** in `images/README.md`: init mode replicates mounts, hostname, `lo`, `PATH`, the image's locale and orphan reaping; the kernel `ip=` argument already configures the interface, so `fcnet` is not needed. It drops every unit: ssh and getty (CI image), cron, rsyslog, timesyncd, resolved (universal image). Cron jobs and clock discipline are the visible losses. Checked on a real universal image (Ubuntu 22.04, Node 24, Python 3.10): same `LANG`, hostname, users, sudo, node, python, git, HTTPS, npm and pip over DNS as the systemd variant of the same image. |
+| 3 | `--init` in the image build and `dev.sh inject-agent` | **Done**, and testing it found two bugs in `build-universal-image.sh` (a `/dev` bind mount before debootstrap broke it on this host; `/etc/resolv.conf` stayed a dangling symlink, so an init-mode guest had no DNS), both fixed. PID 1 now reads `LANG` from the image instead of hard-coding it. |
+| 4 | Pool and `kiln doctor` paths, parallel benchmark on an idle box | **Partial.** Pool creates and claims went through the init image in the full suite (`18-pool` passes). The parallel benchmark was not re-run (a latency measurement, not a correctness gate), and `kiln doctor` was not run against an init image. |
+| 5 | Guest entropy at cold boot | **Not done.** The tests and the HTTPS checks pass, but nothing measures a command that needs randomness the instant it starts. |
+| 6 (added) | Auth | **Done.** Full suite with `auth_token` set, topic `13-auth` runs: passes. |
+| 7 (added) | Jailer | **Blocked by an existing bug, not by init mode**: the jailed Firecracker's API socket is unreachable by the unprivileged daemon and `POST /sandboxes` hangs, on any image (finding 32). |
+| 8 (added) | PID 1 shutdown | **Done.** `SIGTERM` to PID 1 (sync, reset, Firecracker exits), `kill -9` of the agent (eight in a row), a 200-orphan burst with a zombie control, daemon stop with three live init sandboxes (snapshotted, children exited, resumed), delete of a self-shut-down guest. Topic `32-guest-supervision`, `scripts/restart-test.sh`. |
+
+Full integration suite on the init image with auth on: 457 of 458 on the CI
+image with a FUSE kernel and 443 of 444 on the universal image; the one miss on
+each was topic 29 hitting a 6-tap pool when two topics ran at once (17 of 17
+alone). Numbers and method: [benchmarks](../benchmarks.md).
+
+**Go or no-go for making it the default image:** no-go today. Blocking:
+entropy at cold boot is unexamined; cron and clock discipline would silently
+disappear for anyone who relies on them (a release-notes and migration
+decision, not an engineering gap); the jailer, which is separately broken, has
+not been run with an init image; a guest that shuts itself down stays listed
+(finding 33, true on both image kinds). Not blocking but still to do: the
+parallel benchmark and `kiln doctor` on it, and the kernel levers for the
+remaining 80-100ms.
 
 ## Goals and how to measure them
 
