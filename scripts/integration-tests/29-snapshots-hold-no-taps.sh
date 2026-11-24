@@ -4,6 +4,10 @@
 # network_overrides). Before this, every snapshot pinned a tap, so a pool of
 # 32 allowed 32 snapshots and then every create failed.
 #
+# Every sandbox here asks for 128 MiB, which is not the default shape: a
+# default-shaped create would match the max_count pool that 18-pool configures
+# concurrently and count against its slot.
+#
 # Compares exact id sets and per-sandbox facts, never the global tap count:
 # other topics lease taps concurrently, so only "more snapshots than taps
 # exist, and everything still works" is race-free.
@@ -51,7 +55,7 @@ else
   fi
   assert_contains "/status exposes tap in-use" "$(cat "$WORKDIR/resp.json")" '"in_use"'
 
-  status="$(req POST /sandboxes '{"tags":{"suite":"integration","case":"snapshots-hold-no-taps-create"}}')"
+  status="$(req POST /sandboxes '{"mem_size_mib":128,"tags":{"suite":"integration","case":"snapshots-hold-no-taps-create"}}')"
   assert_status "creating a sandbox while more snapshots than taps are held" 200 "$status"
   id="$(extract id < "$WORKDIR/resp.json")"
   [ -n "$id" ] && CREATED_SANDBOXES+=("$id")
@@ -89,13 +93,13 @@ else
   # can reach (the bridge gateway is always exempt), so it is opt-in.
   if [ -n "${SANDKILN_INTEGRATION_TEST_EGRESS_PROBE_IP:-}" ]; then
     probe="ping -c1 -W2 $SANDKILN_INTEGRATION_TEST_EGRESS_PROBE_IP >/dev/null 2>&1 && echo reachable || echo blocked"
-    status="$(req POST /sandboxes '{"tags":{"suite":"integration","case":"snapshots-hold-no-taps-control"}}')"
+    status="$(req POST /sandboxes '{"mem_size_mib":128,"tags":{"suite":"integration","case":"snapshots-hold-no-taps-control"}}')"
     CTRL="$(extract id < "$WORKDIR/resp.json")"
     [ -n "$CTRL" ] && CREATED_SANDBOXES+=("$CTRL")
     req POST "/sandboxes/$CTRL/exec" "{\"command\":\"sh\",\"args\":[\"-c\",\"$probe\"]}" >/dev/null
     assert_contains "control sandbox (no policy) can reach the probe address" "$(cat "$WORKDIR/resp.json")" "reachable"
 
-    status="$(req POST /sandboxes '{"egress":{"mode":"deny_all"},"tags":{"suite":"integration","case":"snapshots-hold-no-taps-egress"}}')"
+    status="$(req POST /sandboxes '{"mem_size_mib":128,"egress":{"mode":"deny_all"},"tags":{"suite":"integration","case":"snapshots-hold-no-taps-egress"}}')"
     DENY="$(extract id < "$WORKDIR/resp.json")"
     [ -n "$DENY" ] && CREATED_SANDBOXES+=("$DENY")
     req POST "/sandboxes/$DENY/snapshot" >/dev/null
@@ -104,7 +108,7 @@ else
     # Occupy taps so the resume cannot land on the one it was snapshotted from.
     HOGS=()
     for _ in 1 2 3; do
-      req POST /sandboxes '{"tags":{"suite":"integration","case":"snapshots-hold-no-taps-hog"}}' >/dev/null
+      req POST /sandboxes '{"mem_size_mib":128,"tags":{"suite":"integration","case":"snapshots-hold-no-taps-hog"}}' >/dev/null
       hog="$(extract id < "$WORKDIR/resp.json")"
       [ -n "$hog" ] && { HOGS+=("$hog"); CREATED_SANDBOXES+=("$hog"); }
     done

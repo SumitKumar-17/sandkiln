@@ -265,9 +265,14 @@ points at pool slot accounting (`record_claim`/`record_release`) racing a
 fallback path, not at resume health. Next: reproduce with the parallel loop
 plus pool create/claim/stop, log claim and release per pool id. Seen again
 while verifying finding 29: 18-pool failed 1 of 6 isolated runs and 2 of 2 full
-runs (one check each, the same two symptoms), on a quiet daemon. A likely
-contributor to chase: the replenisher boots its warm instance through the same
-pool-matching create path, so it counts as a claim until it is snapshotted.
+runs (one check each, the same two symptoms), on a quiet daemon. Strong
+suspect, not yet proven: pools match on shape (vcpu, memory, image), so any
+default-shaped `POST /sandboxes` from another concurrent topic, or another
+user of the shared daemon, claims the pool's warm snapshot or fills its
+`max_count` slot, which produces exactly these symptoms without any
+bookkeeping bug. Topic 29 therefore creates only non-default shapes (128 MiB).
+A/B on the shared daemon with nothing else running: 18-pool passed 8 of 8 on the daemon before the tap change and 8 of 8 after it, so the tap change is not the cause. To settle it, run 18-pool alone against a daemon nobody else touches and log
+claim and release per pool id.
 
 ### 8. Stale copies on the remote box. Note
 The remote box holds stale copies (`docs/architecture`, worktrees).
