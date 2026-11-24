@@ -46,6 +46,7 @@ The environment variable for a key is `SANDKILN_` plus the upper-cased key.
 | `SANDKILN_FIRECRACKER_BIN` | `~/sandkiln-tools/bin/firecracker` | Path to the Firecracker binary. |
 | `SANDKILN_KERNEL_PATH` | `~/sandkiln-tools/images/vmlinux-5.10.223` | Guest kernel image. Use a FUSE-enabled kernel for [remote storage mounts](/concepts/remote-storage). |
 | `SANDKILN_KERNEL_ARGS` | unset | Extra guest kernel arguments, for example `quiet`. |
+| `SANDKILN_SNAPSHOT_DIRTY_TRACKING` | `true` | Track the pages a sandbox dirties from boot, so snapshotting a cold-booted sandbox writes only those pages (a sparse memory file) instead of all of its RAM. `false` restores full writes. A resumed sandbox is always snapshotted in full. See [Snapshot cost](/engineering/38-opt-snapshot-diff-from-boot). |
 | `SANDKILN_BASE_ROOTFS` | `~/sandkiln-tools/images/ubuntu-22.04.ext4` | Base rootfs cloned per sandbox. **The default is the small test image; override it for a production image.** See [Manual host setup](/self-hosting/manual-setup#point-the-daemon-at-the-image-you-built). |
 | `SANDKILN_VCPU_COUNT` | `2` | vCPUs per sandbox, when a request does not override it. |
 | `SANDKILN_MEM_SIZE_MIB` | `512` | Memory per sandbox, when a request does not override it. |

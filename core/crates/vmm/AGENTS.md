@@ -51,7 +51,10 @@ behavior belongs here, not in `daemon`.
   (`tap_override` repoints `eth0` via `network_overrides` on snapshot load).
   `resume` always spawns directly — jailer covers `Vm::boot` only;
   `daemon`'s `snapshots/ops/take.rs` (`snapshot_and_stop`) refuses to snapshot a
-  jailed sandbox for this reason.
+  jailed sandbox for this reason. A VM booted with
+  `VmConfig::track_dirty_pages` snapshots as a Firecracker `Diff` (only the pages
+  dirtied since boot, a sparse file); a resumed VM never does, because its memory
+  came from a file (`Vm::dirty_tracked`). See `docs/design-notes/snapshot-take-cost.md`.
 - **`rootfs.rs`** — per-sandbox rootfs clone via native `FICLONE` reflink,
   falling back to a full copy, reporting which happened
   (`rootfs_clone_total{method}` on `/metrics`).

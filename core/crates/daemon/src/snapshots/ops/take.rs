@@ -7,6 +7,7 @@
 //! (`check_snapshottable`) and the error types its callers react to.
 
 use crate::http::error::AppError;
+use crate::metrics::SnapshotPhase;
 use crate::sandbox::Sandbox;
 use crate::snapshots::held::Snapshot;
 use crate::snapshots::layout::snapshot_dir;
@@ -14,7 +15,7 @@ use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
 use sandkiln_vmm::network::IpLease;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 use uuid::Uuid;
 
 /// Why a sandbox can't be snapshotted — the two structural (not
@@ -96,6 +97,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
             .map_err(SnapshotStopError::Blocked)?;
     }
 
+    let take_started = Instant::now();
     let sandbox = state.sandboxes.lock().unwrap().remove(&id).ok_or(SnapshotStopError::NotFound)?;
     // Pool membership ends here regardless of outcome — a later
     // resume/fork is a fresh creation event, not tied back to this pool
@@ -122,27 +124,41 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
         let snapshot_path = snapshot_path.clone();
         let mem_file_path = mem_file_path.clone();
         move || -> std::io::Result<IpLease> {
+            let metrics = &state.metrics;
+            // Each step is recorded only if it ran, so a failed pause does
+            // not put a zero-length memory write in the histogram.
+            let timed = |phase: SnapshotPhase, step: &mut dyn FnMut() -> std::io::Result<()>| {
+                let started = Instant::now();
+                let result = step();
+                metrics.record_snapshot_phase_ms(phase, started.elapsed().as_secs_f64() * 1000.0);
+                result
+            };
             let outcome = std::fs::create_dir_all(&dir)
-                .and_then(|_| vm.pause())
-                .and_then(|_| vm.snapshot(&mem_file_path, &snapshot_path));
+                .and_then(|_| timed(SnapshotPhase::Pause, &mut || vm.pause()))
+                .and_then(|_| timed(SnapshotPhase::Create, &mut || vm.snapshot(&mem_file_path, &snapshot_path)));
             // Either way this VM is done — a paused VM that failed to
             // snapshot can't be handed back as still-running. `force_stop`,
             // not `stop`: stop() first sends a guest `sync`, which a paused
             // guest can never answer, so it only added a ~6s timeout to every
             // snapshot (6.8s measured end to end, ~0.5s of real work).
+            let stop_started = Instant::now();
             let _ = vm.force_stop();
+            metrics.record_snapshot_phase_ms(SnapshotPhase::ForceStop, stop_started.elapsed().as_secs_f64() * 1000.0);
+            let release_started = Instant::now();
             // The guest is dead, so its tap is free and its egress chain
             // (keyed by that tap) is moot. Both go now whatever happened.
             if has_egress_chain {
                 sandkiln_vmm::egress::remove(network.config.guest_ip, &network.config.tap_device, state.network.uplink());
             }
-            match outcome {
+            let released = match outcome {
                 Ok(()) => Ok(state.network.detach(network)),
                 Err(e) => {
                     state.network.release(network);
                     Err(e)
                 }
-            }
+            };
+            metrics.record_snapshot_phase_ms(SnapshotPhase::Release, release_started.elapsed().as_secs_f64() * 1000.0);
+            released
         }
     })
     .await;
@@ -186,10 +202,15 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
     // gets, not a `Snapshot` left alive with a broken durability
     // contract.
     let (snapshot, persist_result) = tokio::task::spawn_blocking(move || {
+        let started = Instant::now();
         let persist_result = snapshot.persist(&snapshot_dir(&snapshot.id));
-        (snapshot, persist_result)
+        (snapshot, persist_result, started.elapsed())
     })
     .await
+    .map(|(snapshot, persist_result, elapsed)| {
+        state.metrics.record_snapshot_phase_ms(SnapshotPhase::Persist, elapsed.as_secs_f64() * 1000.0);
+        (snapshot, persist_result)
+    })
     .expect("persist snapshot metadata task panicked");
 
     if let Err(e) = persist_result {
@@ -210,6 +231,9 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
         tracing::warn!(error = %e, sandbox_id = %id, "failed to record sandbox snapshot in history store");
     }
 
+    let total_ms = take_started.elapsed().as_secs_f64() * 1000.0;
+    state.metrics.record_snapshot_phase_ms(SnapshotPhase::Total, total_ms);
+    tracing::debug!(snapshot_id = %snapshot_id, total_ms, "snapshot taken");
     Ok(snapshot_id)
 }
 

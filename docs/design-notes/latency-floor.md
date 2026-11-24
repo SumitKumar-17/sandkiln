@@ -144,7 +144,7 @@ removes work that currently overlaps with kernel tail.
 | First exec after resume | 8.4ms | under 5ms | guest page faults on first touch, plus the daemon's `exec true` health check before returning (pool path) | keep pool memory files in page cache; trim health check to one cheap round trip; later, working-set prefetch |
 | Metadata refresh | MMDS re-init after resume, retried | not on the floor | MMDS comes back uninitialized | none soon |
 | User-visible `create` | pool claim measured 70-200ms in September, **before** the guest-boot work; no current figure | about 15-20ms | stale number; pool is opt-in per profile, not the default | re-measure; make the pool the default path |
-| Snapshot take, for the pool refill | 310-727ms | dirty pages only | full-memory write plus fsync, synchronously | `sync_snapshot_files` review, diff snapshots (see below); not user-visible if the pool absorbs it |
+| Snapshot take, for the pool refill | 546ms suite median (was 1781ms); about 150ms of work plus a 280ms settling wait right after create | dirty pages only | done for cold-booted sandboxes: diff snapshot of the touched pages; the settling wait is the rest | [snapshot take cost](snapshot-take-cost.md) |
 | Clone uniqueness | **not done** in the guest agent (no reseed, no clock set found in `core/crates/guest-agent` or `vmm`) | per the Firecracker guidance above | restore-based create hands out identical clones | reseed and set clock on claim; guest kernel 5.10 has no VMGenID reseed (needs >= 5.18), so explicit reseed is mandatory, not optional |
 
 Resumed first exec at 8.4ms versus the 4ms load call tells us about 4ms is
@@ -164,8 +164,8 @@ reconnect or the health check is **not measured**; measure before acting.
 | 5 | Trimmed guest kernel config (drop unused drivers/features, keep virtio, vsock, ext4, fuse as needed) | cold | about 10-30ms estimate, **unverified** | medium: build and maintain a kernel; `build-guest-kernel.sh` exists for FUSE only | not started |
 | 6 | Read-only rootfs plus overlay (tmpfs upper) | cold, warm | little latency; smaller snapshot and diff, safe sharing | medium; affects drives and persistence semantics | not started |
 | 7 | Keep pool memory files hot in the page cache; fadvise/touch after take | warm | removes the disk-resident penalty (FaaSnap: up to 3.5x on cold-cache restores) | small | not started |
-| 8 | Diff snapshots for repeated take of one sandbox | snapshot-take | proportional to dirtied pages, potentially large for idle sandboxes; **unmeasured** | medium-large: dirty tracking has runtime cost, merge chain, file lifetime rules | not started; dev-preview upstream |
-| 9 | Review `sync_snapshot_files=false` for pool entries (replaceable, so durability is cheap to give up) | snapshot-take | removes the fsync share of take; **unmeasured** | small | not started |
+| 8 | Diff snapshots | snapshot-take | measured: fresh 512 MiB guest 620ms to 152ms, 1 GiB 3679ms to 376ms; suite median 1781ms to 546ms | built for a cold-booted sandbox (no base, no chain); no measurable runtime cost of tracking. A chain for repeated takes of a resumed sandbox is not built | **done** for cold-booted sandboxes, see [snapshot take cost](snapshot-take-cost.md) |
+| 9 | Review `sync_snapshot_files=false` for pool entries (replaceable, so durability is cheap to give up) | snapshot-take | measured on Firecracker 1.17.0: full write 566-1222ms to about 300ms; on top of the diff only 20-110ms | needs Firecracker 1.17 or later (v1.16.1 rejects the field) and a durability split | **evaluated, not built**: see [snapshot take cost](snapshot-take-cost.md) |
 | 10 | Working-set recording and prefetch (REAP/FaaSnap style) | warm | 3.7x on cold-start page-fault cost in the papers; only matters if first-exec time is fault-bound | large; needs uffd or record/prefetch machinery | not started, gate on measurement |
 | 11 | Uffd backend, huge pages | warm | none on one host with a warm cache; huge pages block dirty tracking | large | rejected for now (see above) |
 
@@ -229,7 +229,7 @@ run shape.
 | Warm, default `create` | `create_to_first_command` with a matching pool, p50 | at most 20ms, p99 at most 50ms | 4ms resume + 8.4ms first exec + HTTP; the p99 bound covers the resume-failure fallback, which falls back to a cold create and will exceed it, so report its rate separately |
 | Warm, resume | `resume_call` p50 / `resume_first_command` p50 | at most 5ms / at most 8ms | already met (4ms / 8.4ms, first one marginal) |
 | Parallel | `parallel_create_to_first_command_c8` p95 | at most 2x the sequential p50 | catches lease and clone contention |
-| Snapshot take | `snapshot_take` p50 | track, no target until lever 8 or 9 is measured | load-sensitive |
+| Snapshot take | `snapshot_take` p50 | track; 546ms after lever 8 (was 1781ms), of which about 280ms is the settling wait | load-sensitive |
 
 Rules for claiming a win: run before and after back to back, at least 20
 samples, record both in `docs/benchmarks.md`, and report an unexplained
@@ -247,7 +247,8 @@ results.
    (the September numbers predate them).
 4. Levers 7 and 9 as cheap experiments; lever 5 only if the post-init
    profile shows the kernel stage dominating; lever 8 only after
-   `snapshot_take` is split into pause, memory write and fsync.
+   `snapshot_take` is split into pause, memory write and fsync (done, see
+   [snapshot take cost](snapshot-take-cost.md)).
 
 ## What I could not verify
 

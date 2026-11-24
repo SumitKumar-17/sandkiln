@@ -1,0 +1,8 @@
+# mem.bin size after one snapshot of a 512 MiB guest, ext4 state dir, 2026-11-24T20:28:16Z
+# columns: tracking, MiB of guest memory dirtied beforehand, allocated MiB (du), apparent bytes
+tracking=false dirty=0 allocated_MiB=512 apparent_bytes=536870912
+tracking=false dirty=128 allocated_MiB=512 apparent_bytes=536870912
+tracking=false dirty=400 allocated_MiB=512 apparent_bytes=536870912
+tracking=true dirty=0 allocated_MiB=92 apparent_bytes=536870912
+tracking=true dirty=128 allocated_MiB=219 apparent_bytes=536870912
+tracking=true dirty=400 allocated_MiB=334 apparent_bytes=536870912

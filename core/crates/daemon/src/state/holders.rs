@@ -239,6 +239,7 @@ mod tests {
                 origins: Default::default(),
                 exec_timeout: std::time::Duration::from_secs(600),
                 kernel_args: String::new(),
+                snapshot_dirty_tracking: true,
                 retained_checkpoints_max: 16,
             default_warm_count: 0,
                 state_dir: dir.join("state"),

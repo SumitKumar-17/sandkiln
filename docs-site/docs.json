@@ -233,7 +233,8 @@
               "engineering/25-opt-snapshot-stop-force-stop",
               "engineering/28-opt-guest-boot-time",
               "engineering/34-making-a-create-a-resume",
-              "engineering/35-the-agent-as-pid-1"
+              "engineering/35-the-agent-as-pid-1",
+              "engineering/38-opt-snapshot-diff-from-boot"
             ]
           }
         ]

@@ -8,16 +8,17 @@ documented fact could answer them.
    baseline known to be wrong; finding 4 shipped the mechanism and metric.
    Remaining: decide on production defaults; `create-reflink-volume.sh` is a loop mount
    and does not survive a reboot, so add a systemd mount unit.
-2. **Snapshot-take latency** (309.6-990ms, the most load-sensitive figure).
-   Firecracker's docs confirm the asymmetry is structural: take writes every
-   dirty page synchronously, resume loads memory lazily via copy-on-write.
-   The open question is how much sandkiln's wrapping adds on top of an
-   inherently expensive operation; unmeasured.
-3. **Firecracker Diff snapshots.** Capture only pages dirtied since the last
-   snapshot instead of a full dump. At least one other small project chains
-   about ten diffs before collapsing to a full snapshot. Needs measurement
-   on this workload (frequent snapshot/resume of one sandbox) before
-   claiming a win.
+2. **Snapshot-take latency.** Measured and mostly fixed: the take was split
+   into steps (`snapshot_take_phase_duration_ms`), the cost turned out to be
+   Firecracker writing and fsyncing the whole memory file (not sandkiln's
+   wrapping, which is about 50 ms), and a cold-booted sandbox is now
+   snapshotted as a Firecracker diff of only the pages it touched. Evidence,
+   the levers weighed and the decisions: [snapshot take cost](snapshot-take-cost.md).
+   Open there: the guest settling wait is now the largest part of a take right
+   after create, and `sync_snapshot_files` needs Firecracker 1.17.
+3. **Firecracker Diff snapshots.** Built for the cold-booted case (no base
+   snapshot, no merge chain): [snapshot take cost](snapshot-take-cost.md). A
+   chain of diffs for repeated takes of one sandbox is not built.
 4. **Guest userspace boot.** An earlier note said guest boot was not a
    priority: it sat inside the roughly 10ms cold-boot window, and the
    measured 10.5-10.9ms was already far ahead of public Firecracker-sandbox

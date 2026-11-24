@@ -107,6 +107,10 @@ pub struct VmConfig {
     /// metadata endpoint. Requires `network` (MMDS intercepts via a
     /// configured interface). `None` configures no MMDS.
     pub metadata: Option<serde_json::Value>,
+    /// Turns on Firecracker's KVM dirty-page tracking from boot, which lets
+    /// `Vm::snapshot` write only the pages the guest touched since boot
+    /// instead of the whole memory file. See `Vm::snapshot`.
+    pub track_dirty_pages: bool,
 }
 
 /// How long a control-plane request (sync, health checks, tunnel setup) may
@@ -123,6 +127,10 @@ pub struct Vm {
     /// When this process started running guest code (boot or resume). See
     /// [`MIN_GUEST_AGE_BEFORE_PAUSE`].
     started_at: Instant,
+    /// Booted with dirty-page tracking, so `snapshot` may write a diff. Always
+    /// false for a resumed VM: its memory came from a file, so "dirtied since
+    /// boot" no longer describes what differs from zero.
+    dirty_tracked: bool,
 }
 
 /// A guest paused less than this long after it started running can be

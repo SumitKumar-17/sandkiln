@@ -35,6 +35,7 @@ changes, edit it in one place.
 | [sdks-and-cli.md](design-notes/sdks-and-cli.md) | SDK and CLI surface and behavior |
 | [images-and-auth.md](design-notes/images-and-auth.md) | Auth, images, networking, docs and examples |
 | [load-testing.md](design-notes/load-testing.md) | Planned concurrency-ceiling test |
+| [snapshot-take-cost.md](design-notes/snapshot-take-cost.md) | What a snapshot take costs, step by step, the diff snapshot that shipped and the levers weighed and not built |
 | [latency-investigation.md](design-notes/latency-investigation.md) | Open latency questions |
 | [latency-floor.md](design-notes/latency-floor.md) | Lowest achievable start latency, stage-by-stage gap analysis, ranked levers, goals |
 | [feature-plan.md](design-notes/feature-plan.md) | Ordered feature plan: goals, approach and verification per item |

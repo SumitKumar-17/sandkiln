@@ -276,6 +276,7 @@ async fn create_sandbox_cold(
                 jail,
                 rate_limit,
                 metadata: Some(metadata),
+                track_dirty_pages: state.config.snapshot_dirty_tracking,
             });
             match vm {
                 Ok(vm) => {

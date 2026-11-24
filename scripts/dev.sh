@@ -43,6 +43,11 @@
 #                                (which needs debug logs for finer detail than
 #                                /metrics exposes).
 #
+#   snapshot-profile [opts] [base-url]                 scripts/snapshot-profile.sh
+#                                one snapshot take per run, split into pause, Firecracker's
+#                                memory write, force stop, lease release and metadata persist
+#                                (snapshot_take_phase_duration_ms), with medians; --mem, --dirty.
+#
 #   bench-suite [args...]        examples/benchmark-suite: client-side suite (create, first
 #                                command, exec, snapshot, fork, resume, parallel) against any
 #                                daemon; `bench-suite compare A.json B.json` diffs two results.
@@ -149,6 +154,9 @@ case "$subcommand" in
     ;;
   load-test)
     exec "$SCRIPT_DIR/load-test.sh" "$@"
+    ;;
+  snapshot-profile)
+    exec "$SCRIPT_DIR/snapshot-profile.sh" "$@"
     ;;
   bench-report)
     exec "$SCRIPT_DIR/bench-report.sh" "$@"

@@ -74,9 +74,19 @@ stable references used across `docs/` and `ROADMAP.md`.
   hypothesis (see [benchmarks](benchmarks.md)).
 - Still to decide: make reflink the default for production setups.
 
-### 5. Snapshot-take is 310-990ms. Open
-Full memory and disk are written each time. Candidates: Diff snapshots,
-dirty-tracked rootfs. See [snapshot cost](design-notes/latency-investigation.md).
+### 5. Snapshot-take is 310-990ms. Fixed for cold-booted sandboxes
+- Cause: Firecracker v1.16.1 writes the whole guest memory file in one
+  `write` and fsyncs it (about 180 ms to write 512 MiB into the page cache,
+  about 0.8 s to flush it), so the take scaled with configured RAM, not with
+  what the guest used. Sandkiln's own steps (pause, force stop, lease release,
+  metadata) add about 50 ms. The 310-990 ms range was disk state, not code.
+- Fix: guests boot with dirty-page tracking and a cold-booted sandbox is
+  snapshotted as a Firecracker diff, which writes only the pages it touched
+  (`snapshot_dirty_tracking`, on by default). A resumed sandbox is still
+  snapshotted in full.
+- Result (benchmark suite, 60 takes each, alternated, pool off): median 1781
+  ms to 546 ms, p95 3380 ms to 775 ms. Per-step data, the levers not built and
+  why: [snapshot take cost](design-notes/snapshot-take-cost.md).
 
 ### 13. Snapshot requests took 6.8s. Fixed
 - Root cause: `snapshot_and_stop` called `Vm::stop()` on a paused VM, whose

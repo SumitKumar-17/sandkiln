@@ -4,13 +4,15 @@ Current reality and the reasoning behind it. Every milestone ends with
 something proven on real hardware, not just code that compiles. Detail,
 findings and numbers live in [`docs/`](docs/README.md).
 
-Last verified 2026-11-24 on the dev box (Intel i9-13900K, kernel 6.8,
-Firecracker v1.16.1), on the final `main`: 450 Rust unit tests, clippy clean, and
-the live suite (`scripts/integration-test.sh`, 442 checks over 34 topics) passed
-442 of 442 on two full runs in a row, with the default warm pool on and the
-current guest agent in the default images. The orderly-shutdown test
-(`scripts/restart-test.sh`) and all 12 runnable examples
-(`scripts/dev.sh examples-smoke`) pass.
+Last verified 2026-11-25 on the dev box (Intel i9-13900K, kernel 6.8,
+Firecracker v1.16.1), for the snapshot-take change on top of the 2026-11-24
+`main`: 455 Rust unit tests (one guest-agent test fails intermittently when the
+suite runs in parallel, unrelated to this change), clippy clean, and the live
+suite (`scripts/integration-test.sh`, 458 checks over 35 topics) passed 458 of
+458 on two full runs in a row against a daemon with `default_warm_count = 0`
+and `snapshot_dirty_tracking` on. `scripts/restart-test.sh` and
+`scripts/dev.sh examples-smoke` were not rerun for this change; their last
+passing run was on the 2026-11-24 `main`.
 
 Status key: **done** works end to end and is verified; **partial** works with
 a stated gap; **planned** not built.
@@ -22,7 +24,7 @@ a stated gap; **planned** not built.
 | Boot, exec, guest agent | done | Spawn to `InstanceStart` 12.6-14.0ms, exec round trip about 245us. |
 | Daemon HTTP API (`sandkilnd`) | done | Create, exec, list, stop, file ops, env vars, graceful SIGTERM shutdown. |
 | Networking | done | Tap pool, shared bridge, NAT, DNS proxy, bridge port isolation between sandboxes. |
-| Snapshot, resume, fork | partial | Durable across restart, persistent-by-default stop, named sandboxes. Fork is single-live per snapshot. Take costs 310-990ms. |
+| Snapshot, resume, fork | partial | Durable across restart, persistent-by-default stop, named sandboxes. Fork is single-live per snapshot. A take of a cold-booted sandbox is 546ms median in the suite (was 1781ms), about 280ms of it a settling wait. |
 | Time-travel restore, lineage | partial | Retired checkpoints (capped at 8) and parent pointers. Daemon API only, no SDK or CLI yet. |
 | Idle lifecycle | partial | Auto-suspend, destroy and archive tier. Operator config only; no delete-after-archive. |
 | Warm pools | done | `max_count` with queueing; a default pool (`default_warm_count`, 2) makes a plain create a resume, 26ms to first command. Explicit pool config is in memory only. |
@@ -49,7 +51,7 @@ a stated gap; **planned** not built.
 | Create to first command | 214ms |
 | `POST /sandboxes` create (reflinked rootfs) | about 16ms |
 | Resume from snapshot | 3.7-4.0ms |
-| Snapshot take | 485-727ms |
+| Snapshot take (suite: create, one command, snapshot) | 546ms, was 1781ms |
 
 Directional, one shared box. Method, full table and history in
 [benchmarks](docs/benchmarks.md).
@@ -58,10 +60,12 @@ Directional, one shared box. Method, full table and history in
 
 In order, most load-bearing first. Detail per item: [feature plan](docs/design-notes/feature-plan.md).
 
-1. **Snapshot-take cost.** Taking a snapshot writes the whole memory file
-   (0.4 to 1.5 s). Measure sandkiln's own overhead first, then try Diff
-   snapshots and skipping the file sync for pool entries. See
-   [latency investigation](docs/design-notes/latency-investigation.md).
+1. **Snapshot take, what is left.** A cold-booted sandbox is snapshotted as a
+   diff of the touched pages (done). About 280 ms of a take right after create
+   is the guest settling wait (`MIN_GUEST_AGE_BEFORE_PAUSE`, a correctness guard
+   that needs its own large resume sweep before it moves); a resumed sandbox is
+   still snapshotted in full; `sync_snapshot_files=false` needs Firecracker 1.17
+   or later. See [snapshot take cost](docs/design-notes/snapshot-take-cost.md).
 2. **Make the init-mode image the default.** It reaches the first command in
    about 147 ms against about 232 ms with systemd. Mounts, auth, PID 1
    shutdown and a real universal image are verified on it. Before it replaces
