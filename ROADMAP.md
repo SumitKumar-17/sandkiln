@@ -35,6 +35,7 @@ a stated gap; **planned** not built.
 | JS/TS SDK, Python SDK (sync and async), CLI | done | Published to npm and PyPI (`sandkiln`, `sandkiln-cli`). Gaps are the ones named in the rows above. |
 | MCP server (`sandkiln-mcp`) | partial | Stdio server with 12 tools and 2 resources, verified against a live daemon. Not published yet (no release workflow); exec timeout is client-side only. |
 | Docs site, website, examples | done | Ten runnable examples. |
+| GitHub Actions integration | partial | `sandkiln-run` action and example verified against a real daemon; not yet run on GitHub. Daemon inside a hosted runner is not supported ([note](docs/design-notes/ci-integration.md)). |
 | Load testing | planned | Concurrency-ceiling ramp, see [load testing](docs/design-notes/load-testing.md). |
 | Multi-node, regions | planned | Deliberately last. |
 | GPU, desktop automation, git-native filesystem | planned / not planned | See [ideas not started](docs/design-notes/ideas-not-started.md). |

@@ -20,6 +20,20 @@ loosely follows [Keep a Changelog](https://keepachangelog.com/).
   with JSON and Markdown output, a `compare` mode that flags regressions, a
   committed sample result, and `scripts/dev.sh bench-suite`.
 
+## GitHub Actions integration — 2026-11-24
+
+### Added
+- `.github/actions/sandkiln-run`: a composite action that runs a command in a
+  fresh sandbox with the checked-out workspace uploaded, streams output,
+  propagates the exit code (124 on timeout, 125 when none was reported), and
+  always destroys the sandbox. Guide: [Run CI jobs in a
+  sandbox](docs-site/guides/run-ci-jobs-in-a-sandbox.mdx).
+- `examples/github-actions`: a sample project and two workflows (remote
+  daemon over HTTPS, self-hosted KVM runner). Verified against a real
+  daemon; not yet run on GitHub itself.
+- `ci-actions.yml`: `actionlint` over the workflows and an offline test of the
+  action's script.
+
 ## sandkiln-mcp 0.1.0 — 2026-11-24
 
 ### Added

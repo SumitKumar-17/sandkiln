@@ -54,6 +54,11 @@ user would actually write.
   unit tests for the pure modules, and a committed sample under `results/`.
   Reads `/status` directly because the SDK's `getStatus` is newer than the
   pinned 0.12.0. Run via `scripts/dev.sh bench-suite`.
+- `github-actions/` — workflows and a sample project for the in-repo
+  `.github/actions/sandkiln-run` composite action (tests untrusted pull-request
+  code in a deny-all-egress microVM). Uses the `kiln` CLI, not the SDK, and is
+  linted by `.github/workflows/ci-actions.yml`. Live-verified via the action's
+  `run.sh`; not yet run on GitHub.
 
 ## Conventions
 
