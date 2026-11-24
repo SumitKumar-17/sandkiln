@@ -21,6 +21,12 @@ pub fn handle(req: Request) -> Response {
             Ok(()) => Response::Ok,
             Err(e) => Response::Error { message: e.to_string() },
         },
+        Request::ResumeFixup { unix_secs, unix_nanos, entropy_base64 } => {
+            match crate::fixup::apply(unix_secs, unix_nanos, &entropy_base64) {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error { message: e },
+            }
+        }
         Request::StopTunnel { tunnel_id } => {
             crate::tunnel::stop(&tunnel_id);
             Response::Ok

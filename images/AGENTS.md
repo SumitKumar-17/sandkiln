@@ -12,7 +12,8 @@ cleanup trap on anything that mounts/chroots).
   even CA certificates) — kept for a fast manual sanity check only.
 - `inject-agent.sh` — bakes the guest agent into a rootfs (mount, copy to
   `/usr/local/bin/`, install + enable a systemd service). Works against
-  any systemd rootfs.
+  any systemd rootfs. `--init` points `/sbin/init` at the agent instead
+  (PID 1 mode, opt-in, run it on a copy of the image; see `README.md`).
 - `build-guest-kernel.sh` — rebuilds `vmlinux` with `CONFIG_FUSE_FS`
   enabled (off in Firecracker's default/CI configs; guest kernels can't
   load modules at runtime), from Firecracker's published recommended

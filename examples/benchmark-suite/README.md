@@ -52,6 +52,7 @@ From the repo root, `scripts/dev.sh bench-suite [args]` does the same (and runs
 | `--base-url`, `--token` | env `SANDKILN_DAEMON_URL`, `SANDKILN_AUTH_TOKEN`, then `http://127.0.0.1:7777` | which daemon |
 | `--hardware LABEL` | none | hardware description stored in the result |
 | `--json FILE`, `--markdown FILE` | none | write the result files |
+| `--image ID` | daemon default | boot every sandbox from this registered image (`kiln image create`), to compare images; recorded in the result |
 | `--allow-busy` | off | run even when the daemon has live sandboxes |
 
 The suite refuses to start when `/status` shows live sandboxes, because other

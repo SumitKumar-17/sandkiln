@@ -23,9 +23,9 @@ the [benchmark suite](../../examples/benchmark-suite/README.md).
 
 ## Next, in priority order
 
-### 1. Per-clone fixups after resume (Correctness, blocks item 2)
+### 1. Per-clone fixups after resume (Correctness, shipped; unblocks item 2)
 The latency research found that a resumed guest reseeds neither its entropy pool nor its clock (guest kernel 5.10 has no vmgenid reseed), so clones of one snapshot are not unique and a resumed clock is stale. Add a fixup request to the guest protocol that the daemon sends after every resume, claim and fork: reseed the RNG with host entropy, set the wall clock from the host, refresh hostname and id.
-Verify: two forks of one snapshot produce different `/dev/urandom` streams and agree with the host clock within a second; integration topic.
+Shipped as `Request::ResumeFixup`; verified by integration topic `28-resume-fixup` (clone clock within 2s of the host after a 5s pause, two forks read different random bytes and kernel UUIDs).
 
 ### 2. Warm path by default: a user-visible create is a resume (Latency, high)
 A resumed sandbox answers its first command in about 8ms against 214ms cold, so the biggest user-visible win is not a faster boot but never booting on the request path. Add a `default_pool_warm_count` setting that keeps warm instances of the default profile ready without the operator creating a pool, replenished in the background, and report warm hits and misses in `/status` and `/metrics`.

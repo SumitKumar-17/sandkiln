@@ -2,14 +2,13 @@
 //!
 //! The filesystem is the source of truth (same pattern as `DriveStore::list`):
 //! `reconcile` scans the hot and archive roots, `load_one` validates one
-//! directory and re-reserves its network lease. A directory missing any of its
+//! directory and re-reserves its IP lease. A directory missing any of its
 //! three files, or with unreadable metadata, is skipped with a warning and left
 //! on disk for manual inspection.
 
 use super::{Snapshot, SnapshotMeta};
 use crate::snapshots::layout::{mem_path, meta_path, snapshots_root, state_path};
-use sandkiln_vmm::network::NetworkManager;
-use sandkiln_vmm::vm::NetworkConfig;
+use sandkiln_vmm::network::{GuestAddr, NetworkManager};
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -21,7 +20,7 @@ use std::time::{Duration, UNIX_EPOCH};
 /// snapshots durable across a restart, mirroring `DriveStore::list()`'s
 /// "filesystem is the source of truth" pattern. Call once at startup,
 /// before the HTTP listener binds and before any `NetworkManager::lease()`
-/// can race a reconciled snapshot's tap device. `archive_root` is always
+/// can race a reconciled snapshot's IP. `archive_root` is always
 /// scanned regardless of whether `Config::archive_timeout` is currently
 /// set — turning it off must not orphan snapshots already archived.
 ///
@@ -130,13 +129,11 @@ fn load_one(dir: &Path, id: &str, network: &NetworkManager) -> Option<Snapshot> 
         return None;
     }
 
-    let config = NetworkConfig {
-        tap_device: meta.tap_device,
-        guest_ip: meta.guest_ip,
-        gateway_ip: meta.gateway_ip,
-        guest_mac: meta.guest_mac,
-    };
-    let lease = network.reserve(config, meta.host_octet);
+    // Only the identity is re-reserved. Any `tap_device` an older meta.json
+    // recorded is ignored: no tap is held across a snapshot, and the saved
+    // name is meaningless after a restart (the tap may belong to anyone now).
+    let addr = GuestAddr { guest_ip: meta.guest_ip, gateway_ip: meta.gateway_ip, guest_mac: meta.guest_mac };
+    let lease = network.reserve_ip(addr, meta.host_octet);
 
     Some(Snapshot {
         id: meta.id,
@@ -175,7 +172,6 @@ mod tests {
             id: id.to_string(),
             source_sandbox_id: "sandbox-1".to_string(),
             rootfs_path: PathBuf::from("/tmp/sandkiln-rootfs-1.ext4"),
-            tap_device: "tapA".to_string(),
             guest_ip: "172.16.0.5".parse::<Addr>().unwrap(),
             gateway_ip: "172.16.0.1".parse::<Addr>().unwrap(),
             guest_mac: "AA:FC:00:00:05:05".to_string(),
@@ -236,9 +232,8 @@ mod tests {
             snapshot_path: state_path(&real.dir),
             mem_file_path: mem_path(&real.dir),
             rootfs_path: PathBuf::from("/tmp/sandkiln-rootfs-9.ext4"),
-            network: network.reserve(
-                NetworkConfig {
-                    tap_device: "tapA".to_string(),
+            network: network.reserve_ip(
+                GuestAddr {
                     guest_ip: "172.16.0.9".parse().unwrap(),
                     gateway_ip: "172.16.0.1".parse().unwrap(),
                     guest_mac: "AA:FC:00:00:09:09".to_string(),
@@ -275,7 +270,7 @@ mod tests {
         assert_eq!(loaded.id, real.id);
         assert_eq!(loaded.source_sandbox_id, "sandbox-9");
         assert_eq!(loaded.rootfs_path, PathBuf::from("/tmp/sandkiln-rootfs-9.ext4"));
-        assert_eq!(loaded.network.config.tap_device, "tapA");
+        assert_eq!(loaded.network.addr.guest_ip, "172.16.0.9".parse::<Addr>().unwrap());
         assert_eq!(loaded.network.host_octet(), 9);
         assert_eq!(
             loaded.attached_drives,
@@ -302,10 +297,11 @@ mod tests {
             }]
         );
 
-        // The reconciled snapshot's tap must be pulled out of the fresh
-        // manager's free pool — the actual double-lease-prevention
-        // property under test here.
-        assert!(!fresh_network.free_tap_devices().contains(&"tapA".to_string()));
+        // The reconciled snapshot's IP must leave the fresh manager's free
+        // pool (double-lease prevention) and its taps must stay free: a
+        // snapshot holds none.
+        assert_eq!(fresh_network.free_ip_count(), 252);
+        assert_eq!(fresh_network.free_tap_devices().len(), 2);
     }
 
     #[test]
@@ -485,20 +481,50 @@ mod tests {
     }
 
     #[test]
-    fn load_one_reserves_the_snapshots_tap_and_host_octet_out_of_the_pool() {
+    fn load_one_reserves_the_snapshots_ip_but_no_tap() {
         let t = TempDir::new("reserves-pool");
         let dir = t.path.join("snap-reserve");
         write_full_snapshot_dir(&dir, &sample_meta("snap-reserve"));
 
         let network = test_network(["tapA".to_string(), "tapB".to_string()]);
         let loaded = load_one(&dir, "snap-reserve", &network).expect("valid snapshot must reconcile");
-        assert_eq!(loaded.network.config.tap_device, "tapA");
+        assert_eq!(loaded.network.host_octet(), 5);
 
-        assert!(
-            !network.free_tap_devices().contains(&"tapA".to_string()),
-            "reconciling a snapshot must remove its held tap from the live pool so a later \
-             live lease() cannot double-hand it to a different sandbox"
+        assert_eq!(network.free_ip_count(), 252, "the snapshot's host octet must leave the pool");
+        assert_eq!(
+            network.free_tap_devices(),
+            vec!["tapA".to_string(), "tapB".to_string()],
+            "a held snapshot must not consume a tap: every one stays leasable"
         );
-        assert!(network.free_tap_devices().contains(&"tapB".to_string()));
+    }
+
+    /// A restart may find a saved tap name that is no longer in the pool at
+    /// all (smaller `tap_pool_size`, different prefix): that must not matter.
+    #[test]
+    fn load_one_ignores_a_saved_tap_name_that_is_not_in_the_pool() {
+        let t = TempDir::new("stale-tap-name");
+        let dir = t.path.join("snap-stale-tap");
+        let legacy = serde_json::json!({
+            "id": "snap-stale-tap",
+            "source_sandbox_id": "sandbox-1",
+            "rootfs_path": "/tmp/sandkiln-rootfs-1.ext4",
+            "tap_device": "tap-from-a-previous-config",
+            "guest_ip": "172.16.0.5",
+            "gateway_ip": "172.16.0.1",
+            "guest_mac": "AA:FC:00:00:05:05",
+            "host_octet": 5,
+            "attached_drives": [],
+            "tags": {},
+            "created_at_unix": 1_700_000_000_u64,
+        });
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(meta_path(&dir), serde_json::to_vec(&legacy).unwrap()).unwrap();
+        fs::write(state_path(&dir), b"state").unwrap();
+        fs::write(mem_path(&dir), b"mem").unwrap();
+
+        let network = test_network(["tapA".to_string()]);
+        let loaded = load_one(&dir, "snap-stale-tap", &network).expect("a stale tap name must not block reconcile");
+        assert_eq!(loaded.network.addr.guest_ip, "172.16.0.5".parse::<Addr>().unwrap());
+        assert_eq!(network.free_tap_devices(), vec!["tapA".to_string()]);
     }
 }

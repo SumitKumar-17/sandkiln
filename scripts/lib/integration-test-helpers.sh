@@ -16,10 +16,28 @@ extract() {
   fi
 }
 
+with_test_image() {
+  # with_test_image <json-body> — when SANDKILN_INTEGRATION_TEST_IMAGE names a
+  # registered image, adds it as "image_id" to a sandbox- or pool-create body that
+  # does not already pick one, so the whole suite can run against a
+  # non-default image (e.g. the init-mode image) without editing any topic.
+  local body="$1"
+  if [ -z "${SANDKILN_INTEGRATION_TEST_IMAGE:-}" ] || [[ "$body" == *'"image_id"'* ]] || [[ "$body" != "{"* ]]; then
+    printf '%s' "$body"
+  elif [ "$body" = "{}" ]; then
+    printf '{"image_id":"%s"}' "$SANDKILN_INTEGRATION_TEST_IMAGE"
+  else
+    printf '{"image_id":"%s",%s' "$SANDKILN_INTEGRATION_TEST_IMAGE" "${body#\{}"
+  fi
+}
+
 req() {
   # req <method> <path> [json-body] — writes the response body to
   # $WORKDIR/resp.json, prints the HTTP status code.
   local method="$1" path="$2" data="${3:-}"
+  if [ "$method" = POST ] && { [ "$path" = /sandboxes ] || [ "$path" = /pools ]; } && [ -n "$data" ]; then
+    data="$(with_test_image "$data")"
+  fi
   if [ -n "$data" ]; then
     curl -s -o "$WORKDIR/resp.json" -w '%{http_code}' -X "$method" "$BASE_URL$path" \
       -H 'Content-Type: application/json' "${AUTH_HEADER[@]}" -d "$data"

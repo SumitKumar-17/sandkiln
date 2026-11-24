@@ -3,7 +3,7 @@
 //! Owns `stop_sandbox_by_id`, the shared stop path behind `DELETE` and the
 //! idle reaper and shutdown (snapshot-then-stop by default, destroy for
 //! `keep=false` or when there is nothing to preserve), `destroy_sandbox_by_id`
-//! (full teardown: VM, lease, egress chain, rootfs, jail id, fork lock) and the
+//! (full teardown: VM, lease or fork tap, egress chain, rootfs, jail id, fork lock) and the
 //! HTTP-free `StopOutcome`/`StopError` result types.
 
 use crate::snapshots::ops::take::{snapshot_and_stop, SnapshotBlocked, SnapshotStopError};
@@ -73,9 +73,9 @@ pub(crate) async fn stop_sandbox_by_id(state: Arc<AppState>, id: String, keep: b
 /// `keep=false`, or internally when `keep=true` has nothing new to
 /// preserve for a fork.
 ///
-/// A forked sandbox (`source_snapshot_id.is_some()`) doesn't own its
-/// rootfs or lease — both still belong to the snapshot, so neither is
-/// touched here. What it does release is the snapshot's fork lock
+/// A forked sandbox (`source_snapshot_id.is_some()`) doesn't own the guest's
+/// IP — it still belongs to the snapshot, so it is left alone; the fork's own
+/// tap and egress chain are returned. It also releases the snapshot's fork lock
 /// (`Snapshot::forked_into`), unblocking a later `/fork`/`/resume` — but
 /// only after `vm.stop()` returns (kills and waits on the process), so a
 /// new fork can't start writing the shared rootfs before the old one has
@@ -97,13 +97,17 @@ async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopO
         let state = state.clone();
         move || {
             let _ = sandbox.vm.stop();
+            // The egress chain (if any) goes before its tap is returned: it is
+            // keyed by the tap, which the next sandbox to lease it must not
+            // inherit. Safe even if no policy was ever applied — see
+            // `egress::remove`.
             if let Some(network) = sandbox.network {
-                // This sandbox's egress chain (if any) goes before the
-                // lease is released, matching "removed only when the
-                // lease is released." Safe even if no policy was ever
-                // applied — see `egress::remove`.
                 sandkiln_vmm::egress::remove(network.config.guest_ip, &network.config.tap_device, state.network.uplink());
-                let _ = state.network.release(network);
+                state.network.release(network);
+            }
+            if let Some(fork) = sandbox.fork_network {
+                sandkiln_vmm::egress::remove(fork.guest_ip, fork.tap.device(), state.network.uplink());
+                state.network.release_tap(fork.tap);
             }
             // Every `Sandbox` owns a private rootfs outright (a fork
             // gets its own clone at fork time — see

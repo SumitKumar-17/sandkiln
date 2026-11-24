@@ -6,7 +6,8 @@ Kernel and rootfs build scripts for sandbox base images.
   Firecracker's public CI artifacts, for manual boot testing. Not a
   production image source.
 - `inject-agent.sh` — bakes the guest agent binary into a rootfs image and
-  enables it as a systemd service.
+  enables it as a systemd service. `--init` instead makes the agent the
+  guest's PID 1 (see "Init-mode image" below).
 - `build-guest-kernel.sh` — rebuilds `vmlinux` with `CONFIG_FUSE_FS`
   enabled (off by default; guest kernels can't load modules at runtime).
   Only needed for remote storage mounts — most sandboxes don't need it.
@@ -42,6 +43,34 @@ Still open: **OCI conversion** — turning a Docker/OCI image into a
 bootable ext4 rootfs (layers, entrypoint, etc.) — see "Base and custom
 images" in `ROADMAP.md`. That remains a separate, larger problem than
 registering an image that's already built.
+
+## Init-mode image (opt-in, faster cold start)
+
+`sudo images/inject-agent.sh --init <agent-binary> <copy-of-rootfs.ext4>`
+points `/sbin/init` at the agent, so the kernel starts it as PID 1 and
+systemd never runs. The agent mounts the pseudo filesystems, sets the
+hostname, brings loopback up and reaps orphans itself (`core/crates/guest-agent/src/init/`).
+Always run it on a **copy**: the default images are untouched, and the copy is
+registered and selected per sandbox like any custom image:
+
+```
+cp --reflink=auto base.ext4 base-init.ext4        # keep it on the reflink filesystem
+sudo images/inject-agent.sh --init core/target/x86_64-unknown-linux-musl/release/sandkiln-agent base-init.ext4
+kiln image create init-agent base-init.ext4        # then: kiln sandbox create --image init-agent
+```
+
+Measured on the dev box, cold `create_to_first_command` median 230ms with the
+systemd image against 147ms with this one (see `docs/benchmarks.md`). One
+operational catch: the daemon copies a registered image into `images_dir`;
+if that directory is not on the filesystem that supports reflink, every
+create pays a full 300MB copy and the gain disappears (create call 22ms ->
+98ms measured). Point `images_dir` at the reflink volume. Re-running
+`inject-agent.sh` without `--init` on the same file restores systemd.
+
+What an init-mode guest does not have: systemd units (services baked into the
+image never start), journald, `systemctl`/`poweroff` talking to a manager
+(send `SIGTERM` to PID 1 or `reboot -f`), and the ssh service. Not yet
+verified: remote storage mounts (needs the FUSE kernel and an object store).
 
 Built artifacts (kernels, rootfs images) are not committed — see
 `.gitignore` — they're large binary blobs that get rebuilt or fetched, not

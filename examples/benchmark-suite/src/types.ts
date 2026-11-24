@@ -42,6 +42,8 @@ export interface RunOptions {
   iterations: number;
   concurrency: number;
   execSamples: number;
+  /** Registered image every sandbox booted from; null is the daemon default. */
+  imageId: string | null;
 }
 
 export interface BenchmarkResult {

@@ -191,7 +191,7 @@ else
   # DELETE below, then more `req` calls afterward) would race and
   # clobber while this is still in flight.
   curl -s -o "$WORKDIR/pool-max-2-resp.json" -X POST "$BASE_URL/sandboxes" \
-    -H 'Content-Type: application/json' "${AUTH_HEADER[@]}" -d "{\"name\":\"it-pool-max-2-$$\"}" &
+    -H 'Content-Type: application/json' "${AUTH_HEADER[@]}" -d "$(with_test_image "{\"name\":\"it-pool-max-2-$$\"}")" &
   QUEUED_PID=$!
   sleep 4
   if kill -0 "$QUEUED_PID" 2>/dev/null; then

@@ -36,18 +36,32 @@ else
   fi
   wait "$slow_pid" 2>/dev/null || true
 
-  started=$(date +%s%N)
-  status="$(req POST "/sandboxes/$SBX_LONG/snapshot")"
-  elapsed_ms=$(( ($(date +%s%N) - started) / 1000000 ))
-  assert_status "snapshot the sandbox" 200 "$status"
-  SNAP_LONG="$(extract snapshot_id < "$WORKDIR/resp.json")"
-  # The bug cost 6.5s+ on an idle box (the doomed guest sync); a snapshot writes the
-  # whole guest memory, so under the suite's 4-way parallelism a healthy one can
-  # take ~4s. 5.5s separates the two; the idle-box figure is 0.56s.
-  if [ "$elapsed_ms" -lt 5500 ]; then
-    pass "snapshot request took ${elapsed_ms}ms (was ~6800ms when it waited on a doomed guest sync)"
+  # The bug (stopping a paused VM waited on a guest sync it can never answer)
+  # cost 6.5s+ on EVERY snapshot, while load only slows a snapshot some of the
+  # time: a snapshot writes the whole guest memory and 10s has been seen under
+  # the suite's parallelism. So the check passes if any of up to three
+  # snapshots is fast, and fails only if all are slow. An idle box takes ~0.6s.
+  fast_ms=""
+  for attempt in 1 2 3; do
+    if [ "$attempt" -gt 1 ]; then
+      status="$(req POST /sandboxes '{"tags":{"suite":"integration","case":"long-exec-retry"}}')"
+      SBX_LONG="$(extract id < "$WORKDIR/resp.json")"
+      [ -z "$SBX_LONG" ] && break
+      CREATED_SANDBOXES+=("$SBX_LONG")
+    fi
+    started=$(date +%s%N)
+    status="$(req POST "/sandboxes/$SBX_LONG/snapshot")"
+    elapsed_ms=$(( ($(date +%s%N) - started) / 1000000 ))
+    SNAP_LONG="$(extract snapshot_id < "$WORKDIR/resp.json")"
+    if [ "$attempt" -eq 1 ]; then assert_status "snapshot the sandbox" 200 "$status"; fi
+    if [ "$elapsed_ms" -lt 5500 ]; then fast_ms="$elapsed_ms"; break; fi
+    CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_LONG}")
+    [ -n "$SNAP_LONG" ] && { req DELETE "/snapshots/$SNAP_LONG" >/dev/null; SNAP_LONG=""; }
+  done
+  if [ -n "$fast_ms" ]; then
+    pass "snapshot request took ${fast_ms}ms (was ~6800ms when it waited on a doomed guest sync)"
   else
-    fail "snapshot request took ${elapsed_ms}ms: stopping the paused VM is waiting on a guest sync again"
+    fail "every snapshot attempt took over 5.5s: stopping the paused VM is waiting on a guest sync again"
   fi
   CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_LONG}")
   [ -n "$SNAP_LONG" ] && { req DELETE "/snapshots/$SNAP_LONG" >/dev/null; }

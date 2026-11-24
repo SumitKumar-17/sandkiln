@@ -12,6 +12,7 @@ use crate::snapshots::held::Snapshot;
 use crate::snapshots::layout::snapshot_dir;
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
+use sandkiln_vmm::network::IpLease;
 use std::sync::Arc;
 use std::time::SystemTime;
 use uuid::Uuid;
@@ -75,9 +76,12 @@ impl From<SnapshotStopError> for AppError {
 
 /// Pauses the VM, snapshots to disk, stops the process — the sandbox
 /// stops existing as a live `Sandbox` and a `Snapshot` (same `name`, if
-/// any) takes its place. Network lease and rootfs aren't
+/// any) takes its place. The rootfs and the guest's IP aren't
 /// released/removed (unlike a full destroy): both move to the
-/// `Snapshot` for `resume_snapshot_by_id`/`fork_snapshot` to hand on.
+/// `Snapshot` for `resume_snapshot_by_id`/`fork_snapshot` to hand on. The
+/// **tap** goes back to the pool the moment the VM is dead — a held snapshot
+/// must not pin one — and so does the sandbox's egress chain, which is keyed
+/// by that tap; resume leases a free tap and re-applies the policy to it.
 ///
 /// Shared by `snapshot_sandbox` (explicit), `stop_sandbox_by_id`
 /// (preserve-by-default), and `idle_reaper`'s auto-suspend — one place
@@ -112,36 +116,42 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
     let mem_file_path = dir.join("mem.bin");
 
     let result = spawn_blocking_in_current_span("snapshot task panicked", {
+        let state = state.clone();
         let dir = dir.clone();
         let snapshot_path = snapshot_path.clone();
         let mem_file_path = mem_file_path.clone();
-        move || -> std::io::Result<()> {
-            std::fs::create_dir_all(&dir)?;
-            let outcome = vm.pause().and_then(|_| vm.snapshot(&mem_file_path, &snapshot_path));
+        move || -> std::io::Result<IpLease> {
+            let outcome = std::fs::create_dir_all(&dir)
+                .and_then(|_| vm.pause())
+                .and_then(|_| vm.snapshot(&mem_file_path, &snapshot_path));
             // Either way this VM is done — a paused VM that failed to
             // snapshot can't be handed back as still-running. `force_stop`,
             // not `stop`: stop() first sends a guest `sync`, which a paused
             // guest can never answer, so it only added a ~6s timeout to every
             // snapshot (6.8s measured end to end, ~0.5s of real work).
             let _ = vm.force_stop();
-            outcome
+            // The guest is dead, so its tap is free and its egress chain
+            // (keyed by that tap) is moot. Both go now whatever happened.
+            sandkiln_vmm::egress::remove(network.config.guest_ip, &network.config.tap_device, state.network.uplink());
+            match outcome {
+                Ok(()) => Ok(state.network.detach(network)),
+                Err(e) => {
+                    state.network.release(network);
+                    Err(e)
+                }
+            }
         }
     })
     .await;
 
-    if let Err(e) = result {
-        let _ = std::fs::remove_dir_all(&dir);
-        let cleanup_state = state.clone();
-        spawn_blocking_in_current_span("cleanup task panicked", move || {
-            // Lease is fully released here (not left dormant), so the
-            // egress chain goes with it. No-op if there was never one.
-            sandkiln_vmm::egress::remove(network.config.guest_ip, &network.config.tap_device, cleanup_state.network.uplink());
-            let _ = cleanup_state.network.release(network);
+    let network = match result {
+        Ok(ip) => ip,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dir);
             let _ = std::fs::remove_file(&rootfs_path);
-        })
-        .await;
-        return Err(SnapshotStopError::Io(e));
-    }
+            return Err(SnapshotStopError::Io(e));
+        }
+    };
 
     let snapshot = Snapshot {
         id: snapshot_id.clone(),
@@ -183,7 +193,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
         let _ = std::fs::remove_dir_all(&dir);
         let cleanup_state = state.clone();
         tokio::task::spawn_blocking(move || {
-            let _ = cleanup_state.network.release(snapshot.network);
+            cleanup_state.network.release_ip(snapshot.network);
             let _ = std::fs::remove_file(&snapshot.rootfs_path);
         })
         .await

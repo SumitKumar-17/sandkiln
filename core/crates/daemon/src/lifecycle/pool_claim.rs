@@ -250,7 +250,11 @@ async fn destroy_unhealthy_claim(state: &Arc<AppState>, id: String) {
         let state = state.clone();
         move || {
             if let Some(lease) = sandbox.network {
-                let _ = state.network.release(lease);
+                // An egress chain may already be installed (the claim applies
+                // it before its last fallible step); it is keyed by the tap
+                // about to be returned.
+                sandkiln_vmm::egress::remove(lease.config.guest_ip, &lease.config.tap_device, state.network.uplink());
+                state.network.release(lease);
             }
             let _ = std::fs::remove_file(&sandbox.rootfs_path);
             // force_stop, not stop -- the health check already proved

@@ -77,20 +77,6 @@ pub struct RestoreSnapshotHistoryResponse {
     id: String,
 }
 
-/// RAII for `try_reserve_pending_tap_restore`/`release_pending_tap_restore`
-/// — releases on drop, covering every exit path. Mirrors
-/// `lifecycle::create::PendingImageBootGuard`.
-struct PendingTapRestoreGuard {
-    state: Arc<AppState>,
-    tap_device: String,
-}
-
-impl Drop for PendingTapRestoreGuard {
-    fn drop(&mut self) {
-        self.state.release_pending_tap_restore(&self.tap_device);
-    }
-}
-
 /// Thin HTTP wrapper; see `restore_snapshot_history_by_id` for the
 /// mechanics.
 #[tracing::instrument(skip(state))]
@@ -104,30 +90,16 @@ pub async fn restore_snapshot_history(
 
 /// Does **not** consume the checkpoint — "rewind," not "pop," it stays in
 /// `AppState::retired_snapshots`, restorable again later. The resulting
-/// sandbox owns everything outright: a freshly reserved lease (guarded
-/// below since, unlike startup reconciliation, a restore can race live use
-/// of the same tap device) and its own private rootfs clone (never the
+/// sandbox owns everything outright: the checkpoint's guest IP, claimed
+/// atomically below (a restore can race live use of the same address, or a
+/// sibling checkpoint of the lineage), a tap leased fresh at resume time (the
+/// checkpoint froze none), and its own private rootfs clone (never the
 /// checkpoint's file, so nothing it does can corrupt future restores) —
 /// so unlike a fork it stays snapshottable: `source_snapshot_id: None`,
 /// resume's convention. `parent_snapshot_id` records where it came from.
 pub(crate) async fn restore_snapshot_history_by_id(state: Arc<AppState>, id: String) -> Result<String, AppError> {
     let retired: RetiredSnapshot =
         state.retired_snapshots.lock().unwrap().get(&id).cloned().ok_or_else(|| AppError::NotFound(id.clone()))?;
-
-    if let Some(holder) = state.tap_device_holder(&retired.network.tap_device) {
-        return Err(AppError::Conflict(format!(
-            "checkpoint {id}'s network identity is currently in use by {holder} — stop or destroy it first"
-        )));
-    }
-    // Atomic claim-or-refuse: closes the race between two sibling retired
-    // checkpoints (same tap device) both restoring at once -- the check
-    // above already covers a live sandbox/held snapshot conflict.
-    if !state.try_reserve_pending_tap_restore(&retired.network.tap_device) {
-        return Err(AppError::Conflict(format!(
-            "another restore is already in progress for checkpoint {id}'s network identity — try again shortly"
-        )));
-    }
-    let _tap_guard = PendingTapRestoreGuard { state: state.clone(), tap_device: retired.network.tap_device.clone() };
 
     // A checkpoint's name is inert while it sits in history (destroying
     // its holder frees the name for reuse, on purpose), so restoring must
@@ -145,16 +117,34 @@ pub(crate) async fn restore_snapshot_history_by_id(state: Arc<AppState>, id: Str
         None => None,
     };
 
+    // Claimed before the slow clone/resume so the identity is held throughout.
+    // `try_reserve_ip` takes the octet out of the free pool atomically, so
+    // exactly one of two concurrent restores of one lineage (its checkpoints
+    // share an IP) gets it, as does a live sandbox against a restore.
+    let guest_ip = retired.addr.guest_ip;
+    let ip_lease = match state.network.try_reserve_ip(retired.addr.clone(), retired.host_octet) {
+        Some(lease) => lease,
+        None => {
+            let holder = state.guest_ip_holder(guest_ip).unwrap_or_else(|| "another restore or a sandbox being created".to_string());
+            return Err(AppError::Conflict(format!(
+                "checkpoint {id}'s guest IP {guest_ip} is currently in use by {holder} — stop or destroy it first"
+            )));
+        }
+    };
+
     let new_id = Uuid::new_v4().to_string();
     let new_rootfs_path = crate::storage::rootfs_path(&new_id);
-    spawn_blocking_in_current_span("restore rootfs clone task panicked", {
+    if let Err(e) = spawn_blocking_in_current_span("restore rootfs clone task panicked", {
         let source = retired.rootfs_path.clone();
         let dest = new_rootfs_path.clone();
         let state = state.clone();
         move || crate::lifecycle::create::clone_rootfs(&source, &dest, &state.metrics)
     })
     .await
-    .map_err(AppError::from)?;
+    {
+        state.network.release_ip(ip_lease);
+        return Err(AppError::from(e));
+    }
 
     // `Some(clone)`: the restored VM writes to its own disk, never the retired
     // checkpoint's, which must stay pristine so it can be restored again.
@@ -165,22 +155,23 @@ pub(crate) async fn restore_snapshot_history_by_id(state: Arc<AppState>, id: Str
         Some(new_rootfs_path.clone()),
     )
     .await;
-    let vm = match result {
-        Ok(vm) => vm,
+    let (vm, tap) = match result {
+        Ok(resumed) => resumed,
         Err(e) => {
             let _ = std::fs::remove_file(&new_rootfs_path);
+            state.network.release_ip(ip_lease);
             return Err(AppError::from(e));
         }
     };
 
-    let lease = state.network.reserve(retired.network.clone(), retired.host_octet);
-    let guest_ip = lease.config.guest_ip;
+    let lease = ip_lease.with_tap(tap);
     let tap_device = lease.config.tap_device.clone();
 
     let sandbox = Sandbox {
         id: new_id.clone(),
         vm,
         network: Some(lease),
+        fork_network: None,
         rootfs_path: new_rootfs_path,
         attached_drives: retired.attached_drives.clone(),
         image_id: retired.image_id.clone(),

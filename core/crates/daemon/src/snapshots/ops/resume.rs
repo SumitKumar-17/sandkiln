@@ -13,6 +13,7 @@ use crate::snapshots::held::Snapshot;
 use crate::snapshots::retired::RetiredSnapshot;
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
+use sandkiln_vmm::network::TapLease;
 use sandkiln_vmm::vm::{ResumeConfig, Vm};
 use std::io;
 use std::path::PathBuf;
@@ -70,7 +71,7 @@ fn retire_snapshot_files(snapshot: &Snapshot, old_snapshot_dir: Option<&std::pat
         snapshot_path: new_state,
         mem_file_path: new_mem,
         rootfs_path: snapshot.rootfs_path.clone(),
-        network: snapshot.network.config.clone(),
+        addr: snapshot.network.addr.clone(),
         host_octet: snapshot.network.host_octet(),
         attached_drives: snapshot.attached_drives.clone(),
         image_id: snapshot.image_id.clone(),
@@ -167,8 +168,8 @@ pub(crate) async fn resume_snapshot_by_id(
 
     let result = resume_vm(&state, snapshot.snapshot_path.clone(), snapshot.mem_file_path.clone(), private_rootfs.clone()).await;
 
-    let vm = match result {
-        Ok(vm) => vm,
+    let (vm, tap) = match result {
+        Ok(resumed) => resumed,
         Err(e) => {
             if let Some(clone) = &private_rootfs {
                 let _ = std::fs::remove_file(clone);
@@ -221,16 +222,18 @@ pub(crate) async fn resume_snapshot_by_id(
         (Ok(Some(_)), None) | (Err(_), None) => unreachable!("history is only retained when a private rootfs clone exists"),
     };
 
-    // Captured before `snapshot.network`/`snapshot.egress` move into the
-    // `Sandbox` literal below.
+    // The snapshot's IP plus the tap just leased: the sandbox owns both from
+    // here, and `snapshot.egress` is captured before it moves below.
     let egress = snapshot.egress.clone();
-    let guest_ip = snapshot.network.config.guest_ip;
-    let tap_device = snapshot.network.config.tap_device.clone();
+    let lease = snapshot.network.with_tap(tap);
+    let guest_ip = lease.config.guest_ip;
+    let tap_device = lease.config.tap_device.clone();
 
     let sandbox = Sandbox {
         id: new_id.clone(),
         vm,
-        network: Some(snapshot.network),
+        network: Some(lease),
+        fork_network: None,
         rootfs_path,
         attached_drives: snapshot.attached_drives,
         image_id: snapshot.image_id,
@@ -260,9 +263,9 @@ pub(crate) async fn resume_snapshot_by_id(
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
 
-    // Re-applied idempotently rather than assumed still installed —
-    // correct whether the chain survived (daemon restart) or needs
-    // recreating (host reboot wiped it). A failure here is a loud
+    // Applied to the tap this resume was just given: the chain is keyed by
+    // tap and was removed when the snapshot was taken. Idempotent, so also
+    // correct after a daemon restart or a host reboot that wiped it. A failure here is a loud
     // warning, not fatal: this snapshot is already consumed (one-way),
     // so destroying the freshly resumed sandbox over an iptables hiccup
     // would be real data loss for what's a best-effort hardening layer.
@@ -275,7 +278,7 @@ pub(crate) async fn resume_snapshot_by_id(
     Ok(new_id)
 }
 
-// `pub(crate)`: also used by `routes::snapshot_history`'s restore path —
+// `pub(crate)`: also used by fork and `routes::snapshot_history`'s restore path —
 // loading a VM from state.snap/mem.bin is identical whether those files
 // belong to a live `Snapshot` or a dormant `RetiredSnapshot`.
 ///
@@ -285,20 +288,40 @@ pub(crate) async fn resume_snapshot_by_id(
 /// the VM write into the snapshot's own disk, which is only correct when the
 /// snapshot is being consumed. Without this, a resumed VM silently corrupts
 /// the snapshot it came from (see `ResumeConfig::rootfs_override`).
+///
+/// Leases the tap the guest is plugged into and returns it with the VM: the
+/// snapshot holds no tap, so any free one will do (`ResumeConfig::tap_override`).
+/// A pool with none free fails the resume (`503`) and the snapshot stays
+/// intact; the tap goes back to the pool on any failure here, so the caller
+/// owns it only when this returns `Ok`.
 pub(crate) async fn resume_vm(
     state: &Arc<AppState>,
     snapshot_path: PathBuf,
     mem_file_path: PathBuf,
     rootfs_override: Option<PathBuf>,
-) -> std::io::Result<Vm> {
+) -> std::io::Result<(Vm, TapLease)> {
     let state = state.clone();
     spawn_blocking_in_current_span("resume task panicked", move || {
-        Vm::resume(&ResumeConfig {
+        let tap = state.network.lease_tap()?;
+        let vm = match Vm::resume(&ResumeConfig {
             firecracker_bin: state.config.firecracker_bin.clone(),
             snapshot_path,
             mem_file_path,
             rootfs_override,
-        })
+            tap_override: Some(tap.device().to_string()),
+        }) {
+            Ok(vm) => vm,
+            Err(e) => {
+                state.network.release_tap(tap);
+                return Err(e);
+            }
+        };
+        // Best effort: an older guest agent does not know the request, and a
+        // resume that otherwise worked is not worth failing over it.
+        if let Err(e) = vm.apply_resume_fixup() {
+            tracing::warn!(error = %e, "post-resume entropy and clock fixup failed");
+        }
+        Ok((vm, tap))
     })
     .await
 }

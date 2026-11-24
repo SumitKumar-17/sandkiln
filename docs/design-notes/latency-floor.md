@@ -157,10 +157,10 @@ reconnect or the health check is **not measured**; measure before acting.
 
 | # | Lever | Path | Expected gain | Effort | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Custom minimal init as PID 1 running the agent, replacing systemd | cold | about 100-120ms of the 125ms (estimate) | medium: init in the guest-agent crate or a tiny sibling, image build script, NIC setup moved in | not started (ROADMAP "What's next" 4) |
+| 1 | Custom minimal init as PID 1 running the agent, replacing systemd | cold | about 100-120ms of the 125ms (estimate) | medium: init in the guest-agent crate or a tiny sibling, image build script, NIC setup moved in | **built, opt-in per image, measured**: median to first command 232ms to 147ms (n=30 x 2 against 4 default runs), goal 110ms not met; remaining time is mostly the kernel. Not the default yet (see below). `images/inject-agent.sh --init` |
 | 2 | Pool as the default create path, with a refill policy, so `create` is a resume | both | cold users see 214ms to about 15-20ms; the largest user-visible win | medium: default profile, sizing, eviction, honest metrics for misses | partial: pools exist, opt-in per profile |
-| 3 | Per-clone fixups on claim: entropy reseed, clock set, hostname/id, boot id | warm | no latency gain, a correctness prerequisite for lever 2 | small-medium: agent RPC plus daemon call in the claim flow | not started |
-| 4 | Agent-initiated vsock readiness signal; `create` can block until ready | cold | about 0-20ms, and makes "200 means ready" true | small | not started (open question in startup latency) |
+| 3 | Per-clone fixups on claim: entropy reseed, clock set, hostname/id, boot id | warm | no latency gain, a correctness prerequisite for lever 2 | small-medium: agent RPC plus daemon call in the claim flow | done: `Request::ResumeFixup`, sent after every resume, claim and fork (finding 28) |
+| 4 | Agent-initiated vsock readiness signal; `create` can block until ready | cold | about 0-20ms, and makes "200 means ready" true | small | not started: needs a daemon and vmm change (host listens on the vsock UDS, create waits) which was outside the init change; with init mode the agent answers about 10-20ms after it starts and the poll backs off from 1ms, so the headroom is small, unmeasured |
 | 5 | Trimmed guest kernel config (drop unused drivers/features, keep virtio, vsock, ext4, fuse as needed) | cold | about 10-30ms estimate, **unverified** | medium: build and maintain a kernel; `build-guest-kernel.sh` exists for FUSE only | not started |
 | 6 | Read-only rootfs plus overlay (tmpfs upper) | cold, warm | little latency; smaller snapshot and diff, safe sharing | medium; affects drives and persistence semantics | not started |
 | 7 | Keep pool memory files hot in the page cache; fadvise/touch after take | warm | removes the disk-resident penalty (FaaSnap: up to 3.5x on cold-cache restores) | small | not started |
@@ -173,6 +173,30 @@ Already done and counted in the 214.5ms: reflink clone (124ms to 0.08ms),
 socket-wait backoff (20ms to 0.67ms), history WAL (1.9ms to 37us),
 `quiet loop.max_loop=1` (413ms to 214.5ms), concurrent clone and lease,
 pre-created tap pool, bounded vsock I/O, file-backed snapshot load.
+
+## Lever 1, result and what remains before it is the default
+
+Measured and recorded in [benchmarks](../benchmarks.md#init-mode-image-the-agent-as-pid-1-2026-11-24):
+`create_to_first_command` median 232ms to 147ms. The guest's own clock says
+init plus agent start is now a small share (the agent process starts at
+80-110ms of guest uptime, first command answered by 100-150ms); the rest is
+the kernel, which is lever 5 and the `ip=` interface bring-up. Milestone A's
+110ms target is therefore **not met**, and the estimate of "under 10ms of
+userspace" holds only if the kernel stage is ignored.
+
+The init-mode image is the recommended path for production latency today, as
+an opt-in image (`inject-agent.sh --init` on a copy, registered under a name),
+and the full integration suite passes on it (353/353). Before it can become
+the default image: (1) run the remote-mounts topic with a FUSE kernel and an
+object store on it; (2) decide what to do about images that depend on systemd
+units (`build-universal-image.sh` images: services such as cron, ssh or a
+user's own units do not start, `systemctl poweroff` has no manager); (3) make
+`build-universal-image.sh` and `scripts/dev.sh inject-agent` take `--init` so
+the image is reproducible rather than a hand-made copy; (4) apply the same to
+the pool and the `kiln doctor` path and re-run the parallel benchmark on an
+idle box; (5) look at guest entropy at cold boot (an init-mode guest has no
+systemd seeding the pool; the kernel's own jitter entropy covered the tests,
+but crypto-heavy first commands are unmeasured).
 
 ## Goals and how to measure them
 

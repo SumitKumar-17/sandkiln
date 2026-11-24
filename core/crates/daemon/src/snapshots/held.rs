@@ -10,7 +10,7 @@ pub mod reconcile;
 use crate::snapshots::layout::{mem_path, meta_path, move_file, state_path, write_atomically};
 use crate::state::{AttachedDrive, Mount};
 use sandkiln_vmm::egress::EgressPolicy;
-use sandkiln_vmm::network::Lease;
+use sandkiln_vmm::network::IpLease;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -36,11 +36,14 @@ pub struct Snapshot {
     /// resume (ownership passes to the new sandbox) or deletion (file
     /// removed).
     pub rootfs_path: PathBuf,
-    /// Held, not released to `NetworkManager`'s pool: guest IP/MAC are
-    /// frozen into the snapshotted memory image via boot-time kernel args,
-    /// so a resume must reattach this exact tap device, never a fresh
-    /// lease. See `Vm::resume`.
-    pub network: Lease,
+    /// The guest's IP/MAC identity, held out of `NetworkManager`'s pool: it
+    /// is frozen into the snapshotted memory image via boot-time kernel args,
+    /// so a resume must present this exact address. **No tap device** is held
+    /// — the guest needs one only while it runs, so a snapshot costs an
+    /// address from the /24 and nothing from the tap pool; resume plugs the
+    /// guest into whichever tap is free (`ResumeConfig::tap_override`). See
+    /// `docs/findings.md`, finding 29.
+    pub network: IpLease,
     /// Carried over from the source sandbox, read-only flag included — a
     /// drive's data lives inside the snapshotted state the same way
     /// network config does, so attaching a read-write copy elsewhere
@@ -57,11 +60,11 @@ pub struct Snapshot {
     /// (once resumed) or `get-or-create`.
     pub name: Option<String>,
     /// Live sandbox currently forked from this snapshot without consuming
-    /// it, if any. A resume reopens the exact rootfs file and (if
-    /// networked) the exact tap device this snapshot records, both frozen
-    /// at the source's original boot — a second live descendant sharing
-    /// either means two Firecracker processes writing one rootfs file, or
-    /// two guests presenting the same IP/MAC on the bridge at once. This
+    /// it, if any. A resume reopens the exact rootfs file and presents
+    /// the exact IP/MAC this snapshot records, both frozen at the source's
+    /// original boot — a second live descendant sharing either means two
+    /// Firecracker processes writing one rootfs file, or two guests
+    /// presenting the same IP/MAC on the bridge at once. This
     /// field is the lock ruling both out: set while a fork is resumed,
     /// cleared only once that descendant's `Vm` is killed
     /// (`stop_sandbox_by_id`), checked by `fork_snapshot`/
@@ -102,7 +105,9 @@ pub struct Snapshot {
 /// `Snapshot::persist`, read back by `reconcile` at startup — this file's
 /// existence is what makes a `Snapshot` durable across a restart, the
 /// same "filesystem is the source of truth" convention
-/// `sandkiln_vmm::drive` uses. Every `#[serde(default)]` field below was
+/// `sandkiln_vmm::drive` uses. A `tap_device` key written by an older daemon
+/// is ignored on read: a snapshot no longer owns a tap. Every
+/// `#[serde(default)]` field below was
 /// added after this struct shipped — defaulting lets a `meta.json` from
 /// before that field existed still reconcile cleanly instead of failing.
 #[derive(Serialize, Deserialize)]
@@ -110,7 +115,6 @@ struct SnapshotMeta {
     id: String,
     source_sandbox_id: String,
     rootfs_path: PathBuf,
-    tap_device: String,
     guest_ip: Ipv4Addr,
     gateway_ip: Ipv4Addr,
     guest_mac: String,
@@ -145,10 +149,9 @@ impl Snapshot {
             id: self.id.clone(),
             source_sandbox_id: self.source_sandbox_id.clone(),
             rootfs_path: self.rootfs_path.clone(),
-            tap_device: self.network.config.tap_device.clone(),
-            guest_ip: self.network.config.guest_ip,
-            gateway_ip: self.network.config.gateway_ip,
-            guest_mac: self.network.config.guest_mac.clone(),
+            guest_ip: self.network.addr.guest_ip,
+            gateway_ip: self.network.addr.gateway_ip,
+            guest_mac: self.network.addr.guest_mac.clone(),
             host_octet: self.network.host_octet(),
             attached_drives: self.attached_drives.clone(),
             image_id: self.image_id.clone(),
@@ -215,7 +218,7 @@ pub(crate) fn move_snapshot_files(snapshot: &mut Snapshot, dest_dir: &Path) -> i
 mod tests {
     use super::*;
     use crate::snapshots::test_support::{test_network, TempDir};
-    use sandkiln_vmm::vm::NetworkConfig;
+    use sandkiln_vmm::network::GuestAddr;
 
     #[test]
     fn move_snapshot_files_relocates_state_and_mem_but_leaves_rootfs_exactly_where_it_was() {
@@ -237,9 +240,8 @@ mod tests {
             snapshot_path: state_file.clone(),
             mem_file_path: mem_file.clone(),
             rootfs_path: rootfs_file.clone(),
-            network: network.reserve(
-                NetworkConfig {
-                    tap_device: "tapA".to_string(),
+            network: network.reserve_ip(
+                GuestAddr {
                     guest_ip: "172.16.0.9".parse().unwrap(),
                     gateway_ip: "172.16.0.1".parse().unwrap(),
                     guest_mac: "AA:FC:00:00:09:09".to_string(),

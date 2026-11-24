@@ -2,7 +2,7 @@
 //! in-memory maps of live sandboxes, held and retired snapshots, pools and
 //! tunnels), plus the drive/mount record types.
 //!
-//! Ownership queries live in `holders` ("who holds this drive, image or tap")
+//! Ownership queries live in `holders` ("who holds this drive, image or guest IP")
 //! and naming in `naming`; both extend `AppState` and are re-exported here so
 //! callers keep using `crate::state::*`.
 
@@ -69,7 +69,7 @@ pub struct AppState {
     pub snapshots: Mutex<HashMap<String, Snapshot>>,
     /// Retired checkpoints ("time-travel restore", see
     /// `crate::snapshots::retired`). A separate map, not a flag on
-    /// `Snapshot`: a retired checkpoint holds no live `Lease` at all,
+    /// `Snapshot`: a retired checkpoint holds no `IpLease` at all,
     /// structurally unlike every `snapshots` entry.
     pub retired_snapshots: Mutex<HashMap<String, RetiredSnapshot>>,
     /// Lazily-created per-name mutex, serializing concurrent claims/
@@ -94,16 +94,6 @@ pub struct AppState {
     /// Configured pre-warmed pools, keyed by caller-given id. In-memory
     /// only, unlike `snapshots` — see `crate::lifecycle::pool`.
     pub pools: Mutex<HashMap<String, Pool>>,
-    /// Tap devices with a restore in flight. Closes a race
-    /// `tap_device_holder` alone can't: two different retired checkpoints
-    /// in one lineage share a frozen tap/IP/MAC (`crate::snapshots::retired`),
-    /// so two concurrent restores could both pass a plain liveness check
-    /// and then race `NetworkManager::reserve`, which doesn't itself
-    /// detect double-reservation (it's built for the startup-reconcile
-    /// case, where nothing else can be live yet). A plain set, not a
-    /// refcount like `pending_image_boots` — only one restore per tap
-    /// device can ever be in flight.
-    pending_tap_restores: Mutex<std::collections::HashSet<String>>,
     /// One entry per tunnel between `POST /sandboxes/:id/tunnel`
     /// (register) and the matching `GET .../tunnel/:tunnel_id/ws`
     /// (take) — see `http/routes/tunnel.rs`. The receiving half of
@@ -145,7 +135,6 @@ impl AppState {
             preview_client: build_preview_client(),
             history,
             pools: Mutex::new(HashMap::new()),
-            pending_tap_restores: Mutex::new(std::collections::HashSet::new()),
             tunnels: Mutex::new(HashMap::new()),
         }
     }

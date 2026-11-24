@@ -1,6 +1,7 @@
 use crate::state::{AttachedDrive, Mount};
 use sandkiln_vmm::egress::EgressPolicy;
-use sandkiln_vmm::network::Lease;
+use sandkiln_vmm::network::{Lease, TapLease};
+use std::net::Ipv4Addr;
 use sandkiln_vmm::vm::Vm;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -8,14 +9,25 @@ use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
+/// What a fork owns of its network: a tap and the (snapshot-owned) guest IP
+/// it needs to address that tap's egress rules.
+pub struct ForkNetwork {
+    pub tap: TapLease,
+    pub guest_ip: Ipv4Addr,
+}
+
 pub struct Sandbox {
     pub id: String,
     pub vm: Vm,
     /// `None` only for a fork (`source_snapshot_id.is_some()`): the
-    /// source snapshot owns the lease for as long as the fork lives (see
-    /// `Snapshot::forked_into`), so this sandbox's teardown never
-    /// releases it. Every other sandbox owns its lease outright.
+    /// source snapshot keeps the guest's IP for as long as the fork lives
+    /// (see `Snapshot::forked_into`), so this sandbox's teardown never
+    /// releases it — the fork owns only its tap, in `fork_network`. Every
+    /// other sandbox owns its whole lease (IP and tap) outright.
     pub network: Option<Lease>,
+    /// `Some` exactly when `network` is `None` (a fork): the tap this fork's
+    /// guest is plugged into, returned to the pool when the fork stops.
+    pub fork_network: Option<ForkNetwork>,
     /// Always this sandbox's own private rootfs clone (fork/restore each
     /// get a fresh one via `lifecycle::create::clone_rootfs`, never the
     /// source's file directly), so `destroy_sandbox_by_id` can always

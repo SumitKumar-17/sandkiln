@@ -237,6 +237,7 @@ fn bench_resume(c: &mut Criterion) {
                     snapshot_path: snapshot_path.clone(),
                     mem_file_path: mem_path.clone(),
                     rootfs_override: None,
+                    tap_override: None,
                 };
 
                 let started = Instant::now();

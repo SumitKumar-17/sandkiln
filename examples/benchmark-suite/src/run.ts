@@ -15,7 +15,7 @@ export async function runBenchmarks(args: RunArgs, onSignal: (cleanup: () => Pro
   const selected = BENCHMARKS.filter((b) => args.only.length === 0 || args.only.includes(b.name));
 
   const connection = { baseUrl: args.baseUrl.replace(/\/$/, ""), authToken: args.authToken };
-  const options = { iterations: args.iterations, concurrency: args.concurrency, execSamples: args.execSamples };
+  const options = { iterations: args.iterations, concurrency: args.concurrency, execSamples: args.execSamples, imageId: args.imageId };
 
   // Fail fast and clearly if the daemon is unreachable or busy: other
   // sandboxes compete for the same disk, taps and CPU and skew every number.
