@@ -16,4 +16,5 @@ pub mod sandbox;
 pub mod sandbox_name;
 pub mod snapshot;
 pub mod snapshot_history;
+pub mod status;
 pub mod tunnel;

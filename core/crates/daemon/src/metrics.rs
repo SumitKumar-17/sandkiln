@@ -115,6 +115,14 @@ impl Metrics {
         };
     }
 
+    pub fn rootfs_clone_counts(&self) -> (u64, u64) {
+        (self.rootfs_clones_reflink.load(Ordering::Relaxed), self.rootfs_clones_copy.load(Ordering::Relaxed))
+    }
+
+    pub fn sandboxes_created(&self) -> u64 {
+        self.sandboxes_created_total.load(Ordering::Relaxed)
+    }
+
     pub fn record_boot_duration_ms(&self, ms: f64) {
         self.boot_duration_ms.observe(ms);
     }

@@ -8,6 +8,7 @@ from .errors import SandkilnApiError
 from .image import Image, ImageInfo
 from .pool import Pool, PoolInfo
 from .sandbox import DirEntry, DriveAttachment, ExecResult, MountInfo, Sandbox, SandboxInfo, SnapshotInfo, StopResult
+from .status import DaemonStatus, get_status
 from .tunnel import TunnelHandle
 
 __all__ = [
@@ -32,5 +33,7 @@ __all__ = [
     "Pool",
     "AsyncPool",
     "PoolInfo",
+    "DaemonStatus",
+    "get_status",
     "SandkilnApiError",
 ]

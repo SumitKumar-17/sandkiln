@@ -292,3 +292,24 @@ test("formatDirEntryList renders kind+mode, size, mtime, and name per line", () 
       "l777  5  2026-01-03T00:00:00.000Z  link\n",
   );
 });
+
+import { formatStatus } from "../dist/format.js";
+
+test("formatStatus prints counts, disk and warnings", () => {
+  const out = formatStatus({
+    version: "0.0.1",
+    uptimeSecs: 3700,
+    authEnabled: false,
+    jailerEnabled: false,
+    counts: { sandboxes: 2, heldSnapshots: 1, retiredCheckpoints: 0, pools: 1, poolWarmReady: 1 },
+    tapPool: { size: 32, free: 30 },
+    sandboxesCreatedTotal: 7,
+    rootfsClones: { reflink: 7, copy: 0 },
+    disk: [{ path: "/s", totalBytes: 100 * 1024 ** 3, freeBytes: 50 * 1024 ** 3 }],
+    warnings: ["open auth"],
+  });
+  assert.match(out, /up 1h 1m/);
+  assert.match(out, /tap devices 30\/32 free/);
+  assert.match(out, /50\.0 GiB free of 100\.0 GiB/);
+  assert.match(out, /warning: open auth/);
+});
