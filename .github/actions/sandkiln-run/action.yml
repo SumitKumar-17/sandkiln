@@ -1,0 +1,103 @@
+name: Run in a sandkiln microVM
+description: Run a command in a fresh sandkiln microVM with the checked-out workspace uploaded, then always destroy the sandbox.
+author: sandkiln
+
+inputs:
+  daemon-url:
+    description: Base URL of a reachable sandkilnd (https, or http on loopback for a self-hosted runner).
+    required: true
+  auth-token:
+    description: Bearer token of the daemon (store it as a secret). Masked in logs.
+    required: false
+    default: ""
+  command:
+    description: Shell script to run inside the sandbox, from the uploaded workspace root (/workspace).
+    required: true
+  image:
+    description: Registered image id to boot from. Daemon default rootfs when empty.
+    required: false
+    default: ""
+  working-directory:
+    description: Directory, relative to the workspace, whose contents are uploaded. The whole workspace by default.
+    required: false
+    default: "."
+  exclude:
+    description: Extra comma-separated tar exclude patterns. ".git" is always excluded.
+    required: false
+    default: ""
+  egress:
+    description: Outbound network policy for the sandbox, one of default, deny_all, allow_all.
+    required: false
+    default: deny_all
+  allow-cidrs:
+    description: Comma-separated CIDRs to allow when egress is deny_all.
+    required: false
+    default: ""
+  timeout:
+    description: Seconds the command may run before it is abandoned and the step fails with exit code 124.
+    required: false
+    default: "600"
+  keep-on-failure:
+    description: Leave the sandbox running when the command fails, for debugging. It must then be removed by hand.
+    required: false
+    default: "false"
+  cli-version:
+    description: Version of the sandkiln-cli npm package to install.
+    required: false
+    default: 0.12.0
+  install-cli:
+    description: Set to "false" when kiln (and Node.js 22 or newer) is already on the runner's PATH.
+    required: false
+    default: "true"
+
+outputs:
+  sandbox-id:
+    description: Id of the sandbox the command ran in.
+    value: ${{ steps.run.outputs.sandbox-id }}
+  exit-code:
+    description: Exit code of the command (124 on timeout, 125 if it could not be read back).
+    value: ${{ steps.run.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      if: inputs.install-cli == 'true'
+      with:
+        node-version: "22"
+
+    - name: Install the kiln CLI
+      if: inputs.install-cli == 'true'
+      shell: bash
+      env:
+        CLI_VERSION: ${{ inputs.cli-version }}
+      run: |
+        npm install --global --prefix "$RUNNER_TEMP/sandkiln-cli" "sandkiln-cli@${CLI_VERSION}"
+        echo "$RUNNER_TEMP/sandkiln-cli/bin" >> "$GITHUB_PATH"
+
+    - name: Run the command in a sandbox
+      id: run
+      shell: bash
+      env:
+        INPUT_DAEMON-URL: ${{ inputs.daemon-url }}
+        INPUT_AUTH-TOKEN: ${{ inputs.auth-token }}
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_IMAGE: ${{ inputs.image }}
+        INPUT_WORKING-DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_EXCLUDE: ${{ inputs.exclude }}
+        INPUT_EGRESS: ${{ inputs.egress }}
+        INPUT_ALLOW-CIDRS: ${{ inputs.allow-cidrs }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+        INPUT_KEEP-ON-FAILURE: ${{ inputs.keep-on-failure }}
+      run: '"${{ github.action_path }}/run.sh" run'
+
+    # Composite actions have no post step; always() makes this run after a
+    # failed command, a timeout or a cancelled job alike.
+    - name: Destroy the sandbox
+      if: always()
+      shell: bash
+      env:
+        INPUT_DAEMON-URL: ${{ inputs.daemon-url }}
+        INPUT_AUTH-TOKEN: ${{ inputs.auth-token }}
+        INPUT_KEEP-ON-FAILURE: ${{ inputs.keep-on-failure }}
+      run: '"${{ github.action_path }}/run.sh" cleanup'

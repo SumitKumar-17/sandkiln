@@ -1,0 +1,28 @@
+name: CI (github actions)
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/**", "examples/github-actions/**"]
+  pull_request:
+    branches: [main]
+    paths: [".github/**", "examples/github-actions/**"]
+
+jobs:
+  lint:
+    name: Lint workflows and test the sandkiln-run action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+      # The example workflows live outside .github/workflows, so name them.
+      - name: actionlint
+        run: |
+          "$(go env GOPATH)/bin/actionlint" -config-file .github/actionlint.yaml \
+            .github/workflows/*.yml examples/github-actions/workflows/*.yml
+      - name: Action control-flow tests
+        run: .github/actions/sandkiln-run/test/test-run.sh
+      - name: Sample project tests (default egress, so the isolation test is skipped)
+        run: python3 -m unittest discover -v -s tests -p 'test_wordstats.py'
+        working-directory: examples/github-actions/sample-project

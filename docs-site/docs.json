@@ -76,7 +76,8 @@
               "guides/persist-by-name",
               "guides/share-a-drive",
               "guides/custom-image",
-              "guides/auto-suspend"
+              "guides/auto-suspend",
+              "guides/run-ci-jobs-in-a-sandbox"
             ]
           },
           {

@@ -1,0 +1,40 @@
+# Runs a pull request's code inside a throwaway microVM instead of on the
+# runner. The runner only checks the code out and tars it; nothing from the
+# pull request executes on it. Copy this file to .github/workflows/ of your repo.
+name: Test pull request in a microVM
+
+on:
+  # Same-repository pull requests only get repository secrets. Fork pull
+  # requests do not, so this job is skipped for them (see the README).
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Skip fork pull requests: their runs have no access to the secrets.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run the sample project's tests in a sandbox
+        id: sandbox
+        # In your own repository, reference the action by its published
+        # location and a pinned ref instead of this relative path.
+        uses: ./.github/actions/sandkiln-run
+        with:
+          daemon-url: ${{ secrets.SANDKILN_DAEMON_URL }}
+          auth-token: ${{ secrets.SANDKILN_AUTH_TOKEN }}
+          working-directory: examples/github-actions/sample-project
+          egress: deny_all
+          timeout: "120"
+          command: python3 -m unittest discover -v tests
+
+      - name: Report
+        if: always()
+        run: echo "sandbox ${{ steps.sandbox.outputs.sandbox-id }} exited with ${{ steps.sandbox.outputs.exit-code }}"
