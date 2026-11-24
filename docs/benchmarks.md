@@ -12,6 +12,7 @@ most load-sensitive figure of all.
 | --- | --- |
 | `cargo bench -p sandkiln-vmm --bench vm_lifecycle` | Cold boot, exec round trip, snapshot take, resume, against real Firecracker. Needs `SANDKILN_BENCH_FIRECRACKER_BIN`, `SANDKILN_BENCH_KERNEL_PATH`, `SANDKILN_BENCH_ROOTFS_PATH`. |
 | `scripts/bench-report.sh [iterations]` | Fast regression check against `/metrics`, plus client-side `first_exec_client` (time to first real command after `create()` returns). Diffed against the last run. |
+| [`examples/benchmark-suite`](../examples/benchmark-suite/README.md) (`scripts/dev.sh bench-suite`) | Client-side suite on the JS SDK against any daemon: create, first command, exec, snapshot, fork, resume, parallel create. JSON result plus a `compare` mode. See "Reproduce these numbers". |
 | `scripts/load-test.sh [concurrency] [iterations] [base-url]` | Concurrent create/exec/delete through the HTTP API (defaults: 10 workers, 20 iterations, port 7777). |
 | `scripts/integration-test.sh [base-url]` | Full API behavior against a real daemon: sandbox lifecycle, tags, drives (persistence across sandboxes, conflict detection), snapshot/resume, auth, `/metrics`, error cases, in one repeatable run. Tracks and tears down everything it creates. See root `AGENTS.md`. |
 | `scripts/dev-tools/profile-cold-create.sh` | 20 sequential creates with per-phase debug logging. |
@@ -74,6 +75,38 @@ phase of a cycle; samples are small and the box is shared. The `create`
 improvement was later shown to be capped by the 4ms lease: see
 [engineering post 20](../website/src/content/engineering/20-opt-concurrent-clone-and-lease.md).
 Predates the socket-wait and retry fixes and has not been cleanly re-run.
+
+## Reproduce these numbers
+
+[`examples/benchmark-suite`](../examples/benchmark-suite/README.md) reruns the
+client-side figures against any daemon (`scripts/dev.sh bench-suite --iterations 20`)
+and `compare` diffs two result files. A committed sample is in
+[`examples/benchmark-suite/results/`](../examples/benchmark-suite/results/)
+(2026-11-24, i9-13900K, kernel 6.8, guest kernel 5.10.223, n=20 per metric, 200
+for exec, daemon idle at start, a second identical run agreed to within a few
+percent except snapshot take). The suite times through the SDK, so it includes
+the HTTP hop and the SDK; the published table above times lower layers for
+several rows. Side by side, the published figure (left) against this sample's
+median (right):
+
+| Metric | Published | Suite median | Reading |
+| --- | --- | --- | --- |
+| Create to first command | 214.5ms (matrix: 237ms) | 213.1ms after `create()` returned, 235.4ms including the create call | Agrees. |
+| `POST /sandboxes` create, reflinked | about 16-18ms | 21.2ms (18.5-25.4) | Slightly higher: the suite times the whole SDK call. Same order. |
+| Resumed first exec | 8.4ms | 6.3ms | Agrees within noise. |
+| Resume from snapshot | 3.7-4.0ms | 13.1ms `Sandbox.resume()` | Different layer: published is vmm-only, the suite includes the HTTP hop and all the daemon's resume work. Not a regression. |
+| Exec round trip | about 245us | 1.76ms (min 537us) | Different layer: published reuses an open vsock connection, the suite makes one HTTP request per command. Not comparable. |
+| Snapshot take | 485-727ms | 1208ms (min 1001, max 2615) | Materially higher. Unexplained: the suite times the full `snapshot()` call, the published figure is vmm-level, and this figure is the most load-sensitive. Treat as open until a vmm-level rerun on a quiet box reads the same. |
+| Fork | not published | 8.8ms call, 7.5ms first command | New. |
+| Parallel create, 8 at once | not published | 20.1/s, 357ms median per create to first command | New. |
+
+The published table is left as it was. Where the suite and the published figure
+measure the same thing (create to first command, resumed first exec) they agree.
+Where they differ, the suite is the better-quality figure for what an SDK
+caller experiences (it has a stated method, a recorded environment and the
+raw samples), while the published vmm-level rows remain the right figures for
+the cost of the VMM itself. Only snapshot take has a gap that is not explained
+by the layer difference.
 
 ## Per-phase profile of a cold create
 

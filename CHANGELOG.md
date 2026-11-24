@@ -12,6 +12,14 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Examples — 2026-11-24
+
+### Added
+- `examples/benchmark-suite`: a reproducible client-side benchmark (create,
+  first command, exec round trip, snapshot, fork, resume, parallel create)
+  with JSON and Markdown output, a `compare` mode that flags regressions, a
+  committed sample result, and `scripts/dev.sh bench-suite`.
+
 ## sandkiln-mcp 0.1.0 — 2026-11-24
 
 ### Added
