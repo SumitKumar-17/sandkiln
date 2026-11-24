@@ -47,8 +47,10 @@
             "group": "Self-Hosting",
             "pages": [
               "self-hosting/manual-setup",
+              "self-hosting/jailer",
               "self-hosting/configuration",
-              "self-hosting/operations"
+              "self-hosting/operations",
+              "self-hosting/troubleshooting"
             ]
           },
           {
