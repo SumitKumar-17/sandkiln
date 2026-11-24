@@ -22,7 +22,7 @@ a stated gap; **planned** not built.
 | Snapshot, resume, fork | partial | Durable across restart, persistent-by-default stop, named sandboxes. Fork is single-live per snapshot. Take costs 310-990ms. |
 | Time-travel restore, lineage | partial | Retired checkpoints (capped at 8) and parent pointers. Daemon API only, no SDK or CLI yet. |
 | Idle lifecycle | partial | Auto-suspend, destroy and archive tier. Operator config only; no delete-after-archive. |
-| Warm pools | done | `max_count` with queueing. Config is in memory only. |
+| Warm pools | done | `max_count` with queueing; a default pool (`default_warm_count`, 2) makes a plain create a resume, 26ms to first command. Explicit pool config is in memory only. |
 | Drives and remote storage | done | Read-only sharing, S3-compatible mounts via rclone in the guest. |
 | Egress policy | partial | IP/CIDR allow and deny per sandbox. No domain or port rules, IPv4 only. |
 | Preview, tunnel, PTY, streamed exec | partial | HTTP preview only (no WebSocket proxy). PTY and exec-stream are JS/TS and CLI only; no live PTY resize, no exec kill. |
@@ -55,9 +55,10 @@ Directional, one shared box. Method, full table and history in
 
 In order, most load-bearing first.
 
-1. **Warm path by default.** A user-visible create should be a resume (8ms
-   to first command against 214ms cold): a default warm pool the operator does
-   not have to configure. Plan: [feature plan](docs/design-notes/feature-plan.md).
+1. **Make the cold path the default-able one.** The init-mode image reaches
+   the first command in about 147ms; mounts, auth and the jailer must be
+   tested on it before it replaces systemd. Then per-image warm defaults and
+   wake-on-claim replenishment. Plan: [feature plan](docs/design-notes/feature-plan.md).
 2. **Admin tooling follow-up.** `GET /status`, `kiln status` and
    `getStatus`/`get_status` have shipped. `kiln doctor` has shipped as a
    client-side end-to-end probe (host prerequisite checks stay in

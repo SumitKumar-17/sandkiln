@@ -32,7 +32,7 @@ Because there is a single bridge, the NAT, DNS and firewall setup each target ex
 
 ## Why a tap pool
 
-Creating a new tap device is a `TUNSETIFF` ioctl on `/dev/net/tun`. In practice that does not work under an ambient `CAP_NET_ADMIN`; it needs real root. Attaching an existing tap to a bridge, bringing a link up, and creating the bridge itself are netlink operations, and those do work. The daemon deliberately never runs as root, so it cannot create taps on demand.
+Creating a new tap device is a `TUNSETIFF` ioctl on `/dev/net/tun`. In practice that does not work under an ambient `CAP_NET_ADMIN`; it needs real root. Attaching an existing tap to a bridge, bringing a link up, and creating the bridge itself are netlink operations, and those do work. The daemon deliberately never runs as root, so it cannot create taps on demand. A tap is held only while a VM runs, and a snapshot keeps just its address: see [snapshots without taps](/engineering/36-snapshots-without-taps).
 
 The resolution is to split the work by privilege. `scripts/host-setup/create-tap-pool.sh` runs once as root and creates `N` persistent taps owned by the daemon's user:
 
@@ -89,7 +89,7 @@ stateDiagram-v2
     Reserved --> Leased: becomes the Lease for a resumed VM
 ```
 
-The shutdown path matters for this state machine. On `SIGTERM` or `SIGINT` the daemon snapshots every live sandbox (`core/crates/daemon/src/lifecycle/shutdown.rs`), and each snapshot keeps its sandbox's tap and address, so the leases move to `HeldBySnapshot` rather than being lost; the next start `reserve`s them again from the snapshots on disk. A jailed sandbox cannot be snapshotted and is destroyed instead, which releases its lease and egress chain. A `SIGKILL` or crash skips all of it: the Firecracker processes are orphaned and keep their taps attached until an operator intervenes.
+The shutdown path matters for this state machine. On `SIGTERM` or `SIGINT` the daemon snapshots every live sandbox (`core/crates/daemon/src/lifecycle/shutdown.rs`), and each snapshot keeps its sandbox's address (and, when this was written, its tap as well; see the update further down), so the leases move to `HeldBySnapshot` rather than being lost; the next start `reserve`s them again from the snapshots on disk. A jailed sandbox cannot be snapshotted and is destroyed instead, which releases its lease and egress chain. A `SIGKILL` or crash skips all of it: the Firecracker processes are orphaned and keep their taps attached until an operator intervenes.
 
 `NetworkManager` does not track which sandbox holds which lease. That mapping lives in the daemon, in the `Sandbox` and `Snapshot` records, and the daemon answers "who holds this tap" with `AppState::tap_device_holder` across live sandboxes, held snapshots and in-flight restores. Keeping the allocator ignorant of owners keeps `sandkiln-vmm` free of daemon concepts, at the cost of making the daemon responsible for never losing a `Lease`.
 
@@ -112,6 +112,8 @@ The third command is the isolation mechanism. A bridge port marked `isolated` ca
 `release` runs `ip link set <tap> nomaster` and `ip link set <tap> down`, ignoring individual failures, then returns the octet and the tap to the free lists. Ignoring errors there is intentional: teardown must always return resources, even if the link is already gone.
 
 `reserve(config, host_octet)` exists for a second kind of owner. A snapshot freezes the guest's IP and MAC into its memory image through boot arguments, so a resume must reattach the exact tap and address it had. At daemon start, reconciled snapshots call `reserve` to remove their tap and octet from the free lists, so a later `lease()` cannot hand the same tap to a new sandbox. It logs a warning, rather than panicking, if the entries were already absent, which signals pool or configuration drift and is not fatal to startup. The snapshot side of this is in the [snapshots post](/engineering/06-snapshots-resume-fork).
+
+> **Update (2026-11-24):** this changed. A snapshot now keeps only the guest address (an `IpLease`); the tap is leased when a sandbox runs and returned at snapshot time, and a resume attaches any free tap through Firecracker's `network_overrides`. Held snapshots therefore no longer count against the tap pool. See [snapshots without taps](/engineering/36-snapshots-without-taps).
 
 ## How the guest gets its address
 

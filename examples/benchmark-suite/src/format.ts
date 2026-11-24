@@ -47,7 +47,7 @@ export function renderEnvironment(result: BenchmarkResult): string {
     ["rootfs clones", Object.entries(e.rootfsClones).map(([k, v]) => `${k}=${v}`).join(", ") || "none yet"],
     ["live sandboxes at start", String(e.liveSandboxesAtStart)],
     ["node", e.node],
-    ["options", `iterations=${result.options.iterations} concurrency=${result.options.concurrency} exec-samples=${result.options.execSamples} image=${result.options.imageId ?? "default"}`],
+    ["options", `iterations=${result.options.iterations} pause-ms=${result.options.pauseMs ?? 0} concurrency=${result.options.concurrency} exec-samples=${result.options.execSamples} image=${result.options.imageId ?? "default"}`],
   ];
   return pairs.map(([k, v]) => `${k.padEnd(24)} ${v}`).join("\n");
 }
@@ -68,7 +68,7 @@ export function renderMarkdown(result: BenchmarkResult): string {
     `- Guest kernel: ${env.guestKernel ?? "unknown"}`,
     `- Rootfs clones so far: ${Object.entries(env.rootfsClones).map(([k, v]) => `${k}=${v}`).join(", ") || "none"}`,
     `- Live sandboxes at start: ${env.liveSandboxesAtStart}`,
-    `- Options: iterations=${result.options.iterations}, concurrency=${result.options.concurrency}, exec-samples=${result.options.execSamples}, image=${result.options.imageId ?? "default"}`,
+    `- Options: iterations=${result.options.iterations}, pause-ms=${result.options.pauseMs ?? 0}, concurrency=${result.options.concurrency}, exec-samples=${result.options.execSamples}, image=${result.options.imageId ?? "default"}`,
   ].join("\n");
   return `## Environment\n\n${envLines}\n\n## Results\n\n${table}\n`;
 }

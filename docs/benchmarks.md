@@ -36,6 +36,7 @@ Log filter note: it is the binary name, `RUST_LOG=sandkilnd=debug`, not
 | Snapshot take | 485-727ms (309.6-335.0 on a quieter day; up to 990ms under load) |
 | Snapshot HTTP request | 0.56s (was 6.8s) |
 | Graceful shutdown, 3 live sandboxes | 0.75s |
+| Create to first command, warm pool (default), paced | 26.4ms median, p95 39.4ms (cold: 233.9ms), see [Warm pool by default](#warm-pool-by-default-2026-11-24) |
 | Remaining boot floor | about 125ms of systemd userspace in our guest (not to be confused with Firecracker's 125ms init bound; see "What each number measures") (`dev-vda.device` 107ms, `fcnet.service` 45ms); an opt-in init-mode image removes it, see below (median 147ms to first command instead of 230ms) |
 
 ## What each number measures
@@ -135,6 +136,23 @@ caller experiences (it has a stated method, a recorded environment and the
 raw samples), while the published vmm-level rows remain the right figures for
 the cost of the VMM itself. Only snapshot take has a gap that is not explained
 by the layer difference.
+
+## Warm pool by default (2026-11-24)
+
+`default_warm_count` (default 2) keeps warm instances of the daemon's default shape ready, so a plain `POST /sandboxes` resumes one. Measured with `examples/benchmark-suite` (`--only create --iterations 20`), same daemon and box, pool on against `SANDKILN_DEFAULT_WARM_COUNT=0`. Results are committed under `examples/benchmark-suite/results/`.
+
+| Metric (median, n=20) | Pool off | Pool on, paced (`--pause-ms 4000`) | Pool on, back to back |
+| --- | --- | --- | --- |
+| `create_call` | 23.6ms | 23.6ms | 22.8ms |
+| `first_command_after_create` | 209.7ms | 2.4ms | 231.0ms |
+| `create_to_first_command` | 233.9ms (p95 244.4) | **26.4ms** (p95 39.4, max 144.3) | 252.7ms (min 24.2) |
+
+How to read it:
+- The `create` call takes the same 23-24ms either way, because it returns before the guest answers. What changes is whether the guest is ready at that point: cold, the first command still waits about 210ms for boot; warm, it answers in about 2ms.
+- **Paced** is the steady state: a pause lets the replenisher refill the pool between creates, so every create is a resume. 233.9ms to 26.4ms, 8.9x faster.
+- **Back to back** exposes the limit: 20 creates in a row drain the 2 warm instances (the first two hit, with a 24ms minimum) and the rest are cold while the pool refills, so the median is cold. A bigger `default_warm_count` or more spacing moves that boundary; it is a capacity setting, not a cap on speed.
+- One paced sample was a 140.6ms create (the maximum); it is left in, cause not established.
+- Cost: each warm instance is a held full-RAM snapshot on disk (512 MiB by default) and one guest address, and every claim triggers a replacement boot and snapshot in the background (replenishment pauses when addresses or disk run low, see `default_warm_count`).
 
 ## Init-mode image: the agent as PID 1 (2026-11-24)
 

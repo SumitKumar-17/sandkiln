@@ -57,3 +57,15 @@ test("--image selects a registered image; absent or empty means the daemon defau
   assert.equal(without.imageId, null);
   assert.equal(empty.imageId, null);
 });
+
+test("--pause-ms defaults to 0 and rejects a negative or fractional value", () => {
+  const run = (argv: string[]) => {
+    const parsed = parseCli(argv, {});
+    if (parsed.command !== "run") throw new Error("expected run");
+    return parsed;
+  };
+  assert.equal(run([]).pauseMs, 0);
+  assert.equal(run(["--pause-ms", "4000"]).pauseMs, 4000);
+  assert.throws(() => run(["--pause-ms", "-1"]), /--pause-ms/);
+  assert.throws(() => run(["--pause-ms", "1.5"]), /--pause-ms/);
+});

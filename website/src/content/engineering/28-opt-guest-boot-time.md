@@ -135,7 +135,7 @@ The first two were the only ones with a possible effect, measured only bundled w
 
 About 125 ms of the remaining time is systemd userspace. That is time spent after `/sbin/init` starts, so it is a different quantity from Firecracker's published 125 ms bound, which ends when init starts ([what a start-latency number means](/engineering/29-what-a-start-latency-number-means)). `systemd-analyze` blames `dev-vda.device` at 107 ms and `fcnet.service` at 45 ms. That is generic init work done for a guest that only needs to start one agent and configure one interface.
 
-A purpose-built init that mounts what the agent needs, brings up the interface and execs the guest agent directly would likely remove most of that. It has NOT been done. It is a possible next step with its own correctness work, since systemd currently provides mounts, device handling and service supervision that an init of our own would have to take over, and it should be justified by a fresh measurement before anyone starts.
+A purpose-built init that mounts what the agent needs, brings up the interface and execs the guest agent directly would likely remove most of that. It has NOT been done. It is a possible next step with its own correctness work, since systemd currently provides mounts, device handling and service supervision that an init of our own would have to take over, and it should be justified by a fresh measurement before anyone starts. It has since been built as an opt-in image: see [the agent as PID 1](/engineering/35-the-agent-as-pid-1).
 
 ## How to reproduce
 

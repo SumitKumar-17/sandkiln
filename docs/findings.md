@@ -257,6 +257,25 @@ now also attaches a tap (about 4ms of `ip`/`bridge` calls): end to end resume
 measured 13.6 and 14.4ms median against 13.1ms recorded before, within the
 noise of a shared box.
 
+### 30. The replenisher consumed its own pool. FIXED
+Pool replenishment booted its warm instances through the normal create path.
+That request has the pool's own shape, so it matched the pool and resumed the
+pool's warm snapshot instead of cold booting: a pool wanting 2 warm instances
+could never get past 1 (a pool of 1 worked, which hid it). Found when the
+default pool, which wants 2, stuck at 1 ready with a growing count of "warm
+claims" nobody had made. The replenisher now cold boots directly
+(`create_warm_instance`). Regression check in topic 18 (a pool with
+`warm_count` 2 reaches 2).
+
+### 31. Pool claims retained the pool's placeholder as a time-travel checkpoint. FIXED
+A claim resumed the warm snapshot with history retained, so every pool-backed
+create cloned the placeholder's disk, moved it into the retired checkpoints and
+counted it against `retained_checkpoints_max`, evicting users' real
+checkpoints. It also cost about 50-90ms per create (a warm create measured 78
+to 117ms, against 26 to 30ms once consumed). A claim now consumes the warm
+snapshot, and the new sandbox starts its own lineage (no dangling parent to the
+consumed snapshot).
+
 ### 27. Pool claim bookkeeping under full-suite load. FIXED (test isolation)
 Intermittent `18-pool` failures: `warm_ready` read 0 where 1 was expected,
 the pool's warm snapshot was missing at delete, and `claimed` read 1 with both

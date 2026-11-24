@@ -24,6 +24,17 @@ A cold sandbox's first real exec (not just the boot succeeding, the guest agent 
 
 A plain `POST /sandboxes`/`Sandbox.create()` that requests nothing a warm snapshot can't already provide, no `drives`, no custom `rate_limit`, both baked into Firecracker's boot-time configuration, which a snapshot has already fixed, matches against any configured pool whose image and resource profile (vCPU count, memory) agree. If a warm snapshot is ready, the daemon resumes it, runs the health check, and, on success, overwrites the resumed sandbox's placeholder name/tags/MMDS content with the caller's real ones (`claim_from_pool`, which is also what makes MMDS correctly reflect the *claimer's* identity rather than the pool's own internal bookkeeping, see [Internals: MMDS](/internals/mmds)) before returning it. There's no separate "claim from pool" API call, a caller never explicitly opts in or out; it's entirely transparent based on what the request does and doesn't ask for.
 
+## The default pool
+
+The daemon keeps an implicit pool called `default` for its own default shape (default image, vCPU and memory), sized by `default_warm_count` (2 unless changed; 0 turns it off). A plain `POST /sandboxes` therefore resumes a warm instance without anyone configuring a pool. Paced, create to first command measured 26ms against 234ms cold; back to back, only as many creates as there are warm instances hit it, and the rest are cold while it refills.
+
+Three things keep it safe to leave on:
+- **Claims consume the warm snapshot.** The claimed sandbox runs on the disk the replenisher prepared and starts its own lineage; the placeholder is never kept as a time-travel checkpoint.
+- **The replenisher boots cold.** It must not go through the create path, which would match its own pool and consume the warm instance it is trying to add.
+- **Replenishment pauses on shortage.** With 16 or fewer free guest addresses, no free tap device, or under 5 GiB free in the state directory, it stops adding warm instances (and logs the transition once) so background work never starves real users.
+
+A pool matches any create with its shape, so on a shared daemon the shape you pool is the shape you serve. `POST /pools` with the id `default` is a `409`; `DELETE /pools/default` removes it until the next restart. Hits and misses are in `/metrics` (`pool_claims_total`) and `GET /status` (`pool_claims`).
+
 ## See it in action
 
 ```bash
