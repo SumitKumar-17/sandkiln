@@ -52,13 +52,25 @@ user would actually write.
   benchmarks against any daemon: create, first command, exec, snapshot, fork,
   resume, parallel create; JSON/Markdown output, `compare` mode, node:test
   unit tests for the pure modules, and a committed sample under `results/`.
-  Reads `/status` directly because the SDK's `getStatus` is newer than the
-  pinned 0.12.0. Run via `scripts/dev.sh bench-suite`.
+  Reads `/status` directly to stay independent of the SDK's status types. Run
+  via `scripts/dev.sh bench-suite`.
 - `github-actions/` — workflows and a sample project for the in-repo
   `.github/actions/sandkiln-run` composite action (tests untrusted pull-request
   code in a deny-all-egress microVM). Uses the `kiln` CLI, not the SDK, and is
   linted by `.github/workflows/ci-actions.yml`. Live-verified via the action's
   `run.sh`; not yet run on GitHub.
+- `README.md` — the index: one row per example with what it demonstrates,
+  requirements, how to run and when it was last verified. Update the row
+  whenever an example is added or re-verified.
+
+## Verification
+
+`scripts/dev.sh examples-smoke` (`scripts/dev-tools/examples-smoke.sh`) runs
+every example the way its README says, against a live daemon, from throwaway
+copies, and cleans up what they created. Add a function to it for every new
+example. `--published` installs the SDK from the registry, the default links
+this repository's build. A change to an example is not done until that table
+is green or a skip is explained.
 
 ## Conventions
 
@@ -69,8 +81,8 @@ user would actually write.
 - Depend on the published `sandkiln` package, not in-repo source paths.
   Exception: an SDK method not yet published points at `packages/sdk`,
   stated visibly in its README, switched back to a version range the
-  next release after it ships (checked and fixed for `local-tunnel/`
-  this session — `tunnel()` shipped in SDK 0.12.0). A daemon feature with
+  next release after it ships (done for `local-tunnel/` once
+  `tunnel()` shipped in SDK 0.12.0). A daemon feature with
   no SDK surface calls the HTTP API directly — don't invent SDK methods
   to demo it.
 - Each `README.md` states what it does, exact run commands, config env
