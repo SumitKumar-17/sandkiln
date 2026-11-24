@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-const entry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+// SANDKILN_MCP_ENTRY lets the same check run against an installed package (see packages/mcp/README.md, "Release check").
+const entry = process.env.SANDKILN_MCP_ENTRY ?? fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const baseUrl = process.env.SANDKILN_DAEMON_URL ?? "http://127.0.0.1:7777";
 
 function connect() {

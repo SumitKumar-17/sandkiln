@@ -47,3 +47,13 @@ test("parseCpuModel reads the model and thread count", () => {
   assert.equal(parseCpuModel(info), "Test CPU @ 3GHz (2 threads)");
   assert.equal(parseCpuModel("nothing"), null);
 });
+
+test("--image selects a registered image; absent or empty means the daemon default", () => {
+  const withImage = parseCli(["--image", "init-agent"], {});
+  const without = parseCli([], {});
+  const empty = parseCli(["--image", ""], {});
+  if (withImage.command !== "run" || without.command !== "run" || empty.command !== "run") throw new Error("expected run");
+  assert.equal(withImage.imageId, "init-agent");
+  assert.equal(without.imageId, null);
+  assert.equal(empty.imageId, null);
+});

@@ -4,8 +4,9 @@ Read root `AGENTS.md` first.
 
 ## What this crate is
 
-A ~700KB static binary running *inside* every microVM as a systemd
-service, listening on four vsock ports: `AGENT_PORT` (request/response —
+A ~1MB static binary running *inside* every microVM, as a systemd
+service by default or as the guest's PID 1 in an init-mode image (see
+`init/`), listening on four vsock ports: `AGENT_PORT` (request/response —
 exec, file ops, chmod/chown/mkdir/rename/copy/symlink/readlink/truncate),
 `PTY_PORT` (interactive shell, long-lived, drops to raw bytes after one
 handshake — see `pty.rs`), `EXEC_STREAM_PORT` (streamed background exec,
@@ -21,12 +22,25 @@ ships inside every rootfs image.
 
 ## Files
 
-- **`main.rs`** — three listener loops. `AGENT_PORT`: accept, read framed
+- **`main.rs`** — when `getpid() == 1` hands off to `init::run`, otherwise
+  runs the agent directly (`run_agent`). Three listener loops. `AGENT_PORT`: accept, read framed
   messages in a loop, dispatch to `handler::handle`, write response,
   repeat until disconnect. `PTY_PORT`/`EXEC_STREAM_PORT`: accept and spawn
   a thread per session (`pty::handle_connection`/
   `exec_stream::handle_connection`) so a long session never blocks the
   next `accept()`.
+- **`init/`** — init mode (the agent as PID 1). `mod.rs` selects by
+  `getpid() == 1` only (a stray local run can never mount over a host);
+  `setup.rs` mounts `/proc /sys /dev/pts /dev/shm /run /tmp` and cgroup2,
+  makes the `/dev/fd`/`stdin`/`stdout`/`stderr` links, sets the hostname,
+  brings `lo` up, resets the environment to what the systemd service had
+  (`LANG`, `PATH`), sets `RLIMIT_NOFILE` and disables Ctrl-Alt-Del's instant
+  reset; `supervisor.rs` forks the agent as a child, reaps with
+  `waitpid(-1)`, restarts the agent with capped backoff if it dies, and on
+  SIGTERM/SIGINT/SIGUSR1/SIGUSR2 syncs and restarts the guest (Firecracker
+  exits on reset). The agent is a child, not PID 1 itself, so the reaper
+  never steals exit statuses from the agent's own `Command`/`forkpty`
+  children. The network interface is still set by the kernel `ip=` argument.
 - **`fixup.rs`** — `Request::ResumeFixup`: mixes host entropy into the kernel pool (`RNDADDENTROPY`), forces a reseed and sets the wall clock, so clones of one snapshot differ.
 - **`handler.rs`** — each `Request` variant, as thin wrappers over
   `std::process::Command`/`std::fs` plus one raw `libc::chown` (std has
@@ -73,15 +87,18 @@ sudo bash images/inject-agent.sh \
   <path-to-rootfs.ext4>
 ```
 Mounts the image, copies the binary to `/usr/local/bin/`, enables the
-systemd service. `SANDKILN_BASE_ROOTFS` must point at whatever you
+systemd service. With `--init` it instead points `/sbin/init` at the agent
+(systemd stays as `/sbin/init.systemd`): run it on a copy of an image to get
+an opt-in init-mode image. `SANDKILN_BASE_ROOTFS` must point at whatever you
 injected into, or the daemon keeps booting the old image.
 
 ## Non-obvious things
 
 - No error recovery inside a connection — a bad frame or serialize
   failure just ends that connection, deliberately, rather than resyncing.
-- Runs as a regular systemd service, not PID 1 — don't assume init
-  semantics.
+- Runs as a regular systemd service by default — don't assume init
+  semantics in the request handlers. Only `init/` may assume it is PID 1,
+  and only after `is_init_process()`.
 - A capability needing more system access here should assume Firecracker
   jailer hardening (see root `ROADMAP.md`) will eventually restrict it —
   don't build in an unrestricted-root assumption.

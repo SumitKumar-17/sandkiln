@@ -1,6 +1,7 @@
 mod exec_stream;
 mod fixup;
 mod handler;
+mod init;
 mod pty;
 mod tunnel;
 
@@ -9,6 +10,16 @@ use std::io::{Read, Write};
 use vsock::{VsockListener, VMADDR_CID_ANY};
 
 fn main() {
+    // As the guest's PID 1 (a rootfs whose /sbin/init is this binary), prepare
+    // the guest and supervise the agent as a child; under any other init this
+    // is skipped and behaviour is unchanged.
+    if init::is_init_process() {
+        init::run(run_agent);
+    }
+    run_agent()
+}
+
+fn run_agent() -> ! {
     // Each its own thread, concurrent with the exec/file-op loop below
     // and with each other — PTY sessions and streamed exec sessions are
     // both long-lived (a real interactive shell, or a long-running
@@ -28,6 +39,7 @@ fn main() {
             Err(e) => eprintln!("accept error: {e}"),
         }
     }
+    unreachable!("a vsock listener's incoming() never ends")
 }
 
 fn run_pty_listener() {

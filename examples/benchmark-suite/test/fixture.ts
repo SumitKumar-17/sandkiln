@@ -10,7 +10,7 @@ export function fixture(samples: Record<string, number[]>): BenchmarkResult {
   }
   return {
     schema: 1,
-    options: { iterations: 3, concurrency: 2, execSamples: 2 },
+    options: { iterations: 3, concurrency: 2, execSamples: 2, imageId: null },
     environment: {
       date: "2026-11-24T00:00:00.000Z",
       daemonUrl: "http://127.0.0.1:7777",

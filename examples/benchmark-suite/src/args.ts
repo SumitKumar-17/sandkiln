@@ -14,6 +14,7 @@ export interface RunArgs {
   jsonOut: string | null;
   markdownOut: string | null;
   allowBusy: boolean;
+  imageId: string | null;
 }
 
 export interface CompareArgs {
@@ -41,6 +42,7 @@ Run options:
   --hardware LABEL   free-form hardware description stored in the result
   --json FILE        write the diffable JSON result
   --markdown FILE    write a Markdown report
+  --image ID         boot every sandbox from this registered image (kiln image create) instead of the default
   --allow-busy       run even if the daemon already has live sandboxes
 
 compare exits 1 when any metric regressed beyond the threshold.`;
@@ -71,6 +73,7 @@ export function parseCli(argv: readonly string[], env: Record<string, string | u
       hardware: { type: "string" },
       json: { type: "string" },
       markdown: { type: "string" },
+      image: { type: "string" },
       "allow-busy": { type: "boolean" },
       threshold: { type: "string" },
       "min-delta-ms": { type: "string" },
@@ -108,6 +111,7 @@ export function parseCli(argv: readonly string[], env: Record<string, string | u
     hardware: values.hardware ?? null,
     jsonOut: values.json ?? null,
     markdownOut: values.markdown ?? null,
+    imageId: values.image === undefined || values.image === "" ? null : values.image,
     allowBusy: values["allow-busy"] ?? false,
   };
 }

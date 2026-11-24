@@ -38,6 +38,11 @@
 #   SANDKILN_INTEGRATION_TEST_ONLY=<substring>[,<substring>...] runs only the
 #   topic files whose name contains one of them, e.g. =18-pool.
 #
+#   SANDKILN_INTEGRATION_TEST_IMAGE=<registered-image-id> boots every sandbox
+#   a topic creates from that image (adds image_id to a create body that has
+#   none), to run the suite against a non-default image such as the init-mode
+#   image; pool-create bodies get it too so claims still match their pool.
+#
 #   SANDKILN_INTEGRATION_TEST_PARALLELISM (default 4) caps how many topic
 #   files run at once. Each topic mostly runs sandboxes one at a time, but
 #   they all draw from the same physical tap-device pool (32 by default,

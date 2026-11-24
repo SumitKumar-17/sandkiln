@@ -31,7 +31,11 @@ export class BenchContext {
   }
 
   create(): Promise<Sandbox> {
-    return Sandbox.create({ ...this.connection, tags: { [RUN_TAG_KEY]: this.runTag } });
+    return Sandbox.create({
+      ...this.connection,
+      tags: { [RUN_TAG_KEY]: this.runTag },
+      ...(this.options.imageId === null ? {} : { imageId: this.options.imageId }),
+    });
   }
 
   /** Deletes every sandbox and snapshot carrying this run's tag. Safe to call

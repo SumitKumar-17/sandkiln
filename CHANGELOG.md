@@ -51,15 +51,8 @@ loosely follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - `GET /status`: one authenticated document with version, uptime, object
   counts, tap devices free, disk headroom for the state and rootfs volumes,
-  rootfs clone methods, and plain-language warnings. Clients: `getStatus()`
-  (JS), `get_status()` (Python, sync and async), `kiln status` (exits 2 on
-  warnings). Integration topic `27-status`.
-
-### Added (SDK and CLI)
-- `sandbox.uploadDir` / `downloadDir` (JS SDK) and `kiln sandbox upload-dir` / `download-dir`: copy directory trees with modes and symlinks; downloads validate names and symlinks from the untrusted guest.
-
-### Added (CLI)
-- `kiln doctor`: end-to-end daemon check (reachable, host warnings, then a real create, exec and stop), timed per step; exits 0, 1 or 2.
+  rootfs clone methods, and plain-language warnings. Integration topic
+  `27-status`. Clients: see the SDK and CLI releases below.
 
 ### Fixed
 - Clones of one snapshot shared a random stream and a resumed clock was stale. The daemon now sends the guest agent a `ResumeFixup` (host entropy, forced reseed, wall clock) after every resume, claim and fork. Re-inject the guest agent into existing images (`scripts/dev.sh inject-agent`).
@@ -253,6 +246,11 @@ this list stays terse on purpose.
   `examples/named-persistent-sandbox` (persistent-by-default stop
   across two separate process runs).
 
+## sandkiln (Python) [0.4.0] — 2026-11-24
+
+### Added
+- `get_status()` (and `sandkiln.astatus.get_status`): host health and capacity from `GET /status`.
+
 ## sandkiln (Python) [0.3.0] — 2026-10-07
 
 ### Added
@@ -282,6 +280,15 @@ entry below and earlier), this just ships it to PyPI via
 `.github/workflows/publish-python-sdk.yml`'s OIDC trusted-publishing
 flow. No code change; versioned separately from the JS/TS SDK/CLI table
 below from here on, since the two don't need to move in lockstep.
+
+## [0.13.0] — 2026-11-24
+
+JS SDK `sandkiln` and CLI `sandkiln-cli`.
+
+### Added
+- `getStatus()` (SDK) and `kiln status`: host health and capacity from `GET /status`; the CLI exits 2 on warnings.
+- `kiln doctor`: end-to-end daemon check (reachable, host warnings, then a real create, exec and stop), timed per step; exits 0, 1 or 2.
+- `sandbox.uploadDir` / `downloadDir` (SDK) and `kiln sandbox upload-dir` / `download-dir`: copy directory trees with modes and symlinks; downloads validate names and symlinks from the untrusted guest.
 
 ## [0.12.0] — 2026-10-07
 

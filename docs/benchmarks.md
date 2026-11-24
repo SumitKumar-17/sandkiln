@@ -36,7 +36,7 @@ Log filter note: it is the binary name, `RUST_LOG=sandkilnd=debug`, not
 | Snapshot take | 485-727ms (309.6-335.0 on a quieter day; up to 990ms under load) |
 | Snapshot HTTP request | 0.56s (was 6.8s) |
 | Graceful shutdown, 3 live sandboxes | 0.75s |
-| Remaining boot floor | about 125ms systemd userspace (`dev-vda.device` 107ms, `fcnet.service` 45ms) |
+| Remaining boot floor | about 125ms systemd userspace (`dev-vda.device` 107ms, `fcnet.service` 45ms); an opt-in init-mode image removes it, see below (median 147ms to first command instead of 230ms) |
 
 ## History: before and after
 
@@ -107,6 +107,56 @@ caller experiences (it has a stated method, a recorded environment and the
 raw samples), while the published vmm-level rows remain the right figures for
 the cost of the VMM itself. Only snapshot take has a gap that is not explained
 by the layer difference.
+
+## Init-mode image: the agent as PID 1 (2026-11-24)
+
+Lever 1 of the [latency floor](design-notes/latency-floor.md). Same daemon,
+same kernel, same base rootfs; the only difference is that the second image's
+`/sbin/init` is the guest agent (`images/inject-agent.sh --init`, registered
+as `init-agent`). `examples/benchmark-suite --only create --iterations 30
+[--image init-agent]`, alternating default and init runs back to back on an
+idle daemon (the suite refuses a busy one), client-side wall time:
+
+| Metric (median, p95 in brackets) | Default (systemd), 4 runs of 30 | Init mode, 2 valid runs of 30 |
+| --- | --- | --- |
+| `create_call` | 20.8-22.7ms | 19.6-21.9ms (no change, as expected) |
+| `first_command_after_create` | 204.5-212.5ms (p95 228-235) | 122.6-127.5ms (p95 134-143) |
+| **`create_to_first_command`** | **225.5-234.6ms** (p95 248-258, min 205-219) | **144.6-149.7ms** (p95 156-167, min 123-131) |
+
+About 83ms (36%) off the median, 232ms to 147ms pooled. The goal in the
+latency note was 110ms; **it was not met**. Guest uptime at the first command
+is 0.10-0.15s on the init image against 0.18-0.22s on systemd, and the
+agent process starts at 0.08-0.11s of guest uptime, so what remains is mostly
+the kernel reaching userspace (80-100ms with this CI kernel, including the
+`ip=` configuration), not init. The next lever is the kernel (lever 5) and
+moving the interface setup out of `ip=`.
+
+Two measurement traps hit on the way, both recorded because they are easy to
+repeat: (1) a first pair of init runs showed `create_call` 98ms instead of
+22ms and a total of 222ms, a 3-4ms-per-MB full copy of the image, because
+registering an image copies it into `images_dir`, which was on the ext4 root
+volume (no reflink); those two runs are discarded (`rootfs_clones.copy` rose
+by 60). (2) The suite measures create plus first command, so a faster `create`
+alone would not have shown up. Not measured: the parallel benchmark on the
+init image (another job held a live sandbox, so the suite refused to run
+without `--allow-busy`, which would have skewed it) and the post-init
+`initcall_debug` profile.
+
+Correctness on the init image: the whole integration suite
+(`SANDKILN_INTEGRATION_TEST_IMAGE=init-agent scripts/integration-test.sh`,
+29 topics) passed 353 of 353, including exec, files, PTY, exec streaming,
+previews and tunnels, egress, snapshots, fork, resume with the entropy and
+clock fixup, and pools (pool creates and claims go through the same image).
+The same suite on the default image passed 352 of 353 on its one run; the
+failure was `18-pool`'s "deleting the pool also cleaned up exactly its own
+warm snapshot (expected 1, got 2)", which passed on rerun on both images (a
+flake against another job's snapshots on the shared box). Not covered: remote
+storage mounts (`22-mounts` skips without a FUSE kernel and an object-store
+endpoint), auth, and the jailer topic (not enabled on this daemon).
+By hand on the init image: PID 1 is the agent, mounts match the systemd list
+minus the systemd-private ones, `lo` is up, a double-forked orphan leaves no
+zombie, and killing the agent is survived (init respawns it and the next exec
+succeeds).
 
 ## Per-phase profile of a cold create
 
