@@ -179,6 +179,31 @@ fn config_path_for(mount_id: &str) -> String {
     format!("/root/.sandkiln-rclone-{mount_id}.conf")
 }
 
+/// Probe run in the guest before a mount touches anything: exit 10 when the
+/// `rclone` binary is missing, 11 when the kernel has no `/dev/fuse`. A
+/// shell script rather than two requests so it costs one round trip, and
+/// it works against any guest agent version.
+const MOUNT_PREFLIGHT_SCRIPT: &str = "command -v rclone >/dev/null 2>&1 || exit 10; [ -c /dev/fuse ] || exit 11";
+const PREFLIGHT_NO_RCLONE: i32 = 10;
+const PREFLIGHT_NO_FUSE: i32 = 11;
+
+/// Turns the probe's exit code into the reason this sandbox cannot mount, or
+/// `None` when it can (or the probe itself could not run, e.g. an image
+/// without `sh`: the mount is then attempted and reports its own failure).
+fn mount_preflight_error(exit_code: i32) -> Option<String> {
+    match exit_code {
+        PREFLIGHT_NO_RCLONE => Some(
+            "remote storage mounts need the rclone binary inside the sandbox, and this image does not have one (see images/inject-rclone.sh)"
+                .to_string(),
+        ),
+        PREFLIGHT_NO_FUSE => Some(
+            "remote storage mounts need FUSE, and this sandbox's kernel has no /dev/fuse (build the guest kernel with CONFIG_FUSE_FS, see images/build-guest-kernel.sh)"
+                .to_string(),
+        ),
+        _ => None,
+    }
+}
+
 /// `Mkdir`/`WriteFile`/`Chmod` all report success as a bare
 /// `Response::Ok`, not `Response::Exec` — mirrors `http/routes/fs.rs`'s own
 /// private `ok_or_bad_request`, which isn't reusable from here.
@@ -215,6 +240,23 @@ pub async fn create_mount(
                 "{} is already mounted at {} — unmount it first (DELETE /sandboxes/{id}/mounts/{})",
                 existing.bucket, existing.mount_path, existing.id
             )));
+        }
+    }
+
+    let probe = call_agent(
+        state.clone(),
+        id.clone(),
+        Request::Exec {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), MOUNT_PREFLIGHT_SCRIPT.to_string()],
+            env: HashMap::new(),
+            timeout_secs: None,
+        },
+    )
+    .await?;
+    if let AgentResponse::Exec { exit_code, .. } = probe {
+        if let Some(reason) = mount_preflight_error(exit_code) {
+            return Err(AppError::BadRequest(reason));
         }
     }
 
@@ -372,6 +414,19 @@ mod tests {
     #[test]
     fn config_path_for_is_deterministic_and_namespaced_by_mount_id() {
         assert_eq!(config_path_for("abc-123"), "/root/.sandkiln-rclone-abc-123.conf");
+    }
+
+    #[test]
+    fn preflight_names_what_is_missing() {
+        assert!(mount_preflight_error(PREFLIGHT_NO_RCLONE).unwrap().contains("rclone binary"));
+        assert!(mount_preflight_error(PREFLIGHT_NO_FUSE).unwrap().contains("/dev/fuse"));
+    }
+
+    #[test]
+    fn preflight_passes_on_success_and_on_a_probe_that_could_not_run() {
+        assert_eq!(mount_preflight_error(0), None);
+        assert_eq!(mount_preflight_error(127), None);
+        assert_eq!(mount_preflight_error(126), None);
     }
 
     fn sample_request() -> CreateMountRequest {
