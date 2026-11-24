@@ -1,65 +1,33 @@
-# AGENTS.md — images/
+# AGENTS.md: images/
 
-Read root `AGENTS.md` first. No build system of its own — kernel/rootfs
-build and manipulation scripts, bash, same conventions as `scripts/`
-(`set -euo pipefail`, header usage comment, idempotent where reasonable,
-cleanup trap on anything that mounts/chroots).
+Read root `AGENTS.md` first. Kernel and rootfs build and manipulation scripts. Bash, same conventions as `scripts/`:
+`set -euo pipefail`, a header usage comment, idempotent where reasonable, and a cleanup trap on anything that
+mounts or chroots.
 
-## What exists here
+## Files
 
-- `fetch-test-image.sh` — pulls a known-good kernel + minimal rootfs from
-  Firecracker's public CI artifacts. **Not a production image** (lacks
-  even CA certificates) — kept for a fast manual sanity check only.
-- `inject-agent.sh` — bakes the guest agent into a rootfs (mount, copy to
-  `/usr/local/bin/`, install + enable a systemd service). Works against
-  any systemd rootfs.
-- `build-guest-kernel.sh` — rebuilds `vmlinux` with `CONFIG_FUSE_FS`
-  enabled (off in Firecracker's default/CI configs; guest kernels can't
-  load modules at runtime), from Firecracker's published recommended
-  config, reconciled with `make olddefconfig`. Only needed for remote
-  storage mounts — most sandboxes don't need it.
-- `inject-rclone.sh` — bakes `rclone` + `fusermount3` into a rootfs, same
-  shape as `inject-agent.sh`. `fusermount3` is needed even running as
-  root: rclone's FUSE backend always execs it, no direct `mount(2)`
-  fallback. Depends only on libc — copy straight from any Debian/Ubuntu
-  host's `/bin/fusermount3` (`fuse3` package).
-- `build-universal-image.sh` — builds the actual production
-  `SANDKILN_BASE_ROOTFS` from scratch with `debootstrap`: Ubuntu + current
-  Node.js LTS + Python 3 + common CLI tooling + a working systemd init, as
-  an ext4 image. Replaces `fetch-test-image.sh`'s stripped CI test image
-  for anything real — that one is missing even `ca-certificates`. Calls
-  `setup-multi-agent-users.sh` automatically as its last step. See "Base
-  and custom images" in `ROADMAP.md`.
-- `setup-multi-agent-users.sh` — bakes multi-agent isolation into a
-  rootfs: N sequential agent user accounts, each a private home
-  directory, plus a shared group/directory for deliberate cross-agent
-  file sharing. Runs automatically from `build-universal-image.sh`, but
-  also standalone against any already-built ext4 image. See "Multi-agent
-  isolation" in `ROADMAP.md`.
+- `fetch-test-image.sh`: kernel plus a minimal rootfs from Firecracker's public CI artifacts. Not a production
+  image (no CA certificates); for a quick sanity check.
+- `inject-agent.sh`: bakes the guest agent into any systemd rootfs (copy to `/usr/local/bin/`, install and enable
+  the service).
+- `build-guest-kernel.sh`: rebuilds `vmlinux` with `CONFIG_FUSE_FS` (off in Firecracker's configs; guest kernels
+  cannot load modules). Only needed for remote storage mounts.
+- `inject-rclone.sh`: bakes `rclone` and `fusermount3` into a rootfs. `fusermount3` is needed even as root because
+  rclone's FUSE backend always execs it; it depends only on libc, so copy it from any Debian/Ubuntu `/bin/fusermount3`.
+- `build-universal-image.sh`: builds the production `base_rootfs` with `debootstrap` (Ubuntu, Node.js LTS, Python 3,
+  common tooling, systemd) as ext4, then runs `setup-multi-agent-users.sh`.
+- `setup-multi-agent-users.sh`: N sequential agent users with private homes plus a shared group and directory. Runs
+  from the universal build, or standalone on any ext4 image.
+- `README.md`: user-facing notes for these scripts.
 
-## Non-obvious things
+## Invariants
 
-- **Every loop-device-mounting script needs a cleanup trap** — a
-  mid-mount death without unmounting leaves a stale loop device and a
-  locked image file on the shared dev box. Follow `inject-agent.sh`'s
-  `trap cleanup EXIT` pattern.
-- **These scripts need real root and network access** — can't be
-  meaningfully tested sandboxed. Without that access, write the script
-  correctly and say so plainly; whoever has the real dev box must
-  actually run it before it's "done."
-- `SANDKILN_BASE_ROOTFS` controls the **default** image every new
-  sandbox boots from — building a new image doesn't change that until
-  the env var points at it and the daemon restarts. A single sandbox can
-  instead boot from a *registered* image without touching the default
-  (see Managed images below).
-- **Managed images**: `routes_images.rs` (`POST/GET /images`,
-  `DELETE /images/:id`) registers an already-built ext4 rootfs under a
-  name, referenced per sandbox via `image_id`
-  (`kiln sandbox create --image <id>`). Copies the file into
-  `SANDKILN_IMAGES_DIR` — no HTTP upload, no building/converting; the
-  file must already be a real ext4 rootfs with the agent injected
-  (`inject-agent.sh`). The daemon can't verify that itself (no root to
-  loop-mount) — `scripts/preflight-check.sh --root-checks --rootfs-image
-  <path>` confirms it before registering. Converting a Docker/OCI image
-  into a bootable rootfs is a separate, larger problem this mechanism
-  doesn't attempt.
+- Every script that mounts a loop device needs a cleanup trap (`inject-agent.sh`'s `trap cleanup EXIT`); a mid-mount
+  death leaves a stale loop device and a locked image on the shared dev box.
+- These need real root and network access. If you cannot run them, say so; someone with the dev box must run one
+  before it is done.
+- `base_rootfs` is the default image for every new sandbox. A new image changes nothing until that setting points at
+  it and the daemon restarts. A single sandbox can boot a registered image instead (`POST /images`, `image_id`; handled
+  in the daemon's `http/routes/images.rs` and `sandkiln-vmm`'s `image.rs`). The daemon cannot verify the agent is
+  baked in, so run `scripts/preflight-check.sh --root-checks --rootfs-image <path>` before registering. OCI conversion
+  is not attempted.

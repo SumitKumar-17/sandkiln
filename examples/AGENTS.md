@@ -1,66 +1,32 @@
-# AGENTS.md — examples
+# AGENTS.md: examples
 
-Read root `AGENTS.md` first.
-
-## What this is
-
-Real, runnable reference projects on the published SDKs (`sandkiln` on
-npm/PyPI) — not README snippets. Each subdirectory is standalone with its
-own manifest, not a workspace member, so it looks like what an external
-user would actually write.
+Read root `AGENTS.md` first. Real, runnable reference projects on the published SDKs (`sandkiln` on npm and PyPI), not
+README snippets. Each subdirectory is standalone with its own manifest and is not a workspace member, so it looks like
+what an external user would write.
 
 ## Contents
 
-- `code-playground/` — JS/TS. Runs code from a file/stdin in a sandbox,
-  prints stdout/stderr/exit code.
-- `agent-runner/` — Python. Runs a stand-in "agent-generated" script,
-  reads back a result file.
-- `dev-server-preview/` — JS/TS. Starts a server in a sandbox, prints the
-  browser URL via `Sandbox.previewUrl()` + the preview reverse proxy.
-- `interactive-terminal/` — JS/TS. Live bidirectional shell via
-  `Sandbox.pty()`, raw-mode passthrough to this process's terminal —
-  distinct from `code-playground`'s request/response `runCommand()`.
-- `snapshot-lifecycle/` — JS/TS. Snapshots a setup step, forks two
-  independent branches from it, proves neither's writes leak into the
-  other, then consumes the snapshot via `resume()` and confirms it's
-  gone — the concrete fork-vs-resume distinction.
-- `named-persistent-sandbox/` — JS/TS. `getOrCreate()` by name, writes a
-  counter, stops with default (state-keeping) options, repeats as a
-  simulated second process — proves the counter persists by name alone,
-  no id tracked by the caller.
-- `pool-warm-start/` — JS/TS. Claims from a pre-warmed pool several times
-  in a row, reporting each as a clean claim or health-check fallback —
-  see its README's "Why several attempts, not one" before assuming a pool
-  claim is always instant-fast.
-- `exec-stream-logs/` — JS/TS. Starts a detached command, live-tails via
-  `.attachLogs()`, then **reattaches after it finished** and gets the
-  identical buffered log back in milliseconds.
-- `remote-storage-mount/` — JS/TS. Mounts an S3-compatible bucket at
-  `/mnt/bucket`, read/write through it, unmounts, confirms the FUSE mount
-  is gone. Needs the optional FUSE+rclone rootfs setup (`SELF_HOSTING.md`)
-  and `S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`.
-- `egress-policy/` — JS/TS. Pings a caller-supplied `EGRESS_EXAMPLE_TARGET_IP`
-  under no-policy / `deny_all` / `deny_all + allowCidrs` — the real
-  allow/deny behavior, not just "doesn't break normal use." No hardcoded
-  target: a public IP silently "passes" on a host with no outbound route
-  (a real dev-box finding), a LAN IP isn't portable.
-- `local-tunnel/` — JS/TS. Starts a real local HTTP server on this
-  machine, opens a tunnel with `sandbox.tunnel()`, then `curl`s it from
-  **inside** the sandbox and confirms the exact bytes came back — the
-  reverse of `dev-server-preview/`.
+| Directory | Language | Shows |
+|---|---|---|
+| `code-playground/` | JS | run code from a file or stdin, print stdout, stderr, exit code |
+| `agent-runner/` | Python | run a stand-in agent-generated script, read back a result file |
+| `dev-server-preview/` | JS | start a server, print its browser URL via `previewUrl()` |
+| `interactive-terminal/` | JS | live shell through `pty()` with raw-mode passthrough |
+| `snapshot-lifecycle/` | JS | snapshot, two independent forks, then `resume()` consuming the snapshot |
+| `named-persistent-sandbox/` | JS | `getOrCreate()` by name; state survives a default `stop()` |
+| `pool-warm-start/` | JS | repeated pool claims, each reported as a clean claim or a health-check fallback |
+| `exec-stream-logs/` | JS | detached command, live tail, then reattach after it finished |
+| `remote-storage-mount/` | JS | mount an S3-compatible bucket, read and write through it, unmount |
+| `egress-policy/` | JS | ping a caller-supplied IP under no policy, `deny_all`, and `deny_all` plus `allowCidrs` |
+| `local-tunnel/` | JS | `tunnel()` a local HTTP server into the sandbox and `curl` it from inside |
 
 ## Conventions
 
-- Every example needs a real running `sandkilnd` — nothing mocked. See
-  root `SELF_HOSTING.md`.
-- Stay minimal — if an example needs its own abstraction layer to stay
-  readable, that abstraction belongs in a library, not here.
-- Depend on the published `sandkiln` package, not in-repo source paths.
-  Exception: an SDK method not yet published points at `packages/sdk`,
-  stated visibly in its README, switched back to a version range the
-  next release after it ships (checked and fixed for `local-tunnel/`
-  this session — `tunnel()` shipped in SDK 0.12.0). A daemon feature with
-  no SDK surface calls the HTTP API directly — don't invent SDK methods
-  to demo it.
-- Each `README.md` states what it does, exact run commands, config env
-  vars, and a pointer to `SELF_HOSTING.md`.
+- Every example needs a real running `sandkilnd`; nothing is mocked (see `SELF_HOSTING.md`).
+- Stay minimal. An abstraction layer an example needs belongs in a library.
+- Depend on the published `sandkiln` package, not in-repo paths. If an SDK method is not published yet, point at
+  `packages/sdk`, say so in the README, and switch back to a version range after the release. A daemon feature with no
+  SDK surface calls the HTTP API directly; do not invent SDK methods.
+- Each `README.md` follows one template: what it does, requirements, run commands, configuration, notes.
+- `egress-policy/` takes its target IP from the caller: a hardcoded public IP would pass falsely on a host with no
+  outbound route.
