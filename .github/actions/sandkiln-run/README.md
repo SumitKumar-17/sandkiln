@@ -7,7 +7,7 @@ afterwards. It needs a reachable `sandkilnd`; it does not start one (see
 topologies and what GitHub-hosted runners can and cannot do).
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v5
   with:
     persist-credentials: false
 - uses: ./.github/actions/sandkiln-run
@@ -31,7 +31,7 @@ topologies and what GitHub-hosted runners can and cannot do).
 | `allow-cidrs` | empty | Comma-separated CIDRs allowed under `deny_all`. |
 | `timeout` | `600` | Seconds before the job is killed in the sandbox and the step fails with exit code 124. Needs `timeout` (coreutils or busybox) in the image. |
 | `keep-on-failure` | `false` | Leave the sandbox running when the command fails. You must remove it. |
-| `cli-version` | `0.12.0` | `sandkiln-cli` version installed from npm. |
+| `cli-version` | `0.14.0` | `sandkiln-cli` version installed from npm. |
 | `install-cli` | `true` | `false` when `kiln` and Node.js 22+ are already on `PATH`. |
 
 ## Outputs

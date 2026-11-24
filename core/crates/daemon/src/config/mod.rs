@@ -27,6 +27,9 @@ pub struct JailerHostConfig {
     pub uid_gid_range: RangeInclusive<u32>,
 }
 
+/// Ceiling on `default_warm_count`: every warm instance is a full-RAM snapshot on disk and a guest address.
+const MAX_DEFAULT_WARM_COUNT: u32 = 32;
+
 pub struct Config {
     /// Where the effective values came from, for `--print-config`.
     pub origins: std::collections::BTreeMap<&'static str, Origin>,
@@ -130,6 +133,8 @@ pub struct Config {
     pub kernel_args: String,
     /// Cap on retained time-travel checkpoints; `0` = unlimited.
     pub retained_checkpoints_max: usize,
+    /// Warm instances of the default shape kept ready (the `default` pool); 0 disables.
+    pub default_warm_count: u32,
     /// `None` (default, `SANDKILN_JAILER_ENABLED` unset/falsy) keeps
     /// direct Firecracker spawn. See `JailerHostConfig`.
     pub jailer: Option<JailerHostConfig>,
@@ -237,6 +242,10 @@ impl Config {
         let mut r = Resolver::new(env, file_values);
         let vcpu_count: u8 = r.number("vcpu_count");
         let mem_size_mib: u32 = r.number("mem_size_mib");
+        let default_warm_count: u32 = r.number("default_warm_count");
+        if default_warm_count > MAX_DEFAULT_WARM_COUNT {
+            r.error(format!("default_warm_count ({default_warm_count}) is above {MAX_DEFAULT_WARM_COUNT}: each warm instance holds a full-RAM snapshot and a guest address"));
+        }
         let max_vcpu_count: u8 = r.number("max_vcpu_count");
         let max_mem_size_mib: u32 = r.number("max_mem_size_mib");
         if vcpu_count > max_vcpu_count {
@@ -311,6 +320,7 @@ impl Config {
             exec_timeout: Duration::from_secs(exec_timeout_secs),
             kernel_args: r.opt_string("kernel_args").unwrap_or_default(),
             retained_checkpoints_max: r.number("retained_checkpoints_max"),
+            default_warm_count,
             jailer,
             origins: Default::default(),
         };
@@ -346,6 +356,7 @@ impl Config {
             "preview_timeout_secs" => Some(self.preview_timeout.as_secs().to_string()),
             "exec_timeout_secs" => Some(self.exec_timeout.as_secs().to_string()),
             "retained_checkpoints_max" => Some(self.retained_checkpoints_max.to_string()),
+            "default_warm_count" => Some(self.default_warm_count.to_string()),
             "kernel_args" => Some(self.kernel_args.clone()).filter(|a| !a.is_empty()),
             "firecracker_bin" => p(&self.firecracker_bin),
             "kernel_path" => p(&self.kernel_path),

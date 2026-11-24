@@ -45,6 +45,24 @@ pub struct PoolKey {
     pub mem_size_mib: u32,
 }
 
+/// Id of the implicit pool for the daemon's default shape. `POST /pools` with
+/// this id is a 409 like any taken id; deleting it lasts until restart.
+pub const DEFAULT_POOL_ID: &str = "default";
+
+/// The implicit pool serving a plain `POST /sandboxes`: the daemon's own
+/// default image, vCPU and memory, `warm_count` ready, no ceiling. `None`
+/// when `warm_count` is 0 (disabled).
+pub fn default_pool_config(vcpu_count: u8, mem_size_mib: u32, warm_count: u32) -> Option<PoolConfig> {
+    (warm_count > 0).then(|| PoolConfig {
+        id: DEFAULT_POOL_ID.to_string(),
+        image_id: None,
+        vcpu_count,
+        mem_size_mib,
+        warm_count,
+        max_count: None,
+    })
+}
+
 impl PoolConfig {
     pub fn key(&self) -> PoolKey {
         PoolKey { image_id: self.image_id.clone(), vcpu_count: self.vcpu_count, mem_size_mib: self.mem_size_mib }
@@ -134,6 +152,14 @@ impl Pool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_pool_serves_the_daemon_default_shape_and_is_off_at_zero() {
+        let c = default_pool_config(2, 1024, 3).expect("enabled");
+        assert_eq!((c.id.as_str(), c.image_id.clone(), c.vcpu_count, c.mem_size_mib, c.warm_count, c.max_count), ("default", None, 2, 1024, 3, None));
+        assert_eq!(c.key(), PoolKey { image_id: None, vcpu_count: 2, mem_size_mib: 1024 });
+        assert!(default_pool_config(2, 1024, 0).is_none());
+    }
 
     fn config() -> PoolConfig {
         PoolConfig { id: "p1".to_string(), image_id: None, vcpu_count: 2, mem_size_mib: 512, warm_count: 2, max_count: None }

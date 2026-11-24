@@ -161,6 +161,22 @@ assert_eq "deleting the pool also cleaned up exactly its own warm snapshot" "1" 
 status="$(req DELETE "/pools/it-pool-$$")"
 assert_status "deleting an already-deleted pool is a 404" 404 "$status"
 
+section "pre-warmed pools: a pool wanting more than one warm instance fills up"
+# Regression: the replenisher used to boot through the normal create path,
+# which matched its own pool and resumed the pool's warm snapshot, so a pool
+# with warm_count 2 stayed at 1 forever.
+FILL_POOL_MEM=224
+status="$(req POST /pools "{\"id\":\"it-pool-fill-$$\",\"warm_count\":2,\"mem_size_mib\":$FILL_POOL_MEM}")"
+assert_status "create a pool with warm_count 2" 200 "$status"
+CREATED_POOLS+=("it-pool-fill-$$")
+if wait_for_warm "it-pool-fill-$$" 2; then
+  pass "a pool with warm_count 2 reaches 2 warm instances"
+else
+  fail "a pool with warm_count 2 never reached 2 warm instances"
+fi
+status="$(req DELETE "/pools/it-pool-fill-$$")"
+assert_status "delete the filled pool" 204 "$status"
+
 section "pre-warmed pools: max_count ceiling and queueing"
 # warm_count: 0 here deliberately -- this section is only about the
 # max_count/claimed-count lifecycle, not replenishment (already covered

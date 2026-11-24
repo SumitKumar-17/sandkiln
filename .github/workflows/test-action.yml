@@ -38,7 +38,7 @@ jobs:
       matrix:
         cli-version: ["0.12.0", "0.14.0"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Start the stub daemon
@@ -61,12 +61,14 @@ jobs:
         env:
           SANDBOX_ID: ${{ steps.run.outputs.sandbox-id }}
           EXIT_CODE: ${{ steps.run.outputs.exit-code }}
+          CLI: ${{ matrix.cli-version }}
         run: |
           set -eu
           test -n "$SANDBOX_ID"
           test "$EXIT_CODE" = 0
-          which kiln
-          kiln --version
+          # The pinned version, not whatever else is on the runner, was installed.
+          test "$(command -v kiln)" = "$RUNNER_TEMP/sandkiln-cli/bin/kiln"
+          npm ls --global --prefix "$RUNNER_TEMP/sandkiln-cli" | grep -F "sandkiln-cli@${CLI}"
           ${{ env.STUB }}/assert-requests.sh destroyed "$SANDBOX_ID"
           ${{ env.STUB }}/assert-requests.sh streamed "$SANDBOX_ID"
 
@@ -74,7 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Start the stub daemon
@@ -106,7 +108,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Start the stub daemon
@@ -147,7 +149,7 @@ jobs:
         id: gate
         run: |
           if [ -n "$FAKE_TOKEN" ]; then echo "present=true" >>"$GITHUB_OUTPUT"; else echo "::notice::SANDKILN_FAKE_TOKEN is not available here; skipping the masking test"; fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: steps.gate.outputs.present == 'true'
         with:
           persist-credentials: false
@@ -188,7 +190,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Start the stub daemon
@@ -238,7 +240,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Start the stub daemon

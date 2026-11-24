@@ -240,6 +240,7 @@ mod tests {
                 exec_timeout: std::time::Duration::from_secs(600),
                 kernel_args: String::new(),
                 retained_checkpoints_max: 16,
+            default_warm_count: 0,
                 state_dir: dir.join("state"),
                 rootfs_dir: dir.join("rootfs"),
                 images_dir: dir.join("images"),

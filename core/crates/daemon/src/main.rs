@@ -163,6 +163,11 @@ async fn async_main(loaded: config::Loaded) {
     let archive_dir = config.archive_dir.clone();
     let state = Arc::new(AppState::new(config, net_manager, drives, images, reconciled_snapshots, reconciled_retired, history));
 
+    if let Some(pool) = lifecycle::pool::default_pool_config(state.config.vcpu_count, state.config.mem_size_mib, state.config.default_warm_count) {
+        tracing::info!(warm_count = pool.warm_count, "default warm pool enabled: a plain create resumes a warm instance");
+        state.pools.lock().unwrap().insert(pool.id.clone(), lifecycle::pool::Pool::new(pool));
+    }
+
     if let Some(auto_suspend_timeout) = auto_suspend_timeout {
         tracing::info!(auto_suspend_timeout_secs = auto_suspend_timeout.as_secs(), "idle sandbox auto-suspend enabled");
     }

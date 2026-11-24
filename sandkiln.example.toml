@@ -53,6 +53,11 @@
 # Ceiling on a per-sandbox memory override, in MiB.
 # max_mem_size_mib = 16384
 
+# ---- pools ----
+
+# Warm instances of the daemon's default shape (default image, vCPU and memory) kept ready in the background, so a plain `POST /sandboxes` resumes one (about 8ms to first command) instead of cold booting (about 210ms). Each is a held full-RAM snapshot on disk and holds one guest address; replenishment pauses when addresses or disk run low. 0 disables. Shown as the pool `default`.
+# default_warm_count = 2
+
 # ---- storage ----
 
 # Durable state: held snapshots and retired checkpoints.

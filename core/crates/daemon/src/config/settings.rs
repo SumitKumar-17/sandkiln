@@ -57,6 +57,12 @@ pub const SETTINGS: &[Setting] = &[
         "storage",
         "How many retired checkpoints (time-travel restore points, each a full-RAM snapshot plus a rootfs) to keep. Beyond this the oldest are deleted after each resume. 0 keeps all, which can fill the disk.",
     ),
+    s(
+        "default_warm_count",
+        Some("2"),
+        "pools",
+        "Warm instances of the daemon's default shape (default image, vCPU and memory) kept ready in the background, so a plain `POST /sandboxes` resumes one (about 8ms to first command) instead of cold booting (about 210ms). Each is a held full-RAM snapshot on disk and holds one guest address; replenishment pauses when addresses or disk run low. 0 disables. Shown as the pool `default`.",
+    ),
     s("firecracker_bin", Some("~/sandkiln-tools/bin/firecracker"), "vm", "Path to the Firecracker binary."),
     s("kernel_path", Some("~/sandkiln-tools/images/vmlinux-5.10.223"), "vm", "Guest kernel image (vmlinux)."),
     s("base_rootfs", Some("~/sandkiln-tools/images/ubuntu-22.04.ext4"), "vm", "Default base rootfs image sandboxes boot from."),
