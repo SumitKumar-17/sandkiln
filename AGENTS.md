@@ -231,9 +231,16 @@ verification — same bar as a human contributor's claim.
 
 ## 17. Git
 
-Commit small and often, no cap on commit count. Identity is always
-`SumitKumar-17 <sumitkanpur2005@gmail.com>` — never the session default,
-never a `Co-Authored-By` trailer.
+Work on a branch and land it through a pull request that is squash-merged
+into one commit (`gh pr merge --squash --delete-branch`) once its checks pass;
+never push to `main` directly. One PR is one logical change with a body that
+says the problem, the change and how it was verified. Identity is always
+`SumitKumar-17 <sumitkanpur2005@gmail.com>`, never the session default, never
+a `Co-Authored-By` trailer.
+
+History: on 2026-11-24 `main` was squashed from 478 commits into milestone
+commits (identical tree). The original history is the `archive/full-history`
+branch and every release tag still points into it; do not delete either.
 
 ## 18. Final review
 
