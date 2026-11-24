@@ -3,7 +3,7 @@ import { registerDriveCommands } from "./commands/drive.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerImageCommands } from "./commands/image.js";
 import { registerPoolCommands } from "./commands/pool.js";
-import { registerSandboxCommands } from "./commands/sandbox.js";
+import { registerSandboxCommands } from "./commands/sandbox/index.js";
 import { registerStatusCommand } from "./commands/status.js";
 import { fail } from "./commands/shared.js";
 

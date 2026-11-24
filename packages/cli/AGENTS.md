@@ -19,14 +19,20 @@ operation delegates to the SDK.
   `clientOptions` (resolves `--base-url`/`--token`, falls through to the
   SDK's env resolution when unset), `fail`/`handleApiError` (clean
   `error: ...` on stderr + exit 1, never a raw stack trace).
-- **`src/commands/sandbox.ts`** — the large group: `sandbox
-  create|get-or-create|by-name|ls|rm|exec|read|write|preview|pty|tunnel|
-  exec-stream|logs|snapshot|snapshots|resume|fork|chmod|chown|mkdir|
-  rename|cp|symlink|readlink|truncate|ls-dir|mount|mounts|unmount`, each
-  a thin call into `Sandbox`/`Sandbox.attach()`. Also owns
-  `tagOption`/`envOption`/`buildEgressOption` and local helpers
-  `attachSandbox` (reconstructs a handle from an id, no round-trip) and
-  `followLogs` (replay-then-live-tail, shared by `exec-stream`/`logs`).
+- **`src/commands/sandbox/`** — the large group, split by concern. Each
+  subcommand is its own `register<Name>(sandbox)` function (one per
+  command), grouped in: `lifecycle.ts` (`create|get-or-create|by-name|ls|rm|
+  snapshot|snapshots|resume|fork`), `exec.ts` (`exec|pty|exec-stream|logs`,
+  plus `followLogs`, the replay-then-live-tail shared by `exec-stream` and
+  `logs`), `files.ts` (`read|write|chmod|chown|mkdir|rename|cp|symlink|
+  readlink|truncate|ls-dir|upload-dir|download-dir`), `network.ts`
+  (`preview|tunnel|mount|mounts|unmount`) and `helpers.ts` (`tagOption`/
+  `envOption`/`buildEgressOption`, and `attachSandbox`, which reconstructs a
+  handle from an id with no round-trip). `index.ts` owns
+  `registerSandboxCommands` and the one ordered `REGISTRARS` list, which is
+  the order `kiln sandbox --help` prints; a new subcommand is a new function
+  in the matching module plus a line there. Each is a thin call into
+  `Sandbox`/`Sandbox.attach()`.
   - `pty <id>`: raw stdin mode so every keystroke (incl. Ctrl+C) goes
     straight to the remote shell. Real gotcha already found: a 10s hang
     after shell exit was a guest-side bug (`close` never fired until the
@@ -63,7 +69,11 @@ operation delegates to the SDK.
 
 ## Testing
 
-`node:test`, no added dep. `test/format.test.js` imports compiled
+`node:test`, no added dep. `test/sandbox-commands.test.js` reads the built
+CLI's `sandbox --help` output and compares every subcommand's usage line and
+option flags (and their order) to a literal, so a split or refactor cannot
+drop a command; update it when you add or change one on purpose.
+`test/format.test.js` imports compiled
 `dist/format.js` (built as its own banner-less `tsup` entry so it's
 importable standalone); `npm test` runs `pretest` (build) first. Run:
 `npm run test -w sandkiln-cli`.
