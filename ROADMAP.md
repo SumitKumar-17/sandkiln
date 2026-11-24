@@ -65,7 +65,8 @@ In order, most load-bearing first.
    [latency investigation](docs/design-notes/latency-investigation.md).
 4. **Guest userspace boot.** About 125ms of systemd (`dev-vda.device`
    107ms, `fcnet.service` 45ms) is the remaining floor to first command: a
-   purpose-built init or trimmed image.
+   purpose-built init or trimmed image. Ranked levers and goals:
+   [latency floor](docs/design-notes/latency-floor.md).
 5. **MCP server** so agents drive sandboxes directly, and a per-request exec
    timeout that also kills the guest process (today the process keeps
    running after a 504).
