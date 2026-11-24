@@ -28,17 +28,11 @@ Our cold path has more stages than the bound covers, and some conditions differ:
 
 ```mermaid
 flowchart LR
-    subgraph H["host, create call, about 16 to 21 ms"]
-        h1["clone rootfs, lease tap"] --> h2["spawn Firecracker, configure"] --> h3["InstanceStart returns, about 13 ms of it"]
-    end
-    subgraph G["guest, runs after the call returned"]
-        g1["kernel boots"] --> g2["init starts, Firecracker's 125 ms bound ends here"] --> g3["systemd reaches the agent"] --> g4["agent listening on vsock"]
-    end
-    H --> G
-    g4 --> x["first command answers"]
+    h1["host: clone rootfs, lease tap"] --> h2["host: spawn Firecracker, configure"] --> h3["host: InstanceStart returns, create call over"]
+    h3 --> g1["guest: kernel boots"] --> g2["guest: init starts, Firecracker's 125 ms bound ends here"] --> g3["guest: systemd reaches the agent"] --> g4["guest: agent listening on vsock"] --> x["first command answers"]
 ```
 
-The create call returns while the guest is still booting. Everything in the second box happens after `POST /sandboxes` has already answered 200, which is the reason a fast create call is not the same thing as a ready sandbox. The create call is a statement that Firecracker started. It is not a statement that anything inside the guest is listening, and the daemon does not wait for the agent before returning.
+The create call returns while the guest is still booting. Everything from the guest kernel onward happens after `POST /sandboxes` has already answered 200, which is the reason a fast create call is not the same thing as a ready sandbox. The create call is a statement that Firecracker started. It is not a statement that anything inside the guest is listening, and the daemon does not wait for the agent before returning.
 
 The same stages as a timeline of who is doing the work:
 
