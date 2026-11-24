@@ -33,6 +33,7 @@ a stated gap; **planned** not built.
 | Observability | done | Structured logs, request ids, `/metrics`, JSON logs, console capture. `GET /status` shipped with `kiln status` and SDK `getStatus`/`get_status`. |
 | History store | done | Sqlite record of every sandbox and how it ended. Live sandboxes do not survive a daemon crash. |
 | JS/TS SDK, Python SDK (sync and async), CLI | done | Published to npm and PyPI (`sandkiln`, `sandkiln-cli`). Gaps are the ones named in the rows above. |
+| MCP server (`sandkiln-mcp`) | partial | Stdio server with 12 tools and 2 resources, verified against a live daemon. Not published yet (no release workflow); exec timeout is client-side only. |
 | Docs site, website, examples | done | Ten runnable examples. |
 | Load testing | planned | Concurrency-ceiling ramp, see [load testing](docs/design-notes/load-testing.md). |
 | Multi-node, regions | planned | Deliberately last. |

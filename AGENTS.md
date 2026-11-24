@@ -20,6 +20,7 @@ core/crates/daemon/      axum HTTP API (sandkilnd)
 packages/sdk/            sandkiln npm package (TypeScript)
 packages/python/         sandkiln PyPI package (Python)
 packages/cli/            kiln CLI, wraps the JS/TS SDK
+packages/mcp/            sandkiln-mcp, MCP server (stdio) over the JS/TS SDK
 images/                  rootfs/kernel build + agent-injection scripts
 scripts/                 dev-box bootstrap, daemon lifecycle, tests
 website/                 marketing pages only, Astro, deployed via GitHub Pages
