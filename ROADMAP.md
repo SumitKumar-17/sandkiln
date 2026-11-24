@@ -5,10 +5,9 @@ something proven on real hardware, not just code that compiles. Detail,
 findings and numbers live in [`docs/`](docs/README.md).
 
 Last verified 2026-11-24 on the dev box (Intel i9-13900K, kernel 6.8,
-Firecracker v1.16.1): 345 unit tests, clippy clean, live suite
-(`scripts/integration-test.sh`) 334 of 335 and 333 of 335 on the last two
-full runs. The misses were the finding 20 pool flake (fixed since) and a timing bound
-that has since been loosened.
+Firecracker v1.16.1): 392 Rust unit tests, clippy clean, and the live suite
+(`scripts/integration-test.sh`, 393 checks over 31 topics) passed 393 of 393
+on three full runs in a row.
 
 Status key: **done** works end to end and is verified; **partial** works with
 a stated gap; **planned** not built.
@@ -56,7 +55,9 @@ Directional, one shared box. Method, full table and history in
 
 In order, most load-bearing first.
 
-1. **Re-run the full suite twice** to confirm finding 20's fix (25 of 55 early-snapshot resumes crashed before, 0 of 180 after) holds at suite scale.
+1. **Warm path by default.** A user-visible create should be a resume (8ms
+   to first command against 214ms cold): a default warm pool the operator does
+   not have to configure. Plan: [feature plan](docs/design-notes/feature-plan.md).
 2. **Admin tooling follow-up.** `GET /status`, `kiln status` and
    `getStatus`/`get_status` have shipped. `kiln doctor` has shipped as a
    client-side end-to-end probe (host prerequisite checks stay in
@@ -64,10 +65,10 @@ In order, most load-bearing first.
 3. **Snapshot-take cost.** Measure sandkiln's own overhead, then evaluate
    Firecracker Diff snapshots. See
    [latency investigation](docs/design-notes/latency-investigation.md).
-4. **Guest userspace boot.** About 125ms of systemd userspace, not to be confused with Firecracker's 125ms init bound (`dev-vda.device`
-   107ms, `fcnet.service` 45ms) is the remaining floor to first command: a
-   purpose-built init or trimmed image. Ranked levers and goals:
-   [latency floor](docs/design-notes/latency-floor.md).
+4. **Cold path.** The opt-in init-mode image reaches the first command in
+   about 147ms against about 232ms with systemd; what is left is mostly kernel
+   boot and `ip=` setup. Remaining steps before it can be the default, and the
+   other ranked levers: [latency floor](docs/design-notes/latency-floor.md).
 5. **Exec timeout for streamed exec.** `exec` takes a per-request
    `timeout_secs` that kills the guest process group (shipped; SDKs, CLI, MCP
    use it). `exec-stream` has no limit of its own: the GitHub Action runs the

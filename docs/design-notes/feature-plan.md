@@ -46,8 +46,8 @@ Verify: benchmark suite snapshot latency; a resume from a diff-chain is bit-iden
 ### 6. Per-request exec timeout that kills the process (Use, shipped)
 Shipped: `POST /sandboxes/:id/exec` takes `timeout_secs` (1 to `exec_timeout_secs`, which is also the default); the guest agent runs the command in its own process group, drains both pipes concurrently, and at the limit sends the group SIGTERM then SIGKILL after a 2 second grace, replying `Response::TimedOut` with the output so far, which the daemon returns as a 504 with `timed_out: true`. The no-limit wire shape is unchanged, and an agent that predates the field ignores it and runs unbounded. JS (`timeoutSeconds`, `SandkilnExecTimeoutError`), Python (`timeout=`, sync and async), `kiln sandbox exec --timeout` (exit 124) and MCP `sandbox_exec` use it. Verified live: topic `30-exec-timeout` (a `sleep 30` with `timeout_secs=2` answers in 2.0s and no `sleep` is left in the guest, including grandchildren of a shell), the CLI, both Python clients, the JS SDK, the MCP live smoke and the Action. Not done: `exec-stream` has no timeout (the Action wraps the job in `timeout` inside the guest); a process that calls `setsid` leaves the group and survives the kill (its pipe is abandoned after 2 seconds); a guest agent that predates the field still needs re-injecting before the limit takes effect.
 
-### 7. Pool claim accounting under load, finding 27 (Reliability, medium)
-Reproduce with the parallel loop plus pool create, claim and stop; log claim and release per pool id; fix the race. See [findings](../findings.md).
+### 7. Pool claim accounting under load, finding 27 (Reliability, done)
+The flake was topic interference, not a daemon race: pools serve any create of their shape. Fixed in the topic; see [findings](../findings.md).
 
 ### 8. Directory transfer (Use, shipped)
 `uploadDir`/`downloadDir` shipped in the JS SDK and CLI as per-file calls (no archive extraction from the untrusted guest). Remaining: Python parity and a live integration topic.
