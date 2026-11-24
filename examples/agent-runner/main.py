@@ -36,7 +36,7 @@ def main() -> None:
         print("--- result.json ---")
         print(result_bytes.decode("utf-8"))
     finally:
-        sandbox.stop()
+        sandbox.stop(keep=False)
         print(f"Sandbox {sandbox.id} stopped.")
 
 

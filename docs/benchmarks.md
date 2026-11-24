@@ -36,7 +36,33 @@ Log filter note: it is the binary name, `RUST_LOG=sandkilnd=debug`, not
 | Snapshot take | 485-727ms (309.6-335.0 on a quieter day; up to 990ms under load) |
 | Snapshot HTTP request | 0.56s (was 6.8s) |
 | Graceful shutdown, 3 live sandboxes | 0.75s |
-| Remaining boot floor | about 125ms systemd userspace (`dev-vda.device` 107ms, `fcnet.service` 45ms); an opt-in init-mode image removes it, see below (median 147ms to first command instead of 230ms) |
+| Remaining boot floor | about 125ms of systemd userspace in our guest (not to be confused with Firecracker's 125ms init bound; see "What each number measures") (`dev-vda.device` 107ms, `fcnet.service` 45ms); an opt-in init-mode image removes it, see below (median 147ms to first command instead of 230ms) |
+
+## What each number measures
+
+The same word ("boot", "create", "first command") names different intervals in
+different tools. Read a figure against this table before comparing it with
+another. The long version is
+[engineering post 29](../website/src/content/engineering/29-what-a-start-latency-number-means.md).
+
+| Figure | Interval it covers | Excludes | Statistic and source |
+| --- | --- | --- | --- |
+| Cold boot, `InstanceStart` (12.6-14.0ms) | Firecracker process spawn to `InstanceStart` returning: the host creating the VM and starting vCPUs | Guest kernel, init, agent | criterion, VMM level |
+| `POST /sandboxes` (16-18ms reflinked) | Daemon work: clone, lease, spawn, configure, start | Guest boot; the agent is not yet listening | Mean from `/metrics`; suite median 21.2ms through the SDK |
+| Create to first command (214.5ms) | `first_exec_client`: first real `exec` timed from the moment `create()` returned until it answers | The create call itself (add about 21ms for the suite's 235.4ms) | **Mean** over the `bench-report.sh` iterations, one box |
+| `first_command_after_create` (213.1ms) | The same interval, client side through the SDK | The create call | **Median** of n=20, `examples/benchmark-suite` |
+| Resume (3.7-4.0ms) | `PUT /snapshot/load` and resume, VMM level | HTTP hop, daemon bookkeeping, the guest's first command | criterion |
+| `resume_call` (13.1ms) | `Sandbox.resume()` through HTTP, including the daemon's resume work and the entropy and clock fixup | The first command | Median of n=20, suite |
+| Resumed first exec (8.4ms), `resume_first_command` (6.3ms) | First command after a resume returned | The resume itself | Mean (`bench-report.sh`) and median (suite) |
+| Exec round trip (about 245us) | One request on an already open vsock connection | HTTP, connection setup | criterion; the suite's 1.76ms is one HTTP request per command |
+| about 125ms systemd userspace | Time systemd spends after the kernel hands over to it, inside our guest | Kernel boot | `systemd-analyze` in the guest. **Not** Firecracker's 125ms init bound, which is the time until `/sbin/init` *starts* |
+
+Statistics used by the suite: the **median** is the middle sample (half faster,
+half slower), the **p95** is the value 19 of 20 samples are at or below, **min**
+and **max** are the extremes. Medians are reported because a single slow outlier
+(a disk flush, another process on the shared box) moves a mean but not a median;
+with n=20 the p95 sits next to the max and says little, so the median and min
+are the stable figures. Every number here comes from one shared box.
 
 ## History: before and after
 
@@ -133,7 +159,7 @@ moving the interface setup out of `ip=`.
 
 Two measurement traps hit on the way, both recorded because they are easy to
 repeat: (1) a first pair of init runs showed `create_call` 98ms instead of
-22ms and a total of 222ms, a 3-4ms-per-MB full copy of the image, because
+22ms and a total of 222ms, a full copy of the 300MB image on every create, because
 registering an image copies it into `images_dir`, which was on the ext4 root
 volume (no reflink); those two runs are discarded (`rootfs_clones.copy` rose
 by 60). (2) The suite measures create plus first command, so a faster `create`

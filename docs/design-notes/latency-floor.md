@@ -18,7 +18,7 @@ rootfs, directional only.
    is bounded by the memory-file mapping and the first guest page faults:
    single-digit milliseconds.
 2. sandkiln's cold path (214.5ms to first command) is not limited by the
-   host. Host work is about 16ms. About 125ms is systemd and about 70ms is
+   host. Host work is about 16ms. About 125ms is systemd userspace (not Firecracker's 125ms init bound, a different quantity) and about 70ms is
    kernel plus agent start (derived, see below). The gap to a well-built cold
    path is **guest userspace**, not Firecracker.
 3. sandkiln's warm path (resume 4ms, first exec 8.4ms) is already close to
@@ -60,7 +60,7 @@ API call and doing memory allocation and kernel load during configuration
 | Pre-created `/dev/loopN` | 124ms `loop_init` here (our measurement, fixed by `loop.max_loop=1`) | post 28 |
 | Driver probing and legacy device timeouts | 900ms on a distro kernel; near zero on a minimal config | NSDI paper |
 | Static IP via `ip=` | 18.7ms `ip_auto_config` here, about 20ms in NSDI | NSDI paper; post 28 |
-| Init system and device units | 125ms systemd here, `dev-vda.device` 107ms (our measurement) | post 28 |
+| Init system and device units | about 125ms systemd userspace here (not Firecracker's init bound), `dev-vda.device` 107ms (our measurement) | post 28 |
 | Method | `initcall_debug` plus `printk.time=1`, graph with the kernel's boot-graph script; `quiet` removes console cost | [Bootlin boot-time slides](https://bootlin.com/doc/legacy/optimizations/embedded_linux_optimizations.pdf) |
 | Specialized kernel | A Linux specialized by configuration reports a 23ms hello-world boot in the authors' slides; 71ms without kernel-mode-linux. Unikernel-style, not our workload | [Lupine slides](https://2020.eurosys.org/wp-content/uploads/2020/04/slides/159_kuo_slides.pdf), [paper](https://people.cs.vt.edu/djwillia/papers/eurosys20-lupine.pdf); figures from search snippets, **unverified** |
 | Direct boot of an uncompressed kernel | PVH direct boot roughly halved time to kernel start (95ms to 48ms) in a 2018 QEMU RFC | [qemu-devel RFC](https://lists.nongnu.org/archive/html/qemu-devel/2018-12/msg00957.html); old, **unverified** for current versions |
@@ -160,7 +160,7 @@ reconnect or the health check is **not measured**; measure before acting.
 | 1 | Custom minimal init as PID 1 running the agent, replacing systemd | cold | about 100-120ms of the 125ms (estimate) | medium: init in the guest-agent crate or a tiny sibling, image build script, NIC setup moved in | **built, opt-in per image, measured**: median to first command 232ms to 147ms (n=30 x 2 against 4 default runs), goal 110ms not met; remaining time is mostly the kernel. Not the default yet (see below). `images/inject-agent.sh --init` |
 | 2 | Pool as the default create path, with a refill policy, so `create` is a resume | both | cold users see 214ms to about 15-20ms; the largest user-visible win | medium: default profile, sizing, eviction, honest metrics for misses | partial: pools exist, opt-in per profile |
 | 3 | Per-clone fixups on claim: entropy reseed, clock set, hostname/id, boot id | warm | no latency gain, a correctness prerequisite for lever 2 | small-medium: agent RPC plus daemon call in the claim flow | done: `Request::ResumeFixup`, sent after every resume, claim and fork (finding 28) |
-| 4 | Agent-initiated vsock readiness signal; `create` can block until ready | cold | about 0-20ms, and makes "200 means ready" true | small | not started: needs a daemon and vmm change (host listens on the vsock UDS, create waits) which was outside the init change; with init mode the agent answers about 10-20ms after it starts and the poll backs off from 1ms, so the headroom is small, unmeasured |
+| 4 | Agent-initiated vsock readiness signal; `create` can block until ready | cold | about 0-20ms, and makes "200 means ready" true | small | not started: needs a daemon and vmm change (host listens on the vsock UDS, create waits) which was outside the init change; with init mode the poll starts at 1ms and the agent starts at 80-110ms of guest uptime, so the headroom is probably small, but it is unmeasured |
 | 5 | Trimmed guest kernel config (drop unused drivers/features, keep virtio, vsock, ext4, fuse as needed) | cold | about 10-30ms estimate, **unverified** | medium: build and maintain a kernel; `build-guest-kernel.sh` exists for FUSE only | not started |
 | 6 | Read-only rootfs plus overlay (tmpfs upper) | cold, warm | little latency; smaller snapshot and diff, safe sharing | medium; affects drives and persistence semantics | not started |
 | 7 | Keep pool memory files hot in the page cache; fadvise/touch after take | warm | removes the disk-resident penalty (FaaSnap: up to 3.5x on cold-cache restores) | small | not started |

@@ -12,6 +12,12 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Guest agent init mode — 2026-11-24
+
+### Added
+- The guest agent can run as the guest's PID 1 (`core/crates/guest-agent/src/init/`): mounts the pseudo filesystems, sets the hostname, brings loopback up, reaps orphans, restarts the agent if it dies, and syncs then restarts the guest on SIGTERM. Opt-in per image: `images/inject-agent.sh --init` on a copy of a rootfs, then register it (`kiln image create`). Default images are unchanged. Measured cold create plus first command: median 232ms with systemd, 147ms with init mode (30 sequential creates each); the 110ms goal was not met, the rest is mostly kernel boot. Integration suite 353/353 on the init image. Details in `docs/benchmarks.md`.
+- `examples/benchmark-suite --image ID` and `SANDKILN_INTEGRATION_TEST_IMAGE` for the integration suite, to run either against a non-default image.
+
 ## Examples — 2026-11-24
 
 ### Added

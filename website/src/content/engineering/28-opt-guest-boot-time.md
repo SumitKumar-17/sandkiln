@@ -24,7 +24,7 @@ The second tool was the kernel's own initcall timing. Booting with `initcall_deb
 | `ip_auto_config` | 18.7 ms | about 9% |
 | every other initcall | each under 4 ms | the remainder |
 
-The third was `systemd-analyze` inside the guest. It showed 197 ms of kernel time and 125 ms of userspace, with the guest uptime at the first successful exec at 0.29 s. Those figures come from separate boots and do not sum exactly, which is why the diagram below reports them as measured and does not pretend to be an exact partition. The host side of the wait, clone, lease, configuration and the vsock connect, was only about 40 ms.
+The third was `systemd-analyze` inside the guest. It showed 197 ms of kernel time and 125 ms of userspace (systemd's own measure of its work after the kernel, unrelated to Firecracker's 125 ms bound on reaching `/sbin/init`), with the guest uptime at the first successful exec at 0.29 s. Those figures come from separate boots and do not sum exactly, which is why the diagram below reports them as measured and does not pretend to be an exact partition. The host side of the wait, clone, lease, configuration and the vsock connect, was only about 40 ms.
 
 ```mermaid
 flowchart TD
@@ -133,7 +133,7 @@ The first two were the only ones with a possible effect, measured only bundled w
 
 ## The honest remaining floor
 
-About 125 ms of the remaining time is systemd userspace. `systemd-analyze` blames `dev-vda.device` at 107 ms and `fcnet.service` at 45 ms. That is generic init work done for a guest that only needs to start one agent and configure one interface.
+About 125 ms of the remaining time is systemd userspace. That is time spent after `/sbin/init` starts, so it is a different quantity from Firecracker's published 125 ms bound, which ends when init starts ([what a start-latency number means](/engineering/29-what-a-start-latency-number-means)). `systemd-analyze` blames `dev-vda.device` at 107 ms and `fcnet.service` at 45 ms. That is generic init work done for a guest that only needs to start one agent and configure one interface.
 
 A purpose-built init that mounts what the agent needs, brings up the interface and execs the guest agent directly would likely remove most of that. It has NOT been done. It is a possible next step with its own correctness work, since systemd currently provides mounts, device handling and service supervision that an init of our own would have to take over, and it should be justified by a fresh measurement before anyone starts.
 

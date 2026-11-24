@@ -81,7 +81,7 @@ dirty-tracked rootfs. See [snapshot cost](design-notes/latency-investigation.md)
   setting.
 - Result: create to first exec 441ms to 237ms in the matrix, 413ms to
   214.5ms in bench-report (-48%). Resumed first exec 18ms to 8.4ms.
-  Remaining floor is about 125ms of systemd userspace.
+  Remaining floor is about 125ms of systemd userspace, not to be confused with Firecracker's 125ms init bound.
 
 ## Correctness and data safety
 
