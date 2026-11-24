@@ -276,6 +276,36 @@ to 117ms, against 26 to 30ms once consumed). A claim now consumes the warm
 snapshot, and the new sandbox starts its own lineage (no dangling parent to the
 consumed snapshot).
 
+### 32. The jailer path cannot create a sandbox: the daemon cannot reach the jailed Firecracker's API socket. Open
+Found while validating the init-mode image with the jailer enabled (setuid
+`jailer` copy, cgroup v2, `jailer_enabled = true`, uid range 600000+). Every
+`POST /sandboxes` hung until the client gave up (7 minutes and counting; the
+create has no deadline on this path). Evidence: three `firecracker`
+processes ran as uids 600000-600002 and answered over `api.sock` as root, but
+their state was `Not started` with the default `/machine-config`, so none of
+the daemon's configuration calls ever arrived. The chroot root jailer creates
+is `drwx------` owned by the jailed uid, so the unprivileged daemon cannot
+traverse it to `api.sock` (`curl --unix-socket` as the daemon's user fails). The
+pre-emptive `o+x` on the chroot root in `prepare_chroot_dir` does not survive
+jailer's own ownership setup (the observed mode is 0700). A second gap would follow once that is solved:
+the tap pool is owned by the daemon's user, and a jailed Firecracker running
+as another uid cannot attach to a tap it does not own. The topic `10-jailer`
+therefore cannot pass on any image, init mode or not; "unit-tested but not
+verified" in the jailer docs is now "verified not working". Not fixed here: it
+needs a design (who owns the chroot and the taps, how the daemon reaches the
+socket), not a patch. A hung create also made a graceful daemon stop wait
+out its full 30 seconds.
+
+### 33. A guest that shuts itself down leaves its sandbox listed. Open
+`reboot -f` in a systemd guest, or `kill -TERM 1` in an init-mode guest, ends
+the Firecracker process (the guest resets, `reboot=k`), but the daemon keeps
+the sandbox in `GET /sandboxes` with a dead VM: every call returns `500
+Connection refused (os error 111)` until a `DELETE`, which succeeds and
+releases the tap (8 SIGTERM-then-DELETE cycles on a 6-tap pool never ran out).
+The same on both image kinds, so not specific to init mode. A watcher on the
+VM process that marks the sandbox stopped (and an honest status code for calls
+to it) is the missing piece.
+
 ### 27. Pool claim bookkeeping under full-suite load. FIXED (test isolation)
 Intermittent `18-pool` failures: `warm_ready` read 0 where 1 was expected,
 the pool's warm snapshot was missing at delete, and `claimed` read 1 with both

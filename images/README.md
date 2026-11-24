@@ -49,9 +49,11 @@ registering an image that's already built.
 `sudo images/inject-agent.sh --init <agent-binary> <copy-of-rootfs.ext4>`
 points `/sbin/init` at the agent, so the kernel starts it as PID 1 and
 systemd never runs. The agent mounts the pseudo filesystems, sets the
-hostname, brings loopback up and reaps orphans itself (`core/crates/guest-agent/src/init/`).
-Always run it on a **copy**: the default images are untouched, and the copy is
-registered and selected per sandbox like any custom image:
+hostname from `/etc/hostname`, brings loopback up, takes `LANG`/`LC_*` from the
+image's own locale files and reaps orphans itself
+(`core/crates/guest-agent/src/init/`). Always run it on a **copy**: the default
+images are untouched, and the copy is registered and selected per sandbox like
+any custom image:
 
 ```
 cp --reflink=auto base.ext4 base-init.ext4        # keep it on the reflink filesystem
@@ -59,18 +61,55 @@ sudo images/inject-agent.sh --init core/target/x86_64-unknown-linux-musl/release
 kiln image create init-agent base-init.ext4        # then: kiln sandbox create --image init-agent
 ```
 
-Measured on the dev box, cold `create_to_first_command` median 230ms with the
-systemd image against 147ms with this one (see `docs/benchmarks.md`). One
-operational catch: the daemon copies a registered image into `images_dir`;
-if that directory is not on the filesystem that supports reflink, every
-create pays a full 300MB copy and the gain disappears (create call 22ms ->
-98ms measured). Point `images_dir` at the reflink volume. Re-running
-`inject-agent.sh` without `--init` on the same file restores systemd.
+From scratch, `build-universal-image.sh` does both steps:
+`sudo images/build-universal-image.sh --agent <agent-binary> --init out.ext4 [size-gb] [codename] [agents]`
+(without `--init` the agent is injected as the systemd service; without
+`--agent` nothing is injected). `scripts/dev.sh inject-agent --init [rootfs]`
+builds the agent and injects it in init mode. Re-running `inject-agent.sh`
+without `--init` on the same file restores systemd.
 
-What an init-mode guest does not have: systemd units (services baked into the
-image never start), journald, `systemctl`/`poweroff` talking to a manager
-(send `SIGTERM` to PID 1 or `reboot -f`), and the ssh service. Not yet
-verified: remote storage mounts (needs the FUSE kernel and an object store).
+Measured on the dev box, cold `create_to_first_command` median 232ms with the
+systemd image against 147ms with this one, n=60 each (see
+`docs/benchmarks.md`). One operational catch: the daemon copies a registered
+image into `images_dir`; if that directory is not on the filesystem that
+supports reflink, every create pays a full 300MB copy and the gain disappears
+(create call 22ms -> 98ms measured). Point `images_dir` at the reflink volume.
+
+### What init mode replaces and what it drops
+
+Replaced by the agent itself: the pseudo filesystem mounts (`/proc /sys
+/dev/pts /dev/shm /run /tmp`, cgroup2), `/dev/fd` and `stdin/out/err` links,
+the hostname, `lo`, `PATH` and the locale, the open-files limit, a clean
+sync-and-reset on `SIGTERM`/`SIGINT`, and restarting the agent if it dies
+(capped backoff). The network interface was already configured by the kernel
+`ip=` argument, not by a guest unit, so `fcnet.service` in the CI image and
+`/etc/hosts` (a plain file in every image we build) need no replacement.
+
+Dropped, because nothing runs them: every systemd unit baked into the image.
+The CI image enables `ssh.service`, `getty@tty1`, `fcnet.service`,
+`systemd-pstore`, `tmp.mount` and `var-lib-systemd.mount`. The universal image
+(read from a real build) enables `cron`, `rsyslog`, `systemd-resolved`,
+`systemd-timesyncd`, `networkd-dispatcher`, the console and keyboard setup
+units, `dmesg`, the Ubuntu Pro units and the usual timers (fstrim, logrotate,
+dpkg-db-backup, motd-news; the apt timers are masked by the build). Nothing in
+sandkiln talks to a guest over ssh or the console, and nothing in the API, the
+SDKs, the CLI or the integration suite needs any of them, so they are not
+replicated. Two have a visible effect on a workload: **cron jobs do not run**
+(start `cron` from your own command if you need it), and **the clock is not
+disciplined by timesyncd** (the guest clock is correct at boot and after a
+resume, which sets it from the host; it is not corrected afterwards).
+Name resolution does not depend on a unit: `build-universal-image.sh` writes a
+plain `/etc/resolv.conf` (the bridge gateway, `GUEST_NAMESERVER`) so it works in
+both modes. An image that relies on its own units (a database, an sshd) must
+start them from the command that uses them or stay on the systemd image. Also
+absent: journald, `systemctl`/`poweroff` talking to a manager (send `SIGTERM`
+to PID 1, or `reboot -f`). A guest that shuts itself down leaves its sandbox
+listed with a dead VM until it is deleted (finding 33; the same with systemd).
+
+Verified on the dev box with a FUSE kernel, `rclone` in the image and a local
+S3-compatible endpoint: the remote storage mounts topic passes on an init-mode
+image (`inject-rclone.sh` works on an init image too; mounting needs the
+image to have room for the 85MB `rclone` binary, the 300MB CI image does not).
 
 Built artifacts (kernels, rootfs images) are not committed — see
 `.gitignore` — they're large binary blobs that get rebuilt or fetched, not

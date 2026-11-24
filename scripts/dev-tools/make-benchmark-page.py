@@ -45,9 +45,21 @@ SCENARIOS = [
         ["create_call", "first_command_after_create", "create_to_first_command"],
     ),
     (
+        "Create to first command, cold, default image (systemd)",
+        "Pool disabled, so every create boots a microVM; run alternately with the init-mode image below on the same daemon.",
+        "default-image-cold", None,
+        ["create_call", "first_command_after_create", "create_to_first_command"],
+    ),
+    (
+        "Create to first command, cold, init-mode image (agent as PID 1)",
+        "The same run with an image whose `/sbin/init` is the guest agent, so systemd never starts. Opt-in per image, not the default.",
+        "init-image-cold", None,
+        ["create_call", "first_command_after_create", "create_to_first_command"],
+    ),
+    (
         "Snapshots, resume, fork, commands and parallel creates",
         "Measured with the default pool's replenishment idle.",
-        "-i9-13900K.json", "warm-pool",
+        "-i9-13900K.json", ("warm-pool", "image-cold"),
         ["exec_roundtrip", "snapshot_take", "resume_call", "resume_first_command", "fork_call", "fork_first_command",
          "parallel_create_to_first_command_c8", "parallel_throughput_c8"],
     ),
@@ -68,8 +80,9 @@ LABELS = {
 
 
 def newest(label: str, exclude):
+    excluded = (exclude,) if isinstance(exclude, str) else (exclude or ())
     files = sorted(
-        p for p in results.glob("*.json") if label in p.name and not (exclude and exclude in p.name)
+        p for p in results.glob("*.json") if label in p.name and not any(e in p.name for e in excluded)
     )
     if not files:
         raise SystemExit(f"no benchmark result matching {label!r}")
@@ -131,11 +144,11 @@ CREATE_ROWS = [
     ("20 creates back to back", med("warm-pool-on-burst", None, "create_to_first_command")),
 ]
 FAST_ROWS = [
-    ("resume a snapshot", med(BASE, "warm-pool", "resume_call")),
-    ("fork a snapshot", med(BASE, "warm-pool", "fork_call")),
-    ("1st command after resume", med(BASE, "warm-pool", "resume_first_command")),
-    ("1st command after fork", med(BASE, "warm-pool", "fork_first_command")),
-    ("command in a running sandbox", med(BASE, "warm-pool", "exec_roundtrip")),
+    ("resume a snapshot", med(BASE, ("warm-pool", "image-cold"), "resume_call")),
+    ("fork a snapshot", med(BASE, ("warm-pool", "image-cold"), "fork_call")),
+    ("1st command after resume", med(BASE, ("warm-pool", "image-cold"), "resume_first_command")),
+    ("1st command after fork", med(BASE, ("warm-pool", "image-cold"), "fork_first_command")),
+    ("command in a running sandbox", med(BASE, ("warm-pool", "image-cold"), "exec_roundtrip")),
 ]
 
 

@@ -208,13 +208,51 @@ clock fixup, and pools (pool creates and claims go through the same image).
 The same suite on the default image passed 352 of 353 on its one run; the
 failure was `18-pool`'s "deleting the pool also cleaned up exactly its own
 warm snapshot (expected 1, got 2)", which passed on rerun on both images (a
-flake against another job's snapshots on the shared box). Not covered: remote
-storage mounts (`22-mounts` skips without a FUSE kernel and an object-store
-endpoint), auth, and the jailer topic (not enabled on this daemon).
+flake against another job's snapshots on the shared box). That run did not cover
+remote storage mounts, auth or the jailer; the later run below does, except the
+jailer.
 By hand on the init image: PID 1 is the agent, mounts match the systemd list
 minus the systemd-private ones, `lo` is up, a double-forked orphan leaves no
 zombie, and killing the agent is survived (init respawns it and the next exec
 succeeds).
+
+### Init-mode image, re-measured with warm pools off (2026-11-24)
+
+A second, independent measurement on a private daemon (port 7792, own bridge and
+taps, `default_warm_count = 0` so every create is cold, default 5.10.223 kernel,
+reflinked `images_dir`), the agent rebuilt from the same tree for both images.
+`examples/benchmark-suite --only create --iterations 20 [--image init-bench]`,
+alternated default, init, default, init, default, init; six result files under
+`examples/benchmark-suite/results/` named `*-default-image-cold-r*` and
+`*-init-image-cold-r*`.
+
+| Run | Default (systemd) `create_to_first_command` median (min) | Init mode median (min) |
+| --- | --- | --- |
+| 1 | 233.7ms (210.5) | 150.4ms (127.5) |
+| 2 | 228.8ms (217.6) | 149.2ms (132.9) |
+| 3 | 237.0ms (222.8) | 144.0ms (133.4) |
+| Pooled, n=60 each | **231.7ms** (p95 258.6) | **147.5ms** (p95 161.2) |
+
+The pooled gap is 84ms (36%), the same as the first measurement (232 to 147).
+`create_call` is 21.3ms against 22.1ms; the whole difference is
+`first_command_after_create` (210.5ms against 124.6ms). The milestone goal of
+110ms is still not met.
+
+Correctness on the same setup, with `auth_token` set (so the auth topic runs),
+on a FUSE kernel with `rclone` baked into the image and a local
+`rclone serve s3` endpoint on the bridge gateway (so `22-mounts` runs): the full
+integration suite, 32 topics, 457 passed and 1 failed. The failure was
+`29-snapshots-hold-no-taps` returning `503 no free tap devices` because this
+daemon had only 6 taps and the suite ran two topics at once; the topic alone
+passed 17 of 17. The jailer topic was not runnable (see finding 32).
+A second full run on a real universal image built with
+`build-universal-image.sh --agent ... --init` (Ubuntu 22.04, Node 24, Python 3.10,
+4 agent users) passed 443 of 444 with the same single tap-pool miss (17 of 17
+alone); in that guest `LANG`, users, sudo, node, python, git, DNS, HTTPS, `npm view`
+and a pip-style HTTPS fetch behaved as in the systemd variant of the same image. Orderly
+daemon shutdown with three live init-mode sandboxes (`scripts/restart-test.sh`
+with `SANDKILN_INTEGRATION_TEST_IMAGE`): all three snapshotted, every Firecracker
+child exited, all three came back as snapshots and one resumed and ran a command.
 
 ## Per-phase profile of a cold create
 
