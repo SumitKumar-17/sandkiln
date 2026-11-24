@@ -141,8 +141,9 @@ async fn async_main(loaded: config::Loaded) {
                 "SANDKILN_JAILER_BIN does not point at a file: {} — run scripts/host-setup/install-firecracker.sh first",
                 jailer_cfg.jailer_bin.display()
             );
+            sweep_stale_jails(jailer_cfg);
             if jailer_cfg.self_check {
-                run_jailer_self_check(jailer_cfg, &config.firecracker_bin);
+                run_jailer_self_check(jailer_cfg);
             } else {
                 tracing::warn!("jailer startup self-check disabled (SANDKILN_JAILER_SELF_CHECK=false): a jailer setup the daemon cannot use will only show up as failing creates");
             }
@@ -151,7 +152,7 @@ async fn async_main(loaded: config::Loaded) {
                 chroot_base_dir = %jailer_cfg.chroot_base_dir.display(),
                 uid_gid_range_start = *jailer_cfg.uid_gid_range.start(),
                 uid_gid_range_end = *jailer_cfg.uid_gid_range.end(),
-                "jailer-based sandbox boot enabled — sandboxes will boot chroot'd, cgroup-limited, under a dedicated uid/gid"
+                "jailer-based sandbox boot enabled — sandboxes will boot chroot'd, cgroup-limited, under a dedicated uid"
             );
         }
         None => {
@@ -220,16 +221,29 @@ async fn async_main(loaded: config::Loaded) {
 /// `.json()` and the default pretty layer are different builder types, so
 /// this can't be one `tracing_subscriber::fmt()` chain with a branch in
 /// the middle — each arm builds and `init()`s its own subscriber.
+/// A jailed VM cannot outlive its daemon, so any jail found at startup is
+/// left over from a previous process and would collide with new jail ids.
+fn sweep_stale_jails(jailer_cfg: &config::JailerHostConfig) {
+    let report = sandkiln_vmm::jailer::sweep_stale_jails(&jailer_cfg.chroot_base_dir, &jailer_cfg.supervisor_bin);
+    if !report.removed.is_empty() {
+        tracing::info!(count = report.removed.len(), "removed jails left behind by a previous daemon process");
+    }
+    for (jail, reason) in &report.failed {
+        tracing::warn!(jail = %jail, reason = %reason, "could not remove a stale jail; remove it with sudo before it collides with a new sandbox");
+    }
+}
+
 /// Refuses to start on a jailer setup the daemon cannot use, instead of
 /// accepting requests that would each fail (see `sandkiln_vmm::jailer::self_check`).
-fn run_jailer_self_check(jailer_cfg: &config::JailerHostConfig, firecracker_bin: &std::path::Path) {
+fn run_jailer_self_check(jailer_cfg: &config::JailerHostConfig) {
     let launch = JailLaunch {
         jailer_bin: jailer_cfg.jailer_bin.clone(),
+        supervisor_bin: jailer_cfg.supervisor_bin.clone(),
         chroot_base_dir: jailer_cfg.chroot_base_dir.clone(),
         uid: *jailer_cfg.uid_gid_range.start(),
-        gid: *jailer_cfg.uid_gid_range.start(),
+        gid: jailer_cfg.gid,
     };
-    match sandkiln_vmm::jailer::self_check(&launch, firecracker_bin) {
+    match sandkiln_vmm::jailer::self_check(&launch) {
         Ok(()) => tracing::info!("jailer self-check passed: the daemon can use the jails jailer builds"),
         Err(reason) => {
             eprintln!("sandkilnd: jailer_enabled is set but the jailer is not usable: {reason}");

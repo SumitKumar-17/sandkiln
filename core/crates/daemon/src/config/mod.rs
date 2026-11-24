@@ -21,10 +21,14 @@ use std::time::Duration;
 /// (`docs-site/self-hosting/configuration.mdx`).
 pub struct JailerHostConfig {
     pub jailer_bin: PathBuf,
+    /// Runs in each chroot in place of Firecracker (`crates/jail-supervisor`).
+    pub supervisor_bin: PathBuf,
     pub chroot_base_dir: PathBuf,
-    /// Uid/gid range dedicated to jailed VMs — must not overlap anything
-    /// else on the host (`sandkiln_vmm::jailer::JailerIdPool`).
+    /// Uid range dedicated to jailed VMs, one per concurrent VM — must not
+    /// overlap anything else on the host (`sandkiln_vmm::jailer::JailerIdPool`).
     pub uid_gid_range: RangeInclusive<u32>,
+    /// The one group shared by every jailed VM and the daemon's user.
+    pub gid: u32,
     /// Run `sandkiln_vmm::jailer::self_check` at startup and refuse to start
     /// when it fails. On by default; off only to diagnose a jailer setup.
     pub self_check: bool,
@@ -287,6 +291,8 @@ impl Config {
             }
             Some(JailerHostConfig {
                 jailer_bin: r.path("jailer_bin"),
+                supervisor_bin: r.path("jailer_supervisor_bin"),
+                gid: r.number("jailer_gid"),
                 chroot_base_dir: r.path("jailer_chroot_base_dir"),
                 uid_gid_range: jailer_uid_gid_range(base, pool_size),
                 self_check: r.flag("jailer_self_check"),
@@ -385,6 +391,8 @@ impl Config {
             "archive_timeout_secs" => secs(&self.archive_timeout),
             "jailer_enabled" => Some(self.jailer.is_some().to_string()),
             "jailer_bin" => self.jailer.as_ref().and_then(|j| p(&j.jailer_bin)),
+            "jailer_supervisor_bin" => self.jailer.as_ref().and_then(|j| p(&j.supervisor_bin)),
+            "jailer_gid" => self.jailer.as_ref().map(|j| j.gid.to_string()),
             "jailer_chroot_base_dir" => self.jailer.as_ref().and_then(|j| p(&j.chroot_base_dir)),
             "jailer_uid_gid_base" => self.jailer.as_ref().map(|j| j.uid_gid_range.start().to_string()),
             "jailer_self_check" => self.jailer.as_ref().map(|j| j.self_check.to_string()),

@@ -1024,6 +1024,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandkiln-jail-supervisor"
+version = "0.0.1"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "sandkiln-protocol"
 version = "0.0.1"
 dependencies = [

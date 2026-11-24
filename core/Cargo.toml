@@ -6,6 +6,7 @@ members = [
     "crates/guest-agent",
     "crates/daemon",
     "crates/store",
+    "crates/jail-supervisor",
 ]
 
 [workspace.package]

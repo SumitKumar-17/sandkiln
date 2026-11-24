@@ -256,9 +256,10 @@ async fn create_sandbox_cold(
             let jail = jail_id.and_then(|id| {
                 state.config.jailer.as_ref().map(|j| JailLaunch {
                     jailer_bin: j.jailer_bin.clone(),
+                    supervisor_bin: j.supervisor_bin.clone(),
                     chroot_base_dir: j.chroot_base_dir.clone(),
                     uid: id,
-                    gid: id,
+                    gid: j.gid,
                 })
             });
 

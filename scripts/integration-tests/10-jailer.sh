@@ -1,8 +1,4 @@
 section "jailer"
-# With the jailer enabled the daemon currently refuses to start unless
-# jailer_self_check is off (finding 32), so this topic can only run against a
-# daemon started with SANDKILN_JAILER_SELF_CHECK=false, where the create below
-# fails with an explanation after about 15 seconds instead of hanging.
 if [ -z "${SANDKILN_JAILER_ENABLED:-}" ]; then
   echo "  skip - SANDKILN_JAILER_ENABLED not set in this script's environment, presumed off on the daemon too"
 else
@@ -18,6 +14,23 @@ else
     status="$(req POST "/sandboxes/$SBX_JAIL/exec" '{"command":"echo","args":["hello-from-a-jailed-vm"]}')"
     assert_status "exec in a jailed sandbox" 200 "$status"
     assert_contains "exec output is correct from inside the chroot" "$(cat "$WORKDIR/resp.json")" "hello-from-a-jailed-vm"
+
+    # A second concurrent jailed sandbox runs under its own uid and chroot:
+    # both must work at once, and each only sees its own files.
+    status="$(req POST /sandboxes '{"tags":{"suite":"integration","case":"jailer-second"}}')"
+    assert_status "create a second concurrent jailed sandbox" 200 "$status"
+    SBX_JAIL2="$(extract id < "$WORKDIR/resp.json")"
+    if [ -n "$SBX_JAIL2" ]; then
+      CREATED_SANDBOXES+=("$SBX_JAIL2")
+      req POST "/sandboxes/$SBX_JAIL/exec" '{"command":"sh","args":["-c","echo one > /tmp/jail-marker"]}' >/dev/null
+      status="$(req POST "/sandboxes/$SBX_JAIL2/exec" '{"command":"sh","args":["-c","cat /tmp/jail-marker 2>&1; echo second-ok"]}')"
+      assert_status "exec in the second jailed sandbox" 200 "$status"
+      assert_contains "the second jailed sandbox answers" "$(cat "$WORKDIR/resp.json")" "second-ok"
+      assert_not_contains "the second sandbox does not see the first one's file" "$(cat "$WORKDIR/resp.json")" "one"
+      status="$(req DELETE "/sandboxes/$SBX_JAIL2?keep=false")"
+      assert_status "stop the second jailed sandbox" 204 "$status"
+      CREATED_SANDBOXES=("${CREATED_SANDBOXES[@]/$SBX_JAIL2}")
+    fi
 
     status="$(req POST "/sandboxes/$SBX_JAIL/snapshot")"
     assert_status "snapshotting a jailed sandbox is rejected" 400 "$status"

@@ -55,14 +55,21 @@ behavior belongs here, not in `daemon`.
 - **`rootfs.rs`** — per-sandbox rootfs clone via native `FICLONE` reflink,
   falling back to a full copy, reporting which happened
   (`rootfs_clone_total{method}` on `/metrics`).
-- **`jailer.rs`** — chroot, cgroup v2, a dedicated uid/gid per VM.
-  `JailerIdPool` (mirrors `network.rs`'s tap/IP pool),
-  `link_resource_into_jail` (hard link, falls back to copy across
-  filesystems), `build_jailer_args`/`cgroup_limits` (pure, unit tested).
-  **Not yet proven on real hardware** — `SANDKILN_JAILER_ENABLED` breaks
-  every create unless `jailer` itself is made setuid-root first
-  (`docs-site/self-hosting/manual-setup.mdx`); confirmed live via `Operation not permitted`
-  chown-ing a hard-linked file into the chroot before that step.
+- **`jailer.rs`** — chroot, cgroup v2, a dedicated uid per VM plus one shared
+  jail group. `JailerIdPool` (mirrors `network.rs`'s tap/IP pool, with
+  `quarantine` for a uid whose process could not be killed),
+  `link_resource_into_jail` (hard link, falls back to copy; writable files get
+  the jail group), `copy_binary_into_jail`, `build_jailer_args`/`cgroup_limits`
+  (pure, unit tested), `self_check` (startup probe with the real jailer) and
+  `sweep_stale_jails`. Verified live; the design (supervisor as jailer's exec
+  file, shared group, group-owned taps) is in
+  `docs/design-notes/security-hardening.md`. Setup: `docs-site/self-hosting/jailer.mdx`.
+- **`vm/terminate.rs`, `vm/jail_state.rs`** — bounded termination (`kill` +
+  `try_wait` with a deadline; a process under another uid cannot be signalled)
+  and the host-side handles of a jailed VM (jail directory, cgroup, the control
+  pipe whose closing makes the supervisor end Firecracker).
+- **`core/crates/jail-supervisor`** (own crate, static musl binary) — what jailer
+  runs in the chroot in place of Firecracker; see its module doc.
 - **`network.rs`** — `NetworkManager`: tap pool, bridge
   attachment, IP allocation, port isolation. The identity is two leases with
   different lifetimes: `IpLease` (guest IP/MAC/host octet; owned by a running

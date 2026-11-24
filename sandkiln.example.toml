@@ -117,13 +117,19 @@
 # Path to the jailer binary (setuid root).
 # jailer_bin = "~/sandkiln-tools/bin/jailer"
 
+# Static helper that runs inside each jail in place of Firecracker, so the unprivileged daemon can reach and stop it.
+# jailer_supervisor_bin = "~/sandkiln-tools/bin/sandkiln-firecracker-supervisor"
+
+# The one group shared by every jailed VM; the daemon's user must be a member (scripts/host-setup/prepare-jailer.sh).
+# jailer_gid = 600000
+
 # Base directory for per-VM chroots; keep on the same filesystem as rootfs and drives.
 # jailer_chroot_base_dir = "~/sandkiln-tools/jail"
 
-# First uid/gid of the range reserved for jailed VMs.
+# First uid of the range reserved for jailed VMs (one per concurrent VM).
 # jailer_uid_gid_base = 600000
 
-# Size of the uid/gid range (max concurrent jailed VMs).
+# Size of the uid range (max concurrent jailed VMs).
 # jailer_pool_size = 32
 
 # At startup, run the real jailer once against a throwaway jail and refuse to start if the daemon could not use the result. Disable only to diagnose a jailer setup.
