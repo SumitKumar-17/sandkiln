@@ -13,7 +13,7 @@ description: Every /sandboxes route -- lifecycle, filesystem ops, exec-stream, s
 | `GET /sandboxes/by-name/:name` | Resolve a name to a *live* sandbox's id. `409` if the name currently belongs to a held snapshot instead. |
 | `POST /sandboxes/get-or-create` | Resolve-or-create by name in one call. Body: `name` (required), `tags?`, `vcpu_count?`, `mem_size_mib?`, `image_id?`, `rate_limit?`, `drives?`, `egress?` (the last five used only if a fresh sandbox is created — resuming an existing snapshot always uses what was recorded on it). |
 | `DELETE /sandboxes/:id` | Stop a sandbox. Preserves state as a snapshot by default (`200`, `{"kept": true, "snapshot_id": "..."}`); `?keep=false` fully destroys instead (`204`). See [Sandbox lifecycle](/concepts/sandbox-lifecycle). |
-| `POST /sandboxes/:id/exec` | Run a command. Body: `{"command": "...", "args": [...], "env"?: {...}, "timeout_secs"?: <n>}`. Returns `stdout`/`stderr`/`exit_code`. `timeout_secs` is enforced inside the guest: on expiry the command's whole process group is killed and the reply is a `504` (see [Exec timeout](#exec-timeout)). |
+| `POST /sandboxes/:id/exec` | Run a command. Body: `{"command": "...", "args": [...], "env"?: {...}, "timeout_secs"?: <n>}`. Returns `stdout`/`stderr`/`exit_code`. A command that cannot be started is a normal `200` result, not an error (see [Commands that cannot start](#commands-that-cannot-start)). `timeout_secs` is enforced inside the guest: on expiry the command's whole process group is killed and the reply is a `504` (see [Exec timeout](#exec-timeout)). |
 | `POST /sandboxes/:id/read-file` | Body: `{"path": "..."}`. Returns `{"content_base64": "..."}`. |
 | `POST /sandboxes/:id/write-file` | Body: `{"path": "...", "content_base64": "..."}`. |
 | `POST /sandboxes/:id/chmod` | Body: `{"path": "...", "mode": <octal-as-int>}`. |
@@ -30,6 +30,20 @@ description: Every /sandboxes route -- lifecycle, filesystem ops, exec-stream, s
 | `GET /sandboxes/:id/exec-stream` | Lists every streamed session tracked against this sandbox, running or finished: `{"sessions": [{"id", "command", "args", "started_at_unix", "exit_code"}, ...]}` — `exit_code` is `null` while still running. |
 | `GET /sandboxes/:id/exec-stream/:session_id/logs` | Upgrades to a WebSocket: replays everything captured so far, then live-tails anything new, until the process exits (one final `"[process exited with code N]"` text message, then the socket closes) or the client disconnects. Callable again any number of times for the same session, including long after it finished — it's just a replay with nothing to tail. Buffered replay frames arrive as binary; the final exit notice arrives as text — a client needs to handle both frame types. Sessions aren't carried across `resume()`/`fork()` and don't survive a daemon restart. |
 
+
+## Commands that cannot start
+
+A command the guest cannot start answers `200` with the shell's exit code and the reason on `stderr`, the same as running it in a shell would, for plain and timed exec alike:
+
+| Situation | `exit_code` | `stderr` |
+| --- | --- | --- |
+| The command is not found on `PATH` | `127` | `nosuch: command not found` |
+| A path that does not exist, or whose interpreter (`#!`) does not | `127` | `/no/such/path: No such file or directory` |
+| A directory | `126` | `/tmp: Is a directory` |
+| A file without the execute bit | `126` | `/tmp/data.txt: Permission denied` |
+| An executable the kernel cannot load | `126` | `/tmp/bad: Exec format error` |
+
+`stdout` is empty. A command that itself exits `127` is untouched. Anything else that stops the agent from spawning (out of memory, process limit) stays an error, since it says nothing about the command. A streamed exec (`exec-stream`) reports the same codes in its session's `exit_code` and its log, and the PTY shell exits `127` or `126` the same way. Needs a guest agent from this change on; an older agent answers these cases with a `500`.
 
 ## Exec timeout
 

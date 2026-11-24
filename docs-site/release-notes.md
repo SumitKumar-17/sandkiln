@@ -15,6 +15,17 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Exec error clarity — 2026-11-24
+
+Found by running every example. Daemon and guest agent; the SDKs, CLI and MCP server needed no change and gained tests.
+
+### Fixed
+- A command that cannot be started is a normal exec result with the shell's exit code, not an HTTP `500` ("unexpected agent response: No such file or directory"): `127` when it is not found, `126` for a directory, a file without the execute bit or an unloadable binary, with a one-line reason on `stderr`. Plain exec, exec with `timeout_secs`, streamed exec (the session's `exit_code` and log) and the PTY shell all follow it; any other spawn error stays an error. Needs a re-injected guest agent.
+- `POST /sandboxes/:id/mounts` checks that the sandbox has `rclone` and `/dev/fuse` before it writes anything into the guest, and a `400` names which is missing, instead of a bare "No such file or directory".
+
+### Added
+- Integration topic `31-exec-spawn-failure`, guest agent unit tests with real child processes for each mapping, and SDK, Python and CLI tests that a `127`/`126` result is returned (CLI: exits with that code) rather than thrown.
+
 ## sandkiln (Python) [0.6.0] — 2026-11-24
 
 Brings the Python SDK level with the JS/TS SDK. Still no runtime dependencies.

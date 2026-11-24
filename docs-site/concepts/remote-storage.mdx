@@ -11,7 +11,7 @@ A mount attaches an S3-compatible bucket to a path inside a sandbox, so code run
 
 **`rclone` and `fusermount3` baked into the rootfs.** Both are injected as binaries — `images/inject-rclone.sh`, or `scripts/dev.sh inject-rclone <static-rclone-binary> [rootfs]` — the same way the guest agent itself is, rather than installed with a package manager. `fusermount3` is a hard requirement, not a convenience: rclone's Linux FUSE backend always execs it to perform the actual mount, even running as root, and has no direct-mount code path.
 
-There is no preflight capability check. The routes are always registered, so a missing kernel feature or missing binary shows up only when you try to mount, as a `400` whose message is rclone's own `rclone mount failed (exit N): ...` output. See [Self-hosting quickstart](/getting-started/self-hosting) for the setup steps in context.
+The routes are always registered. Mounting first checks that the sandbox has the `rclone` binary and a `/dev/fuse` device, and a sandbox missing one gets a `400` that names it; any later failure is a `400` carrying rclone's own `rclone mount failed (exit N): ...` output. See [Self-hosting quickstart](/getting-started/self-hosting) for the setup steps in context.
 
 ## Mounting, listing, unmounting
 
