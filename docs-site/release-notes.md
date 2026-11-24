@@ -15,6 +15,19 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## sandkiln (Python) [0.6.0] — 2026-11-24
+
+Brings the Python SDK level with the JS/TS SDK. Still no runtime dependencies.
+
+### Added
+- `Sandbox.pty(cols, rows)` returns a `PtySession` (`send`, `recv(timeout)`, iteration, context manager); `AsyncSandbox.pty()` returns an `AsyncPtySession`. A refused session raises `SandkilnApiError` (`404`, `409`) before any connection is made. Terminal size applies once at open; the daemon has no live resize.
+- `exec_stream(command, args, env)`, `list_exec_streams()` (typed `ExecStreamSession`) and `attach_logs(session_id)` (a `LogStream` with `exit_code` and `read_all()` returning a `LogOutput`), sync and async.
+- `upload_dir()` / `download_dir()` returning a `TransferResult`, sync and async, with `exclude` and `concurrency`. `download_dir` treats the guest as untrusted: unsafe or duplicate entry names raise `ValueError`, a symlink is only recreated when its target resolves inside the destination (checked against links already on disk, which the JS check does not do), files are written without following links, and setuid/setgid/sticky bits are dropped.
+- Tests for framing, masking against the RFC 6455 vectors, message reassembly, the handshake, sync and async round trips against an in-process server, and the transfer safety rules.
+
+### Changed
+- The RFC 6455 client is one module (`_ws.py`, with `_ws_async.py` for `asyncio`) shared by the tunnel, the PTY and the log stream, instead of living inside the tunnel. It now reassembles fragmented messages, caps a message at 64 MiB, masks with one integer XOR instead of a byte loop, and turns a handshake rejected by the daemon into a typed `SandkilnApiError` rather than a bare `ConnectionError`.
+
 ## sandkiln-run tested on hosted runners — 2026-11-24
 
 ### Added

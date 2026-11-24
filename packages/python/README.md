@@ -93,9 +93,27 @@ sandbox.stop()
 - `sandbox.tunnel(guest_port, local_port, local_host="127.0.0.1")` — the
   reverse of `preview_url`: exposes a service running on **this
   machine** to code inside the sandbox. Returns a `TunnelHandle` with
-  `.tunnel_id`/`.close()`. This package's only WebSocket-based feature —
-  hand-rolled (RFC 6455 handshake and frame masking), since the standard
-  library has no WebSocket client.
+  `.tunnel_id`/`.close()`. The tunnel, `pty()` and `attach_logs()` share
+  one RFC 6455 WebSocket client hand-rolled on the standard library
+  (there is none to import), so the package still has no dependencies.
+- `sandbox.pty(cols=80, rows=24)` — a live interactive shell. Returns a
+  `PtySession`: `send(data)` is stdin, `recv(timeout=None)` returns the
+  next chunk of output as `bytes` (`None` once the shell ended), and it
+  iterates and works as a context manager. Terminal size applies once at
+  open; there is no live resize.
+- `sandbox.exec_stream(command, args=None, env=None)` — starts a command
+  detached and returns a session id at once;
+  `sandbox.attach_logs(session_id)` returns a `LogStream` that replays
+  the captured output then live-tails it (`exit_code` is set from the
+  daemon's final notice, `read_all()` returns a `LogOutput`);
+  `sandbox.list_exec_streams()` lists sessions as `ExecStreamSession`.
+- `sandbox.upload_dir(local_dir, remote_dir, exclude=None, concurrency=8)`
+  / `sandbox.download_dir(remote_dir, local_dir, ...)` — copy a directory
+  tree with modes and symlinks; return a `TransferResult`. `download_dir`
+  treats the guest as untrusted (unsafe names raise `ValueError`, symlinks
+  that would leave `local_dir` are skipped and listed).
+- `AsyncSandbox` has all of these as awaitables (`AsyncPtySession`,
+  `AsyncLogStream`).
 - `sandbox.mount(bucket, endpoint, access_key, secret_key, mount_path, read_only=False)`
   — mounts an S3-compatible bucket into the sandbox via `rclone mount`;
   ordinary `read_file()`/`write_file()` calls against `mount_path` then
@@ -169,11 +187,11 @@ closely — same daemon, same operations, Python-idiomatic naming
 
 ## Status
 
-Published, and matches the daemon's current HTTP API closely, not
-completely. Two daemon features have no wrapper here yet, available
-only via the [JS/TS SDK](https://www.npmjs.com/package/sandkiln) or the
-`kiln` CLI: streamed background exec (following a long-running
-command's live output) and interactive `pty` sessions. See the
+Published, and level with the [JS/TS SDK](https://www.npmjs.com/package/sandkiln):
+the same operations, including `pty()`, streamed background exec and
+directory transfer. The two clients' shared gaps are the daemon features
+no client wraps yet (snapshot lineage filtering and time-travel restore).
+See the
 [roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md)
 for what's next.
 

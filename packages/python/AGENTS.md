@@ -43,24 +43,36 @@ SDK's calls are occasional, not high-throughput).
 - **`_http.py` / `_http_async.py`** — the one `urllib.request` /
   `asyncio.open_connection` call site each; same `SandkilnApiError`
   shape, different transport.
-- **`tunnel.py` / `atunnel.py`** — `Sandbox.tunnel`/`AsyncSandbox.tunnel`.
-  This package's first (and so far only) WebSocket-based feature, so
-  there's no stdlib client to build on — both hand-roll the whole thing:
-  the RFC 6455 handshake (`Sec-WebSocket-Key`/`-Accept`, verified against
-  the spec's own published test vector in review, not just "it connects"),
-  masked client frames, and the tunnel's own small binary multiplexing
-  frame (shared wire format with the JS SDK's `tunnel.ts` and the
-  daemon's `http/routes/tunnel.rs` — change one, change all three). `tunnel.py`
-  runs its relay loop on a background `threading.Thread`;
-  `atunnel.py` mirrors it as an `asyncio.Task`, importing every pure
-  encode/decode helper (`_encode_ws_frame`, `_encode_tunnel_frame`,
-  `_expected_accept`, ...) from `tunnel.py` rather than duplicating them —
-  only the actual I/O (blocking socket vs. `asyncio.open_connection`) is
-  written twice, same convention as every other async mirror here. Not
-  fragmentation-aware by design: every payload either side ever sends is
-  far under any size where a real WebSocket implementation would
-  fragment, so a minimal non-fragmenting reader is correct for this
-  specific protocol, not a general-purpose gap.
+- **`_ws.py` / `_ws_async.py`** — the one hand-rolled RFC 6455 client
+  (the standard library has none), shared by the tunnel, `pty()` and
+  `attach_logs()`. `_ws.py` holds the pure parts (handshake request and
+  `Sec-WebSocket-Accept` check, `encode_frame`/`apply_mask`, `MessageAssembler`
+  for fragmented messages and interleaved control frames, the `?token=` path
+  helper, mapping a pre-upgrade HTTP error to `SandkilnApiError`) plus the
+  blocking `WebSocketConnection`; `_ws_async.py` is the `asyncio` I/O
+  (`AsyncWebSocketConnection` reads in a task into a bounded queue, so a
+  `recv(timeout=)` cancel cannot lose half a frame). Pure helpers are
+  imported, never duplicated. Peer-declared lengths are untrusted
+  (`MAX_MESSAGE_BYTES`). Auth is `?token=`, as the daemon's WebSocket
+  routes accept it (`require_preview_token`).
+- **`streams.py` / `astreams.py`** — `PtySession`/`LogStream` (and async
+  mirrors), `ExecStreamSession`, `LogOutput`. Thin session objects over a
+  connection (`send`/`recv(timeout)`/iterate/context manager) instead of the
+  raw socket the JS SDK returns. Ids are URL-quoted into the request line
+  (`pty_path`, `logs_path`) so they cannot inject handshake lines. The
+  daemon applies `cols`/`rows` once; there is no live resize.
+- **`transfer.py` / `atransfer.py`** — `upload_dir`/`download_dir` and
+  `TransferResult`, mirroring `packages/sdk/src/transfer.ts`. `download_dir`
+  handles untrusted guest input: `safe_child` (one plain path component),
+  `symlink_stays_inside` (resolves links already on disk, stricter than the JS
+  lexical check), duplicate-name refusal, `O_NOFOLLOW` writes, setuid bits
+  dropped. Keep the two directions' rules in step with `transfer.ts`.
+- **`tunnel.py` / `atunnel.py`** — `Sandbox.tunnel`/`AsyncSandbox.tunnel`:
+  the tunnel's own small binary multiplexing frame (shared wire format
+  with the JS SDK's `tunnel.ts` and the daemon's `http/routes/tunnel.rs` —
+  change one, change all three) over `_ws.py`. `tunnel.py` runs its relay
+  loop on a background `threading.Thread`; `atunnel.py` mirrors it as an
+  `asyncio.Task`.
 - **`_config.py`** — env fallback (`SANDKILN_DAEMON_URL`/
   `SANDKILN_AUTH_TOKEN`), matching `config.ts` exactly.
 - **`errors.py`** — `SandkilnApiError(status, message, body)` and `SandkilnExecTimeoutError`, its 504 subclass raised by `run_command(timeout=)` when the guest killed the command (`stdout`, `stderr`, `timeout_secs`); `as_exec_timeout` is the pure conversion.
@@ -81,10 +93,17 @@ compat (this package declares `requires-python = ">=3.9"`).
 
 ## Testing
 
-`tests/test_preview_url.py` (stdlib `unittest`, mirrors the JS SDK's
-`previewUrl.test.js`) covers the one pure logic piece. Run directly
-(`python packages/python/tests/test_preview_url.py`, not `unittest
-discover` — no `tests/__init__.py`). Everything else needs a live daemon.
+Run each file directly (`python packages/python/tests/test_websocket.py`,
+not `unittest discover` — no `tests/__init__.py`); no test framework needed.
+`test_preview_url.py` (stdlib `unittest`), `test_websocket.py` (RFC 6455
+vectors, masking, reassembly, handshake, sync/async round trips against the
+in-process server in `_fakews.py`), `test_streams.py` (`pty`/`attach_logs`/
+`exec_stream` against fakes), `test_transfer.py` (path-safety helpers and
+trees against an in-memory sandbox, including a hostile listing) are
+plain `test_*` functions with a small runner, also valid under pytest.
+`test_exec_timeout.py` and `test_status.py` import pytest. Anything touching a
+real microVM (a PTY round trip, a streamed exec, a directory copy) needs a
+live daemon: run a script against it as in the next section.
 
 ## Building and verifying
 
@@ -103,6 +122,8 @@ when touching `pyproject.toml`.
 
 - `Sandbox.attach(id, ...)` does zero network calls, same reasoning as
   the JS SDK's `attach`.
+- `Sandbox.pty()`/`attach_logs()` connect immediately (a refused session is a
+  real `SandkilnApiError` from before the upgrade), unlike `attach`.
 
 ## Publishing
 
