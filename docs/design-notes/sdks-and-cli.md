@@ -24,7 +24,16 @@ approach). Verified live end to end, including `attach()` reconstructing a
 handle without a network call and correct 404 handling on a stopped
 sandbox. Published via the OIDC trusted-publishing workflow
 `.github/workflows/publish-python-sdk.yml`; see `packages/python/AGENTS.md`
-for shipping the next version. Not in Python: `pty()`, `execStream()`.
+for shipping the next version. `pty()`, `exec_stream()`/`attach_logs()`/
+`list_exec_streams()` and `upload_dir()`/`download_dir()` (0.6.0) return small
+session objects (`PtySession`, `LogStream`; async mirrors) over a WebSocket client
+hand-rolled on the standard library, since there is no native `WebSocket` to hand
+back as the JS SDK does. `download_dir` is stricter than the JS version in one
+place: it resolves symlinks already on disk when checking that a link stays inside
+the destination, because a purely lexical check is fooled by `a -> ..` followed by
+`b -> a/..`. Verified live in sync and async on the dev box: a PTY round trip at a
+set terminal size, a streamed exec attached while running and again after it
+finished, a directory round trip, and a real guest with escaping symlinks.
 
 Async client: `AsyncSandbox`/`AsyncDrive`/`AsyncImage`/`AsyncPool` mirror
 the sync classes method for method on `asyncio.open_connection`

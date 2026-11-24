@@ -103,3 +103,19 @@ def test_async_run_command_raises_the_same_typed_error(daemon):
 def test_as_exec_timeout_ignores_other_statuses():
     assert as_exec_timeout(SandkilnApiError(500, "x", dict(TIMED_OUT))) is None
     assert as_exec_timeout(SandkilnApiError(504, "x", None)) is None
+
+
+def test_a_command_that_could_not_start_is_a_normal_result(daemon):
+    d = daemon(200, {"stdout": "", "stderr": "nosuch: command not found\n", "exit_code": 127})
+    result = Sandbox.attach("abc", base_url=d.url).run_command("nosuch")
+    assert (result.exit_code, result.stderr) == (127, "nosuch: command not found\n")
+
+
+def test_async_command_that_could_not_start_is_a_normal_result(daemon):
+    d = daemon(200, {"stdout": "", "stderr": "/tmp: Is a directory\n", "exit_code": 126})
+
+    async def go():
+        return await AsyncSandbox.attach("abc", base_url=d.url).run_command("/tmp")
+
+    result = asyncio.run(go())
+    assert (result.exit_code, result.stderr) == (126, "/tmp: Is a directory\n")

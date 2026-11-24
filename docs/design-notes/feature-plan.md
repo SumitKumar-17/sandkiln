@@ -61,10 +61,10 @@ Verify: reboot the dev box; `kiln doctor` and `/status` show reflink clones.
 
 ### 11. Exec error clarity (Use, small)
 Found by running every example: `runCommand` on a binary that does not exist returns a raw 500 ("unexpected agent response: No such file or directory") instead of exit code 127 with a readable message, and `sandbox.mount()` on a guest without rclone gives a bare 400 "No such file or directory". Map a spawn failure in the guest agent to exit 127 with the error on stderr, and have the mount route say what is missing (FUSE kernel, rclone binary).
-Verify: integration topic for both; SDK and CLI show the message.
+Shipped: the guest agent maps a spawn failure to exit 127 (not found, also a missing interpreter) or 126 (directory, no execute bit, bad format) with a shell-style line on stderr, for exec, timed exec, exec-stream and the PTY shell; other spawn errors stay `Response::Error`. `POST /sandboxes/:id/mounts` probes for `rclone` and `/dev/fuse` in one guest round trip before writing anything and answers `400` naming the missing piece. No protocol change. Verified live (second daemon, own bridge): topic `31-exec-spawn-failure` 34/34, and the SDK, CLI (exit 127/126) and MCP (`exit_code: 127`) show the message. Not done: a typed "command not found" in the SDKs (the exit code is the contract) and the PTY failure was only unit-tested, since a guest without any shell cannot be booted usefully.
 
-### 12. Python parity and polish (Use, low)
-Python has no PTY or streamed exec; add them, and add `status`/`doctor` equivalents where they make sense.
+### 12. Python parity and polish (Use, low; PTY, streamed exec and directory copy shipped)
+Shipped in Python 0.6.0: `pty()`, `exec_stream()`/`attach_logs()`/`list_exec_streams()` and `upload_dir()`/`download_dir()`, sync and async, on one hand-rolled RFC 6455 client (`_ws.py`) that the tunnel shares. `get_status` already existed (0.4.0). Still open: a Python `doctor` equivalent (the CLI's `kiln doctor` has no SDK counterpart; decide whether one belongs in a client library at all).
 
 ## Later
 

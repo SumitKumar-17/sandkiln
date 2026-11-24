@@ -13,7 +13,7 @@ description: Persistent drives and remote storage (S3-compatible) mounts.
 
 ## Remote storage mounts
 
-Also wrapped in both SDKs (`Sandbox.mount()`/`.listMounts()`/`.unmount()` in JS/TS, `sandbox.mount()`/`.list_mounts()`/`.unmount()` in Python) and the CLI (`kiln sandbox mount|mounts|unmount`) — see [JS/TS: Sandbox](/api-reference/js-sdk/sandbox), [Python: Sandbox](/api-reference/python-sdk/sandbox), or [kiln sandbox](/api-reference/cli/sandbox). Needs a FUSE-capable guest kernel and `rclone`/`fusermount3` in the rootfs; there's no preflight check, so a host missing either surfaces it as a `400` from the create call. See [Remote storage mounts](/concepts/remote-storage).
+Also wrapped in both SDKs (`Sandbox.mount()`/`.listMounts()`/`.unmount()` in JS/TS, `sandbox.mount()`/`.list_mounts()`/`.unmount()` in Python) and the CLI (`kiln sandbox mount|mounts|unmount`) — see [JS/TS: Sandbox](/api-reference/js-sdk/sandbox), [Python: Sandbox](/api-reference/python-sdk/sandbox), or [kiln sandbox](/api-reference/cli/sandbox). Needs a FUSE-capable guest kernel and `rclone`/`fusermount3` in the rootfs; the create call checks both first and a sandbox missing one gets a `400` that names it (below). See [Remote storage mounts](/concepts/remote-storage).
 
 | Route | What it does |
 |---|---|
@@ -21,7 +21,7 @@ Also wrapped in both SDKs (`Sandbox.mount()`/`.listMounts()`/`.unmount()` in JS/
 | `GET /sandboxes/:id/mounts` | List this sandbox's mounts: `{"mounts": [...]}`, same object shape as above. |
 | `DELETE /sandboxes/:id/mounts/:mount_id` | Unmount and forget it (`204`). Best-effort past the bookkeeping: removed from daemon state whether or not the guest-side `umount` succeeded, with a warning logged if it didn't. |
 
-Errors on create: `400` for any empty required field, for a failed mount (`rclone mount failed (exit N): <stderr><stdout>`), or for any guest-agent error; `404` for an unknown sandbox id; `409` if something is already mounted at that `mount_path` (the message names the existing bucket, its path, and the `DELETE` URL); `500` if rclone exits `0` but `mountpoint -q <path>` disagrees — the daemon unmounts and removes the config before returning. `DELETE` returns `404` for an unknown sandbox or mount id.
+Errors on create: `400` when the sandbox has no `rclone` binary ("remote storage mounts need the rclone binary inside the sandbox...") or no `/dev/fuse` ("...this sandbox's kernel has no /dev/fuse (build the guest kernel with CONFIG_FUSE_FS...)"), checked before anything is written into the guest; `400` for any empty required field, for a failed mount (`rclone mount failed (exit N): <stderr><stdout>`), or for any guest-agent error; `404` for an unknown sandbox id; `409` if something is already mounted at that `mount_path` (the message names the existing bucket, its path, and the `DELETE` URL); `500` if rclone exits `0` but `mountpoint -q <path>` disagrees — the daemon unmounts and removes the config before returning. `DELETE` returns `404` for an unknown sandbox or mount id.
 
 ## Example
 

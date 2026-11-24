@@ -8,7 +8,19 @@ from urllib.parse import urlencode
 from ._config import resolve_auth_token, resolve_base_url
 from ._http import request
 from .errors import SandkilnApiError, as_exec_timeout
+from .streams import (
+    DEFAULT_COLS,
+    DEFAULT_ROWS,
+    ExecStreamSession,
+    LogStream,
+    PtySession,
+    exec_stream_session_from_body,
+    logs_path,
+    pty_path,
+)
+from .transfer import DEFAULT_CONCURRENCY, Exclude, TransferResult, download_dir, upload_dir
 from .tunnel import TunnelHandle, open_tunnel
+from ._ws import WebSocketConnection
 
 
 @dataclass(frozen=True)
@@ -528,6 +540,59 @@ class Sandbox:
         `.close()` when done forwarding.
         """
         return open_tunnel(self._base_url, self._auth_token, self.id, guest_port, local_port, local_host)
+
+    def upload_dir(
+        self, local_dir: str, remote_dir: str, exclude: Exclude | None = None, concurrency: int = DEFAULT_CONCURRENCY
+    ) -> TransferResult:
+        """Copies a local directory into the sandbox, keeping file modes and
+        symlinks; files are sent `concurrency` at a time. `exclude` receives
+        each entry's `/`-separated path relative to `local_dir` and skips it
+        when it returns true. Returns a `TransferResult`."""
+        return upload_dir(self, local_dir, remote_dir, exclude, concurrency)
+
+    def download_dir(
+        self, remote_dir: str, local_dir: str, exclude: Exclude | None = None, concurrency: int = DEFAULT_CONCURRENCY
+    ) -> TransferResult:
+        """Copies a directory out of the sandbox. The guest is untrusted:
+        entry names that are not a single plain path component raise
+        `ValueError`, and a symlink is only recreated when its target stays
+        inside `local_dir` (others are listed in `TransferResult.skipped`), so
+        a hostile guest cannot write outside `local_dir`."""
+        return download_dir(self, remote_dir, local_dir, exclude, concurrency)
+
+    def pty(self, cols: int = DEFAULT_COLS, rows: int = DEFAULT_ROWS) -> PtySession:
+        """Opens a live interactive shell, unlike `run_command`'s one-shot
+        request and response. Returns a `PtySession`: `send()` is stdin,
+        `recv()` yields the shell's interleaved stdout and stderr as `bytes`.
+        `cols`/`rows` size the terminal once at session start; there is no
+        live resize. Raises `SandkilnApiError` when the daemon refuses the
+        session (unknown sandbox `404`, session cap `409`)."""
+        connection = WebSocketConnection.connect(self._base_url, pty_path(self.id, cols, rows), self._auth_token)
+        return PtySession(connection)
+
+    def exec_stream(self, command: str, args: list[str] | None = None, env: dict[str, str] | None = None) -> str:
+        """Starts `command` detached and returns a session id immediately,
+        unlike `run_command`, which waits. Output is captured from the moment
+        it starts whether or not anything is attached; `attach_logs(id)` gives
+        the full history plus a live tail. Not carried across
+        `resume()`/`fork()`. `env` is merged over the sandbox's own."""
+        body: dict[str, object] = {"command": command, "args": args or []}
+        if env is not None:
+            body["env"] = env
+        return self._request("POST", f"/sandboxes/{self.id}/exec-stream", body)["id"]
+
+    def list_exec_streams(self) -> list[ExecStreamSession]:
+        """Every streamed background exec session tracked against this
+        sandbox, running or finished (`exit_code` is `None` while running)."""
+        response = self._request("GET", f"/sandboxes/{self.id}/exec-stream")
+        return [exec_stream_session_from_body(s) for s in response["sessions"]]
+
+    def attach_logs(self, session_id: str) -> LogStream:
+        """Attaches to an `exec_stream()` session: replays everything
+        captured so far, then live-tails new output, whether or not the
+        process has finished. The daemon buffers, so attaching again later
+        replays the same history. Returns a `LogStream`."""
+        return LogStream(WebSocketConnection.connect(self._base_url, logs_path(self.id, session_id), self._auth_token))
 
     def snapshot(self) -> str:
         """Saves this sandbox's full state (memory + disk) to disk and

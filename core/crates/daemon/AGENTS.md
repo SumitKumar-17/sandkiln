@@ -159,7 +159,7 @@ validation and response shaping; the lifecycle logic lives in `lifecycle/` and
 - **`http/routes/mounts.rs`** — `rclone mount` of an S3-compatible bucket,
   built entirely on `call_agent`/`Mkdir`/`WriteFile`/`Chmod`/`Exec` — no
   new wire protocol. Credentials go in as a `0600` config file, never a
-  CLI arg. No holder-tracking (concurrent mounts of one bucket aren't a
+  CLI arg. A preflight probe (`mount_preflight_error`) 400s on a missing `rclone`/`/dev/fuse` first. No holder-tracking (concurrent mounts of one bucket aren't a
   corruption risk) and no re-application on resume/fork (a mount is a
   live guest FUSE process, captured by Firecracker's own snapshot).
 - **`lifecycle/pool.rs`** — pure pool state/matching logic; see

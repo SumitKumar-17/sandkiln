@@ -1,6 +1,6 @@
 ---
 title: "Python: Sandbox"
-description: Every Sandbox method -- lifecycle, filesystem, preview, tunnel, snapshots.
+description: Every Sandbox method -- lifecycle, filesystem, PTY, streamed exec, directory copy, preview, tunnel, snapshots.
 ---
 
 ## `Sandbox`
@@ -90,7 +90,7 @@ print(url)  # open this in a browser, or request it yourself
 
 ### Local tunnel
 
-The reverse of preview: expose a service running on **this machine** to code inside the sandbox. This package's only WebSocket-based feature — hand-rolled (RFC 6455 handshake and frame masking), since the standard library has no WebSocket client.
+The reverse of preview: expose a service running on **this machine** to code inside the sandbox. One of the WebSocket-based features (with `pty()` and `attach_logs()`), all on one hand-rolled RFC 6455 client, since the standard library has none.
 
 ```python
 sandbox = Sandbox.create()
@@ -102,6 +102,58 @@ tunnel.close()
 ```
 
 - **`sandbox.tunnel(guest_port, local_port, local_host="127.0.0.1")`** — returns a `TunnelHandle` with `.tunnel_id` and `.close()`. The relay runs on a background thread (`AsyncSandbox.tunnel(...)` runs it as an `asyncio.Task` instead). See [Local tunnel](/concepts/local-tunnel).
+
+### Interactive shell (PTY)
+
+`run_command` waits for one command and returns everything at once. `pty()` opens a real interactive shell you can drive:
+
+```python
+sandbox = Sandbox.create()
+with sandbox.pty(cols=120, rows=40) as pty:
+    pty.send("echo $((6 * 7)); stty size\n")
+    seen = b""
+    while b"40 120" not in seen:
+        seen += pty.recv(timeout=10)   # bytes: stdout and stderr interleaved
+    pty.send("exit\n")
+```
+
+- **`sandbox.pty(cols=80, rows=24)`** — returns a `PtySession`. `send(data)` (`bytes` or `str`) is the shell's stdin; `recv(timeout=None)` returns the next message as `bytes`, or `None` once the shell ended (a `timeout` in seconds raises `TimeoutError` and leaves the session usable); iterating the session yields messages until it ends. It is a context manager, and `close()` ends the shell and anything it started. `cols`/`rows` size the terminal once, at open; the daemon has no live resize. A refused session raises `SandkilnApiError` before any connection is made (`404` unknown sandbox, `409` at the per-sandbox session cap). `AsyncSandbox.pty()` returns an `AsyncPtySession` (`await send()`, `await recv()`, `async for`, `async with`).
+
+The WebSocket client is hand-rolled on the standard library, so there is still no runtime dependency; the auth token goes as the `?token=` query parameter the daemon's WebSocket routes accept.
+
+### Streamed background exec
+
+For a long-running command you want to watch live, start it in the background and attach to its output:
+
+```python
+session_id = sandbox.exec_stream("sh", ["-c", "for i in 1 2 3; do echo tick $i; sleep 1; done; exit 5"])
+
+with sandbox.attach_logs(session_id) as logs:
+    for message in logs:               # replay, then live tail
+        print(message)                 # bytes of output; str for daemon notices
+print(logs.exit_code)                  # 5
+
+# The daemon buffers, so attaching later replays the same history in one go.
+output = sandbox.attach_logs(session_id).read_all()   # LogOutput(data, notices, exit_code)
+print(sandbox.list_exec_streams())     # [ExecStreamSession(id, command, args, started_at, exit_code), ...]
+```
+
+- **`sandbox.exec_stream(command, args=None, env=None)`** — starts `command` detached and returns a session id immediately. `env` is merged over the sandbox's own.
+- **`sandbox.attach_logs(session_id)`** — returns a `LogStream`: the full captured history first, then new output, whether or not the process has finished. Messages are `bytes` of output, or `str` for the daemon's notices (truncation, and the final `[process exited with code N]`). `exit_code` is set once that notice is seen; `read_all()` drains the stream into a `LogOutput`. Same `recv(timeout)`, iteration and context-manager behaviour as `PtySession`.
+- **`sandbox.list_exec_streams()`** — every session tracked against this sandbox, as `ExecStreamSession` (`exit_code` is `None` while running).
+- Not carried across `resume()`/`fork()`, and gone after a daemon restart. `AsyncSandbox` has the same three methods, awaited, with `AsyncLogStream`.
+
+### Copying directory trees
+
+```python
+result = sandbox.upload_dir("./project", "/work", exclude=lambda rel: rel.startswith(".git/"))
+print(result)   # TransferResult(files=…, directories=…, symlinks=…, bytes=…, skipped=[…])
+sandbox.run_command("sh", ["-c", "cd /work && make"])
+sandbox.download_dir("/work/out", "./out")
+```
+
+- **`sandbox.upload_dir(local_dir, remote_dir, exclude=None, concurrency=8)`** and **`sandbox.download_dir(remote_dir, local_dir, exclude=None, concurrency=8)`** — copy a whole tree, keeping file modes and symlinks, `concurrency` files at a time. `exclude` receives each entry's `/`-separated path relative to the root and skips it when it returns true. Both return a `TransferResult` (`files`, `directories`, `symlinks`, `bytes`, `skipped`).
+- The guest is untrusted, so `download_dir` validates what it lists: an entry name that is not a single plain path component (`..`, a separator, a NUL) raises `ValueError`; a symlink is only recreated when its target resolves inside `local_dir` (existing links on disk are followed in that check), and any other is listed in `skipped`; duplicate names in one listing are refused; files are created `0600` without following links, then given the listed permission bits with setuid/setgid/sticky dropped. A hostile guest cannot write outside `local_dir`.
 
 ### Snapshot, resume, fork
 

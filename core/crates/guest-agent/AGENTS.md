@@ -47,7 +47,11 @@ ships inside every rootfs image.
   no equivalent; `libc` over `nix` for one syscall). No path validation
   of any kind, deliberately — the guest agent is a dumb executor, a path
   is scoped to whatever it resolves to inside that one microVM's own
-  filesystem regardless.
+  filesystem regardless. `spawn_failure` is the one place that maps a failed
+  spawn to the shell convention (127 not found, 126 not executable, with a
+  shell-style line); exec, `bounded_exec` (via `Outcome::SpawnFailed`),
+  `exec_stream` and the `pty` shell all use it, and anything it does not
+  recognise stays an error.
 - **`bounded_exec.rs`** — `Request::Exec` with `timeout_secs`: runs the command
   in its own process group (`process_group(0)`), drains stdout and stderr on
   their own threads into shared buffers, and enforces one deadline over three

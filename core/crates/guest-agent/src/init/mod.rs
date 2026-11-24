@@ -6,11 +6,14 @@
 //! (`images/inject-agent.sh --init`); no daemon or kernel-argument change.
 //!
 //! - [`setup`]: one-shot guest preparation (pseudo filesystems, hostname,
-//!   loopback, environment, limits) matching what systemd gave the agent.
+//!   loopback, limits) matching what systemd gave the agent.
+//! - [`environment`]: the variables the agent starts with, the image's own
+//!   locale included.
 //! - [`supervisor`]: PID 1's job afterwards. The agent runs as a forked
 //!   child, so PID 1 can reap with `waitpid(-1)` without stealing exit
 //!   statuses from the agent's own children (only orphans reparent here).
 
+mod environment;
 mod setup;
 mod supervisor;
 

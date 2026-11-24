@@ -65,15 +65,8 @@ The marketing site (`website/`) links out to this site by absolute URL
 There is no shared content, shared config, or shared design system
 between the two; they're separate deployments by design.
 
-## `release-notes.mdx` is a manual copy, not auto-synced
+## `release-notes.md` is generated
 
-Named `release-notes.mdx`, not `changelog.mdx` — Mintlify has its own
-built-in Changelog feature (`<Update>` blocks) that reserves the
-`/changelog` path; a plain content page there gets silently shadowed
-(served a 404 instead of the file, confirmed live — not assumed).
-
-Unlike the old website page (which parsed root `CHANGELOG.md` at Astro
-build time so it could never drift), this page is a one-time copy —
-Mintlify has no build step to parse it automatically. Update it by hand
-whenever `CHANGELOG.md` gains a new entry; there's nothing that catches
-drift here the way there was before.
+It is `CHANGELOG.md` with repository links rewritten for the site, written by
+`scripts/dev-tools/sync-release-notes.py` (`--check` runs in `docs-check`). Edit
+`CHANGELOG.md`, then run the script; never edit the page by hand.
