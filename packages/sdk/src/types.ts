@@ -561,7 +561,9 @@ export interface DaemonStatusBody {
     pools: number;
     pool_warm_ready: number;
   };
-  tap_pool: { size: number; free: number };
+  tap_pool: { size: number; free: number; in_use?: number };
+  /** Absent on daemons older than the tap/IP split. */
+  ip_pool?: { size: number; free: number; held_by_snapshots: number };
   sandboxes_created_total: number;
   rootfs_clones: { reflink: number; copy: number };
   disk: { path: string; total_bytes: number; free_bytes: number }[];
@@ -575,7 +577,10 @@ export interface DaemonStatus {
   authEnabled: boolean;
   jailerEnabled: boolean;
   counts: { sandboxes: number; heldSnapshots: number; retiredCheckpoints: number; pools: number; poolWarmReady: number };
-  tapPool: { size: number; free: number };
+  /** `inUse` is taps plugged into running sandboxes; absent on older daemons. */
+  tapPool: { size: number; free: number; inUse?: number };
+  /** Guest addresses; a held snapshot keeps its address but no tap. Absent on older daemons. */
+  ipPool?: { size: number; free: number; heldBySnapshots: number };
   sandboxesCreatedTotal: number;
   rootfsClones: { reflink: number; copy: number };
   disk: { path: string; totalBytes: number; freeBytes: number }[];

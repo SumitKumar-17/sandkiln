@@ -317,6 +317,26 @@ entry below and earlier), this just ships it to PyPI via
 flow. No code change; versioned separately from the JS/TS SDK/CLI table
 below from here on, since the two don't need to move in lockstep.
 
+## [0.14.0] — 2026-11-24
+
+JS SDK `sandkiln` and CLI `sandkiln-cli`. Needs a daemon with the per-request exec timeout and the tap/IP split for the matching behavior; older daemons ignore `timeout_secs`.
+
+### Added
+- `runCommand(..., { timeoutSeconds })` throws `SandkilnExecTimeoutError` (with partial output) when the daemon killed the command in the guest; `kiln sandbox exec --timeout <secs>` exits 124.
+- `getStatus()` and `kiln status` report `tapPool.inUse` and the new `ipPool` (size, free, held by snapshots).
+- `kiln --version`.
+
+## sandkiln-mcp 0.2.0 — 2026-11-24
+
+### Changed
+- `sandbox_exec` passes its timeout to the daemon, which kills the command in the guest; a kill is a `timeout` tool error whose details carry the partial output. Requires `sandkiln` 0.14.0.
+
+## sandkiln (Python) [0.5.0] — 2026-11-24
+
+### Added
+- `run_command(..., timeout=)` (sync and async) raises `SandkilnExecTimeoutError` with partial output when the command was killed.
+- `get_status()` includes tap in use and the guest IP pool.
+
 ## [0.13.0] — 2026-11-24
 
 JS SDK `sandkiln` and CLI `sandkiln-cli`.

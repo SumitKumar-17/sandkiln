@@ -259,6 +259,7 @@ export function formatStatus(s: DaemonStatus): string {
     `snapshots   ${s.counts.heldSnapshots} held, ${s.counts.retiredCheckpoints} retired`,
     `pools       ${s.counts.pools} configured, ${s.counts.poolWarmReady} warm ready`,
     `tap devices ${s.tapPool.free}/${s.tapPool.size} free`,
+    ...(s.ipPool ? [`guest IPs    ${s.ipPool.free}/${s.ipPool.size} free, ${s.ipPool.heldBySnapshots} held by snapshots`] : []),
     `rootfs      ${s.rootfsClones.reflink} reflink, ${s.rootfsClones.copy} copy clones`,
     ...s.disk.map((d) => `disk        ${humanBytes(d.freeBytes)} free of ${humanBytes(d.totalBytes)}  ${d.path}`),
   ];

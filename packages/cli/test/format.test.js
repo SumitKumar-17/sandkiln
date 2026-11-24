@@ -303,7 +303,8 @@ test("formatStatus prints counts, disk and warnings", () => {
     authEnabled: false,
     jailerEnabled: false,
     counts: { sandboxes: 2, heldSnapshots: 1, retiredCheckpoints: 0, pools: 1, poolWarmReady: 1 },
-    tapPool: { size: 32, free: 30 },
+    tapPool: { size: 32, free: 30, inUse: 2 },
+    ipPool: { size: 253, free: 250, heldBySnapshots: 1 },
     sandboxesCreatedTotal: 7,
     rootfsClones: { reflink: 7, copy: 0 },
     disk: [{ path: "/s", totalBytes: 100 * 1024 ** 3, freeBytes: 50 * 1024 ** 3 }],
@@ -311,6 +312,7 @@ test("formatStatus prints counts, disk and warnings", () => {
   });
   assert.match(out, /up 1h 1m/);
   assert.match(out, /tap devices 30\/32 free/);
+  assert.match(out, /guest IPs {4}250\/253 free, 1 held by snapshots/);
   assert.match(out, /50\.0 GiB free of 100\.0 GiB/);
   assert.match(out, /warning: open auth/);
 });
