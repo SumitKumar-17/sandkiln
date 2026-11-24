@@ -36,7 +36,7 @@ behavior belongs here, not in `daemon`.
 - **`vm/boot.rs`** — boot mechanics, a submodule (not sibling) of `vm` so
   it can see `Vm`'s private fields. `spawn_direct`/`spawn_jailed` resolve
   the process and paths (host paths direct, in-jail paths like `/kernel`
-  jailed — see `jailer.rs`); `configure_and_start` runs the same PUT
+  jailed — see `jailer/`); `configure_and_start` runs the same PUT
   sequence either way, built by `configuration_requests` as an ordered
   list so each PUT times individually (debug event `"vm boot phase
   breakdown"`). `InstanceStart` is timed separately — it's the one call
@@ -55,13 +55,16 @@ behavior belongs here, not in `daemon`.
 - **`rootfs.rs`** — per-sandbox rootfs clone via native `FICLONE` reflink,
   falling back to a full copy, reporting which happened
   (`rootfs_clone_total{method}` on `/metrics`).
-- **`jailer.rs`** — chroot, cgroup v2, a dedicated uid per VM plus one shared
-  jail group. `JailerIdPool` (mirrors `network.rs`'s tap/IP pool, with
-  `quarantine` for a uid whose process could not be killed),
-  `link_resource_into_jail` (hard link, falls back to copy; writable files get
-  the jail group), `copy_binary_into_jail`, `build_jailer_args`/`cgroup_limits`
-  (pure, unit tested), `self_check` (startup probe with the real jailer) and
-  `sweep_stale_jails`. Verified live; the design (supervisor as jailer's exec
+- **`jailer/`** — chroot, cgroup v2, a dedicated uid per VM plus one shared
+  jail group, split by concern; `mod.rs` re-exports everything so callers use
+  `jailer::X`. `ids.rs`: `JailerIdPool` (mirrors `network.rs`'s tap/IP pool, with
+  `quarantine` for a uid whose process could not be killed).
+  `chroot.rs`: `link_resource_into_jail` (hard link, falls back to copy;
+  writable files get the jail group), `copy_binary_into_jail`. `mod.rs`:
+  `JailLaunch`, `build_jailer_args` (pure, unit tested). `cgroup.rs`:
+  `cgroup_limits` and `sweep_stale_jails`. `selfcheck.rs`: `self_check`
+  (startup probe with the real jailer). `test_support.rs`: the shared
+  `TempDir` for the submodules' tests. Verified live; the design (supervisor as jailer's exec
   file, shared group, group-owned taps) is in
   `docs/design-notes/security-hardening.md`. Setup: `docs-site/self-hosting/jailer.mdx`.
 - **`vm/terminate.rs`, `vm/jail_state.rs`** — bounded termination (`kill` +
@@ -171,7 +174,7 @@ harness. Benchmarks: `benches/vm_lifecycle.rs` (criterion), env vars in
 - `jailer` itself needs privileges the daemon deliberately doesn't have
   — that's why the `jailer` binary is setuid-root (one-time setup), not
   why the daemon's own capability set should be loosened.
-- `jailer.rs`'s tests use real temp dirs/hard links/chmod, no KVM needed
+- The `jailer/` tests use real temp dirs/hard links/chmod, no KVM needed
   — they can't verify the actual installed jailer's directory
   ownership/permissions match what this module assumes. Verify that on
   the dev box before trusting jailer boot in production.
