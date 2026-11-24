@@ -1,5 +1,6 @@
 ---
 title: "What a snapshot costs, and why no snapshot optimization has shipped"
+sidebarTitle: "What a snapshot costs"
 description: "A measured-baseline case study of snapshot-take latency, which is the slowest and most load-sensitive operation in the system, with the candidate optimizations stated as planned or hypothesized, not done."
 ---
 

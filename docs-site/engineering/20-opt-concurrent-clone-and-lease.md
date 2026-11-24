@@ -1,5 +1,6 @@
 ---
 title: "Overlapping the rootfs clone with the network lease: correct, and irrelevant"
+sidebarTitle: "Concurrent clone and lease"
 description: "A case study of a sound optimization that was recorded as a 369ms to 211ms win, then profiled and shown to be capped at the 4ms the network lease costs."
 ---
 

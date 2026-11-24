@@ -1,5 +1,6 @@
 ---
 title: "Pre-warmed pools: what the measurements say and what they do not"
+sidebarTitle: "Pool pre-warming, measured"
 description: "A case study of the pre-warmed snapshot pool as a latency optimization: a modest win on create(), a large one on time to first command, and a resume failure rate that changes the arithmetic."
 ---
 

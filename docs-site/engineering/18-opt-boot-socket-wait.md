@@ -1,5 +1,6 @@
 ---
 title: "Boot: removing a 20 ms sleep that every VM paid"
+sidebarTitle: "Boot socket wait"
 description: "A fixed 20 ms poll for Firecracker's API socket cost every boot the same 20.11 ms; connecting with an exponential backoff cut boot from 34.00 ms to about 11.3 ms, and a sibling 100 ms retry sleep showed why a correct fix can be invisible end to end."
 ---
 

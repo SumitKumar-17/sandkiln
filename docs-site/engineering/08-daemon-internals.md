@@ -1,5 +1,6 @@
 ---
 title: "Daemon internals: AppState, the sandbox lifecycle, and the background loops"
+sidebarTitle: "Daemon internals"
 description: "How sandkilnd is assembled: the capability-first startup order, the one shared AppState and its locking rules, ownership checks across live and held resources, the error and auth layers, hand-rolled metrics, and the idle reaper."
 ---
 

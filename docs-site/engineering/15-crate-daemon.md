@@ -1,5 +1,6 @@
 ---
 title: "Crate tour: sandkiln-daemon"
+sidebarTitle: "sandkiln-daemon"
 description: "The axum HTTP server that turns requests into VM lifecycle calls: its module layout, the AppState ownership maps, the guards that keep failure paths clean, orderly shutdown, and the rules that keep blocking I/O off the async runtime."
 ---
 

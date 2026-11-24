@@ -1,5 +1,6 @@
 ---
 title: "Using sandboxes from agents and CI"
+sidebarTitle: "Agents and CI"
 description: "Two clients built for callers that are not a person at a keyboard. The MCP server gives an AI agent twelve tools, bounded output, structured errors and guaranteed cleanup. The GitHub Action runs a CI job in a fresh microVM and always destroys it. Both are thin layers over the SDK, and this post covers how they are shaped and where they stop."
 ---
 

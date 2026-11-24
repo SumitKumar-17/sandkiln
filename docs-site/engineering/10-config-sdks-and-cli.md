@@ -1,5 +1,6 @@
 ---
 title: "Configuration, the SDKs and the CLI: one API, three clients, one change chain"
+sidebarTitle: "Config, SDKs and CLI"
 description: "How the daemon resolves its configuration from one registry (environment, then sandkiln.toml, then defaults), how the TypeScript SDK, the zero-dependency Python SDK and the kiln CLI mirror the daemon API, how a change propagates through every layer, and how the integration suite pins it."
 ---
 

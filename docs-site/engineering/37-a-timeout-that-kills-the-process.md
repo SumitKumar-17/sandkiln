@@ -1,5 +1,6 @@
 ---
 title: "A timeout that kills the process"
+sidebarTitle: "A timeout that kills the process"
 description: "The old exec timeout gave the caller a 504 and left the command running in the guest. Now the guest agent enforces the limit itself: its own process group, SIGTERM then SIGKILL after 2 seconds, pipes drained, partial output returned. This post covers the wire change, the agent's single-deadline loop, how the daemon validates the limit and waits a margin, the five clients, the integration topic and its positive control, and what is still not covered."
 ---
 

@@ -1,5 +1,6 @@
 ---
 title: "The agent as PID 1: an init for a sandbox"
+sidebarTitle: "The agent as PID 1"
 description: "About 125 ms of a cold create was systemd preparing a general-purpose machine for a guest that runs one program. An opt-in image makes the guest agent PID 1 instead: what an init must do, why the agent runs as a forked child of itself, how the image is built, the measured 232 ms to 147 ms with ranges, what was verified live and what was not, and what stands between this and being the default."
 ---
 

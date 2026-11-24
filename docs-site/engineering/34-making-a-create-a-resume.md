@@ -1,5 +1,6 @@
 ---
 title: "Making a create a resume: the default warm pool"
+sidebarTitle: "The default warm pool"
 description: "A plain create used to boot a kernel and wait about 210 ms for the guest agent. With default_warm_count the daemon keeps resumable snapshots of its default shape ready, so the same call resumes one: 233.9 ms to 26.4 ms to the first command when paced. This post covers the claim path, the two bugs found while building it, what pauses replenishment, the table including the runs that do not look good, and the cost."
 ---
 

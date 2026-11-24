@@ -144,13 +144,19 @@
         ]
       },
       {
-        "tab": "Engineering",
-        "icon": "newspaper",
+        "tab": "Architecture",
         "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "architecture/overview",
+              "engineering/01-system-overview",
+              "architecture/sdk-cli-design"
+            ]
+          },
           {
             "group": "How it works",
             "pages": [
-              "engineering/01-system-overview",
               "engineering/02-vsock-protocol-and-guest-agent",
               "engineering/03-driving-firecracker",
               "engineering/04-create-path-and-rootfs",
@@ -173,9 +179,43 @@
             ]
           },
           {
-            "group": "Performance",
+            "group": "Internals",
+            "pages": [
+              "internals/sqlite-history-store",
+              "internals/snapshot-resume-fork",
+              "internals/drives",
+              "internals/images",
+              "internals/vsock-wire-protocol",
+              "internals/jailer-privilege-model",
+              "internals/egress-iptables",
+              "internals/tap-bridge-networking",
+              "internals/fuse-rclone-mounts",
+              "internals/rate-limiting",
+              "internals/mmds",
+              "internals/pty",
+              "internals/exec-stream",
+              "internals/pre-warmed-pools",
+              "internals/local-tunnel"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Performance",
+        "groups": [
+          {
+            "group": "Measuring",
             "pages": [
               "engineering/16-performance-model-and-measurement",
+              "engineering/29-what-a-start-latency-number-means",
+              "engineering/32-a-benchmark-you-can-rerun",
+              "architecture/testing-and-benchmarking",
+              "architecture/startup-latency"
+            ]
+          },
+          {
+            "group": "Optimizations",
+            "pages": [
               "engineering/17-opt-rootfs-reflink-clone",
               "engineering/18-opt-boot-socket-wait",
               "engineering/19-opt-history-store-wal",
@@ -186,12 +226,15 @@
               "engineering/24-opt-other-measured-wins",
               "engineering/25-opt-snapshot-stop-force-stop",
               "engineering/28-opt-guest-boot-time",
-              "engineering/29-what-a-start-latency-number-means",
-              "engineering/32-a-benchmark-you-can-rerun",
               "engineering/34-making-a-create-a-resume",
               "engineering/35-the-agent-as-pid-1"
             ]
-          },
+          }
+        ]
+      },
+      {
+        "tab": "Case studies",
+        "groups": [
           {
             "group": "Correctness",
             "pages": [
@@ -210,34 +253,10 @@
             ]
           },
           {
-            "group": "Architecture",
+            "group": "Bug hunts and notes",
             "pages": [
-              "architecture/overview",
-              "architecture/startup-latency",
               "architecture/bug-hunt-vsock-timeout",
-              "architecture/sdk-cli-design",
-              "architecture/testing-and-benchmarking",
               "architecture/engineering-notebook"
-            ]
-          },
-          {
-            "group": "Internals",
-            "pages": [
-              "internals/sqlite-history-store",
-              "internals/snapshot-resume-fork",
-              "internals/drives",
-              "internals/images",
-              "internals/vsock-wire-protocol",
-              "internals/jailer-privilege-model",
-              "internals/egress-iptables",
-              "internals/tap-bridge-networking",
-              "internals/fuse-rclone-mounts",
-              "internals/rate-limiting",
-              "internals/mmds",
-              "internals/pty",
-              "internals/exec-stream",
-              "internals/pre-warmed-pools",
-              "internals/local-tunnel"
             ]
           }
         ]

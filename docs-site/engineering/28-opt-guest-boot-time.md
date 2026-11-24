@@ -1,5 +1,6 @@
 ---
 title: "Guest boot time: 413 ms to 214 ms to first command"
+sidebarTitle: "Guest boot time"
 description: "Why the 12.6 ms cold boot number was not what a caller waits for, how initcall_debug pinned 124 ms on the loop driver, which kernel arguments were measured, shipped and rejected, and what the remaining floor is."
 ---
 

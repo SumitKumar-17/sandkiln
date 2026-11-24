@@ -1,5 +1,6 @@
 ---
 title: "A benchmark you can rerun"
+sidebarTitle: "A benchmark you can rerun"
 description: "How examples/benchmark-suite is built: what each metric times, how the statistics and compare mode work, how it cleans up only what it created, why it refuses a busy daemon, how to read a sample result, and the two places its numbers disagree with the published ones."
 ---
 

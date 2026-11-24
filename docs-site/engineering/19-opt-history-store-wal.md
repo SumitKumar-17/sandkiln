@@ -1,5 +1,6 @@
 ---
 title: "History store: sqlite WAL on the create path"
+sidebarTitle: "History store WAL"
 description: "A best-effort sqlite write was costing a cold create 9.24 ms of synchronous disk flushing; switching the history store to WAL with synchronous NORMAL cut an isolated write from 1897.8 us to 37.1 us, at a stated durability cost."
 ---
 

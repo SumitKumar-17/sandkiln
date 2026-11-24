@@ -154,6 +154,18 @@ How to read it:
 - One paced sample was a 140.6ms create (the maximum); it is left in, cause not established.
 - Cost: each warm instance is a held full-RAM snapshot on disk (512 MiB by default) and one guest address, and every claim triggers a replacement boot and snapshot in the background (replenishment pauses when addresses or disk run low, see `default_warm_count`).
 
+### Replenish on claim (2026-11-24)
+
+The pool replenisher now wakes the moment a claim drains a pool (it used to wait for a fixed 2-second tick) and refills up to two instances in parallel. Recorded with `examples/benchmark-suite` (`--only create --iterations 20`, `2026-11-24T1950-*` files under `examples/benchmark-suite/results/`):
+
+| Pause between creates | create to first command, median (p95) |
+| --- | --- |
+| 4000 ms | 25.9ms (38.8) |
+| 1500 ms | 27.2ms (49.5) |
+| none, 20 back to back | 227.5ms (343.0); mostly cold, a pool of 2 cannot cover a burst of 20 |
+
+There is no measurement of the 1500 ms case before this change, so no speedup is claimed for it; the table only records where the pool now keeps up. The product page reads its figure from the newest `warm-pool-on-paced` result.
+
 ## Init-mode image: the agent as PID 1 (2026-11-24)
 
 Lever 1 of the [latency floor](design-notes/latency-floor.md). Same daemon,

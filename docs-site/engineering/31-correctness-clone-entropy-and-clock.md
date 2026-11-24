@@ -1,5 +1,6 @@
 ---
 title: "Clones must not share randomness: ResumeFixup"
+sidebarTitle: "Clone entropy and clock"
 description: "A restored guest wakes with the random pool and wall clock it had at snapshot time, and the 5.10 guest kernel does not reseed on its own. This post covers why that is a security problem for forks and pool claims, the protocol request that repairs it, what the guest agent does with it, its best-effort semantics, and the integration topic that checks it."
 ---
 

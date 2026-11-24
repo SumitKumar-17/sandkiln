@@ -3,9 +3,11 @@ import BaseLayout from "../layouts/BaseLayout.astro";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
 
-import numbers from "../data/numbers.json";
+import { latestMedian } from "../lib/results";
 
 const DOCS = "https://sandkiln.mintlify.site";
+const warmMs = latestMedian("warm-pool-on-paced", "create_to_first_command");
+const coldMs = latestMedian("warm-pool-off-paced", "create_to_first_command");
 const setup = [
   "git clone https://github.com/SumitKumar-17/sandkiln",
   "cd sandkiln && scripts/setup.sh",
@@ -22,7 +24,7 @@ const setup = [
         <p class="lede">
           sandkiln runs untrusted and AI-generated code in its own
           <a href={`${DOCS}/concepts/sandbox-lifecycle`}>microVMs</a>, on hardware you control.
-          A sandbox answers its first command in about {numbers.warm_create_to_first_command_ms} ms from a warm pool, and can be
+          A sandbox answers its first command in about {warmMs} ms when a warm one is ready and {coldMs} ms when it has to boot, and can be
           <a href={`${DOCS}/concepts/snapshots`}>snapshotted, forked and resumed</a>.
           Use it from <a href={`${DOCS}/getting-started/js`}>TypeScript</a>,
           <a href={`${DOCS}/getting-started/python`}>Python</a>, the

@@ -1,5 +1,6 @@
 ---
 title: "Crate tour: sandkiln-vmm"
+sidebarTitle: "sandkiln-vmm"
 description: "The host-side library that owns everything touching a microVM: spawning Firecracker, driving its API, talking to the guest, leasing network identity, cloning rootfs files, and tearing it all down without leaking."
 ---
 

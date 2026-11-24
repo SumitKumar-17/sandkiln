@@ -1,5 +1,6 @@
 ---
 title: "Snapshot disk corruption: forks wrote into the snapshot's own disk"
+sidebarTitle: "Snapshot disk corruption"
 description: "A correctness case study: a snapshot records its rootfs by host path, so a resumed VM wrote straight into the snapshot's own disk, and the next fork read a filesystem that no longer matched its memory. The first test said 'isolated' because cached metadata hid the damage."
 ---
 

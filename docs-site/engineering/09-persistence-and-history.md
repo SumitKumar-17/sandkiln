@@ -1,5 +1,6 @@
 ---
 title: "Persistence and history: what survives a daemon restart, and what does not"
+sidebarTitle: "Persistence and history"
 description: "A sqlite lifecycle history store with a measured WAL pragma choice, startup orphan reconciliation, and the filesystem-as-source-of-truth snapshot layout that is the only thing able to bring a sandbox back."
 ---
 

@@ -1,5 +1,6 @@
 ---
 title: "Crate tour: sandkiln-guest-agent"
+sidebarTitle: "sandkiln-guest-agent"
 description: "The only sandkiln code that runs inside the microVM: a small static binary with three vsock listeners, one outbound dialer, a thread per long-lived session, and a set of hangup rules learned the hard way."
 ---
 

@@ -1,5 +1,6 @@
 ---
 title: "Other measured wins, and the candidates that were rejected"
+sidebarTitle: "Other wins and rejected ideas"
 description: "A survey of git history and the roadmap for measured optimizations not covered elsewhere in this series: egress rule batching, a parallel integration suite, and a retry fix whose end-to-end effect was nil."
 ---
 

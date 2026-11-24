@@ -1,5 +1,6 @@
 ---
 title: "The create path and the rootfs clone"
+sidebarTitle: "Create path and rootfs"
 description: "How a cold POST /sandboxes is assembled from a concurrent rootfs clone and network lease, how the clone chooses between a reflink and a byte copy, and how each step unwinds on failure."
 ---
 

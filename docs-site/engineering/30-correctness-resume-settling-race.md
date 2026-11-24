@@ -1,5 +1,6 @@
 ---
 title: "Finding 20: the resume crash that was a settling race"
+sidebarTitle: "Resume settling race"
 description: "A resumed guest died about half a second after resume when its snapshot was taken the instant create returned. The post follows the evidence from a flaky pool test to a delay sweep, the 500 ms settling fix, the earlier theories that were wrong, and two sibling bugs found on the way: an MMDS call that could never work and a tunnel listener that leaked a thread and a file descriptor per VM."
 ---
 

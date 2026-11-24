@@ -16,7 +16,7 @@ Three rules drive everything below:
 | --- | --- | --- | --- |
 | `README.md` | First-time visitor on GitHub | Pitch, one diagram, headline numbers, quick start, a link table | Feature lists, SDK walkthroughs, build steps, config detail |
 | Website (`website/`) | Evaluator | One page: what it is, one install command, a real session, four measured numbers, links to the docs | Anything technical: architecture, reference, setup detail, posts |
-| `docs-site/` (Mintlify) | User, operator, engineer | Concepts, guides, API/SDK/CLI reference, self-hosting, internals, and the engineering blog (`docs-site/engineering/`) | Measurements history, decisions, roadmap |
+| `docs-site/` (Mintlify) | User, operator, engineer | Five tabs: Docs, API Reference, Architecture, Performance, Case studies. The engineering posts live in `docs-site/engineering/` and are placed in the tabs by topic | Measurements history, decisions, roadmap |
 | `docs/` | Maintainer | Findings, benchmarks, design notes, these plans | User how-tos |
 | `ROADMAP.md` | Maintainer, contributor | Status table (done, partial, planned), ordered next steps | History, measurements, design reasoning |
 | `CHANGELOG.md` | Upgrader | What changed per release | Explanations (link to docs) |

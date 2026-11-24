@@ -1,5 +1,6 @@
 ---
 title: "The vsock protocol and the guest agent"
+sidebarTitle: "Vsock protocol and guest agent"
 description: "How the host and the in-VM agent talk: length-prefixed JSON frames, four ports with four connection shapes, bounded I/O on the host side, and the hangup and direction rules that keep sessions from hanging."
 ---
 

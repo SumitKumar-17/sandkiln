@@ -1,5 +1,6 @@
 ---
 title: "Snapshots, resume, fork and time-travel restore"
+sidebarTitle: "Snapshots, resume, fork"
 description: "How a running sandbox becomes files on disk and comes back: the on-disk layout, the private-disk rule that keeps resume, fork and restore from corrupting a snapshot, ownership, lineage tracking, and what happens when each step fails."
 ---
 

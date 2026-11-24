@@ -102,6 +102,7 @@ pub async fn create_pool(State(state): State<Arc<AppState>>, Json(request): Json
         return Err(AppError::Conflict(format!("pool {} already exists — delete it first to reconfigure it", request.id)));
     }
     pools.insert(request.id.clone(), Pool::new(config));
+    state.replenish_wake.notify_one();
     Ok(Json(summarize(pools.get(&request.id).expect("just inserted"))))
 }
 

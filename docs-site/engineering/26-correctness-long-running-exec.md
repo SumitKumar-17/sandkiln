@@ -1,5 +1,6 @@
 ---
 title: "Long-running exec: a command silent for 4s ran twice"
+sidebarTitle: "Long-running exec"
 description: "A correctness case study: any command that stayed silent for more than 3 seconds failed after about 6.5 seconds and was executed twice, because a retry re-sent a request the guest had already accepted, and a held daemon-wide lock froze every other sandbox while it ran."
 ---
 

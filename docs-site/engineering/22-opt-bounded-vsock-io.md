@@ -1,5 +1,6 @@
 ---
 title: "Bounding every vsock call: from a hang forever to a few seconds"
+sidebarTitle: "Bounded vsock I/O"
 description: "A case study of a robustness fix that is also a latency bound: a missing read timeout let a paused VM hang stop forever, a 3 second transport timeout turned infinity into a few seconds, and a later refinement made the bound apply only where a reply is expected quickly."
 ---
 

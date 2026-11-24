@@ -1,5 +1,6 @@
 ---
 title: "Rootfs clone: from a 128 ms byte copy to a reflink"
+sidebarTitle: "Rootfs reflink clone"
 description: "How a profile showed the per-sandbox rootfs copy was 74% of a cold create, why an earlier XFS experiment appeared to show otherwise, and how a native FICLONE clone took a create from 187.5 ms to 17.9 ms."
 ---
 

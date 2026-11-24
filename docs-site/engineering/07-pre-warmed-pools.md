@@ -1,5 +1,6 @@
 ---
 title: "Pre-warmed pools: a producer/consumer queue of resumable snapshots"
+sidebarTitle: "Pre-warmed pools"
 description: "How the daemon keeps ready-to-resume snapshots per profile, hands them out through an RAII claim guard, and falls back to a cold create when a resumed guest turns out to be dead."
 ---
 

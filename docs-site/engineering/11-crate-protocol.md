@@ -1,5 +1,6 @@
 ---
 title: "Crate tour: sandkiln-protocol"
+sidebarTitle: "sandkiln-protocol"
 description: "The smallest crate in the workspace and the only code both the host and the guest link: framing, message enums, four port constants, and the tests that pin the wire shape byte for byte."
 ---
 

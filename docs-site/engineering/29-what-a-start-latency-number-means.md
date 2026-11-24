@@ -1,5 +1,6 @@
 ---
 title: "What a start-latency number actually means"
+sidebarTitle: "What a latency number means"
 description: "Firecracker's published 125 ms is a design bound for one interval of a cold boot, not an average and not time to first command. This post lays out the stages of sandkiln's own path, says which of our numbers is a median and which is a mean, and shows what each figure includes and leaves out."
 ---
 

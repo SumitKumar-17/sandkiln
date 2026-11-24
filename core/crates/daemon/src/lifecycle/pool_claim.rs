@@ -59,6 +59,7 @@ pub(crate) async fn resolve_pool_claim(state: &Arc<AppState>, key: &crate::lifec
             };
             if let Some(snapshot_id) = pool.take_warm() {
                 pool.record_claim();
+                state.replenish_wake.notify_one();
                 return Ok(PoolClaim::Warm { pool_id: pool.config.id.clone(), snapshot_id });
             }
             if pool.has_room_for_new_claim() {

@@ -42,10 +42,10 @@ a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px soli
 
 /* ---------- masthead ---------- */
 .masthead { padding-block: 1.75rem; }
-.masthead .shell { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; }
+.masthead .shell { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem 1.5rem; }
 .wordmark { display: inline-flex; align-items: center; gap: 0.6rem; font: 500 1.0625rem/1 var(--sans); letter-spacing: -0.01em; color: var(--ink); text-decoration: none; }
 .wordmark:hover { color: var(--ink); }
-.nav { display: flex; gap: 1.5rem; font-size: 0.875rem; }
+.nav { display: flex; flex-wrap: wrap; gap: 0.25rem 1.5rem; font-size: 0.875rem; }
 .nav a { color: var(--ink-2); text-decoration: none; }
 .nav a:hover, .nav a[aria-current="page"] { color: var(--ink); }
 

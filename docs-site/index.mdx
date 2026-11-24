@@ -10,21 +10,26 @@ sandkiln runs each sandbox as a Firecracker microVM with its own kernel, filesys
 1. [Self-hosting quickstart](/getting-started/self-hosting): a running daemon in two commands.
 2. Your first sandbox: [JS/TS](/getting-started/js), [Python](/getting-started/python) [CLI](/getting-started/cli) or [MCP](/getting-started/mcp) for AI agents.
 
-## Then
+## Find what you need
 
 <CardGroup cols={2}>
-  <Card title="Core concepts" href="/concepts/sandbox-lifecycle">
-    Lifecycle, snapshots, named sandboxes, drives, images, networking, auth, preview.
+  <Card title="Docs" href="/concepts/sandbox-lifecycle">
+    Core concepts, guides and self-hosting: how to use and run sandkiln.
   </Card>
-  <Card title="Guides" href="/guides/run-untrusted-code">
-    Task-oriented recipes with real code.
+  <Card title="API Reference" href="/api-reference/http-api/overview">
+    HTTP API, JS/TS SDK, Python SDK, CLI and the MCP server.
   </Card>
-  <Card title="Reference" href="/api-reference/http-api/overview">
-    HTTP API, JS/TS SDK, Python SDK, CLI.
+  <Card title="Architecture" href="/architecture/overview">
+    How it is built: the request path, the crates, and one page per mechanism.
   </Card>
-  <Card title="Internals" href="/internals/vsock-wire-protocol">
-    One page per mechanism, each with a request captured from a live daemon. Start with the [architecture overview](/architecture/overview).
+  <Card title="Performance" href="/engineering/29-what-a-start-latency-number-means">
+    How speed is measured and every optimisation, with the numbers behind it.
+  </Card>
+  <Card title="Case studies" href="/engineering/27-correctness-snapshot-disk-corruption">
+    Bugs we found and how: root cause, evidence, fix.
   </Card>
 </CardGroup>
+
+New here? The product page is [sandkiln.vercel.app](https://sandkiln.vercel.app). Source and issues are on [GitHub](https://github.com/SumitKumar-17/sandkiln).
 
 Found a mistake or have an idea? Email [sumitkanpur2005@gmail.com](mailto:sumitkanpur2005@gmail.com).

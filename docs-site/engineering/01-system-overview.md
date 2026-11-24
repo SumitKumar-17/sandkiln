@@ -1,5 +1,6 @@
 ---
 title: "System overview: crates, ownership and the request path"
+sidebarTitle: "System overview"
 description: "How the five Rust crates divide responsibility between host and guest, which direction dependencies may point, and what happens to one request from the SDK down to a Firecracker microVM and back."
 ---
 

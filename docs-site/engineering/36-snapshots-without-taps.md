@@ -1,5 +1,6 @@
 ---
 title: "Snapshots without taps: splitting the network lease"
+sidebarTitle: "Snapshots without taps"
 description: "A stress test found that 32 held snapshots exhausted a 32-device tap pool and made every create fail. The guest's address is frozen in its memory image but its tap is only a host-side port, so the lease is now two: an IP lease a snapshot keeps and a tap lease only a running VM holds. This post covers the split, Firecracker's network override on snapshot load, how egress rules follow a guest to a new tap, the atomic address claim that replaced a per-tap set, the 40-of-40 result, and the new bound."
 ---
 

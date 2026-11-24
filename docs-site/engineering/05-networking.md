@@ -1,5 +1,6 @@
 ---
 title: "Networking: tap pool, bridge, egress and capabilities"
+sidebarTitle: "Networking"
 description: "How sandkiln leases pre-created tap devices onto one isolated-port bridge, NATs sandbox traffic out, enforces per-sandbox egress policy with dedicated iptables chains, and runs all of it from an unprivileged daemon."
 ---
 

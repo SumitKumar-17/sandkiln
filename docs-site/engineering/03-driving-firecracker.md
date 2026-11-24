@@ -1,5 +1,6 @@
 ---
 title: "Driving Firecracker from Rust"
+sidebarTitle: "Driving Firecracker"
 description: "How sandkiln's vmm crate spawns a Firecracker process, configures it through a hand-rolled API client, supports direct and jailed launch, and tears a VM down without leaking processes, sockets or chroots."
 ---
 

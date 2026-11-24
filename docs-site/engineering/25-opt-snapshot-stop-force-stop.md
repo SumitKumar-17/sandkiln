@@ -1,5 +1,6 @@
 ---
 title: "Snapshot stop: 6.8s to 0.56s"
+sidebarTitle: "Snapshot stop"
 description: "A case study of a snapshot request that spent twelve times longer waiting for a reply a paused VM can never send than doing the snapshot, why the criterion benchmark could not see it, and the one-line change to Vm::force_stop."
 ---
 

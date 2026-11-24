@@ -1,5 +1,6 @@
 ---
 title: "Crate tour: sandkiln-store"
+sidebarTitle: "sandkiln-store"
 description: "A single-file sqlite-backed history of sandbox lifecycle events: what it records, why it can never bring a sandbox back, and how a small API and a few pragmas keep it off the create path's critical cost."
 ---
 

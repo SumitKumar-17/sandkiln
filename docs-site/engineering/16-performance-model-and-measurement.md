@@ -1,5 +1,6 @@
 ---
 title: "The performance model and how it is measured"
+sidebarTitle: "The performance model"
 description: "Which tools measure which part of a sandkiln create or exec, how the per-phase breakdown is built, where the time goes on ext4 and on a reflink filesystem, and how much to trust each number."
 ---
 

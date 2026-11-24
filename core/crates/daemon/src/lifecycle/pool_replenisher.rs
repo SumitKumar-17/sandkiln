@@ -49,10 +49,26 @@ pub(crate) fn replenish_blocker(free_addresses: usize, free_taps: usize, free_di
 /// Logs the transition into and out of a blocked state once, not every tick.
 static PAUSED: AtomicBool = AtomicBool::new(false);
 
+/// How many warm instances one pool boots at the same time. Boot and snapshot
+/// are CPU and disk heavy; two overlap well without starving real creates.
+const MAX_PARALLEL_BOOTS: usize = 2;
+
+/// How many boots to start for a pool short by `deficit` instances.
+pub(crate) fn boots_to_launch(deficit: usize) -> usize {
+    deficit.min(MAX_PARALLEL_BOOTS)
+}
+
+/// Runs until the process exits. Wakes on the fixed tick and, sooner, whenever
+/// a claim drains a pool or a pool is created (`AppState::replenish_wake`), so
+/// a claimed warm instance is replaced right away instead of up to a tick
+/// later. Keeps going while it is making progress.
 pub async fn run(state: Arc<AppState>) {
     loop {
-        tokio::time::sleep(CHECK_INTERVAL).await;
-        replenish_once(&state).await;
+        tokio::select! {
+            _ = tokio::time::sleep(CHECK_INTERVAL) => {}
+            _ = state.replenish_wake.notified() => {}
+        }
+        while replenish_once(&state).await > 0 {}
     }
 }
 
@@ -60,7 +76,7 @@ pub async fn run(state: Arc<AppState>) {
 /// `warm_count` fills in gradually rather than spiking boot load; the
 /// next tick continues. Configs are cloned out from under the lock before
 /// the slow boot+snapshot work below, rather than holding it locked.
-async fn replenish_once(state: &Arc<AppState>) {
+async fn replenish_once(state: &Arc<AppState>) -> usize {
     let free_disk = crate::http::routes::status::disk_usage(&state.config.state_dir).map(|d| d.free_bytes);
     let blocker = replenish_blocker(state.network.free_ip_count(), state.network.free_tap_count(), free_disk);
     if PAUSED.swap(blocker.is_some(), Ordering::Relaxed) != blocker.is_some() {
@@ -70,18 +86,19 @@ async fn replenish_once(state: &Arc<AppState>) {
         }
     }
     if blocker.is_some() {
-        return;
+        return 0;
     }
-    let due: Vec<PoolConfig> = {
+    let due: Vec<(PoolConfig, usize)> = {
         let pools = state.pools.lock().unwrap();
-        pools.values().filter(|p| p.needs_replenish()).map(|p| p.config.clone()).collect()
+        pools.values().filter(|p| p.needs_replenish()).map(|p| (p.config.clone(), boots_to_launch(p.warm_deficit()))).collect()
     };
-    for config in due {
-        replenish_one(state, config).await;
-    }
+    let boots = due.into_iter().flat_map(|(config, n)| std::iter::repeat_n(config, n)).map(|config| replenish_one(state, config));
+    futures_util::future::join_all(boots).await.into_iter().filter(|ok| *ok).count()
 }
 
-async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) {
+/// Boots, snapshots and enqueues one warm instance. `true` when it ended up
+/// warm in a still-configured pool.
+async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) -> bool {
     let request = CreateSandboxRequest {
         name: None,
         tags: HashMap::from([(POOL_TAG_KEY.to_string(), config.id.clone())]),
@@ -100,7 +117,7 @@ async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) {
         Ok(id) => id,
         Err(e) => {
             tracing::warn!(pool_id = %config.id, error = %e, "failed to boot a warm instance for pool replenishment");
-            return;
+            return false;
         }
     };
 
@@ -110,18 +127,18 @@ async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) {
             // Something else (direct API call, a concurrent idle-reaper
             // tick) stopped or snapshotted it first.
             tracing::warn!(pool_id = %config.id, sandbox_id = %sandbox_id, "warm instance was already gone by the time replenishment tried to snapshot it");
-            return;
+            return false;
         }
         Err(SnapshotStopError::Blocked(_)) => {
             // Can't actually happen -- create_sandbox_core above never
             // jails/forks a warm-boot sandbox. Handled anyway to keep this
             // match exhaustive rather than a `_ =>` catch-all.
             tracing::warn!(pool_id = %config.id, sandbox_id = %sandbox_id, "warm instance was unexpectedly ineligible for snapshotting");
-            return;
+            return false;
         }
         Err(SnapshotStopError::Io(e)) => {
             tracing::warn!(pool_id = %config.id, sandbox_id = %sandbox_id, error = %e, "failed to snapshot a freshly booted warm instance for pool replenishment");
-            return;
+            return false;
         }
     };
 
@@ -145,11 +162,17 @@ async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) {
             tracing::warn!(pool_id = %config.id, error = %e, "failed to clean up an orphaned warm snapshot from a deleted pool");
         }
     }
+    still_configured
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pool_boots_at_most_two_instances_at_once() {
+        assert_eq!((boots_to_launch(0), boots_to_launch(1), boots_to_launch(2), boots_to_launch(9)), (0, 1, 2, 2));
+    }
 
     #[test]
     fn replenishment_runs_when_the_host_has_headroom() {
