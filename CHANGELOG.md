@@ -41,7 +41,11 @@ loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## Snapshots no longer hold a tap device — 2026-11-24
 
+### Changed
+- **Warm path by default.** `default_warm_count` (default 2) keeps warm instances of the daemon's default shape ready, so a plain `POST /sandboxes` resumes one: create to first command measured 26.4ms against 233.9ms cold (paced, n=20). Set `default_warm_count = 0` to disable. Each warm instance costs a held full-RAM snapshot on disk and a guest address; replenishment pauses when addresses or disk run low. `GET /status` gains `pool_claims`, `/metrics` gains `pool_claims_total{result}`. The benchmark suite gains `--pause-ms`.
+
 ### Fixed
+- A pool wanting more than one warm instance never got past one: the replenisher consumed its own pool's warm snapshot. Pool claims no longer retain the placeholder as a time-travel checkpoint (it evicted real checkpoints and cost 50-90ms), and a pool-created sandbox starts its own lineage.
 - A held snapshot kept its tap device, so with a 32-tap pool the 33rd snapshot made every create fail, and `DELETE /sandboxes/:id` keeps a snapshot by default. The network lease is now two: an IP lease (kept by a snapshot, because the guest's address is frozen in its memory image) and a tap lease (held only by a running VM). Snapshot returns the tap; resume, fork, pool claim and checkpoint restore lease any free tap and repoint the restored interface with Firecracker's `network_overrides`. Held snapshots are now bounded by the sandbox /24 (253 addresses), not the tap pool. Finding 29 in `docs/findings.md`.
 - Egress rules follow the guest across a tap change: the per-tap chain is removed when a snapshot is taken and applied to the new tap on resume, fork, claim and restore.
 

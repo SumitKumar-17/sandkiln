@@ -7,6 +7,7 @@ export interface RunArgs {
   baseUrl: string;
   authToken: string | undefined;
   iterations: number;
+  pauseMs: number;
   concurrency: number;
   execSamples: number;
   only: string[];
@@ -34,6 +35,7 @@ export const USAGE = `Usage:
 
 Run options:
   --iterations N     rounds per benchmark (default 20)
+  --pause-ms N       wait N ms between iterations of create/snapshot, so a warm pool can refill (default 0: back to back)
   --concurrency C    simultaneous creates in the parallel benchmark (default 8)
   --exec-samples N   exec round trips on one open sandbox (default 200)
   --only a,b         run only these benchmarks (see --list)
@@ -46,6 +48,12 @@ Run options:
   --allow-busy       run even if the daemon already has live sandboxes
 
 compare exits 1 when any metric regressed beyond the threshold.`;
+
+function nonNegativeInt(name: string, raw: string): number {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`--${name} must be a whole number of at least 0, got "${raw}"`);
+  return n;
+}
 
 function positiveInt(name: string, raw: string): number {
   const n = Number(raw);
@@ -65,6 +73,7 @@ export function parseCli(argv: readonly string[], env: Record<string, string | u
     allowPositionals: true,
     options: {
       iterations: { type: "string" },
+      "pause-ms": { type: "string" },
       concurrency: { type: "string" },
       "exec-samples": { type: "string" },
       only: { type: "string" },
@@ -105,6 +114,7 @@ export function parseCli(argv: readonly string[], env: Record<string, string | u
     baseUrl: values["base-url"] ?? env.SANDKILN_DAEMON_URL ?? "http://127.0.0.1:7777",
     authToken: values.token ?? env.SANDKILN_AUTH_TOKEN,
     iterations: positiveInt("iterations", values.iterations ?? "20"),
+    pauseMs: nonNegativeInt("pause-ms", values["pause-ms"] ?? "0"),
     concurrency: positiveInt("concurrency", values.concurrency ?? "8"),
     execSamples: positiveInt("exec-samples", values["exec-samples"] ?? "200"),
     only: values.only?.split(",").map((s) => s.trim()).filter(Boolean) ?? [],

@@ -90,3 +90,5 @@ export async function timed<T>(fn: () => Promise<T>): Promise<{ value: T; ms: nu
   const value = await fn();
   return { value, ms: performance.now() - start };
 }
+
+export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

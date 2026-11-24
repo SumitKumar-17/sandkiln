@@ -16,6 +16,7 @@ Operator view of the daemon. Behind the bearer token (unlike `/metrics`) because
 | `ip_pool` | `size` (253 in the sandbox /24), `free`, and `held_by_snapshots`. Every running sandbox and every held snapshot holds one address, so this is the pool that bounds how many snapshots can exist. |
 | `sandboxes_created_total` | Creates since daemon start. |
 | `rootfs_clones` | `reflink` and `copy` clone counts since start. |
+| `pool_claims` | Creates that matched a pool since start: `warm` (resumed a warm instance), `warm_failed` (a warm instance failed its health check and was discarded), `cold_slot` (nothing warm yet, cold-created). The warm hit rate is `warm` over all three. |
 | `disk` | `path`, `total_bytes`, `free_bytes` for the state and rootfs volumes (one entry if they share a path). |
 | `warnings` | Plain-language conditions to act on; empty when healthy. |
 

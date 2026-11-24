@@ -143,10 +143,12 @@ pub(crate) async fn claim_from_pool(
     request: &CreateSandboxRequest,
     egress: Option<sandkiln_vmm::egress::EgressPolicy>,
 ) -> Result<String, AppError> {
-    // Retains history uniformly like any other resume -- no way to tell
-    // "the pool's own warm checkpoint" from "the caller's future
-    // snapshots of this sandbox" apart from here, so both get kept.
-    let id = resume_snapshot_by_id(state.clone(), snapshot_id, true).await?;
+    // The warm snapshot is consumed, not retained as a time-travel checkpoint:
+    // it is the pool's placeholder state, nobody wants to restore to it, and
+    // retaining it would clone its disk, count against
+    // `retained_checkpoints_max` and evict users' real checkpoints with every
+    // create. The sandbox then runs on the disk the replenisher already made.
+    let id = resume_snapshot_by_id(state.clone(), snapshot_id, false).await?;
 
     // Endpoint copied out first: a crashed resumed guest makes this call block
     // for seconds, and holding the daemon-wide sandbox lock across it froze
@@ -223,6 +225,9 @@ pub(crate) async fn claim_from_pool(
         if let Err(e) = update_metadata_result {
             tracing::warn!(sandbox_id = %id, error = %e, "failed to refresh MMDS metadata after resuming a pool-claimed sandbox, even after retrying");
         }
+        // To the caller this is a fresh sandbox: its lineage starts here, not at
+        // the consumed warm snapshot (which no longer exists).
+        sandbox.parent_snapshot_id = None;
         sandbox.tags = request.tags.clone();
         sandbox.name = request.name.clone();
         sandbox.created_at = created_at;

@@ -40,6 +40,8 @@ export interface Environment {
 
 export interface RunOptions {
   iterations: number;
+  /** Wait between iterations of the sequential benchmarks; 0 is back to back. */
+  pauseMs: number;
   concurrency: number;
   execSamples: number;
   /** Registered image every sandbox booted from; null is the daemon default. */

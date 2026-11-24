@@ -1,11 +1,11 @@
-import { type Benchmark, timed } from "../context.ts";
+import { type Benchmark, sleep, timed } from "../context.ts";
 
 /** The metric a caller feels: wall time from calling create to a real command
  * answering. `create()` returning only means Firecracker started, not that the
  * guest agent is listening, so the two are recorded separately. */
 export const createBenchmark: Benchmark = {
   name: "create",
-  description: "create call, first command after create returns, and the two combined (sequential, cold)",
+  description: "create call, first command after create returns, and the two combined (sequential; with the daemon's default warm pool, a create after a pause is a resume)",
   async run(ctx) {
     for (let i = 0; i < ctx.options.iterations; i++) {
       const created = await timed(() => ctx.create());
@@ -18,6 +18,7 @@ export const createBenchmark: Benchmark = {
       } finally {
         await sandbox.stop({ keep: false });
       }
+      if (ctx.options.pauseMs > 0) await sleep(ctx.options.pauseMs);
     }
   },
 };
