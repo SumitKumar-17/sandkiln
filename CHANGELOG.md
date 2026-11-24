@@ -323,6 +323,7 @@ JS SDK `sandkiln` and CLI `sandkiln-cli`.
 
 ### Added
 - `getStatus()` (SDK) and `kiln status`: host health and capacity from `GET /status`; the CLI exits 2 on warnings.
+- `kiln --version` prints the package version.
 - `kiln doctor`: end-to-end daemon check (reachable, host warnings, then a real create, exec and stop), timed per step; exits 0, 1 or 2.
 - `sandbox.uploadDir` / `downloadDir` (SDK) and `kiln sandbox upload-dir` / `download-dir`: copy directory trees with modes and symlinks; downloads validate names and symlinks from the untrusted guest.
 

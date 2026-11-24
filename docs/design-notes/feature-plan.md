@@ -60,7 +60,11 @@ Verify: `scripts/setup.sh --download` on a clean host boots a sandbox.
 Persist the XFS loop mount with a systemd unit written by `create-reflink-volume.sh`, and make reflink the documented default for production setups.
 Verify: reboot the dev box; `kiln doctor` and `/status` show reflink clones.
 
-### 11. Python parity and polish (Use, low)
+### 11. Exec error clarity (Use, small)
+Found by running every example: `runCommand` on a binary that does not exist returns a raw 500 ("unexpected agent response: No such file or directory") instead of exit code 127 with a readable message, and `sandbox.mount()` on a guest without rclone gives a bare 400 "No such file or directory". Map a spawn failure in the guest agent to exit 127 with the error on stderr, and have the mount route say what is missing (FUSE kernel, rclone binary).
+Verify: integration topic for both; SDK and CLI show the message.
+
+### 12. Python parity and polish (Use, low)
 Python has no PTY or streamed exec; add them, and add `status`/`doctor` equivalents where they make sense.
 
 ## Later
