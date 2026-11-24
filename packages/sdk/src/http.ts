@@ -25,7 +25,8 @@ export async function request<T>(options: RequestOptions): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new SandkilnApiError(response.status, await extractErrorMessage(response));
+    const { message, body } = await readErrorBody(response);
+    throw new SandkilnApiError(response.status, message, body);
   }
 
   if (response.status === 204) {
@@ -35,14 +36,14 @@ export async function request<T>(options: RequestOptions): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function extractErrorMessage(response: Response): Promise<string> {
+async function readErrorBody(response: Response): Promise<{ message: string; body?: unknown }> {
   try {
     const body = (await response.json()) as ApiErrorBody;
     if (typeof body.error === "string") {
-      return body.error;
+      return { message: body.error, body };
     }
   } catch {
     // Non-JSON error body (e.g. a proxy in front of the daemon); fall back below.
   }
-  return response.statusText || `request failed with status ${response.status}`;
+  return { message: response.statusText || `request failed with status ${response.status}` };
 }

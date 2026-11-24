@@ -1,5 +1,6 @@
 import { decodeBase64, encodeBase64 } from "./base64.js";
 import { resolveClient, type ClientContext } from "./client.js";
+import { asExecTimeout } from "./errors.js";
 import { request } from "./http.js";
 import { downloadDir, uploadDir, type TransferOptions, type TransferResult } from "./transfer.js";
 import { openTunnel, type TunnelHandle, type TunnelOptions } from "./tunnel.js";
@@ -156,12 +157,18 @@ export class Sandbox {
   async runCommand(command: string, args: string[] = [], options: RunCommandOptions = {}): Promise<ExecResult> {
     const requestBody: ExecRequestBody = { command, args };
     if (options.env !== undefined) requestBody.env = options.env;
-    const body = await request<ExecResponseBody>({
-      ...this.client,
-      method: "POST",
-      path: `/sandboxes/${encodeURIComponent(this.id)}/exec`,
-      body: requestBody,
-    });
+    if (options.timeoutSeconds !== undefined) requestBody.timeout_secs = options.timeoutSeconds;
+    let body: ExecResponseBody;
+    try {
+      body = await request<ExecResponseBody>({
+        ...this.client,
+        method: "POST",
+        path: `/sandboxes/${encodeURIComponent(this.id)}/exec`,
+        body: requestBody,
+      });
+    } catch (err) {
+      throw asExecTimeout(err) ?? err;
+    }
     return { stdout: body.stdout, stderr: body.stderr, exitCode: body.exit_code };
   }
 
