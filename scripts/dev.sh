@@ -48,6 +48,11 @@
 #                                daemon; `bench-suite compare A.json B.json` diffs two results.
 #                                Installs deps on first use; needs Node >= 22.18.
 #
+#   examples-smoke [opts]        scripts/dev-tools/examples-smoke.sh: runs every example under
+#                                examples/ per its README against the daemon, prints a
+#                                pass/fail/skip table, deletes what they created. Tests this
+#                                repo's SDK build; --published installs from the registry.
+#
 # Guest agent (after any protocol/guest-agent/vmm change):
 #   inject-agent [rootfs-path]   builds sandkiln-guest-agent for the musl
 #                                 target, then `sudo images/inject-agent.sh`
@@ -137,6 +142,9 @@ case "$subcommand" in
     ;;
   docs-check)
     exec "$SCRIPT_DIR/dev-tools/check-docs.sh" "$@"
+    ;;
+  examples-smoke)
+    exec "$SCRIPT_DIR/dev-tools/examples-smoke.sh" "$@"
     ;;
   load-test)
     exec "$SCRIPT_DIR/load-test.sh" "$@"
