@@ -15,6 +15,17 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Jailer: bounded failure and startup self-check — 2026-11-24
+
+Finding 32 (a jailed create hangs) is mitigated, not fixed: the jailer path still cannot create a sandbox, but it now fails fast and says why.
+
+### Added
+- `jailer_self_check` (`SANDKILN_JAILER_SELF_CHECK`, default `true`): with the jailer enabled the daemon runs the real jailer once against a throwaway jail at startup and refuses to start when it cannot enter the jail root.
+- `JailerIdPool::quarantine`: a uid whose process could not be killed is never handed to another VM.
+
+### Fixed
+- A failed jailed boot hung forever: the cleanup `kill()` is refused for a process under another uid and the following `wait()` had no deadline. Teardown waits at most 5 seconds; the jailed API socket wait is 10 seconds and ends early if the jailer process dies; every Firecracker API call during boot has an I/O deadline. The error names the likely cause.
+
 ## Init-mode image validation — 2026-11-24
 
 Work to find out whether the init-mode image (agent as PID 1) can become the default. It cannot yet; see the go/no-go list in `docs/design-notes/latency-floor.md`.

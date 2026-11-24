@@ -148,8 +148,9 @@ impl Vm {
         });
 
         if let Err(e) = result {
-            let _ = child.kill();
-            let _ = child.wait();
+            // Resume always spawns directly (same uid as the daemon), so the
+            // kill is not expected to fail; the wait is bounded regardless.
+            let _ = super::terminate::terminate_child(&mut child, super::terminate::REAP_GRACE);
             let _ = std::fs::remove_file(&api_socket);
             let _ = std::fs::remove_file(&vsock_socket);
             return Err(super::annotate_with_console_log(e, &log_path));

@@ -30,7 +30,7 @@ a stated gap; **planned** not built.
 | Drives and remote storage | done | Read-only sharing, S3-compatible mounts via rclone in the guest. |
 | Egress policy | partial | IP/CIDR allow and deny per sandbox. No domain or port rules, IPv4 only. |
 | Preview, tunnel, PTY, streamed exec | partial | HTTP preview only (no WebSocket proxy). PTY and exec-stream are in the JS/TS SDK, the Python SDK and the CLI; no live PTY resize, no exec kill. |
-| Security | partial | Bridge isolation, ceilings, rate limits done. Jailer is opt-in and unverified on hardware. No seccomp. |
+| Security | partial | Bridge isolation, ceilings, rate limits done. Jailer is opt-in and verified not working (finding 32); startup refuses it. No seccomp. |
 | Auth | partial | Single bearer token. Per-token scoping planned. |
 | Images | partial | Register and boot prebuilt ext4 images. No OCI conversion, no managed catalog. |
 | Observability | done | Structured logs, request ids, `/metrics`, JSON logs, console capture. `GET /status` shipped with `kiln status` and SDK `getStatus`/`get_status`. |

@@ -276,7 +276,7 @@ to 117ms, against 26 to 30ms once consumed). A claim now consumes the warm
 snapshot, and the new sandbox starts its own lineage (no dangling parent to the
 consumed snapshot).
 
-### 32. The jailer path cannot create a sandbox: the daemon cannot reach the jailed Firecracker's API socket. Open
+### 32. The jailer path cannot create a sandbox: the daemon cannot reach the jailed Firecracker's API socket. Open (failure now bounded and detected at startup)
 Found while validating the init-mode image with the jailer enabled (setuid
 `jailer` copy, cgroup v2, `jailer_enabled = true`, uid range 600000+). Every
 `POST /sandboxes` hung until the client gave up (7 minutes and counting; the
@@ -295,6 +295,24 @@ verified" in the jailer docs is now "verified not working". Not fixed here: it
 needs a design (who owns the chroot and the taps, how the daemon reaches the
 socket), not a patch. A hung create also made a graceful daemon stop wait
 out its full 30 seconds.
+
+Mitigated, not fixed. Root cause of the hang, found by reproducing it: the
+connect to `api.sock` was already bounded (2 seconds), but the failure
+cleanup then did `kill()` and an unbounded `wait()` on a Firecracker running
+as another uid. The unprivileged daemon's SIGKILL is refused with `EPERM`, so
+the wait never returned. Now: the jailed boot waits at most 10 seconds for the
+socket (and fails at once if the jailer process dies), every API call has an
+I/O deadline, teardown waits at most 5 seconds for a killed process, and a
+create fails in about 15 seconds with a message naming the cause. A process
+that cannot be killed keeps its uid out of the pool (`JailerIdPool::quarantine`)
+rather than handing it to the next VM. At startup the daemon now runs the real
+jailer once against a throwaway jail and refuses to start when it cannot enter
+the result (`jailer_self_check`, on by default), which is the exact condition
+above. Verified on the dev box: startup refused with the finding named, and
+with the check disabled a create failed in 15.1 seconds with the explanation,
+the lease and rootfs released. Residual: a failed jailed boot leaves a live
+process and a root-owned jail directory that only root can remove (the error
+and a warning name both).
 
 ### 33. A guest that shuts itself down leaves its sandbox listed. Open
 `reboot -f` in a systemd guest, or `kill -TERM 1` in an init-mode guest, ends

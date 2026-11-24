@@ -96,7 +96,7 @@ async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopO
     spawn_blocking_in_current_span("stop task panicked", {
         let state = state.clone();
         move || {
-            let _ = sandbox.vm.stop();
+            let stop_result = sandbox.vm.stop();
             // The egress chain (if any) goes before its tap is returned: it is
             // keyed by the tap, which the next sandbox to lease it must not
             // inherit. Safe even if no policy was ever applied — see
@@ -119,7 +119,10 @@ async fn destroy_sandbox_by_id(state: Arc<AppState>, id: String) -> Result<StopO
             // `Vm::stop` already removed the chroot dir if jailed; this
             // releases the separate daemon-level uid/gid allocation.
             if let (Some(id), Some(pool)) = (sandbox.jail_id, &state.jailer_ids) {
-                pool.release(id);
+                match &stop_result {
+                    Err(e) if sandkiln_vmm::vm::is_unkilled_process(e) => pool.quarantine(id),
+                    _ => pool.release(id),
+                }
             }
         }
     })
