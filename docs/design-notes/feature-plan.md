@@ -36,7 +36,7 @@ A held snapshot keeps its tap lease, and `DELETE` keeps a snapshot by default, s
 Verify: create 100 snapshots on a 32-tap pool; resume succeeds; integration topic for it.
 
 ### 4. Cold path: custom minimal init and trimmed kernel (Latency, high)
-About 125ms of the 214ms is guest userspace (systemd). Replace it with the guest agent as PID 1 (mounts, network from kernel args, then serve), drop unneeded kernel features, and signal readiness over vsock instead of polling. Target and levers are in the research note.
+About 125ms of the 214ms is guest systemd userspace (not to be confused with Firecracker's 125ms init bound). Replace it with the guest agent as PID 1 (mounts, network from kernel args, then serve), drop unneeded kernel features, and signal readiness over vsock instead of polling. Target and levers are in the research note.
 Verify: benchmark suite time-to-first-command; the full integration suite on both images.
 
 ### 5. Snapshot-take cost (Latency, medium)

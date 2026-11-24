@@ -22,7 +22,7 @@ documented fact could answer them.
    priority: it sat inside the roughly 10ms cold-boot window, and the
    measured 10.5-10.9ms was already far ahead of public Firecracker-sandbox
    cold starts (150ms to 2s), so there was no evidence of a gain to chase. After counting through to first command, the
-   remaining floor is about 125ms of systemd userspace (`dev-vda.device`
+   remaining floor is about 125ms of systemd userspace in our guest, not to be confused with Firecracker's 125ms init bound (`dev-vda.device`
    107ms, `fcnet.service` 45ms), so a purpose-built init or trimmed image is
    now the next lever for time to first command. The stage-by-stage gap
    analysis and ranked levers are in [latency floor](latency-floor.md).

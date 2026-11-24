@@ -64,7 +64,7 @@ In order, most load-bearing first.
 3. **Snapshot-take cost.** Measure sandkiln's own overhead, then evaluate
    Firecracker Diff snapshots. See
    [latency investigation](docs/design-notes/latency-investigation.md).
-4. **Guest userspace boot.** About 125ms of systemd (`dev-vda.device`
+4. **Guest userspace boot.** About 125ms of systemd userspace, not to be confused with Firecracker's 125ms init bound (`dev-vda.device`
    107ms, `fcnet.service` 45ms) is the remaining floor to first command: a
    purpose-built init or trimmed image. Ranked levers and goals:
    [latency floor](docs/design-notes/latency-floor.md).
