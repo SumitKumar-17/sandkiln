@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 
 from ._config import resolve_auth_token, resolve_base_url
 from ._http import request
+from .errors import SandkilnApiError, as_exec_timeout
 from .tunnel import TunnelHandle, open_tunnel
 
 
@@ -336,14 +337,34 @@ class Sandbox:
             for summary in response["sandboxes"]
         ]
 
-    def run_command(self, command: str, args: list[str] | None = None, env: dict[str, str] | None = None) -> ExecResult:
+    def run_command(
+        self,
+        command: str,
+        args: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        timeout: int | None = None,
+    ) -> ExecResult:
         """`env` is merged on top of this sandbox's own create-time `env`
-        (this wins on a key conflict) — omit it entirely to just use the
-        sandbox's own defaults, unchanged."""
+        (this wins on a key conflict) - omit it entirely to just use the
+        sandbox's own defaults, unchanged.
+
+        `timeout` is a wall-clock limit in whole seconds enforced inside the
+        sandbox (at least 1, at most the daemon's `exec_timeout_secs`, which
+        is also the default). On expiry the command's whole process group is
+        killed and `SandkilnExecTimeoutError` is raised, carrying the output
+        captured so far."""
         body: dict[str, object] = {"command": command, "args": args or []}
         if env is not None:
             body["env"] = env
-        response = self._request("POST", f"/sandboxes/{self.id}/exec", body)
+        if timeout is not None:
+            body["timeout_secs"] = timeout
+        try:
+            response = self._request("POST", f"/sandboxes/{self.id}/exec", body)
+        except SandkilnApiError as error:
+            timed_out = as_exec_timeout(error)
+            if timed_out is None:
+                raise
+            raise timed_out from None
         return ExecResult(response["stdout"], response["stderr"], response["exit_code"])
 
     def read_file(self, path: str) -> bytes:

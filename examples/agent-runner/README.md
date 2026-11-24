@@ -16,7 +16,8 @@ runner reads back a result file the script produced. Uses the published
    code.
 4. Reads back the result file the script wrote with
    `sandbox.read_file()`.
-5. Stops the sandbox with `sandbox.stop()`.
+5. Destroys the sandbox with `sandbox.stop(keep=False)` (a plain `stop()`
+   keeps a snapshot of it).
 
 See `main.py` — it's the whole program.
 
@@ -25,6 +26,9 @@ See `main.py` — it's the whole program.
 A running `sandkilnd` daemon reachable from this machine. There is no
 hosted service — see [`SELF_HOSTING.md`](../../SELF_HOSTING.md) at the
 repo root for how to stand one up.
+
+The sandbox image needs `python3` (the production image and the default
+test image both have it). Needs `sandkiln` 0.3.0 or newer from PyPI.
 
 ## Run it
 

@@ -3,7 +3,7 @@ title: Networking & isolation
 description: How sandboxes reach the internet, and why they can't reach each other.
 ---
 
-Every sandbox gets its **own tap device**, leased from a pre-created pool, attached to a shared Linux bridge. That's what gives it a real network namespace distinct from every other sandbox on the host.
+Every running sandbox gets its **own tap device**, leased from a pre-created pool, attached to a shared Linux bridge. A snapshot keeps the guest's IP but gives its tap back, so held snapshots never use up the pool. That's what gives it a real network namespace distinct from every other sandbox on the host.
 
 ## Outbound access
 
@@ -53,6 +53,6 @@ Both SDKs and the CLI wrap this directly — `Sandbox.create({ egress })` (JS/TS
 
 Rules match only traffic actually leaving through the daemon's own uplink interface, the same scoping the bridge-wide rule already uses — which has a useful side effect: DNS queries to the bridge's own gateway IP never transit the uplink at all, so they're structurally exempt from any egress policy without needing an explicit allowlist entry. Even a `deny_all` sandbox with nothing allowed can still resolve names; it just can't reach anything past the gateway that isn't explicitly permitted.
 
-A policy is tied to the sandbox's network lease, not its VM: applied once the lease goes live (fresh boot, pool claim, resume, fork, or a [time-travel restore](/concepts/snapshots)) and removed only when the lease is finally released (a full destroy, or deleting a held snapshot or retired checkpoint) — a plain stop-and-preserve leaves the chain dormant but intact, exactly like the tap device it's attached to.
+A policy is tied to the sandbox's tap, because the chain is keyed by it: applied whenever a sandbox gets a tap (fresh boot, pool claim, resume, fork, or a [time-travel restore](/concepts/snapshots)) and removed when the tap is returned (a destroy, a fork stopping, or a snapshot being taken). The policy itself stays with the snapshot and is applied again, to whichever tap the resume is given, so a held snapshot has no chain at all.
 
 **Not yet built**: domain-level rules (would need the shared DNS proxy, currently one instance with no per-source differentiation, to become source-IP-aware — a substantially bigger change) and port-level matching (`-p tcp --dport`, a straightforward extension of the same rule shape, just not built yet). IPv4 only, matching every other networking type in this project.

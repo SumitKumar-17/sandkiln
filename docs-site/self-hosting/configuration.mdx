@@ -41,7 +41,7 @@ The environment variable for a key is `SANDKILN_` plus the upper-cased key.
 | Variable | Default | What it controls |
 |---|---|---|
 | `SANDKILN_LISTEN_ADDR` | `127.0.0.1:7777` | HTTP listen address. |
-| `SANDKILN_EXEC_TIMEOUT_SECS` | `600` | Longest a single `exec`, file or filesystem request may wait for the guest's reply. On expiry the caller gets a `504` and the process keeps running in the guest; raise it or use streamed exec. Must be at least 1. |
+| `SANDKILN_EXEC_TIMEOUT_SECS` | `600` | Longest a single `exec`, file or filesystem request may wait for the guest's reply. Also the default and the ceiling for an exec's own `timeout_secs`: at that limit the guest kills the command and the caller gets a `504` with `timed_out: true` and the partial output. A reply that never comes at all is a plain `504` and the command may still be running. Raise it for longer commands, or use streamed exec. Must be at least 1. |
 | `SANDKILN_FIRECRACKER_BIN` | `~/sandkiln-tools/bin/firecracker` | Path to the Firecracker binary. |
 | `SANDKILN_KERNEL_PATH` | `~/sandkiln-tools/images/vmlinux-5.10.223` | Guest kernel image. Use a FUSE-enabled kernel for [remote storage mounts](/concepts/remote-storage). |
 | `SANDKILN_KERNEL_ARGS` | unset | Extra guest kernel arguments, for example `quiet`. |

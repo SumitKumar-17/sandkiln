@@ -31,9 +31,9 @@ Shipped as `Request::ResumeFixup`; verified by integration topic `28-resume-fixu
 A resumed sandbox answers its first command in about 8ms against 214ms cold, so the biggest user-visible win is not a faster boot but never booting on the request path. Add a `default_pool_warm_count` setting that keeps warm instances of the default profile ready without the operator creating a pool, replenished in the background, and report warm hits and misses in `/status` and `/metrics`.
 Verify: benchmark suite first-command latency with the setting on and off; pool exhaustion falls back to cold create.
 
-### 3. Snapshots must not hold a tap device each (Use and scale, high)
+### 3. Snapshots must not hold a tap device each (Use and scale, shipped)
 A held snapshot keeps its tap lease, and `DELETE` keeps a snapshot by default, so 32 snapshots exhaust a 32-tap pool and every create fails (found while stress-testing). The guest only needs a tap at resume. Firecracker can repoint a restored network interface (`network_overrides` on snapshot load), so release the tap at snapshot time and lease any free one at resume; keep the guest IP and MAC frozen. Surface held-snapshot tap usage in `/status` and warn before exhaustion.
-Verify: create 100 snapshots on a 32-tap pool; resume succeeds; integration topic for it.
+Shipped: the lease is split into an `IpLease` (kept by a snapshot) and a `TapLease` (held only while a VM runs), resume repoints the interface with `network_overrides`, and `/status` reports `tap_pool.in_use`, `ip_pool` and warnings. Held snapshots are now bounded by the sandbox /24 (253 addresses) and disk, not by taps. Verified: 40 snapshots on a 32-tap pool, concurrent resumes, deny_all egress after a tap change, restart reconcile, topic `29-snapshots-hold-no-taps` (see finding 29). Not done: 100 snapshots (the /24 allows 253 but each full-RAM checkpoint costs its memory size on disk), and widening the /24 or giving a snapshot an IP only on demand.
 
 ### 4. Cold path: custom minimal init and trimmed kernel (Latency, high)
 About 125ms of the 214ms is guest systemd userspace (not to be confused with Firecracker's 125ms init bound). Replace it with the guest agent as PID 1 (mounts, network from kernel args, then serve), drop unneeded kernel features, and signal readiness over vsock instead of polling. Target and levers are in the research note.
@@ -43,9 +43,8 @@ Verify: benchmark suite time-to-first-command; the full integration suite on bot
 Taking a snapshot writes the full memory file (310-727ms). Measure sandkiln's own overhead against Firecracker's, then evaluate diff snapshots and writing the memory file to a faster location. Matters for pools (replenish rate) and checkpoint-heavy agent loops.
 Verify: benchmark suite snapshot latency; a resume from a diff-chain is bit-identical in a filesystem check.
 
-### 6. Per-request exec timeout that kills the process (Use, medium)
-`exec_timeout_secs` returns a 504 but the guest process keeps running. Add a per-request timeout field that also signals the process group in the guest.
-Verify: integration topic where a timed-out `sleep` is gone from `ps`.
+### 6. Per-request exec timeout that kills the process (Use, shipped)
+Shipped: `POST /sandboxes/:id/exec` takes `timeout_secs` (1 to `exec_timeout_secs`, which is also the default); the guest agent runs the command in its own process group, drains both pipes concurrently, and at the limit sends the group SIGTERM then SIGKILL after a 2 second grace, replying `Response::TimedOut` with the output so far, which the daemon returns as a 504 with `timed_out: true`. The no-limit wire shape is unchanged, and an agent that predates the field ignores it and runs unbounded. JS (`timeoutSeconds`, `SandkilnExecTimeoutError`), Python (`timeout=`, sync and async), `kiln sandbox exec --timeout` (exit 124) and MCP `sandbox_exec` use it. Verified live: topic `30-exec-timeout` (a `sleep 30` with `timeout_secs=2` answers in 2.0s and no `sleep` is left in the guest, including grandchildren of a shell), the CLI, both Python clients, the JS SDK, the MCP live smoke and the Action. Not done: `exec-stream` has no timeout (the Action wraps the job in `timeout` inside the guest); a process that calls `setsid` leaves the group and survives the kill (its pipe is abandoned after 2 seconds); a guest agent that predates the field still needs re-injecting before the limit takes effect.
 
 ### 7. Pool claim accounting under load, finding 27 (Reliability, medium)
 Reproduce with the parallel loop plus pool create, claim and stop; log claim and release per pool id; fix the race. See [findings](../findings.md).
@@ -61,7 +60,11 @@ Verify: `scripts/setup.sh --download` on a clean host boots a sandbox.
 Persist the XFS loop mount with a systemd unit written by `create-reflink-volume.sh`, and make reflink the documented default for production setups.
 Verify: reboot the dev box; `kiln doctor` and `/status` show reflink clones.
 
-### 11. Python parity and polish (Use, low)
+### 11. Exec error clarity (Use, small)
+Found by running every example: `runCommand` on a binary that does not exist returns a raw 500 ("unexpected agent response: No such file or directory") instead of exit code 127 with a readable message, and `sandbox.mount()` on a guest without rclone gives a bare 400 "No such file or directory". Map a spawn failure in the guest agent to exit 127 with the error on stderr, and have the mount route say what is missing (FUSE kernel, rclone binary).
+Verify: integration topic for both; SDK and CLI show the message.
+
+### 12. Python parity and polish (Use, low)
 Python has no PTY or streamed exec; add them, and add `status`/`doctor` equivalents where they make sense.
 
 ## Later

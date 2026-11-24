@@ -12,7 +12,8 @@ Operator view of the daemon. Behind the bearer token (unlike `/metrics`) because
 | `version`, `uptime_secs` | Daemon build version and seconds since start. |
 | `auth_enabled`, `jailer_enabled` | Whether `auth_token` is set and whether sandboxes boot under the jailer. |
 | `counts` | `sandboxes` (live), `held_snapshots`, `retired_checkpoints`, `pools`, `pool_warm_ready`. |
-| `tap_pool` | `size` (configured) and `free` (leasable now). |
+| `tap_pool` | `size` (configured), `free` (leasable now) and `in_use` (taps plugged into running sandboxes, forks included). Held snapshots hold no tap, so they are not counted here. |
+| `ip_pool` | `size` (253 in the sandbox /24), `free`, and `held_by_snapshots`. Every running sandbox and every held snapshot holds one address, so this is the pool that bounds how many snapshots can exist. |
 | `sandboxes_created_total` | Creates since daemon start. |
 | `rootfs_clones` | `reflink` and `copy` clone counts since start. |
 | `disk` | `path`, `total_bytes`, `free_bytes` for the state and rootfs volumes (one entry if they share a path). |
@@ -20,7 +21,8 @@ Operator view of the daemon. Behind the bearer token (unlike `/metrics`) because
 
 ### Warnings
 
-- No free tap devices (only when a pool is configured).
+- No free tap devices (only when a pool is configured), or fewer than a tenth of them free. Creating or resuming a sandbox then fails with `503`.
+- No free sandbox IPs, or fewer than a tenth free, with how many are held by snapshots.
 - Under 5 GiB free on the state or rootfs volume.
 - Every rootfs clone was a byte copy, meaning `rootfs_dir` is not on a reflink filesystem.
 - `auth_token` is unset.

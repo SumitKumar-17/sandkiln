@@ -39,7 +39,7 @@ npm install -g sandkiln-mcp   # installs the `sandkiln-mcp` command
 | Tool | Arguments | Result |
 |---|---|---|
 | `sandbox_create` | `image`, `vcpu`, `mem_mib`, `name`, `tags`, `env`, `egress` (`allow_all`/`deny_all`), `allow_cidrs` | `sandbox_id` |
-| `sandbox_exec` | `sandbox_id`, `command`, `args`, `env`, `timeout_seconds` (default 60, max 600) | `exit_code`, `stdout`, `stderr`, truncation flags and total sizes |
+| `sandbox_exec` | `sandbox_id`, `command`, `args`, `env`, `timeout_seconds` (default 60, max 600, never above the daemon's `exec_timeout_secs`) | `exit_code`, `stdout`, `stderr`, truncation flags and total sizes |
 | `sandbox_write_file` | `sandbox_id`, `path`, `content`, `encoding` (`utf8`/`base64`) | `bytes_written` (4 MiB limit) |
 | `sandbox_read_file` | `sandbox_id`, `path`, `max_bytes` | `content` as `utf8` or `base64`, `total_bytes`, `truncated` |
 | `sandbox_list_dir` | `sandbox_id`, `path` | up to 500 entries with type, size, mode, mtime |
@@ -57,11 +57,11 @@ Resources: `sandkiln://sandboxes` and `sandkiln://status`.
 
 ## Errors
 
-A failure is an `isError` result whose text is `{"error": {"kind", "message", "status", "hint"}}`. `kind` is one of `invalid_request`, `unauthorized`, `not_found`, `conflict`, `rate_limited`, `daemon_error`, `daemon_unreachable`, `timeout`, `limit_reached`, `internal`; `hint` says what to try next.
+A failure is an `isError` result whose text is `{"error": {"kind", "message", "status", "hint", "details"}}`. `kind` is one of `invalid_request`, `unauthorized`, `not_found`, `conflict`, `rate_limited`, `daemon_error`, `daemon_unreachable`, `timeout`, `limit_reached`, `internal`; `hint` says what to try next.
 
 ## Cleanup and safety
 
 - Sandboxes the session created, resumed or forked are destroyed when the client disconnects or the server receives `SIGTERM` or `SIGINT`. `SIGKILL` cannot be intercepted; those sandboxes stay until an operator removes them.
 - Snapshots are durable and outlive the session.
-- The `sandbox_exec` timeout is client-side. A timed-out process may keep running inside the sandbox, because the daemon has no exec kill yet.
+- The `sandbox_exec` timeout is enforced inside the sandbox: on expiry the command and its child processes are killed and the call returns a `timeout` error whose `details` hold the output captured so far, so nothing keeps running. Against a daemon or guest agent that predates this, the limit is not enforced in the guest.
 - Tools accept any sandbox id on the daemon, not only the session's own. Use an auth token whenever the daemon is reachable by others, and pass `egress: "deny_all"` for code that must stay offline.

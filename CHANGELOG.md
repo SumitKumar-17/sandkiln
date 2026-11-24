@@ -12,6 +12,36 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Exec timeout that kills the command — 2026-11-24
+
+### Added
+- `POST /sandboxes/:id/exec` takes an optional `timeout_secs` (1 to `exec_timeout_secs`, which is also the default; `0` or more than the ceiling is `400`). The guest agent runs the command in its own process group, and at the limit sends the group `SIGTERM`, then `SIGKILL` after a 2 second grace, and reports what it had captured. The daemon answers `504` with `{"timed_out": true, "timeout_secs", "stdout", "stderr"}`. A `504` without `timed_out` is still the daemon giving up waiting (limit plus a 10 second margin, or a guest agent that predates the field, which ignores it and runs unbounded).
+- Protocol: `Request::Exec.timeout_secs` (omitted from the wire when unset, so existing requests are byte-identical) and `Response::TimedOut { stdout, stderr }`. The guest agent must be re-injected for the limit to take effect.
+- JS SDK `runCommand(..., { timeoutSeconds })` throws `SandkilnExecTimeoutError` (a `SandkilnApiError`, status 504) with `stdout`, `stderr`, `timeoutSeconds`. Python `run_command(..., timeout=)` (sync and async) raises `SandkilnExecTimeoutError` the same way. `kiln sandbox exec --timeout <secs>` prints the partial output and exits 124 like coreutils `timeout`.
+- Integration topic `30-exec-timeout`: `sleep 30` with `timeout_secs=2` answers in about 2s and no `sleep` is left in the guest, including the children of a shell.
+
+### Changed
+- MCP `sandbox_exec` passes `timeout_seconds` to the daemon instead of abandoning the call client-side; a killed command is a `timeout` tool error whose `details` carry the partial output, and nothing keeps running. `ToolError` gains optional `details`. The internal `withTimeout` helper is gone.
+- The GitHub Action runs the job under `timeout --kill-after=10` inside the sandbox (the streamed exec API has no limit of its own), with a client-side backstop 30 seconds longer. Needs `timeout` in the image.
+- Without `timeout_secs` an exec is now limited by `exec_timeout_secs` inside the guest too, so a command that outlives it is killed instead of left running after the `504`.
+
+### Not covered
+- `exec-stream` has no timeout. A process that calls `setsid` leaves the group and survives the kill.
+
+## Snapshots no longer hold a tap device — 2026-11-24
+
+### Fixed
+- A held snapshot kept its tap device, so with a 32-tap pool the 33rd snapshot made every create fail, and `DELETE /sandboxes/:id` keeps a snapshot by default. The network lease is now two: an IP lease (kept by a snapshot, because the guest's address is frozen in its memory image) and a tap lease (held only by a running VM). Snapshot returns the tap; resume, fork, pool claim and checkpoint restore lease any free tap and repoint the restored interface with Firecracker's `network_overrides`. Held snapshots are now bounded by the sandbox /24 (253 addresses), not the tap pool. Finding 29 in `docs/findings.md`.
+- Egress rules follow the guest across a tap change: the per-tap chain is removed when a snapshot is taken and applied to the new tap on resume, fork, claim and restore.
+
+### Changed
+- Creating, resuming or forking when every tap is in use is now `503` (retry later) instead of `500`.
+- `GET /status`: `tap_pool.in_use` and a new `ip_pool` (`size`, `free`, `held_by_snapshots`), warnings when taps or sandbox IPs run low. `tap_pool` now counts running sandboxes only.
+- Restoring a retired checkpoint claims its guest IP atomically from the free pool (a `409` names the holder); the per-tap pending-restore set is gone. A tap name saved by an older daemon in a snapshot's `meta.json` is ignored.
+
+### Added
+- Integration topic `29-snapshots-hold-no-taps`: more snapshots than taps, concurrent resumes, fork, and (with `SANDKILN_INTEGRATION_TEST_EGRESS_PROBE_IP`) deny_all after a tap change.
+
 ## Guest agent init mode — 2026-11-24
 
 ### Added
@@ -293,6 +323,7 @@ JS SDK `sandkiln` and CLI `sandkiln-cli`.
 
 ### Added
 - `getStatus()` (SDK) and `kiln status`: host health and capacity from `GET /status`; the CLI exits 2 on warnings.
+- `kiln --version` prints the package version.
 - `kiln doctor`: end-to-end daemon check (reachable, host warnings, then a real create, exec and stop), timed per step; exits 0, 1 or 2.
 - `sandbox.uploadDir` / `downloadDir` (SDK) and `kiln sandbox upload-dir` / `download-dir`: copy directory trees with modes and symlinks; downloads validate names and symlinks from the untrusted guest.
 

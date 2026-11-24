@@ -16,6 +16,15 @@ pub enum Request {
         /// environment, not a replacement for it.
         #[serde(default)]
         env: HashMap<String, String>,
+        /// Wall-clock limit the guest agent enforces itself: on expiry it
+        /// kills the command's whole process group and answers
+        /// [`Response::TimedOut`] with the output captured so far. Absent
+        /// means no limit. Omitted from the wire when `None`, so a request
+        /// without a limit is byte-identical to what an agent that predates
+        /// the field expects; an old agent that is sent a limit ignores the
+        /// unknown field and simply runs unbounded.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_secs: Option<u64>,
     },
     ReadFile {
         path: String,
@@ -176,6 +185,16 @@ pub enum Response {
         stderr: String,
         exit_code: i32,
     },
+    /// An `Exec` whose `timeout_secs` expired: the command's process group
+    /// was killed and reaped, and this carries the (lossily UTF-8 decoded)
+    /// output captured up to the kill. A separate variant rather than a flag
+    /// on `Exec` because there is no meaningful exit code to report, and an
+    /// existing `Exec` consumer can never mistake a killed command for a
+    /// finished one.
+    TimedOut {
+        stdout: String,
+        stderr: String,
+    },
     File {
         content_base64: String,
     },
@@ -205,7 +224,7 @@ mod tests {
 
     #[test]
     fn exec_request_wire_shape() {
-        let req = Request::Exec { command: "echo".to_string(), args: vec!["hi".to_string()], env: HashMap::new() };
+        let req = Request::Exec { command: "echo".to_string(), args: vec!["hi".to_string()], env: HashMap::new(), timeout_secs: None };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(json, r#"{"cmd":"exec","command":"echo","args":["hi"],"env":{}}"#);
     }
@@ -220,10 +239,27 @@ mod tests {
     #[test]
     fn exec_request_args_and_env_default_to_empty_when_omitted() {
         let req: Request = serde_json::from_str(r#"{"cmd":"exec","command":"echo"}"#).unwrap();
-        let Request::Exec { command, args, env } = req else { panic!("expected Exec") };
+        let Request::Exec { command, args, env, timeout_secs } = req else { panic!("expected Exec") };
         assert_eq!(command, "echo");
         assert!(args.is_empty());
         assert!(env.is_empty());
+        assert_eq!(timeout_secs, None);
+    }
+
+    #[test]
+    fn exec_request_with_timeout_wire_shape() {
+        let req = Request::Exec { command: "sleep".to_string(), args: vec!["9".to_string()], env: HashMap::new(), timeout_secs: Some(2) };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"cmd":"exec","command":"sleep","args":["9"],"env":{},"timeout_secs":2}"#);
+        let back: Request = serde_json::from_str(&json).unwrap();
+        let Request::Exec { timeout_secs, .. } = back else { panic!("expected Exec") };
+        assert_eq!(timeout_secs, Some(2));
+    }
+
+    #[test]
+    fn timed_out_response_wire_shape() {
+        let resp = Response::TimedOut { stdout: "out".to_string(), stderr: "err".to_string() };
+        assert_eq!(serde_json::to_string(&resp).unwrap(), r#"{"status":"timed_out","stdout":"out","stderr":"err"}"#);
     }
 
     #[test]
@@ -421,7 +457,8 @@ mod tests {
     #[test]
     fn every_request_variant_roundtrips() {
         let requests = [
-            Request::Exec { command: "ls".to_string(), args: vec!["-la".to_string()], env: HashMap::new() },
+            Request::Exec { command: "ls".to_string(), args: vec!["-la".to_string()], env: HashMap::new(), timeout_secs: None },
+            Request::Exec { command: "ls".to_string(), args: vec![], env: HashMap::new(), timeout_secs: Some(5) },
             Request::ReadFile { path: "/a".to_string() },
             Request::WriteFile { path: "/a".to_string(), content_base64: "x".to_string() },
             Request::ListDir { path: "/a".to_string() },

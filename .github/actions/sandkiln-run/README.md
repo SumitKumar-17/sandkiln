@@ -29,7 +29,7 @@ topologies and what GitHub-hosted runners can and cannot do).
 | `exclude` | empty | Extra comma-separated tar excludes. `.git` is always excluded. |
 | `egress` | `deny_all` | `default`, `deny_all` or `allow_all`. |
 | `allow-cidrs` | empty | Comma-separated CIDRs allowed under `deny_all`. |
-| `timeout` | `600` | Seconds before the step fails with exit code 124. |
+| `timeout` | `600` | Seconds before the job is killed in the sandbox and the step fails with exit code 124. Needs `timeout` (coreutils or busybox) in the image. |
 | `keep-on-failure` | `false` | Leave the sandbox running when the command fails. You must remove it. |
 | `cli-version` | `0.12.0` | `sandkiln-cli` version installed from npm. |
 | `install-cli` | `true` | `false` when `kiln` and Node.js 22+ are already on `PATH`. |
@@ -46,8 +46,11 @@ sandbox never reported one).
 - A final `if: always()` step destroys the sandbox, also after a failure,
   timeout or cancellation. Sandboxes are tagged `github-run` and
   `github-repo`, so `kiln sandbox ls` shows orphans if a runner dies.
-- Output arrives live (`exec-stream`). The timeout is client-side; the daemon
-  has no exec kill, so the process stops when the sandbox is destroyed.
+- Output arrives live (`exec-stream`). The job runs under `timeout` inside the
+  sandbox, which kills its whole process group at the limit; the streaming API
+  has no limit of its own. An image without `timeout` only gets a client-side
+  limit that abandons the stream, and the job stops when the sandbox is
+  destroyed.
 - The workspace goes up as one `tar.gz` over the file API, which base64
   encodes it: exclude build output and caches with `exclude`.
 - Nothing from the runner's environment enters the sandbox except the files

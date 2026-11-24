@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { InvalidArgumentError } from "commander";
 import {
   accumulate,
+  execTimeoutReport,
   formatDirEntryList,
   formatDriveList,
   formatExecStreamList,
@@ -345,4 +346,11 @@ test("a non-blocking failure does not stop the run and warnings alone exit 2", a
   assert.equal(outcomes.length, 2);
   assert.equal(exitCodeFor(outcomes), 2);
   assert.equal(exitCodeFor([{ name: "z", level: "ok", detail: "", ms: 0 }]), 0);
+});
+
+test("execTimeoutReport keeps the partial output and exits 124 like coreutils timeout", () => {
+  const report = execTimeoutReport({ stdout: "partial\n", stderr: "warn\n", timeoutSeconds: 3 });
+  assert.equal(report.exitCode, 124);
+  assert.equal(report.stdout, "partial\n");
+  assert.equal(report.stderr, "warn\nkiln: command timed out after 3s and was killed\n");
 });

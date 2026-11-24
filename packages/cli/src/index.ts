@@ -7,9 +7,12 @@ import { registerSandboxCommands } from "./commands/sandbox.js";
 import { registerStatusCommand } from "./commands/status.js";
 import { fail } from "./commands/shared.js";
 
+declare const __CLI_VERSION__: string;
+
 const program = new Command();
 program
   .name("kiln")
+  .version(__CLI_VERSION__)
   .description("Manage sandkiln sandboxes from the command line.")
   .option("--base-url <url>", "daemon URL (default: SANDKILN_DAEMON_URL or http://127.0.0.1:7777)")
   .option("--token <token>", "auth token (default: SANDKILN_AUTH_TOKEN)");

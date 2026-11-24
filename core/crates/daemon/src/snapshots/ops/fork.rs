@@ -81,7 +81,7 @@ pub(crate) async fn fork_snapshot_by_id(state: Arc<AppState>, snapshot_id: Strin
             vm,
             network: None,
             // The snapshot keeps the IP; the fork owns only the tap it is plugged into.
-            fork_network: Some(ForkNetwork { tap, guest_ip }),
+            fork_network: Some(ForkNetwork { tap, guest_ip, has_egress_chain: snapshot.egress.is_some() }),
             rootfs_path: new_rootfs_path,
             attached_drives: snapshot.attached_drives.clone(),
             image_id: snapshot.image_id.clone(),

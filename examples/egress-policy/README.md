@@ -39,6 +39,16 @@ A running `sandkilnd` daemon — see
 [`SELF_HOSTING.md`](../../SELF_HOSTING.md) at the repo root. There is no
 hosted service.
 
+## Run it
+
+```
+cd examples/egress-policy
+npm install
+EGRESS_EXAMPLE_TARGET_IP=$(ip route show default | awk '{print $3; exit}') node index.js
+```
+
+The sandbox image needs `ping`.
+
 ## Configuration
 
 - `EGRESS_EXAMPLE_TARGET_IP` — a real IP address reachable from the

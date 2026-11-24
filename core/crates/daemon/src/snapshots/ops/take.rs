@@ -110,6 +110,7 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
     // Only a forked descendant (rejected above) ever has `network: None`.
     let network = network.expect("non-fork sandboxes always hold a network lease");
 
+    let has_egress_chain = egress.is_some();
     let snapshot_id = Uuid::new_v4().to_string();
     let dir = snapshot_dir(&snapshot_id);
     let snapshot_path = dir.join("state.snap");
@@ -132,7 +133,9 @@ pub(crate) async fn snapshot_and_stop(state: Arc<AppState>, id: String) -> Resul
             let _ = vm.force_stop();
             // The guest is dead, so its tap is free and its egress chain
             // (keyed by that tap) is moot. Both go now whatever happened.
-            sandkiln_vmm::egress::remove(network.config.guest_ip, &network.config.tap_device, state.network.uplink());
+            if has_egress_chain {
+                sandkiln_vmm::egress::remove(network.config.guest_ip, &network.config.tap_device, state.network.uplink());
+            }
             match outcome {
                 Ok(()) => Ok(state.network.detach(network)),
                 Err(e) => {

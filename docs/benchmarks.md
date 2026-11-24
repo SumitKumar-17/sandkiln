@@ -40,6 +40,8 @@ Log filter note: it is the binary name, `RUST_LOG=sandkilnd=debug`, not
 
 ## What each number measures
 
+Guest-side reference, one `dmesg` capture (2026-11-24, default image, 5.10.223 guest): kernel clocksource switched to `tsc` at 0.022s, `systemd[1]` started at 0.107s of guest uptime. Firecracker's 125ms bound is for `InstanceStart` to init starting, so this guest is inside it; our 214ms to first command is a different, longer span.
+
 The same word ("boot", "create", "first command") names different intervals in
 different tools. Read a figure against this table before comparing it with
 another. The long version is
@@ -52,7 +54,7 @@ another. The long version is
 | Create to first command (214.5ms) | `first_exec_client`: first real `exec` timed from the moment `create()` returned until it answers | The create call itself (add about 21ms for the suite's 235.4ms) | **Mean** over the `bench-report.sh` iterations, one box |
 | `first_command_after_create` (213.1ms) | The same interval, client side through the SDK | The create call | **Median** of n=20, `examples/benchmark-suite` |
 | Resume (3.7-4.0ms) | `PUT /snapshot/load` and resume, VMM level | HTTP hop, daemon bookkeeping, the guest's first command | criterion |
-| `resume_call` (13.1ms) | `Sandbox.resume()` through HTTP, including the daemon's resume work and the entropy and clock fixup | The first command | Median of n=20, suite |
+| `resume_call` (13.1ms; 13.6 and 14.4ms median in two n=15 loops after the tap lease moved to resume time, a different harness, see finding 29) | `Sandbox.resume()` through HTTP, including the daemon's resume work and the entropy and clock fixup | The first command | Median of n=20, suite |
 | Resumed first exec (8.4ms), `resume_first_command` (6.3ms) | First command after a resume returned | The resume itself | Mean (`bench-report.sh`) and median (suite) |
 | Exec round trip (about 245us) | One request on an already open vsock connection | HTTP, connection setup | criterion; the suite's 1.76ms is one HTTP request per command |
 | about 125ms systemd userspace | Time systemd spends after the kernel hands over to it, inside our guest | Kernel boot | `systemd-analyze` in the guest. **Not** Firecracker's 125ms init bound, which is the time until `/sbin/init` *starts* |

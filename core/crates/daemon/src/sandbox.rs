@@ -14,6 +14,9 @@ use std::time::{Instant, SystemTime};
 pub struct ForkNetwork {
     pub tap: TapLease,
     pub guest_ip: Ipv4Addr,
+    /// Whether an egress chain was installed for this fork, so teardown only
+    /// pays the iptables calls when there is something to remove.
+    pub has_egress_chain: bool,
 }
 
 pub struct Sandbox {

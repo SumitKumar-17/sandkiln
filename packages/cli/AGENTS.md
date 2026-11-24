@@ -37,6 +37,9 @@ operation delegates to the SDK.
     then exits — no raw-stdin mode needed (unlike `pty`), since this
     forwards bytes between the daemon's WebSocket and a real local
     socket, not a terminal.
+  - `exec --timeout <secs>` passes the SDK's `timeoutSeconds`; a
+    `SandkilnExecTimeoutError` prints the partial output and exits 124
+    (`execTimeoutReport` in `format.ts`).
   - `exec-stream`/`logs` resolve exit code by parsing the daemon's
     bracketed `[process exited with code N]` notice out of plain output.
   - `resume`/`fork`/`get-or-create`/`by-name` call the SDK's static

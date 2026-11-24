@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn full_request_pipeline_host_to_guest() {
         let request =
-            Request::Exec { command: "echo".to_string(), args: vec!["hi".to_string()], env: std::collections::HashMap::new() };
+            Request::Exec { command: "echo".to_string(), args: vec!["hi".to_string()], env: std::collections::HashMap::new(), timeout_secs: None };
 
         let payload = encode_request(&request).unwrap();
         let mut wire = Vec::new();

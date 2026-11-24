@@ -139,12 +139,30 @@ export interface ExecRequestBody {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  timeout_secs?: number;
 }
 
 /** Merged on top of the sandbox's create-time `env` (wins on conflict),
  * not a replacement for it. */
 export interface RunCommandOptions {
   env?: Record<string, string>;
+  /**
+   * Wall-clock limit enforced inside the sandbox: on expiry the command's
+   * whole process group is killed and `runCommand` throws
+   * `SandkilnExecTimeoutError` with the output captured so far. Whole
+   * seconds, at least 1 and at most the daemon's `exec_timeout_secs`
+   * (also the default when omitted).
+   */
+  timeoutSeconds?: number;
+}
+
+/** The 504 body the daemon sends for a command killed at its limit. */
+export interface ExecTimeoutResponseBody {
+  error: string;
+  timed_out: true;
+  timeout_secs: number;
+  stdout: string;
+  stderr: string;
 }
 
 export interface ExecResponseBody {

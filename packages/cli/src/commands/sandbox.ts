@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
-import { Sandbox } from "sandkiln";
+import { Sandbox, SandkilnExecTimeoutError } from "sandkiln";
 import {
   accumulate,
+  execTimeoutReport,
   formatDirEntryList,
   formatExecStreamList,
   formatMountList,
@@ -257,18 +258,39 @@ export function registerSandboxCommands(program: Command): void {
 
   sandbox
     .command("exec <id> <command> [args...]")
-    .description("Run a command inside a sandbox. Exits with the command's own exit code.")
+    .description(
+      "Run a command inside a sandbox. Exits with the command's own exit code, or 124 (like coreutils timeout) " +
+        "if --timeout expired and the command was killed.",
+    )
     .addOption(envOption("environment variable for this one call (repeatable); overrides a same-named one baked in at create time"))
-    .action(async function (this: Command, id: string, command: string, args: string[], opts: { env: Record<string, string> }) {
+    .option(
+      "--timeout <seconds>",
+      "kill the command (its whole process group) after this many seconds; the daemon's exec_timeout_secs is both the default and the maximum",
+      parsePositiveInt("--timeout"),
+    )
+    .action(async function (
+      this: Command,
+      id: string,
+      command: string,
+      args: string[],
+      opts: { env: Record<string, string>; timeout?: number },
+    ) {
       const { baseUrl, token } = clientOptions(this);
       try {
         const result = await attachSandbox(id, baseUrl, token).runCommand(command, args, {
           env: Object.keys(opts.env).length > 0 ? opts.env : undefined,
+          timeoutSeconds: opts.timeout,
         });
         process.stdout.write(result.stdout);
         process.stderr.write(result.stderr);
         process.exit(result.exitCode);
       } catch (error) {
+        if (error instanceof SandkilnExecTimeoutError) {
+          const report = execTimeoutReport(error);
+          process.stdout.write(report.stdout);
+          process.stderr.write(report.stderr);
+          process.exit(report.exitCode);
+        }
         await handleApiError(error);
       }
     });

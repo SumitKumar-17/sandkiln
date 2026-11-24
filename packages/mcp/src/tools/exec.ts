@@ -1,10 +1,10 @@
 /** Command execution tool. */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SandkilnExecTimeoutError } from "sandkiln";
 import { z } from "zod";
-import { ToolFailure } from "../errors.js";
+import { execTimeoutFailure } from "../exec-timeout.js";
 import { truncateText } from "../truncate.js";
-import { withTimeout } from "../timeout.js";
 import { attach, defineTool, type ToolContext } from "./register.js";
 
 export const DEFAULT_EXEC_TIMEOUT_S = 60;
@@ -33,22 +33,24 @@ export function registerExecTools(server: McpServer, ctx: ToolContext): void {
           .min(1)
           .max(MAX_EXEC_TIMEOUT_S)
           .default(DEFAULT_EXEC_TIMEOUT_S)
-          .describe("How long to wait. On expiry the call returns a timeout error but the process may keep running inside the sandbox."),
+          .describe(
+            "Wall-clock limit enforced inside the sandbox. On expiry the command and its child processes are killed and the call returns a timeout error carrying the output captured so far.",
+          ),
       },
       annotations: { title: "Run command in sandbox", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async (a) => {
       const sandbox = attach(ctx, a.sandbox_id);
-      const result = await withTimeout(
-        sandbox.runCommand(a.command, a.args, a.env ? { env: a.env } : {}),
-        a.timeout_seconds * 1000,
-        () =>
-          new ToolFailure(
-            "timeout",
-            `command did not finish within ${a.timeout_seconds}s`,
-            "The process may still be running in the sandbox. Run it in the background (for example with nohup and output to a file) and poll, or raise timeout_seconds.",
-          ),
-      );
+      let result;
+      try {
+        result = await sandbox.runCommand(a.command, a.args, {
+          ...(a.env ? { env: a.env } : {}),
+          timeoutSeconds: a.timeout_seconds,
+        });
+      } catch (err) {
+        if (err instanceof SandkilnExecTimeoutError) throw execTimeoutFailure(err, ctx.config.maxOutputBytes);
+        throw err;
+      }
       // The budget is split so that stdout and stderr together stay within the cap.
       const budget = Math.floor(ctx.config.maxOutputBytes / 2);
       const stdout = truncateText(result.stdout, budget);

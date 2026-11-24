@@ -59,7 +59,7 @@ One distinction matters: **a command that exits nonzero is not an error.** `sand
 
 ### Timeouts are abandoned, not cancelled
 
-`sandbox_exec` takes a timeout, 60 seconds by default and 600 at most. On expiry the call returns a `timeout` error. The limit is honest about what it does not do: the SDK has no abort and the daemon has no exec kill, so the process may keep running in the sandbox. The `timeout` hint says so and suggests running long work in the background and polling. `withTimeout` swallows a late rejection from the abandoned work so it cannot crash the server process. A daemon-side exec timeout and kill is an open item in `ROADMAP.md`.
+`sandbox_exec` takes a timeout, 60 seconds by default and 600 at most. On expiry the call returns a `timeout` error. The limit is honest about what it does not do: the SDK has no abort and the daemon has no exec kill, so the process may keep running in the sandbox. The `timeout` hint says so and suggests running long work in the background and polling. `withTimeout` swallows a late rejection from the abandoned work so it cannot crash the server process. A daemon-side exec timeout was added to the non-streaming `exec` endpoint on the same day this post was written: the request can carry `timeout_secs`, the guest agent kills the process group on expiry, and the daemon answers 504 with the partial output. The MCP server's `sandbox_exec` had not been moved onto it when this was written and still enforces its own client-side limit, so the caveat above describes the MCP code as it stands. The action's streaming path (`exec-stream`) is also not covered by it. Check the MCP package's README for whether that has since changed.
 
 ### Session ownership and cleanup
 

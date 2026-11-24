@@ -15,7 +15,7 @@ A jailed sandbox can't be snapshotted (`400`) — jailer support covers boot onl
 
 ## Resume — consumes the snapshot *record*, not the checkpoint
 
-`POST /snapshots/:id/resume` boots a new sandbox from the snapshot, consuming the **record**: a second resume of the same id 404s, and the new sandbox owns a fresh rootfs and its network lease outright, exactly like a fresh `POST /sandboxes` create. By default it no longer deletes the underlying checkpoint data, though — see "Time-travel restore" below. `?retain_history=false` opts back into the original, fully-destructive behavior for a caller that wants zero retention overhead.
+`POST /snapshots/:id/resume` boots a new sandbox from the snapshot, consuming the **record**: a second resume of the same id 404s, and the new sandbox owns a fresh rootfs, the snapshot's IP and a tap leased at resume time (Firecracker repoints the restored interface), like a fresh `POST /sandboxes` create. By default it no longer deletes the underlying checkpoint data, though — see "Time-travel restore" below. `?retain_history=false` opts back into the original, fully-destructive behavior for a caller that wants zero retention overhead.
 
 ## Fork — doesn't consume it
 
@@ -29,7 +29,7 @@ Every snapshot records `parent_snapshot_id`: the snapshot its own source sandbox
 
 Resuming used to mean "this exact save point is gone the moment you move forward from it." It no longer does: by default, `POST /snapshots/:id/resume` retires the checkpoint it consumes into `GET /snapshots/history` instead of deleting it, and `POST /snapshots/history/:id/restore` boots a new sandbox from any retired checkpoint — as many times as wanted, since restoring doesn't consume it either. `DELETE /snapshots/history/:id` reclaims one outright once you're done with it (there's no automatic expiry yet, and retention has a real disk cost — see [Snapshot, resume, and fork: the mechanism](/internals/snapshot-resume-fork) for what that actually looks like and why).
 
-This is sequential, not branching: restoring an old checkpoint doesn't erase or invalidate whatever came after it in that lineage (those stay in history too), but a restore is refused (`409`, naming the current holder) while anything else sharing that checkpoint's frozen network identity is currently live or held. A restored sandbox owns its lease and rootfs outright, so — unlike a fork — it stays snapshottable afterward, letting you branch a new line of history from any point you've ever been.
+This is sequential, not branching: restoring an old checkpoint doesn't erase or invalidate whatever came after it in that lineage (those stay in history too), but a restore is refused (`409`, naming the current holder) while anything else sharing that checkpoint's frozen guest IP is currently live or held; the claim is atomic with the free IP pool, so two concurrent restores of one lineage cannot both win. A restored sandbox owns its IP, a tap leased at restore time and its rootfs outright, so — unlike a fork — it stays snapshottable afterward, letting you branch a new line of history from any point you've ever been.
 
 ## Finding a snapshot
 

@@ -29,7 +29,9 @@ for why the daemon cannot be assumed to run on them.
 ## Try the action's script without GitHub
 
 `run.sh` takes GitHub's `INPUT_*` variables, so it runs anywhere `kiln` does
-(this is how it was verified). Names with a hyphen cannot be set with
+(this is how it was verified). It needs the `kiln` CLI on `PATH`
+(`npm install -g sandkiln-cli`) and a sandbox image with `python3` for the
+sample project. Names with a hyphen cannot be set with
 `export` in bash, so pass them through `env`:
 
 ```

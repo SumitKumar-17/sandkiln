@@ -77,7 +77,8 @@ async def request(
             pass
 
     if status >= 400:
-        raise SandkilnApiError(status, _extract_error_message(raw_body, status))
+        message, parsed = _read_error(raw_body, status)
+        raise SandkilnApiError(status, message, parsed)
     if not raw_body:
         return None
     return json.loads(raw_body)
@@ -102,12 +103,12 @@ async def _read_response(reader: asyncio.StreamReader) -> tuple[int, dict[str, s
     return status, headers, body
 
 
-def _extract_error_message(raw_body: bytes, status: int) -> str:
+def _read_error(raw_body: bytes, status: int) -> tuple[str, Any]:
     if raw_body:
         try:
             parsed = json.loads(raw_body)
             if isinstance(parsed, dict) and isinstance(parsed.get("error"), str):
-                return parsed["error"]
+                return parsed["error"], parsed
         except (json.JSONDecodeError, UnicodeDecodeError):
             pass
-    return f"request failed with status {status}"
+    return f"request failed with status {status}", None

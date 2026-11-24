@@ -12,12 +12,13 @@ use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use sandkiln_protocol::{Request, Response as AgentResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Deserialize)]
 pub struct ExecRequestBody {
@@ -29,7 +30,19 @@ pub struct ExecRequestBody {
     /// the sandbox's own defaults, unchanged," not "clear them."
     #[serde(default)]
     env: HashMap<String, String>,
+    /// Wall-clock limit enforced inside the guest: on expiry the command's
+    /// whole process group is killed and the reply is a 504 with
+    /// `timed_out: true` and the output captured so far. Omitted means the
+    /// daemon's `exec_timeout_secs`, which is also the most that may be asked.
+    #[serde(default)]
+    timeout_secs: Option<u64>,
 }
+
+/// How much longer than the command's own limit the daemon waits for the
+/// guest agent's reply: the agent needs up to its SIGTERM grace plus kill
+/// settle time (a few seconds) to report a timeout, and it should answer
+/// first so the caller gets the partial output, not a bare gateway error.
+const AGENT_REPLY_MARGIN: Duration = Duration::from_secs(10);
 
 #[derive(Serialize)]
 pub struct ExecResponseBody {
@@ -43,14 +56,55 @@ pub async fn exec(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(body): Json<ExecRequestBody>,
-) -> Result<Json<ExecResponseBody>, AppError> {
+) -> Result<Response, AppError> {
+    let limit = resolve_exec_timeout(body.timeout_secs, state.config.exec_timeout)?;
     let env = resolve_env(&state, &id, body.env)?;
-    let response = call_agent(state, id, Request::Exec { command: body.command, args: body.args, env }).await?;
+    let request = Request::Exec { command: body.command, args: body.args, env, timeout_secs: Some(limit.as_secs()) };
+    let response = call_agent_with_timeout(state, id, request, limit + AGENT_REPLY_MARGIN).await?;
 
     match response {
-        AgentResponse::Exec { stdout, stderr, exit_code } => Ok(Json(ExecResponseBody { stdout, stderr, exit_code })),
+        AgentResponse::Exec { stdout, stderr, exit_code } => Ok(Json(ExecResponseBody { stdout, stderr, exit_code }).into_response()),
+        AgentResponse::TimedOut { stdout, stderr } => {
+            let (status, body) = timed_out_body(limit, stdout, stderr);
+            Ok((status, Json(body)).into_response())
+        }
         other => Err(AppError::Internal(std::io::Error::other(format!("unexpected agent response: {other:?}")))),
     }
+}
+
+/// The limit a request runs under: its own `timeout_secs`, or the daemon's
+/// ceiling when absent. Zero and anything above the ceiling are the caller's
+/// mistake (400), not silently clamped, so a client never believes it
+/// granted a command more time than it got.
+fn resolve_exec_timeout(requested: Option<u64>, ceiling: Duration) -> Result<Duration, AppError> {
+    let Some(secs) = requested else { return Ok(ceiling) };
+    if secs == 0 {
+        return Err(AppError::BadRequest("timeout_secs must be at least 1".to_string()));
+    }
+    if secs > ceiling.as_secs() {
+        return Err(AppError::BadRequest(format!(
+            "timeout_secs {secs} exceeds this daemon's limit of {}s (exec_timeout_secs)",
+            ceiling.as_secs()
+        )));
+    }
+    Ok(Duration::from_secs(secs))
+}
+
+/// The 504 body for a command the guest killed at its limit. Carries the
+/// usual `error` string (every error body has one) plus the partial output
+/// and `timed_out: true`, which is how a client tells this apart from the
+/// 504 of a host-side wait that expired without the guest answering.
+fn timed_out_body(limit: Duration, stdout: String, stderr: String) -> (StatusCode, serde_json::Value) {
+    (
+        StatusCode::GATEWAY_TIMEOUT,
+        serde_json::json!({
+            "error": format!("command timed out after {}s and was killed", limit.as_secs()),
+            "timed_out": true,
+            "timeout_secs": limit.as_secs(),
+            "stdout": stdout,
+            "stderr": stderr,
+        }),
+    )
 }
 
 /// Merges a sandbox's create-time `env` (the base layer) with a per-call
@@ -120,6 +174,18 @@ pub async fn write_file(
 /// agent and reports its response — exec/read/write here and every
 /// `routes::fs` handler all fit this shape.
 pub(crate) async fn call_agent(state: Arc<AppState>, id: String, request: Request) -> Result<AgentResponse, AppError> {
+    let timeout = state.config.exec_timeout;
+    call_agent_with_timeout(state, id, request, timeout).await
+}
+
+/// [`call_agent`] with a caller-chosen bound on the guest's reply — `exec`
+/// derives it from the command's own limit.
+pub(crate) async fn call_agent_with_timeout(
+    state: Arc<AppState>,
+    id: String,
+    request: Request,
+    timeout: Duration,
+) -> Result<AgentResponse, AppError> {
     // Copy the endpoint out and release the sandbox map's lock *before* the
     // call: a user command can run for minutes, and holding the daemon-wide
     // lock across it would freeze every other sandbox operation meanwhile.
@@ -129,7 +195,6 @@ pub(crate) async fn call_agent(state: Arc<AppState>, id: String, request: Reques
         *sandbox.last_activity.lock().unwrap() = Instant::now();
         sandbox.vm.agent_endpoint()
     };
-    let timeout = state.config.exec_timeout;
     spawn_blocking_in_current_span("agent call task panicked", move || {
         let started = Instant::now();
         let response = endpoint
@@ -146,7 +211,7 @@ pub(crate) async fn call_agent(state: Arc<AppState>, id: String, request: Reques
 fn agent_call_error(e: std::io::Error, timeout: std::time::Duration) -> AppError {
     match e.kind() {
         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => AppError::GatewayTimeout(format!(
-            "no reply from the sandbox within {}s (exec_timeout_secs); the command may still be running in the guest",
+            "no reply from the sandbox within {}s; the command may still be running in the guest",
             timeout.as_secs()
         )),
         _ => AppError::from(e),
@@ -157,7 +222,44 @@ fn agent_call_error(e: std::io::Error, timeout: std::time::Duration) -> AppError
 mod tests {
     use super::*;
     use std::io::{Error, ErrorKind};
-    use std::time::Duration;
+
+    #[test]
+    fn omitted_timeout_defaults_to_the_ceiling() {
+        assert_eq!(resolve_exec_timeout(None, Duration::from_secs(600)).ok().unwrap(), Duration::from_secs(600));
+    }
+
+    #[test]
+    fn a_timeout_up_to_the_ceiling_is_accepted() {
+        assert_eq!(resolve_exec_timeout(Some(2), Duration::from_secs(600)).ok().unwrap(), Duration::from_secs(2));
+        assert_eq!(resolve_exec_timeout(Some(600), Duration::from_secs(600)).ok().unwrap(), Duration::from_secs(600));
+    }
+
+    #[test]
+    fn zero_and_over_ceiling_timeouts_are_400s() {
+        for bad in [0, 601, u64::MAX] {
+            let e = resolve_exec_timeout(Some(bad), Duration::from_secs(600)).unwrap_err();
+            assert!(matches!(e, AppError::BadRequest(_)), "{bad} should be a 400");
+        }
+    }
+
+    #[test]
+    fn timed_out_body_is_a_504_carrying_partial_output() {
+        let (status, body) = timed_out_body(Duration::from_secs(2), "out".to_string(), "err".to_string());
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(body["timed_out"], true);
+        assert_eq!(body["timeout_secs"], 2);
+        assert_eq!(body["stdout"], "out");
+        assert_eq!(body["stderr"], "err");
+        assert!(body["error"].as_str().unwrap().contains("2s"));
+    }
+
+    #[test]
+    fn request_body_timeout_is_optional() {
+        let b: ExecRequestBody = serde_json::from_str(r#"{"command":"ls"}"#).unwrap();
+        assert_eq!(b.timeout_secs, None);
+        let b: ExecRequestBody = serde_json::from_str(r#"{"command":"ls","timeout_secs":5}"#).unwrap();
+        assert_eq!(b.timeout_secs, Some(5));
+    }
 
     #[test]
     fn read_timeouts_become_504_not_500() {

@@ -54,6 +54,13 @@ scenario keep-on-failure 3 0 FAKE_REPORTED=3 "INPUT_KEEP-ON-FAILURE=true" KEEP=1
 scenario insecure-url 2 0 "INPUT_DAEMON-URL=http://example.com"
 scenario bad-egress 2 0 INPUT_EGRESS=sometimes
 scenario bad-timeout 2 0 INPUT_TIMEOUT=-1
+scenario guest-timeout 124 1 FAKE_REPORTED=124 INPUT_TIMEOUT=30
+scenario guest-kill-after-timeout 124 1 FAKE_REPORTED=137 INPUT_TIMEOUT=30
+
+# The limit must reach the guest as a real `timeout` around the job, with the
+# client-side backstop strictly longer than it.
+grep -q "timeout --kill-after=10 30 sh /tmp/sandkiln-job.sh" "$FAKE_LOG" \
+  || { echo "FAIL guest-side timeout missing from the exec-stream wrapper"; failures=$((failures + 1)); }
 
 [ "$failures" -eq 0 ] || { echo "$failures scenario(s) failed"; exit 1; }
 echo "all scenarios passed"
