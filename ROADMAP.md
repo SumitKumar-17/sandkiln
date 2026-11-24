@@ -5,9 +5,13 @@ something proven on real hardware, not just code that compiles. Detail,
 findings and numbers live in [`docs/`](docs/README.md).
 
 Last verified 2026-11-24 on the dev box (Intel i9-13900K, kernel 6.8,
-Firecracker v1.16.1): 392 Rust unit tests, clippy clean, and the live suite
-(`scripts/integration-test.sh`, 393 checks over 31 topics) passed 393 of 393
-on three full runs in a row.
+Firecracker v1.16.1): 417 Rust unit tests, clippy clean, and the live suite
+(`scripts/integration-test.sh`, 437 checks over 33 topics) passed 437 of 437
+on three full runs in a row on the combined `main` (default warm pool on, the
+current guest agent in the default images). The orderly-shutdown test
+(`scripts/restart-test.sh`) and all 12 runnable examples
+(`scripts/dev.sh examples-smoke`) pass; `kiln doctor` reports a 21 ms create and
+a 3 ms first command.
 
 Status key: **done** works end to end and is verified; **partial** works with
 a stated gap; **planned** not built.

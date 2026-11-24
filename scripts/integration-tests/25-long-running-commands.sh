@@ -6,7 +6,7 @@
 #      command froze every other sandbox operation;
 #   3. snapshotting waited ~6s on a `sync` a paused guest can never answer.
 section "long-running commands and snapshot latency"
-status="$(req POST /sandboxes '{"tags":{"suite":"integration","case":"long-exec"}}')"
+status="$(req POST /sandboxes '{"mem_size_mib":128,"tags":{"suite":"integration","case":"long-exec"}}')"
 assert_status "create sandbox for long-command checks" 200 "$status"
 SBX_LONG="$(extract id < "$WORKDIR/resp.json")"
 if [ -z "$SBX_LONG" ]; then
@@ -41,10 +41,14 @@ else
   # time: a snapshot writes the whole guest memory and 10s has been seen under
   # the suite's parallelism. So the check passes if any of up to three
   # snapshots is fast, and fails only if all are slow. An idle box takes ~0.6s.
+  # The sandboxes here have 128 MiB of memory on purpose: a snapshot writes the
+  # whole guest memory, so a small one stays fast even while the default warm
+  # pool is writing its own 512 MiB snapshots in the background, whereas the bug
+  # adds 5s+ whatever the size.
   fast_ms=""
   for attempt in 1 2 3; do
     if [ "$attempt" -gt 1 ]; then
-      status="$(req POST /sandboxes '{"tags":{"suite":"integration","case":"long-exec-retry"}}')"
+      status="$(req POST /sandboxes '{"mem_size_mib":128,"tags":{"suite":"integration","case":"long-exec-retry"}}')"
       SBX_LONG="$(extract id < "$WORKDIR/resp.json")"
       [ -z "$SBX_LONG" ] && break
       CREATED_SANDBOXES+=("$SBX_LONG")
