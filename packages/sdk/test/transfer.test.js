@@ -75,3 +75,38 @@ test("downloadDir refuses a hostile guest: traversal names throw, escaping symli
   await assert.rejects(() => lstat(path.join(local, "abs")));
   await rm(local, { recursive: true });
 });
+
+test("downloadDir refuses a listing that names an entry twice", async () => {
+  const local = await tmp();
+  const sbx = fakeSandbox({ dirs: ["/", "/out"], files: { "/out/a": "x" } });
+  const real = sbx.listDir;
+  sbx.listDir = async (dir) => { const e = await real(dir); return dir === "/out" ? [...e, { ...e[0] }] : e; };
+  await assert.rejects(() => downloadDir(sbx, "/out", local), /duplicate entry name/);
+  await rm(local, { recursive: true });
+});
+
+test("downloadDir judges a chain of symlinks by where it really resolves", async () => {
+  const local = await tmp();
+  // s -> .. stays inside the destination (it points at the root); t -> s/.. looks inside
+  // lexically but really resolves one level above the destination.
+  const sbx = fakeSandbox({ dirs: ["/", "/out", "/out/x"], links: { "/out/x/s": "..", "/out/x/t": "s/.." } });
+  const r = await downloadDir(sbx, "/out", local);
+  assert.deepEqual(r.skipped, ["x/t"]);
+  assert.equal(r.symlinks, 1);
+  await assert.rejects(() => lstat(path.join(local, "x/t")));
+  await rm(local, { recursive: true });
+});
+
+test("downloadDir never writes through a symlink already in the destination", async () => {
+  const local = await tmp();
+  const outside = await tmp();
+  await writeFile(path.join(outside, "victim"), "keep");
+  await symlink(path.join(outside, "victim"), path.join(local, "a"));
+  await mkdir(path.join(local, "d0"));
+  await symlink(outside, path.join(local, "d"));
+  const sbx = fakeSandbox({ dirs: ["/", "/out", "/out/d"], files: { "/out/a": "overwritten", "/out/d/f": "nope" } });
+  await assert.rejects(() => downloadDir(sbx, "/out", local));
+  assert.equal(await readFile(path.join(outside, "victim"), "utf8"), "keep");
+  await assert.rejects(() => lstat(path.join(outside, "f")));
+  await rm(local, { recursive: true }); await rm(outside, { recursive: true });
+});

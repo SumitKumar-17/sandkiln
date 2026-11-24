@@ -52,7 +52,7 @@ Checked by `docs-check`. Hitting one means splitting by topic, not trimming fact
 
 | File | Budget |
 | --- | --- |
-| `README.md` | 90 lines |
+| `README.md` | 110 lines (a generated chart block is about 20 of them) |
 | `ROADMAP.md` | 160 lines |
 | a `docs/design-notes/` file | 300 lines |
 | a per-package `AGENTS.md` | 300 lines |
