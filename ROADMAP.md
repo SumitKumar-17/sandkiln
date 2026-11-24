@@ -56,47 +56,34 @@ Directional, one shared box. Method, full table and history in
 
 ## What's next
 
-In order, most load-bearing first.
+In order, most load-bearing first. Detail per item: [feature plan](docs/design-notes/feature-plan.md).
 
-1. **Make the cold path the default-able one.** The init-mode image reaches
-   the first command in about 147ms. Mounts, auth, PID 1 shutdown and a real
-   universal image are verified on it; the jailer works (finding 32 fixed), and guest entropy, the cron/timesyncd loss and the parallel
-   benchmark remain before it replaces systemd (go/no-go in the
-   [latency floor](docs/design-notes/latency-floor.md)). Then per-image warm
-   defaults and wake-on-claim replenishment. Plan: [feature plan](docs/design-notes/feature-plan.md).
-2. **Admin tooling follow-up.** `GET /status`, `kiln status` and
-   `getStatus`/`get_status` have shipped. `kiln doctor` has shipped as a
-   client-side end-to-end probe (host prerequisite checks stay in
-   `scripts/dev.sh preflight`). Remaining: a dashboard page on the same endpoint.
-3. **Snapshot-take cost.** Measure sandkiln's own overhead, then evaluate
-   Firecracker Diff snapshots. See
+1. **Snapshot-take cost.** Taking a snapshot writes the whole memory file
+   (0.4 to 1.5 s). Measure sandkiln's own overhead first, then try Diff
+   snapshots and skipping the file sync for pool entries. See
    [latency investigation](docs/design-notes/latency-investigation.md).
-4. **Cold path.** The opt-in init-mode image reaches the first command in
-   about 147ms against about 232ms with systemd (re-measured with the pool off);
-   what is left is mostly kernel boot and `ip=` setup. Remaining steps before it
-   can be the default, and the other ranked levers:
-   [latency floor](docs/design-notes/latency-floor.md).
-5. **Exec timeout for streamed exec.** `exec` takes a per-request
-   `timeout_secs` that kills the guest process group (shipped; SDKs, CLI, MCP
-   use it). `exec-stream` has no limit of its own: the GitHub Action runs the
-   job under `timeout` in the guest instead.
-6. **Reflink by default** for production setups (preflight already warns).
-   `create-reflink-volume.sh` is a loop mount; add a systemd mount unit.
-7. **Jailer follow-ups.** It works (finding 32 fixed: supervisor, shared jail
-   group, group-owned taps). Left: snapshots of jailed sandboxes, per-uid taps
-   to close the shared-group tap risk, a boot-time unit for the cgroup
-   delegation. Also a VM-exit watcher so a guest that shuts itself down is not
-   left listed (finding 33, fixed).
-8. **Split oversized daemon files** (finding 6) per AGENTS.md section 2.
-9. **Website:** build and screenshot-review every engineering post.
-10. **Housekeeping:** the dev box XFS volume at `/mnt/sandkiln-xfs` needs
-   `create-reflink-volume.sh` after a reboot; delete the stale `pass.txt` in
-   the remote repo dir and rotate the box password; bump JS tooling
-   (finding 7).
-
-Smaller deferred items are listed in the design notes for each area
-(client surface for time-travel and lineage, PTY resize, exec kill, domain
-and port egress rules, per-token auth scoping, daemon-restart pool state).
+2. **Make the init-mode image the default.** It reaches the first command in
+   about 147 ms against about 232 ms with systemd. Mounts, auth, PID 1
+   shutdown and a real universal image are verified on it. Before it replaces
+   systemd: measure guest entropy at cold boot, decide what happens to the
+   cron and timesyncd services it drops, run the parallel benchmark on it, then
+   the kernel levers for the last 80 to 100 ms ([latency floor](docs/design-notes/latency-floor.md)).
+   After that, per-image warm defaults.
+3. **Jailer follow-ups.** It works (supervisor, shared jail group, group-owned
+   taps). Left: snapshots of jailed sandboxes, per-uid taps to close the
+   shared-group tap risk, and a boot-time unit for the cgroup delegation.
+4. **Exec timeout for streamed exec.** `exec` has a per-request `timeout_secs`
+   that kills the guest process group; `exec-stream` has no limit of its own
+   (the GitHub Action runs the job under `timeout` in the guest instead).
+5. **Reflink volume survives a reboot.** `create-reflink-volume.sh` makes a
+   loop mount; add a systemd mount unit and make reflink the documented default.
+6. **Published guest artifacts** (kernel and root filesystem images) so CI can
+   start a real microVM; a status dashboard page on `GET /status`; a Python
+   equivalent of `kiln doctor`.
+7. **Code health.** Split the oversized daemon files (finding 6), bump the JS
+   tooling (finding 7).
+8. **Housekeeping.** Rotate the box password; delete the stale `pass.txt` in the
+   remote repo directory; `create-reflink-volume.sh` after a box reboot.
 
 ## Engineering principles
 

@@ -170,11 +170,8 @@ handlers. `held.rs` split into `held`, `held/reconcile` and a shared
 
 ## Open investigations
 
-### 10. `18-pool` flake. Open
-The check "deleting the pool cleaned up its own warm snapshot" failed once
-under full-suite concurrency (4/4 in isolation); post-resume
-`vsock ... Connection refused` seen in pool-claim health checks. Likely a
-resume-readiness race. Probably the same family as finding 20.
+### 10. `18-pool` flake. Fixed (superseded by findings 20 and 27)
+The symptoms (the pool's warm snapshot missing at delete, post-resume `Connection refused` in the claim health check) had two causes: a guest crashing after an early snapshot (finding 20, fixed) and other topics claiming the pool's snapshot (finding 27, fixed in the topic).
 
 ### 20. Post-resume guest crash after an early snapshot. FIXED
 - Symptom: a resumed guest died about 0.55s after resume (Firecracker exited,
