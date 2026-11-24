@@ -7,7 +7,7 @@ afterwards. It needs a reachable `sandkilnd`; it does not start one (see
 topologies and what GitHub-hosted runners can and cannot do).
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v5
   with:
     persist-credentials: false
 - uses: ./.github/actions/sandkiln-run
@@ -31,7 +31,7 @@ topologies and what GitHub-hosted runners can and cannot do).
 | `allow-cidrs` | empty | Comma-separated CIDRs allowed under `deny_all`. |
 | `timeout` | `600` | Seconds before the job is killed in the sandbox and the step fails with exit code 124. Needs `timeout` (coreutils or busybox) in the image. |
 | `keep-on-failure` | `false` | Leave the sandbox running when the command fails. You must remove it. |
-| `cli-version` | `0.12.0` | `sandkiln-cli` version installed from npm. |
+| `cli-version` | `0.14.0` | `sandkiln-cli` version installed from npm. |
 | `install-cli` | `true` | `false` when `kiln` and Node.js 22+ are already on `PATH`. |
 
 ## Outputs
@@ -44,7 +44,7 @@ sandbox never reported one).
 - The step fails when the command exits non-zero, with that code in
   `exit-code`. A dropped output stream is a failure (125), never a pass.
 - A final `if: always()` step destroys the sandbox, also after a failure,
-  timeout or cancellation. Sandboxes are tagged `github-run` and
+  timeout or cancellation (observed: see "Cancellation" below). Sandboxes are tagged `github-run` and
   `github-repo`, so `kiln sandbox ls` shows orphans if a runner dies.
 - Output arrives live (`exec-stream`). The job runs under `timeout` inside the
   sandbox, which kills its whole process group at the limit; the streaming API
@@ -56,9 +56,24 @@ sandbox never reported one).
 - Nothing from the runner's environment enters the sandbox except the files
   and the command. Never put secrets in `command` for untrusted code.
 
+## Cancellation
+
+Observed on a GitHub-hosted runner (2026-11-24, runner 2.338.2, `ubuntu-latest`): cancelling
+the run (`gh run cancel`) while the command was blocked on `sleep 600`
+marked the action's main step `cancelled` about 12 seconds after the request,
+and the final step (`if: always()`) then **did run** and destroyed the
+sandbox (`DELETE /sandboxes/<id>?keep=false`, 204). Later steps with
+`if: always()` ran as well; the job and run ended `cancelled`. Not observed:
+a second (force) cancel, a job `timeout-minutes` expiry, and a runner that
+dies, none of which are known to run the final step. Keep the `github-run`
+tag in mind for those: `kiln sandbox ls` shows the orphans.
+
 ## Files and tests
 
 - `action.yml`: inputs, outputs, the step order.
 - `run.sh`: all the logic (`run` and `cleanup`), runnable outside GitHub.
 - `test/test-run.sh`: offline control-flow tests against a stand-in `kiln`.
-  Live verification is in the [example](../../../examples/github-actions/README.md).
+- `test/`: a stub daemon and the helpers behind
+  `.github/workflows/test-action.yml`, which runs this action on a
+  GitHub-hosted runner; see [test/README.md](test/README.md).
+  Live verification against a real daemon is in the [example](../../../examples/github-actions/README.md).

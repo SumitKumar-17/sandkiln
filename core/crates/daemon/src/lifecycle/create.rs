@@ -12,7 +12,7 @@ use crate::http::error::AppError;
 use crate::http::routes::sandbox::CreateSandboxRequest;
 use crate::lifecycle::create_options::{resolve_egress_policy, resolve_rate_limit, resolve_resource_override, first_duplicate};
 use crate::lifecycle::pool_claim::{claim_from_pool, resolve_pool_claim, MAX_POOL_CLAIM_ATTEMPTS, PoolClaim, PoolClaimGuard};
-use crate::metrics::CreatePhase;
+use crate::metrics::{CreatePhase, PoolClaimOutcome};
 use crate::sandbox::Sandbox;
 use crate::state::{can_attach_read_only, describe_drive_holders, AppState, AttachedDrive};
 use crate::tracing_util::spawn_blocking_in_current_span;
@@ -94,11 +94,13 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
                     match claim_from_pool(state, snapshot_id, pool_id, &request, egress.clone()).await {
                         Ok(id) => {
                             guard.commit();
+                            state.metrics.record_pool_claim(PoolClaimOutcome::Warm);
                             return Ok(id);
                         }
                         Err(e) => {
                             // `guard` drops uncommitted here, freeing the
                             // slot for the next loop iteration.
+                            state.metrics.record_pool_claim(PoolClaimOutcome::WarmFailed);
                             tracing::warn!(error = %e, "pool claim failed — retrying against the pool once more before falling back unattributed");
                         }
                     }
@@ -106,6 +108,7 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
                 PoolClaim::ColdSlot { pool_id } => {
                     // Room under max_count, nothing warm ready — cold-create
                     // below, attributed to this pool.
+                    state.metrics.record_pool_claim(PoolClaimOutcome::ColdSlot);
                     return create_sandbox_cold(state, request, Some(pool_id), vcpu_count, mem_size_mib, rate_limit, egress).await;
                 }
                 PoolClaim::NoPool => break, // no pool configured for this profile.
@@ -114,6 +117,19 @@ pub(crate) async fn create_sandbox_core(state: &Arc<AppState>, request: CreateSa
     }
 
     create_sandbox_cold(state, request, None, vcpu_count, mem_size_mib, rate_limit, egress).await
+}
+
+/// Boots one instance for a pool's background replenishment. Goes straight to
+/// the cold path: through `create_sandbox_core` the request would match the
+/// very pool being filled and resume that pool's own warm snapshot, so a
+/// pool wanting 2 would stay at 1 forever.
+pub(crate) async fn create_warm_instance(state: &Arc<AppState>, request: CreateSandboxRequest) -> Result<String, AppError> {
+    let vcpu_count = resolve_resource_override(request.vcpu_count, state.config.vcpu_count, state.config.max_vcpu_count, "vcpu_count")
+        .map_err(AppError::BadRequest)?;
+    let mem_size_mib =
+        resolve_resource_override(request.mem_size_mib, state.config.mem_size_mib, state.config.max_mem_size_mib, "mem_size_mib")
+            .map_err(AppError::BadRequest)?;
+    create_sandbox_cold(state, request, None, vcpu_count, mem_size_mib, None, None).await
 }
 
 /// Cold-boot mechanics. `pool_id` is `Some` when `create_sandbox_core`

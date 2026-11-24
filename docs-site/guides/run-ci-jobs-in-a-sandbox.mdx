@@ -40,7 +40,7 @@ jobs:
           command: python3 -m unittest discover -v tests
 ```
 
-The step fails with the command's exit code, streams its output, and exposes `sandbox-id` and `exit-code`. A final step always destroys the sandbox. Set `keep-on-failure: "true"` to keep it for debugging, then remove it with `kiln sandbox rm <id> --destroy`. Sandboxes carry `github-run` and `github-repo` tags, so `kiln sandbox ls` shows orphans.
+The step fails with the command's exit code, streams its output, and exposes `sandbox-id` and `exit-code`. A final step destroys the sandbox after a failure, a timeout or a cancelled run alike (observed on a GitHub-hosted runner). Set `keep-on-failure: "true"` to keep it for debugging, then remove it with `kiln sandbox rm <id> --destroy`. Sandboxes carry `github-run` and `github-repo` tags, so `kiln sandbox ls` shows orphans.
 
 ## Safe defaults
 
@@ -52,7 +52,8 @@ The step fails with the command's exit code, streams its output, and exposes `sa
 ## Limits
 
 - The workspace is uploaded as one `tar.gz` through the file API, so exclude build output with `exclude`.
-- The timeout is enforced by the client; the daemon has no exec kill, so the process stops when the sandbox is destroyed.
+- The timeout is enforced inside the sandbox with `timeout` from the image (exit code 124); an image without it only gets a client-side limit that abandons the stream.
+- A runner machine that dies mid-job runs no final step, so the sandbox lives on. Find it by its `github-run` tag.
 - The image needs `sh` and `tar`.
 
-The action's [reference](https://github.com/SumitKumar-17/sandkiln/blob/main/.github/actions/sandkiln-run/README.md) lists every input, and the [example](https://github.com/SumitKumar-17/sandkiln/tree/main/examples/github-actions) has both workflows and a sample project. The workflows were checked with `actionlint` and the action's script against a real daemon; they have not yet run on GitHub itself.
+The action's [reference](https://github.com/SumitKumar-17/sandkiln/blob/main/.github/actions/sandkiln-run/README.md) lists every input, and the [example](https://github.com/SumitKumar-17/sandkiln/tree/main/examples/github-actions) has both workflows and a sample project. The action ran on GitHub-hosted runners against a stub daemon on 2026-11-24 (wiring, exit codes, cleanup, token masking, cancellation); the real daemon and a microVM were only exercised from a developer machine, never from a hosted runner.

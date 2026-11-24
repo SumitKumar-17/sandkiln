@@ -5,6 +5,7 @@
 //! and capacity. The pure parts (`disk_usage`'s thresholds, `warnings`) are
 //! split out so they are unit-tested without a daemon.
 
+use crate::metrics::PoolClaimOutcome;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::Json;
@@ -51,6 +52,14 @@ pub struct IpPool {
     pub held_by_snapshots: usize,
 }
 
+/// Creates that matched a pool, by outcome, since the daemon started.
+#[derive(Serialize)]
+pub struct PoolClaims {
+    pub warm: u64,
+    pub warm_failed: u64,
+    pub cold_slot: u64,
+}
+
 #[derive(Serialize)]
 pub struct RootfsClones {
     pub reflink: u64,
@@ -68,6 +77,7 @@ pub struct Status {
     pub ip_pool: IpPool,
     pub sandboxes_created_total: u64,
     pub rootfs_clones: RootfsClones,
+    pub pool_claims: PoolClaims,
     pub disk: Vec<DiskUsage>,
     pub warnings: Vec<String>,
 }
@@ -179,6 +189,11 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<Status> {
         ip_pool,
         sandboxes_created_total: state.metrics.sandboxes_created(),
         rootfs_clones: clones,
+        pool_claims: PoolClaims {
+            warm: state.metrics.pool_claim_count(PoolClaimOutcome::Warm),
+            warm_failed: state.metrics.pool_claim_count(PoolClaimOutcome::WarmFailed),
+            cold_slot: state.metrics.pool_claim_count(PoolClaimOutcome::ColdSlot),
+        },
         disk,
         warnings,
     })

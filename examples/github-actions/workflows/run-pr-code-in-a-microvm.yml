@@ -18,7 +18,7 @@ jobs:
     # Skip fork pull requests: their runs have no access to the secrets.
     if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 

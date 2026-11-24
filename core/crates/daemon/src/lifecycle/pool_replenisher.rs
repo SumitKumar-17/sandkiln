@@ -4,11 +4,12 @@
 
 use crate::lifecycle::pool::PoolConfig;
 use crate::http::routes::sandbox::CreateSandboxRequest;
-use crate::lifecycle::create::create_sandbox_core;
+use crate::lifecycle::create::create_warm_instance;
 use crate::snapshots::ops::delete::delete_snapshot_by_id;
 use crate::snapshots::ops::take::{snapshot_and_stop, SnapshotStopError};
 use crate::state::AppState;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,6 +23,32 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(2);
 /// tags once a claim resumes this snapshot.
 const POOL_TAG_KEY: &str = "sandkiln.pool";
 
+/// Guest addresses a background replenish must leave free for real users:
+/// every warm instance holds one for as long as it waits.
+const RESERVED_GUEST_ADDRESSES: usize = 16;
+
+/// Free space under `state_dir` below which no new warm snapshot is written
+/// (each is a full-RAM file).
+const MIN_FREE_DISK_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+
+/// Why background replenishment should pause now, if it should. Pure so the
+/// thresholds are unit-tested; the caller supplies what the host reports.
+pub(crate) fn replenish_blocker(free_addresses: usize, free_taps: usize, free_disk_bytes: Option<u64>) -> Option<&'static str> {
+    if free_taps == 0 {
+        return Some("no free tap device");
+    }
+    if free_addresses <= RESERVED_GUEST_ADDRESSES {
+        return Some("guest addresses are running low");
+    }
+    match free_disk_bytes {
+        Some(free) if free < MIN_FREE_DISK_BYTES => Some("disk space is running low"),
+        _ => None,
+    }
+}
+
+/// Logs the transition into and out of a blocked state once, not every tick.
+static PAUSED: AtomicBool = AtomicBool::new(false);
+
 pub async fn run(state: Arc<AppState>) {
     loop {
         tokio::time::sleep(CHECK_INTERVAL).await;
@@ -34,6 +61,17 @@ pub async fn run(state: Arc<AppState>) {
 /// next tick continues. Configs are cloned out from under the lock before
 /// the slow boot+snapshot work below, rather than holding it locked.
 async fn replenish_once(state: &Arc<AppState>) {
+    let free_disk = crate::http::routes::status::disk_usage(&state.config.state_dir).map(|d| d.free_bytes);
+    let blocker = replenish_blocker(state.network.free_ip_count(), state.network.free_tap_count(), free_disk);
+    if PAUSED.swap(blocker.is_some(), Ordering::Relaxed) != blocker.is_some() {
+        match blocker {
+            Some(why) => tracing::warn!(reason = why, "pausing warm pool replenishment"),
+            None => tracing::info!("resuming warm pool replenishment"),
+        }
+    }
+    if blocker.is_some() {
+        return;
+    }
     let due: Vec<PoolConfig> = {
         let pools = state.pools.lock().unwrap();
         pools.values().filter(|p| p.needs_replenish()).map(|p| p.config.clone()).collect()
@@ -58,7 +96,7 @@ async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) {
         egress: None,
         env: HashMap::new(),
     };
-    let sandbox_id = match create_sandbox_core(state, request).await {
+    let sandbox_id = match create_warm_instance(state, request).await {
         Ok(id) => id,
         Err(e) => {
             tracing::warn!(pool_id = %config.id, error = %e, "failed to boot a warm instance for pool replenishment");
@@ -106,5 +144,23 @@ async fn replenish_one(state: &Arc<AppState>, config: PoolConfig) {
         if let Err(e) = delete_snapshot_by_id(state.clone(), snapshot_id).await {
             tracing::warn!(pool_id = %config.id, error = %e, "failed to clean up an orphaned warm snapshot from a deleted pool");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replenishment_runs_when_the_host_has_headroom() {
+        assert_eq!(replenish_blocker(200, 20, Some(50 << 30)), None);
+        assert_eq!(replenish_blocker(200, 20, None), None, "an unreadable disk does not block");
+    }
+
+    #[test]
+    fn each_shortage_pauses_replenishment_with_its_own_reason() {
+        assert_eq!(replenish_blocker(200, 0, Some(50 << 30)), Some("no free tap device"));
+        assert_eq!(replenish_blocker(RESERVED_GUEST_ADDRESSES, 20, Some(50 << 30)), Some("guest addresses are running low"));
+        assert_eq!(replenish_blocker(200, 20, Some(1 << 30)), Some("disk space is running low"));
     }
 }

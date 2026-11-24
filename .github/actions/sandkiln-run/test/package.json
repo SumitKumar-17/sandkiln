@@ -1,0 +1,9 @@
+{
+  "name": "sandkiln-run-test-stub",
+  "private": true,
+  "type": "module",
+  "description": "Dependencies of the stub daemon used to test the sandkiln-run action on hosted runners.",
+  "dependencies": {
+    "ws": "8.18.0"
+  }
+}
