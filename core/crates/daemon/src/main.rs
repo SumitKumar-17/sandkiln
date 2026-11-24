@@ -189,6 +189,7 @@ async fn async_main(loaded: config::Loaded) {
     // behind whether any of the three timeouts are actually set.
     tokio::spawn(lifecycle::idle_reaper::run(state.clone(), idle_timeout, auto_suspend_timeout, archive_timeout, archive_dir));
     tokio::spawn(lifecycle::pool_replenisher::run(state.clone()));
+    tokio::spawn(lifecycle::vm_watcher::run(state.clone()));
 
     let app = http::build_router(state.clone());
 

@@ -18,7 +18,7 @@ The crate is one file, `core/crates/store/src/lib.rs`, with everything public de
 | --- | --- | --- |
 | `HistoryStore` | struct | The handle: `open`, `open_in_memory`, and the five operations below |
 | `HistoryRecord` | struct (`Serialize`) | One row as returned to callers |
-| `EndReason` | enum | `Destroyed`, `Snapshotted`, `OrphanedByRestart` |
+| `EndReason` | enum | `Destroyed`, `Snapshotted`, `OrphanedByRestart`, `VmExited` |
 | `HistoryFilter` | struct (`Default`) | `live_only: Option<bool>`, `limit: Option<u32>` |
 | `DEFAULT_LIST_LIMIT` | `u32` const (100) | The cap applied when no limit is given |
 

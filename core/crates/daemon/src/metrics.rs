@@ -13,6 +13,7 @@ pub struct Metrics {
     sandboxes_created_total: AtomicU64,
     rootfs_clones_reflink: AtomicU64,
     rootfs_clones_copy: AtomicU64,
+    vm_exits: AtomicU64,
     /// Indexed by `PoolClaimOutcome as usize`.
     pool_claims: [AtomicU64; 3],
     boot_duration_ms: Histogram,
@@ -105,6 +106,7 @@ impl Metrics {
             sandboxes_created_total: AtomicU64::new(0),
             rootfs_clones_reflink: AtomicU64::new(0),
             rootfs_clones_copy: AtomicU64::new(0),
+            vm_exits: AtomicU64::new(0),
             pool_claims: [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)],
             // Spawn to InstanceStart measures ~13ms (criterion 12.6-14.0ms,
             // docs/benchmarks.md) — bucketed around that so a regression
@@ -149,6 +151,10 @@ impl Metrics {
         self.sandboxes_created_total.load(Ordering::Relaxed)
     }
 
+    pub fn record_vm_exit(&self) {
+        self.vm_exits.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_pool_claim(&self, outcome: PoolClaimOutcome) {
         self.pool_claims[outcome as usize].fetch_add(1, Ordering::Relaxed);
     }
@@ -185,6 +191,10 @@ impl Metrics {
         out.push_str("# TYPE rootfs_clone_total counter\n");
         out.push_str(&format!("rootfs_clone_total{{method=\"reflink\"}} {}\n", self.rootfs_clones_reflink.load(Ordering::Relaxed)));
         out.push_str(&format!("rootfs_clone_total{{method=\"copy\"}} {}\n", self.rootfs_clones_copy.load(Ordering::Relaxed)));
+
+        out.push_str("# HELP sandbox_vm_exits_total Sandboxes whose VM exited on its own (the guest shut down or crashed) and were cleaned up.\n");
+        out.push_str("# TYPE sandbox_vm_exits_total counter\n");
+        out.push_str(&format!("sandbox_vm_exits_total {}\n", self.vm_exits.load(Ordering::Relaxed)));
 
         out.push_str("# HELP pool_claims_total Creates that matched a pool, by outcome: warm (resumed a warm instance), warm_failed (a warm instance failed its health check), cold_slot (nothing warm yet, cold-created).\n");
         out.push_str("# TYPE pool_claims_total counter\n");
@@ -320,6 +330,9 @@ mod tests {
              # TYPE rootfs_clone_total counter\n\
              rootfs_clone_total{method=\"reflink\"} 0\n\
              rootfs_clone_total{method=\"copy\"} 0\n\
+             # HELP sandbox_vm_exits_total Sandboxes whose VM exited on its own (the guest shut down or crashed) and were cleaned up.\n\
+             # TYPE sandbox_vm_exits_total counter\n\
+             sandbox_vm_exits_total 0\n\
              # HELP pool_claims_total Creates that matched a pool, by outcome: warm (resumed a warm instance), warm_failed (a warm instance failed its health check), cold_slot (nothing warm yet, cold-created).\n\
              # TYPE pool_claims_total counter\n\
              pool_claims_total{result=\"warm\"} 0\n\

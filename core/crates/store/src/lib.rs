@@ -52,6 +52,10 @@ pub enum EndReason {
     /// row might have referred to; see the module doc comment for why
     /// that's true unconditionally, not a heuristic.
     OrphanedByRestart,
+    /// The guest's Firecracker process exited on its own (the guest shut
+    /// itself down or crashed) while the daemon was running; the daemon
+    /// noticed and tore the sandbox down.
+    VmExited,
 }
 
 impl EndReason {
@@ -60,6 +64,7 @@ impl EndReason {
             EndReason::Destroyed => "destroyed",
             EndReason::Snapshotted => "snapshotted",
             EndReason::OrphanedByRestart => "orphaned_by_restart",
+            EndReason::VmExited => "vm_exited",
         }
     }
 }
@@ -304,6 +309,16 @@ mod tests {
         assert_eq!(record.ended_at_unix, Some(unix_secs(ended_at) as u64));
         assert_eq!(record.end_reason.as_deref(), Some("snapshotted"));
         assert_eq!(record.final_snapshot_id.as_deref(), Some("snap-1"));
+    }
+
+    #[test]
+    fn record_ended_for_a_vm_that_exited_on_its_own() {
+        let store = HistoryStore::open_in_memory().unwrap();
+        store.record_created("gone", None, &HashMap::new(), None, SystemTime::now()).unwrap();
+        store.record_ended("gone", SystemTime::now(), EndReason::VmExited, None).unwrap();
+        let record = store.get("gone").unwrap().unwrap();
+        assert_eq!(record.end_reason.as_deref(), Some("vm_exited"));
+        assert!(record.final_snapshot_id.is_none());
     }
 
     #[test]

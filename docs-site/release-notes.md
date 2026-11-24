@@ -39,6 +39,7 @@ Work to find out whether the init-mode image (agent as PID 1) can become the def
 - PID 1 takes `LANG`/`LC_*` from the image's `/etc/locale.conf` or `/etc/default/locale` and falls back to `C.UTF-8`, so an init-mode guest sees the same locale as the systemd one (`init/environment.rs`).
 
 ### Fixed
+- A sandbox whose guest shuts itself down (`reboot -f`, `kill -TERM 1`) or crashes is cleaned up automatically within about a second instead of staying listed with a dead VM: it leaves `GET /sandboxes`, its tap and address return to the pools, calls to it answer 404, and its history row ends as `vm_exited` (new `EndReason`). `/metrics` gains `sandbox_vm_exits_total`.
 - Integration topics 18 and 25 no longer depend on a quiet daemon: the pool topic counts only snapshots tagged with its own pool (the default warm pool's churn leaked into a global diff), and the snapshot-latency check uses a 128 MiB sandbox so background snapshot writes cannot push it over its bound.
 - `build-universal-image.sh` failed in debootstrap on an Ubuntu 22.04 host because `/dev` was bind-mounted before it ran; the binds now come after it. `DEBOOTSTRAP_CACHE` keeps packages between retries.
 - The universal image's `/etc/resolv.conf` was a dangling symlink into `/run`, so an init-mode guest had no resolver at all (and a systemd one only its fallback servers). It is now a plain file naming the bridge gateway.

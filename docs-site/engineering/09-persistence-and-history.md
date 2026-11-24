@@ -83,7 +83,7 @@ stateDiagram-v2
   OrphanedByRestart --> [*]
 ```
 
-`EndReason` has exactly these three variants, stored as the strings `destroyed`, `snapshotted` and `orphaned_by_restart`. The first is written when a sandbox is torn down (`?keep=false`, the idle reaper's destroy fallback, or at shutdown for a jailed sandbox or a fork), the second when it is stopped through the persistent-by-default path, which includes `DELETE` with the default `keep`, manual snapshot, auto-suspend and the snapshot-everything drain at orderly shutdown. The third is the restart marker, described next.
+`EndReason` has four variants, stored as the strings `destroyed`, `snapshotted`, `orphaned_by_restart` and `vm_exited` (a guest that shut itself down or crashed, closed by the VM watcher). The first is written when a sandbox is torn down (`?keep=false`, the idle reaper's destroy fallback, or at shutdown for a jailed sandbox or a fork), the second when it is stopped through the persistent-by-default path, which includes `DELETE` with the default `keep`, manual snapshot, auto-suspend and the snapshot-everything drain at orderly shutdown. The third is the restart marker, described next.
 
 ## Startup orphan reconciliation
 

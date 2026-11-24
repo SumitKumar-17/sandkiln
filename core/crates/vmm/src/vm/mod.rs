@@ -261,6 +261,14 @@ impl Vm {
         put_checked(&mut api, "/mmds", metadata)
     }
 
+    /// `Some` once the Firecracker process has exited (the guest shut itself
+    /// down or crashed), without waiting. A process that cannot be inspected is
+    /// reported as still running, so a transient error never tears a live
+    /// sandbox down.
+    pub fn exit_status(&mut self) -> Option<std::process::ExitStatus> {
+        child_exit_status(&mut self.child)
+    }
+
     pub fn stop(self) -> io::Result<()> {
         self.stop_inner(true)
     }
@@ -321,6 +329,11 @@ fn put_checked(api: &mut ApiClient, path: &str, body: &serde_json::Value) -> io:
 /// which boots a fresh Firecracker process the same way `boot` does.
 pub(crate) fn console_log_path(id: u64) -> PathBuf {
     PathBuf::from(format!("/tmp/sandkiln-fc-{id}.log"))
+}
+
+/// `try_wait` that treats an error as "still running".
+fn child_exit_status(child: &mut Child) -> Option<std::process::ExitStatus> {
+    child.try_wait().ok().flatten()
 }
 
 /// Two independent handles to the console log file for the child's
@@ -468,6 +481,25 @@ mod tests {
         assert!(connect_api_with_retry(&path, Duration::from_secs(2)).is_ok());
         drop(binder.join().unwrap());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn child_exit_status_reports_an_exited_process_and_not_a_running_one() {
+        let mut running = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        assert!(child_exit_status(&mut running).is_none());
+        running.kill().unwrap();
+        running.wait().unwrap();
+
+        let mut short = std::process::Command::new("sh").args(["-c", "exit 7"]).spawn().unwrap();
+        let started = Instant::now();
+        let status = loop {
+            if let Some(s) = child_exit_status(&mut short) {
+                break s;
+            }
+            assert!(started.elapsed() < Duration::from_secs(5), "process never reported as exited");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(status.code(), Some(7));
     }
 
     #[test]
