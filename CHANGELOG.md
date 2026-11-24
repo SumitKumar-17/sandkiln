@@ -12,6 +12,20 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Snapshots no longer hold a tap device — 2026-11-24
+
+### Fixed
+- A held snapshot kept its tap device, so with a 32-tap pool the 33rd snapshot made every create fail, and `DELETE /sandboxes/:id` keeps a snapshot by default. The network lease is now two: an IP lease (kept by a snapshot, because the guest's address is frozen in its memory image) and a tap lease (held only by a running VM). Snapshot returns the tap; resume, fork, pool claim and checkpoint restore lease any free tap and repoint the restored interface with Firecracker's `network_overrides`. Held snapshots are now bounded by the sandbox /24 (253 addresses), not the tap pool. Finding 29 in `docs/findings.md`.
+- Egress rules follow the guest across a tap change: the per-tap chain is removed when a snapshot is taken and applied to the new tap on resume, fork, claim and restore.
+
+### Changed
+- Creating, resuming or forking when every tap is in use is now `503` (retry later) instead of `500`.
+- `GET /status`: `tap_pool.in_use` and a new `ip_pool` (`size`, `free`, `held_by_snapshots`), warnings when taps or sandbox IPs run low. `tap_pool` now counts running sandboxes only.
+- Restoring a retired checkpoint claims its guest IP atomically from the free pool (a `409` names the holder); the per-tap pending-restore set is gone. A tap name saved by an older daemon in a snapshot's `meta.json` is ignored.
+
+### Added
+- Integration topic `29-snapshots-hold-no-taps`: more snapshots than taps, concurrent resumes, fork, and (with `SANDKILN_INTEGRATION_TEST_EGRESS_PROBE_IP`) deny_all after a tap change.
+
 ## Guest agent init mode — 2026-11-24
 
 ### Added

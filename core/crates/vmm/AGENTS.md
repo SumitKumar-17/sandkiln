@@ -47,7 +47,8 @@ behavior belongs here, not in `daemon`.
   guest agent, Firecracker's device model answers
   `169.254.169.254` directly; errors loudly if `metadata` is set without
   `network`.
-- **`vm/snapshot.rs`** — `Vm::pause`/`snapshot`/`resume`, `ResumeConfig`.
+- **`vm/snapshot.rs`** — `Vm::pause`/`snapshot`/`resume`, `ResumeConfig`
+  (`tap_override` repoints `eth0` via `network_overrides` on snapshot load).
   `resume` always spawns directly — jailer covers `Vm::boot` only;
   `daemon`'s `snapshots/ops/take.rs` (`snapshot_and_stop`) refuses to snapshot a
   jailed sandbox for this reason.
@@ -62,8 +63,15 @@ behavior belongs here, not in `daemon`.
   every create unless `jailer` itself is made setuid-root first
   (`docs-site/self-hosting/manual-setup.mdx`); confirmed live via `Operation not permitted`
   chown-ing a hard-linked file into the chroot before that step.
-- **`network.rs`** — `NetworkManager`/`Lease`: tap pool, bridge
-  attachment, IP allocation, port isolation. Pool exists (not on-demand
+- **`network.rs`** — `NetworkManager`: tap pool, bridge
+  attachment, IP allocation, port isolation. The identity is two leases with
+  different lifetimes: `IpLease` (guest IP/MAC/host octet; owned by a running
+  sandbox *and* a held snapshot) and `TapLease` (a pooled tap; owned only while
+  a VM runs); `Lease` is the pair for a running VM. `detach` returns the tap
+  and keeps the IP (snapshotting), `release` returns both, `try_reserve_ip`
+  claims a frozen identity atomically (checkpoint restore), `reserve_ip` is the
+  tolerant startup variant. `PoolExhausted` rides in the `io::Error` so the
+  daemon can answer `503`. Pool exists (not on-demand
   creation) because ambient `CAP_NET_ADMIN` covers netlink, not the
   `TUNSETIFF` ioctl. `uplink()` exposes the uplink interface so
   `egress.rs` scopes rules to it the same way the bridge-wide `FORWARD`
@@ -83,7 +91,8 @@ behavior belongs here, not in `daemon`.
   chain reset. Only the two `FORWARD`-touching rules stay individual
   `iptables` calls (`--noflush` can't touch `FORWARD` safely).
   `validate_cidr()` is string-format-only (`Ipv4Addr::from_str` + manual
-  prefix bounds, no new dependency). Tied to the lease, not the VM — see
+  prefix bounds, no new dependency). Keyed by the tap: removed when a
+  snapshot returns its tap and re-applied to the new tap at resume — see
   `sandkiln-daemon/AGENTS.md` for call sites. IPv4 only.
 - **`vsock_client.rs`** — host-side vsock via Firecracker's UDS bridging
   (`CONNECT <port>\n` handshake, then raw bytes). `open_pty` is the same
@@ -145,7 +154,8 @@ harness. Benchmarks: `benches/vm_lifecycle.rs` (criterion), env vars in
   `spawn_blocking` — this crate itself is sync and doesn't touch Tokio,
   but re-read root `AGENTS.md` §12 if that changes.
 - `NetworkManager` doesn't track which sandbox holds which lease —
-  that mapping lives in `daemon`'s `Sandbox` tracking.
+  that mapping lives in `daemon`'s `Sandbox` tracking. A snapshot's saved tap
+  name is meaningless; never reserve a tap by name from saved metadata.
 - Privileged ops (`ip`/`iptables`/`bridge`) run via
   `std::process::Command`, not a netlink library — deliberate, matches
   the shell scripts exactly. Don't switch to `rtnetlink` without

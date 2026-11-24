@@ -20,9 +20,9 @@ src/
                      mounts, drives, images, pool, snapshot, snapshot_history, metrics, ...)
   lifecycle/         create.rs create_options.rs stop.rs idle_reaper.rs pool.rs pool_claim.rs
                      pool_replenisher.rs shutdown.rs
-  snapshots/         held.rs + held/reconcile.rs (live resumable snapshots) retired.rs (lease-free
+  snapshots/         held.rs + held/reconcile.rs (live resumable snapshots) retired.rs (IP-free
                      checkpoints) layout.rs (shared on-disk layout) ops/ (take resume fork delete archive)
-  state.rs + state/  AppState; holders.rs (who holds a drive/image/tap) naming.rs (names + name locks)
+  state.rs + state/  AppState; holders.rs (who holds a drive/image/guest IP) naming.rs (names + name locks)
   sandbox.rs storage.rs metrics.rs log_session.rs tracing_util.rs
 ```
 
@@ -87,9 +87,12 @@ validation and response shaping; the lifecycle logic lives in `lifecycle/` and
   ("who holds this" across live sandboxes + held snapshots, the
   mechanism that prevents double-attaching a drive); `pools` (in-memory
   only, not reconciled from disk — see `lifecycle/pool.rs`); `retired_snapshots`
-  (time-travel restore) plus `tap_device_holder()`, the same ownership
-  check extended to cover a lease-less retired checkpoint and an
-  in-flight restore. `image_holder`/`tap_device_holder` share a
+  (time-travel restore) plus `guest_ip_holder()`, which names who holds a
+  guest IP (live sandbox or held snapshot) for a `409` message. The
+  exclusion itself is `NetworkManager::try_reserve_ip`, atomic with the
+  free pool, so two sibling checkpoints cannot both restore. A held
+  snapshot holds an IP and **no tap**; only a running VM holds a tap.
+  `image_holder`/`guest_ip_holder` share a
   `first_match()` walk; `drive_holders()` stays separate since it
   returns *every* matching holder (multiple read-only holders are
   legitimate), not just the first. Also owns `tunnels`
@@ -97,11 +100,12 @@ validation and response shaping; the lifecycle logic lives in `lifecycle/` and
   handoff between `POST /sandboxes/:id/tunnel` (registers, stores the
   receiver) and the matching `GET .../tunnel/:tunnel_id/ws` (takes it,
   `409` if already taken or never created) — see `http/routes/tunnel.rs`.
-- **`sandbox.rs`** — `Sandbox`: id, `Vm` handle, `Lease`, rootfs path,
+- **`sandbox.rs`** — `Sandbox`: id, `Vm` handle, `Lease` (IP + tap) or, for a fork,
+  `fork_network` (just its tap; the snapshot keeps the IP), rootfs path,
   tags, timestamps, `image_id` (`None` = daemon default rootfs),
   `jail_id`, `name`, `pty_session_count` (`Arc<AtomicU32>`, survives past
-  the lock it was incremented under), `egress` (`None` for a fork — tied
-  to the lease, which the snapshot owns, not the forked record),
+  the lock it was incremented under), `egress` (`None` for a fork — its chain
+  is keyed by the fork's tap and removed with it via `fork_network`),
   `parent_snapshot_id` (lineage; a **separate** field from
   `source_snapshot_id` — conflating them was a real bug: `source_snapshot_id.is_some()`
   is what refuses re-snapshotting a fork, and must stay `None` on resume
@@ -191,24 +195,24 @@ validation and response shaping; the lifecycle logic lives in `lifecycle/` and
   `cfg(test)` fixture (`TempDir`, `test_network`).
 - **`snapshots/retired.rs`** — `RetiredSnapshot` (time-travel restore):
   resuming retires a snapshot here instead of deleting it, restorable
-  repeatedly. Holds a bare `NetworkConfig`, not a live `Lease` — nothing
+  repeatedly. Holds a bare `GuestAddr` + host octet, not an `IpLease` — nothing
   is reserved from the free pool just by sitting in history, only at
-  actual restore time, gated by `tap_device_holder`.
+  actual restore time via `try_reserve_ip`. No tap is recorded.
 - **`http/routes/snapshot_history.rs`** — history list/restore/delete.
   `restore_snapshot_history_by_id` refuses (`409`) if the checkpoint's
-  network identity is already live/held/mid-restore, else clones rootfs
-  fresh and reserves a new lease. Resulting sandbox:
+  guest IP is already live/held (or claimed by a concurrent restore), else clones rootfs
+  fresh, claims the IP and leases a free tap. Resulting sandbox:
   `source_snapshot_id: None`, `parent_snapshot_id: Some(checkpoint)` —
   restoring doesn't consume it.
 - **`snapshots/ops/`** — the real mechanics, one file per operation, all
   `pub(crate)` and reused everywhere else in the crate so there's exactly one
   definition of each: `take.rs` (`snapshot_and_stop`, `check_snapshottable`,
-  `SnapshotStopError`), `resume.rs` (`resume_snapshot_by_id`, `resume_vm`,
-  `retire_snapshot_files`), `fork.rs` (`fork_snapshot_by_id`), `delete.rs`
+  `SnapshotStopError`), `resume.rs` (`resume_snapshot_by_id`, `resume_vm` — leases the tap and
+  returns it with the `Vm`, `retire_snapshot_files`), `fork.rs` (`fork_snapshot_by_id`), `delete.rs`
   (`delete_snapshot_by_id`), `archive.rs` (`archive_snapshot_by_id`,
   `ArchiveError`); `mod.rs` holds `check_no_live_fork`, the guard behind
   resume/fork/delete. `check_snapshottable` refuses a jailed sandbox (can never
-  be resumed correctly) or a fork (doesn't own its lease outright).
+  be resumed correctly) or a fork (doesn't own its IP outright).
   `resume_snapshot_by_id`'s `retain_history: bool` defaults to retiring
   (not deleting) the checkpoint — falls back to delete-and-reuse as a
   loud warning, not a fatal error, if retiring fails after the VM already

@@ -19,6 +19,7 @@ Run `scripts/preflight-check.sh` first; it reports most of these before they bit
 
 ## Sandboxes
 
+- **Creating or resuming a sandbox returns `503` "no free tap devices left in the pool".** Every tap is plugged into a running sandbox (held snapshots do not use one). `GET /status` shows `tap_pool.in_use`; stop sandboxes you no longer need, or raise `tap_pool_size` after re-running `create-tap-pool.sh`. If the message is "no free IPs left in the sandbox subnet" instead, held snapshots are the cause: each keeps one of the 253 addresses, and `ip_pool.held_by_snapshots` says how many. Delete snapshots you will not resume.
 - **Create works, but `exec`, `read-file` or `write-file` time out or fail with a vsock connect error.** The guest agent is not baked into the rootfs `base_rootfs` points at. Run `sudo -E scripts/preflight-check.sh --root-checks` to confirm, then see [Base image and guest agent](/self-hosting/manual-setup#base-image-and-guest-agent).
 - **A plain `exec` returns `504`.** The command ran past `exec_timeout_secs` (default 600). The process keeps running in the guest; raise the setting or use streamed exec.
 - **Sandboxes boot but have no outbound network.** Confirm `uplink_iface` detected the right interface (`ip route show default`), and that the DNS forwarder is running (`systemctl status sandkiln-dnsmasq`, or `scripts/host-setup/start-dns-proxy.sh` by hand). Outbound IP connectivity and DNS resolution are independent failure modes, so check both.
