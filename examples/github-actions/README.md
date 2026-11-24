@@ -54,9 +54,17 @@ run cleanup
 
 ## Verified, and not
 
-Verified against a real daemon: success, failure and timeout exit codes,
-cleanup leaving the sandbox list unchanged, deny-all egress, and `actionlint`
-on the workflows. Not verified: a run on GitHub itself, and authenticated
+Verified against a real daemon (from a developer machine): success, failure
+and timeout exit codes, cleanup leaving the sandbox list unchanged, deny-all
+egress, and `actionlint` on the workflows.
+
+Verified on GitHub-hosted runners against a stub daemon on 2026-11-24, still not
+against a real microVM: the action's install of `kiln` from npm, outputs, exit
+code propagation (including 124), cleanup after a failure and a cancelled
+run, masking of the auth token, and early failure on bad input
+([`test-action.yml`](../../.github/workflows/test-action.yml)). Not verified:
+the example workflows themselves (they need your daemon and secrets), a
+hosted runner reaching a real daemon over the internet, and fork pull
 requests. See the design note's verification record.
 
 ## Security notes

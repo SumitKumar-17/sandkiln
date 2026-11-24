@@ -12,6 +12,17 @@ release yet; where a change only affects one of those, it's called out
 explicitly instead of implying it shipped to a package registry. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## sandkiln-run tested on hosted runners — 2026-11-24
+
+### Added
+- `.github/workflows/test-action.yml` runs the action on GitHub-hosted runners against a stub daemon (`.github/actions/sandkiln-run/test/stub-daemon.mjs`): success, failing command (exit 3), timeout (124), cleanup recorded by the stub, auth token masking, bad input (exit 2), and a manual cancellation probe. The stub tests the action's wiring, not microVM behaviour.
+
+### Changed
+- The action's `cli-version` default is `0.14.0` (was `0.12.0`), and it uses `actions/setup-node@v5`; the example workflows use `actions/checkout@v5` (Node 24 runtimes; v4 raised a deprecation warning on the runner).
+
+### Verified
+- A cancelled run still runs the action's final step and destroys the sandbox (plain cancel only). Documented in the action README and the CI integration note.
+
 ## Exec timeout that kills the command — 2026-11-24
 
 ### Added

@@ -142,8 +142,9 @@ this repository pretends to do it.
   no network unless the workflow asks for them.
 - Cleanup is a final `if: always()` step. Composite actions have no post
   step, so the sandbox lives until the action's last step, not the job's end.
-  A cancelled job should still run it (unverified here); a runner machine that dies does not, so tag
-  every sandbox (`github-run`, `github-repo`) to make orphans findable.
+  A cancelled job does run it (observed on a hosted runner, see the
+  verification record); a runner machine that dies cannot, so tag every
+  sandbox (`github-run`, `github-repo`) to make orphans findable.
 
 ## Verification record
 
@@ -165,18 +166,45 @@ Verified on the dev box against the real daemon and microVMs, 2026-11-24:
   deliberately wrong expression. `.github/actions/sandkiln-run/test/test-run.sh`
   passes offline against a stand-in `kiln` (seven scenarios).
 
-Not verified, because it needs GitHub:
+Verified on GitHub-hosted runners (`ubuntu-latest`, runner 2.338.2), 2026-11-24, with
+`.github/workflows/test-action.yml` and a stub daemon on `127.0.0.1` (a stub:
+it runs commands as plain processes, so it tests the action's wiring and not
+microVM behaviour; see `.github/actions/sandkiln-run/test/README.md`):
 
-- The workflows and the action running on a real GitHub runner, including
-  `actions/setup-node`, `$GITHUB_PATH`, masking, `if: always()` on a
-  cancelled job, and the `secrets` context.
-- Authenticated use (`auth-token`): the box daemon runs without an
-  `auth_token`, so the bearer path and masking were not exercised end to end.
-- Any hosted-runner KVM behavior, topology C, and fork pull requests.
+- `actions/setup-node`, installing `sandkiln-cli` from npm into
+  `$RUNNER_TEMP` and putting it on `PATH` through `$GITHUB_PATH`, for both
+  0.12.0 and 0.14.0.
+- Success (exit 0, the workspace visible to the command, `.git` absent,
+  output arriving live two seconds apart), failure (exit 3 propagated, step
+  failed), timeout (124), and a `DELETE ?keep=false` recorded by the stub for
+  every one of them.
+- The `secrets` context and masking: the token shows as `***` in the raw job
+  log (`gh run view --log`) including in the step header, every request
+  carried it, and a wrong token was refused with 401 and created nothing.
+- Bad egress, plain `http://` to a non-loopback host and a non-numeric
+  timeout each fail the step with exit code 2 before any request.
+- Cancellation: `gh run cancel` while the command was blocked on `sleep 600`.
+  The main step ended `cancelled` about 12 seconds later, the final
+  `if: always()` step then ran and destroyed the sandbox, and the run ended
+  `cancelled`.
+- Incidental: `actions/checkout@v4` and `setup-node@v4` run on Node 20,
+  which the runner forces onto Node 24 with a deprecation warning, so the
+  action and the examples now use `@v5`.
+
+Not verified, because it needs more than the stub or a hosted runner:
+
+- Any microVM on a hosted runner (KVM availability, topology C).
+- A hosted runner reaching a real `sandkilnd` over the internet, and the
+  real daemon's behaviour for the stub's simplifications (the stub accepts
+  any image, has no egress policy and no `timeout` guest binary of its own;
+  it uses the runner's).
+- A second (force) cancel, a job `timeout-minutes` expiry, a dying runner,
+  and fork pull requests.
 
 ## Open questions
 
 - Does a hosted runner boot a Firecracker guest at all, and at what latency?
+- Does a force cancel or a job timeout still run the final step? Only a plain cancel was tried.
 - A published guest kernel/rootfs release would unlock C; not planned.
 - Streamed exec (`exec-stream`) has no daemon-side timeout, so the action
   relies on `timeout` inside the guest. A `timeout_secs` on the stream
