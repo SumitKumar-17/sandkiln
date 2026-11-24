@@ -172,22 +172,49 @@ under full-suite concurrency (4/4 in isolation); post-resume
 `vsock ... Connection refused` seen in pool-claim health checks. Likely a
 resume-readiness race. Probably the same family as finding 20.
 
-### 20. Rare post-resume guest kernel panic. OPEN
-- Symptom: in the full 4-way-parallel integration suite, 2-3 of about 320
-  checks fail because a freshly resumed guest kernel panics
-  (`Attempted to kill the idle task!`, about 20ms after restore) and its
-  Firecracker exits.
-- Evidence: 160/160 resume and re-snapshot cycles were clean in isolated and
-  4-way-parallel loops, and every topic subset passes, so a specific
-  concurrent condition is needed. Same family as the pool-claim
-  health-check fallback (an earlier console log showed an early-boot
-  divide-by-zero trap in the console driver, plausibly TSC or clock-source
-  drift between snapshot and restore; unconfirmed).
-- Root cause: not found. Finding 21's disk bug was a separate cause and may
-  have contributed to old resume failures.
-- Next: capture a failing snapshot's `state.snap`/`mem.bin` and the host
-  load at the time; test with a CPU template; test other Firecracker and
-  kernel versions.
+### 20. Post-resume guest crash after an early snapshot. FIXED
+- Symptom: a resumed guest died about 0.55s after resume (Firecracker exited,
+  the vsock call got `Connection refused` for its whole 5s retry window), so
+  pool claims fell back to a cold create and `18-pool` flaked.
+- Evidence: every failing resume logged `KVM_KVMCLOCK_CTRL call failed` at
+  snapshot load; no healthy resume did. With 6 parallel snapshot-then-resume
+  loops, a snapshot taken the instant `POST /sandboxes` returned killed 25 of
+  55 resumes (45-53% across runs). The same loop with 0.1s, 0.2s, 0.3s, 0.4s,
+  0.7s or 1s of delay first killed 0 of 60 per round; 3 rounds of the fixed
+  build with no delay killed 0 of 180.
+- Root cause: the guest was paused while still settling right after its first
+  command; the snapshot then lacks the guest clock state Firecracker re-arms
+  on load. The earlier "kernel panic" attribution and the TSC guess were wrong
+  about the mechanism: there was no panic text, the VMM simply exited.
+- Fix: `Vm::pause` waits until the guest has been running 500ms
+  (`MIN_GUEST_AGE_BEFORE_PAUSE`); only a snapshot taken right after create
+  waits, by at most a few hundred ms. Full suite went from 343/346 to 345/346,
+  the remaining miss being finding 25.
+- Not found: the exact guest-side state. If it recurs, capture a failing
+  `state.snap` and compare against a healthy one.
+
+### 25. MMDS refresh after resume always failed. FIXED
+`Vm::update_metadata` re-applied `PUT /mmds/config` after every pool claim;
+Firecracker rejects that on a started VM ("not supported after starting the
+microVM"), so claimed sandboxes kept the pool's placeholder metadata while an
+old comment blamed a load-related race and a retry loop hid it. It now writes
+only `PUT /mmds` (config falls back only if that is refused). `18-pool` passed
+3 of 3 runs afterwards.
+
+### 26. Per-VM tunnel listener leaked a thread and a file descriptor. FIXED
+`tunnel::listen` spawned an accept loop per VM that never ended, and `cleanup`
+only deleted the socket file. After a few hundred VMs the daemon hit its
+1024-descriptor soft limit ("Too many open files") with zero sandboxes live.
+`cleanup` now flags the loop and wakes it; a unit test proves the thread exits.
+The daemon also raises its open-file soft limit to the hard limit at startup.
+
+### 27. Pool claim bookkeeping under full-suite load. OPEN
+One of two full runs after the finding 20 fix failed two `18-pool` checks
+(delete did not find its own warm snapshot; `claimed` read 1 with both
+sandboxes stopped); the other run was 346/346 and isolated runs are 3/3. It
+points at pool slot accounting (`record_claim`/`record_release`) racing a
+fallback path, not at resume health. Next: reproduce with the parallel loop
+plus pool create/claim/stop, log claim and release per pool id.
 
 ### 8. Stale copies on the remote box. Note
 The remote box holds stale copies (`docs/architecture`, worktrees).

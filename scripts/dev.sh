@@ -25,6 +25,9 @@
 #                                 default to the standard ~/sandkiln-tools layout if unset —
 #                                 override any of them to point elsewhere)
 #
+# Documentation:
+#   docs-check                  scripts/dev-tools/check-docs.sh (links, docs.json, wording, size budgets)
+#
 # Against a running daemon:
 #   integration-test [base-url]                       scripts/integration-test.sh
 #   load-test [concurrency] [iterations] [base-url]    scripts/load-test.sh
@@ -126,6 +129,9 @@ case "$subcommand" in
     ;;
   integration-test)
     exec "$SCRIPT_DIR/integration-test.sh" "$@"
+    ;;
+  docs-check)
+    exec "$SCRIPT_DIR/dev-tools/check-docs.sh" "$@"
     ;;
   load-test)
     exec "$SCRIPT_DIR/load-test.sh" "$@"

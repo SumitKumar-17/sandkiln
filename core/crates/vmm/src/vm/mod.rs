@@ -241,17 +241,20 @@ impl Vm {
         result
     }
 
-    /// Updates this VM's MMDS content in place — for when a sandbox's
-    /// real identity (id/name/tags) is only known after it's running,
-    /// e.g. resumed from a pre-warmed pool snapshot. Redoes the full
-    /// `PUT /mmds/config` + `PUT /mmds` rather than a bare `PATCH`: a
-    /// resumed VM's MMDS store comes back uninitialized even though it
-    /// was configured pre-snapshot, so `PATCH` alone fails (Engineering
-    /// Notebook: "MMDS forgets who you are after a resume"). Fails if
-    /// this VM has no network interface — shouldn't happen, every
-    /// sandbox is networked.
+    /// Updates this VM's MMDS content in place: for when a sandbox's real
+    /// identity (id/name/tags) is only known after it is running, e.g.
+    /// resumed from a pre-warmed pool snapshot. Writes the data with
+    /// `PUT /mmds`, which Firecracker accepts on a running VM and which
+    /// keeps the MMDS configuration restored from the snapshot. Only if that
+    /// is refused is the configuration re-applied first: Firecracker rejects
+    /// `PUT /mmds/config` once the VM has started ("not supported after
+    /// starting the microVM"), so that is a fallback, not the normal path
+    /// (it failed every time when used unconditionally after resume).
     pub fn update_metadata(&self, metadata: &serde_json::Value) -> io::Result<()> {
         let mut api = ApiClient::connect(&self.api_socket)?;
+        if put_checked(&mut api, "/mmds", metadata).is_ok() {
+            return Ok(());
+        }
         put_checked(&mut api, "/mmds/config", &serde_json::json!({ "network_interfaces": ["eth0"], "version": "V2" }))?;
         put_checked(&mut api, "/mmds", metadata)
     }

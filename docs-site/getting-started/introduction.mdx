@@ -12,6 +12,45 @@ sandkiln is a compute primitive for safely running untrusted or AI-generated cod
 - **Python SDK** (`sandkiln` on PyPI): mirrors the JS SDK exactly.
 - **CLI** (`sandkiln-cli` on npm, installs the `kiln` command): every operation the SDKs expose, from the command line.
 
+## What it can do
+
+**Isolation and security**
+- One Firecracker microVM per sandbox: separate kernel, rootfs and NIC, enforced by KVM.
+- The daemon runs unprivileged with only ambient `CAP_NET_ADMIN`; optional Firecracker jailer hardening (opt-in, not yet proven on real hardware).
+- Bearer-token auth compared in constant time, and daemon-side input validation (for example path-traversal checks on drive ids).
+- Sandbox-to-sandbox traffic is blocked at the bridge with port isolation, not only at the API.
+
+**Speed**
+- Reflink-cloned rootfs: cold `POST /sandboxes` in about 18ms on a reflink filesystem.
+- Resume from snapshot in about 4ms at the VMM layer; pre-warmed snapshot pools skip per-create setup.
+
+**Snapshots and time travel**
+- Snapshot, resume and fork the full memory and disk state; stopping keeps a resumable snapshot by default, durable across daemon restarts.
+- Named sandboxes (`get-or-create`, look up by name), snapshot lineage and time-travel restore from retired checkpoints (HTTP API only today).
+- Orderly shutdown: on `SIGTERM` the daemon drains requests and snapshots every live sandbox.
+
+**Networking and egress policy**
+- Per-sandbox tap device from a pre-created pool, shared bridge, NAT, and a guest DNS forwarder.
+- Per-sandbox egress policy (`allow_all` or `deny_all` with allow and deny CIDRs) applied as an iptables chain and preserved across snapshot, resume and fork.
+
+**Drives and mounts**
+- Persistent drives that outlive a sandbox, with read-only sharing and conflict detection.
+- Custom and managed rootfs images; S3-compatible remote storage mounts (FUSE and rclone).
+
+**Execution**
+- Exec with exit codes and env, a full file API (read, write, chmod, rename, symlink, listing), streamed background exec with logs, and an interactive PTY over WebSocket.
+
+**Pools, previews and tunnels**
+- Pre-warmed snapshot pools with `max_count` and queueing.
+- Dev-server preview proxy at `/sandboxes/:id/preview/:port`, and a local tunnel that exposes a service on your machine to code inside a sandbox (Node SDK and CLI).
+- Idle lifecycle: auto-suspend, auto-destroy and archive, configured by the daemon operator.
+
+**Observability**
+- Request ids, Prometheus-style `/metrics` (create phase timings, rootfs clone method), durable lifecycle history in sqlite.
+- `GET /status` (counts, tap pool, disk headroom, warnings) and `kiln status`, which exits 2 when there are warnings.
+
+Planned, not built: OCI image conversion, multi-node, snapshot encryption at rest, per-caller auth scoping. The live done, partial and planned list is in the [roadmap](https://github.com/SumitKumar-17/sandkiln/blob/main/ROADMAP.md).
+
 ## Where to go from here
 
 - New to sandkiln? Start with [Self-hosting quickstart](/getting-started/self-hosting) to get a daemon running, then pick your language: [JS/TS](/getting-started/js), [Python](/getting-started/python), or the [CLI](/getting-started/cli).

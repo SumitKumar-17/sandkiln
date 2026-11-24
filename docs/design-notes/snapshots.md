@@ -1,5 +1,7 @@
 # Persistence and snapshotting
 
+![Sandbox lifecycle: create, run, snapshot, stop, then resume, fork or time-travel restore](../images/lifecycle.svg)
+
 A sandbox is a persistent identity (name, config, filesystem state); a
 session is one running microVM of it. Resumed daily for a week it is one
 sandbox, seven sessions.

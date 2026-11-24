@@ -27,7 +27,7 @@ behavior belongs here, not in `daemon`.
   restored CPU/timer state vs. timing-sensitive init) — measured at
   roughly 1-in-3 to 2-in-3 resumes on this box, handled by a real
   post-resume health check (`daemon`'s `pool` module), not just
-  documented. `update_metadata` redoes the full `PUT /mmds/config` + `PUT
+  documented. `update_metadata` writes `PUT /mmds` (re-applying `PUT /mmds/config` only as a fallback, since Firecracker rejects it on a started VM); it used to redo `PUT /mmds/config` + `PUT
   /mmds` rather than a bare `PATCH` — a resumed VM's MMDS store comes
   back uninitialized, and `PATCH` alone fails on it. `force_stop` skips
   `stop`'s "sync before kill" call, for a VM already known dead — without
