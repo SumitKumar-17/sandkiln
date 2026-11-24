@@ -3,9 +3,9 @@
 //!
 //! `drive_holders` (every live sandbox, held snapshot and retired checkpoint
 //! referencing a drive; several read-only holders are legitimate),
-//! `image_holder` and `tap_device_holder` (the first holder, via
-//! `first_match`), and the pending-reservation counters that cover an
-//! in-flight image boot or tap restore before its record is visible.
+//! `image_holder` and `guest_ip_holder` (the first holder, via
+//! `first_match`), and the pending-reservation counter that covers an
+//! in-flight image boot before its record is visible.
 
 use super::AppState;
 
@@ -69,44 +69,23 @@ impl AppState {
             })
     }
 
-    /// Where `tap_device` is held: a live sandbox's lease, a held
-    /// snapshot's (the `Lease` stays in the `Snapshot` whether or not it's
-    /// lent to a live fork — see `Snapshot::forked_into`), or another
-    /// retired checkpoint mid-restore. `None` means free to reserve.
+    /// Who presents `guest_ip` on the bridge or owns it: a live sandbox's
+    /// lease or a held snapshot's `IpLease` (kept whether or not a fork of it
+    /// is running). `None` means nothing live or held has it.
     ///
-    /// The guard `restore_snapshot_history` needs before calling
-    /// `NetworkManager::reserve`: unlike `snapshot::reconcile`'s startup-
-    /// only call (nothing else can be live yet), a restore can race a
-    /// real live user of the same tap, and `reserve` itself doesn't check
-    /// for that — it's built for the startup case and will proceed with
-    /// only a warning otherwise.
-    pub fn tap_device_holder(&self, tap_device: &str) -> Option<String> {
+    /// Only for explaining a refusal. The exclusion itself is
+    /// `NetworkManager::try_reserve_ip`, atomic with the free pool, so two
+    /// concurrent restores of one lineage (checkpoints share a frozen IP) can
+    /// never both win; this walk could not close that race on its own. It
+    /// replaced a per-tap "pending restore" set: no tap is frozen into a
+    /// checkpoint any more, so only the IP needs exclusion.
+    pub fn guest_ip_holder(&self, guest_ip: std::net::Ipv4Addr) -> Option<String> {
         let sandboxes = self.sandboxes.lock().unwrap();
         let snapshots = self.snapshots.lock().unwrap();
         first_match(sandboxes.values(), "sandbox", |s| s.id.as_str(), |s| {
-            s.network.as_ref().is_some_and(|n| n.config.tap_device == tap_device)
+            s.network.as_ref().is_some_and(|n| n.config.guest_ip == guest_ip)
         })
-        .or_else(|| first_match(snapshots.values(), "snapshot", |s| s.id.as_str(), |s| s.network.config.tap_device == tap_device))
-        .or_else(|| {
-            self.pending_tap_restores
-                .lock()
-                .unwrap()
-                .contains(tap_device)
-                .then(|| "another restore already in progress for this checkpoint's network identity".to_string())
-        })
-    }
-
-    /// Claims `tap_device` for an in-flight restore: `true` = won, `false`
-    /// = another restore already holds it, caller must refuse. Pair with
-    /// `release_pending_tap_restore`, ideally via an RAII guard
-    /// (`routes::snapshot_history::PendingTapRestoreGuard`) so every exit
-    /// path releases it.
-    pub fn try_reserve_pending_tap_restore(&self, tap_device: &str) -> bool {
-        self.pending_tap_restores.lock().unwrap().insert(tap_device.to_string())
-    }
-
-    pub fn release_pending_tap_restore(&self, tap_device: &str) {
-        self.pending_tap_restores.lock().unwrap().remove(tap_device);
+        .or_else(|| first_match(snapshots.values(), "snapshot", |s| s.id.as_str(), |s| s.network.addr.guest_ip == guest_ip))
     }
 
     /// Claims a pending reference on `image_id` for a boot's duration —
@@ -128,7 +107,7 @@ impl AppState {
     }
 }
 
-/// Shared "first match, labeled" walk `image_holder`/`tap_device_holder`
+/// Shared "first match, labeled" walk `image_holder`/`guest_ip_holder`
 /// both need over sandboxes/snapshots/retired checkpoints. Returns e.g.
 /// `"sandbox sbx-1"`, or `None`.
 fn first_match<'a, T: 'a>(
@@ -338,34 +317,30 @@ mod tests {
 
     // `image_holder`'s sandbox-map branch isn't exercised here (a real
     // `Sandbox` needs a running `Vm`, which needs KVM); its snapshot-map
-    // branch and `tap_device_holder`'s are, below, since `Snapshot` needs
-    // only a `Lease` and `NetworkManager::reserve()` builds one without
+    // branch and `guest_ip_holder`'s are, below, since `Snapshot` needs only
+    // an `IpLease` and `NetworkManager::reserve_ip()` builds one without
     // real netlink.
 
     fn test_network() -> NetworkManager {
         NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", ["tapA".to_string()])
     }
 
-    fn test_lease(network: &NetworkManager, tap_device: &str, host_octet: u8) -> sandkiln_vmm::network::Lease {
-        network.reserve(
-            sandkiln_vmm::vm::NetworkConfig {
-                tap_device: tap_device.to_string(),
-                guest_ip: "10.0.0.5".parse().unwrap(),
-                gateway_ip: "10.0.0.1".parse().unwrap(),
-                guest_mac: "AA:FC:00:00:05:05".to_string(),
-            },
-            host_octet,
-        )
+    fn test_addr(host: u8) -> sandkiln_vmm::network::GuestAddr {
+        sandkiln_vmm::network::GuestAddr {
+            guest_ip: format!("10.0.0.{host}").parse().unwrap(),
+            gateway_ip: "10.0.0.1".parse().unwrap(),
+            guest_mac: format!("AA:FC:00:00:{host:02X}:{host:02X}"),
+        }
     }
 
-    fn test_snapshot(id: &str, network: &NetworkManager, tap_device: &str) -> Snapshot {
+    fn test_snapshot(id: &str, network: &NetworkManager, host_octet: u8) -> Snapshot {
         Snapshot {
             id: id.to_string(),
             source_sandbox_id: "sandbox-x".to_string(),
             snapshot_path: PathBuf::from("/tmp/does-not-need-to-exist/state.snap"),
             mem_file_path: PathBuf::from("/tmp/does-not-need-to-exist/mem.bin"),
             rootfs_path: PathBuf::from("/tmp/does-not-need-to-exist/rootfs.ext4"),
-            network: test_lease(network, tap_device, 5),
+            network: network.reserve_ip(test_addr(host_octet), host_octet),
             attached_drives: vec![],
             image_id: None,
             tags: HashMap::new(),
@@ -380,19 +355,14 @@ mod tests {
         }
     }
 
-    fn test_retired_snapshot(id: &str, tap_device: &str) -> RetiredSnapshot {
+    fn test_retired_snapshot(id: &str) -> RetiredSnapshot {
         RetiredSnapshot {
             id: id.to_string(),
             source_sandbox_id: "sandbox-y".to_string(),
             snapshot_path: PathBuf::from("/tmp/does-not-need-to-exist/state.snap"),
             mem_file_path: PathBuf::from("/tmp/does-not-need-to-exist/mem.bin"),
             rootfs_path: PathBuf::from("/tmp/does-not-need-to-exist/rootfs.ext4"),
-            network: sandkiln_vmm::vm::NetworkConfig {
-                tap_device: tap_device.to_string(),
-                guest_ip: "10.0.0.6".parse().unwrap(),
-                gateway_ip: "10.0.0.1".parse().unwrap(),
-                guest_mac: "AA:FC:00:00:06:06".to_string(),
-            },
+            addr: test_addr(6),
             host_octet: 6,
             attached_drives: vec![],
             image_id: None,
@@ -408,54 +378,33 @@ mod tests {
     }
 
     #[test]
-    fn tap_device_holder_is_none_when_nothing_holds_it() {
-        let t = TestState::new("tap-holder-none");
-        assert_eq!(t.state.tap_device_holder("tapA"), None);
+    fn guest_ip_holder_is_none_when_nothing_holds_it() {
+        let t = TestState::new("ip-holder-none");
+        assert_eq!(t.state.guest_ip_holder("10.0.0.5".parse().unwrap()), None);
     }
 
     #[test]
-    fn tap_device_holder_finds_a_held_snapshot() {
-        let t = TestState::new("tap-holder-snapshot");
+    fn guest_ip_holder_finds_a_held_snapshot() {
+        let t = TestState::new("ip-holder-snapshot");
         let network = test_network();
-        t.state.snapshots.lock().unwrap().insert("snap-1".to_string(), test_snapshot("snap-1", &network, "tapA"));
-        assert_eq!(t.state.tap_device_holder("tapA"), Some("snapshot snap-1".to_string()));
-        assert_eq!(t.state.tap_device_holder("tapB"), None, "an unrelated tap must not be reported as held");
+        t.state.snapshots.lock().unwrap().insert("snap-1".to_string(), test_snapshot("snap-1", &network, 5));
+        assert_eq!(t.state.guest_ip_holder("10.0.0.5".parse().unwrap()), Some("snapshot snap-1".to_string()));
+        assert_eq!(t.state.guest_ip_holder("10.0.0.9".parse().unwrap()), None, "an unrelated IP must not be reported as held");
     }
 
+    /// Retired checkpoints are inert history: they never count as a holder,
+    /// which is what lets two checkpoints of one lineage coexist.
     #[test]
-    fn tap_device_holder_reports_a_pending_restore() {
-        let t = TestState::new("tap-holder-pending-restore");
-        assert!(t.state.try_reserve_pending_tap_restore("tapA"));
-        assert!(t.state.tap_device_holder("tapA").is_some());
-    }
-
-    #[test]
-    fn try_reserve_pending_tap_restore_claims_then_blocks_a_second_caller() {
-        let t = TestState::new("pending-restore-claim");
-        assert!(t.state.try_reserve_pending_tap_restore("tapA"), "the first claim must win");
-        assert!(!t.state.try_reserve_pending_tap_restore("tapA"), "a second concurrent claim of the same tap must lose");
-    }
-
-    #[test]
-    fn release_pending_tap_restore_frees_it_for_a_new_claim() {
-        let t = TestState::new("pending-restore-release");
-        assert!(t.state.try_reserve_pending_tap_restore("tapA"));
-        t.state.release_pending_tap_restore("tapA");
-        assert_eq!(t.state.tap_device_holder("tapA"), None);
-        assert!(t.state.try_reserve_pending_tap_restore("tapA"), "releasing must actually free the claim for reuse");
-    }
-
-    #[test]
-    fn release_pending_tap_restore_without_a_matching_reservation_does_not_panic() {
-        let t = TestState::new("pending-restore-release-unclaimed");
-        t.state.release_pending_tap_restore("never-claimed");
-        assert_eq!(t.state.tap_device_holder("never-claimed"), None);
+    fn guest_ip_holder_ignores_retired_checkpoints() {
+        let t = TestState::new("ip-holder-retired");
+        t.state.retired_snapshots.lock().unwrap().insert("retired-1".to_string(), test_retired_snapshot("retired-1"));
+        assert_eq!(t.state.guest_ip_holder("10.0.0.6".parse().unwrap()), None);
     }
 
     #[test]
     fn drive_holders_includes_a_retired_snapshot_that_references_the_drive() {
         let t = TestState::new("drive-holders-retired");
-        let mut retired = test_retired_snapshot("retired-1", "tapA");
+        let mut retired = test_retired_snapshot("retired-1");
         retired.attached_drives = vec![AttachedDrive { drive_id: "d1".to_string(), read_only: false }];
         t.state.retired_snapshots.lock().unwrap().insert("retired-1".to_string(), retired);
 
@@ -468,7 +417,7 @@ mod tests {
     #[test]
     fn image_holder_finds_a_retired_snapshot() {
         let t = TestState::new("image-holder-retired");
-        let mut retired = test_retired_snapshot("retired-2", "tapA");
+        let mut retired = test_retired_snapshot("retired-2");
         retired.image_id = Some("img1".to_string());
         t.state.retired_snapshots.lock().unwrap().insert("retired-2".to_string(), retired);
 

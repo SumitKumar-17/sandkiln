@@ -17,17 +17,19 @@
 //!   back a memory image believing bytes the shared, since-mutated rootfs
 //!   no longer has.
 //! - The record is inert data, not a live resource: it holds a
-//!   `NetworkConfig` + `host_octet`, **not** a live `Lease` — nothing is
-//!   reserved from `NetworkManager`'s pool just by sitting in history. A
-//!   lease is only reserved at *restore* time, gated by
-//!   `AppState::tap_device_holder` (unlike `reconcile()`'s
+//!   `GuestAddr` + `host_octet`, **not** an `IpLease` — nothing is
+//!   reserved from `NetworkManager`'s pool just by sitting in history. The
+//!   IP is only claimed at *restore* time with `NetworkManager::try_reserve_ip`,
+//!   which is atomic with the free pool (unlike `reconcile()`'s
 //!   once-at-startup guarantee, a restore can race an already-live user
-//!   of the same frozen tap/network identity).
+//!   of the same frozen guest address, or a sibling checkpoint of the same
+//!   lineage). No tap is recorded or reserved at all: a restore plugs the
+//!   guest into whichever tap is free.
 //!
 //! **Sequential, not branching**: restoring an old checkpoint doesn't
 //! invalidate what came after it (like `git checkout` of an ancestor
 //! commit doesn't delete its descendants) — it only requires nothing else
-//! sharing this checkpoint's network identity is live right now, the same
+//! sharing this checkpoint's guest IP is live right now, the same
 //! one-live-descendant rule `Snapshot::forked_into` enforces for fork,
 //! generalized across a whole lineage. True parallel branching is a
 //! separate, harder, still-open problem (see `snapshots/ops/fork.rs`) that
@@ -38,7 +40,7 @@
 
 use crate::state::{AttachedDrive, Mount};
 use sandkiln_vmm::egress::EgressPolicy;
-use sandkiln_vmm::vm::NetworkConfig;
+use sandkiln_vmm::network::GuestAddr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -48,8 +50,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// One retired checkpoint — everything needed to restore it, minus any
-/// actively-held resource (a live `Lease`). See the module doc comment.
-/// `Clone` (unlike `Snapshot`, which holds a `Lease` nothing should
+/// actively-held resource (an `IpLease`). See the module doc comment.
+/// `Clone` (unlike `Snapshot`, which holds an `IpLease` nothing should
 /// silently duplicate) is safe here precisely because nothing in this
 /// struct is exclusively held — `restore_snapshot_history_by_id` clones
 /// one out from under a short-lived lock rather than removing it from
@@ -63,10 +65,11 @@ pub struct RetiredSnapshot {
     /// Left exactly where it was at retirement — never moved, never
     /// mutated. The property that makes retiring safe at all.
     pub rootfs_path: PathBuf,
-    /// Not a live `Lease` — see the module doc comment. `host_octet`
-    /// travels alongside since `NetworkManager::reserve` needs it (same
-    /// reason `SnapshotMeta` stores it).
-    pub network: NetworkConfig,
+    /// The guest's frozen address, not a held lease — see the module doc
+    /// comment. `host_octet` travels alongside since
+    /// `NetworkManager::try_reserve_ip` needs it (same reason `SnapshotMeta`
+    /// stores it).
+    pub addr: GuestAddr,
     pub host_octet: u8,
     pub attached_drives: Vec<AttachedDrive>,
     pub image_id: Option<String>,
@@ -88,8 +91,8 @@ pub struct RetiredSnapshot {
 
 /// On-disk mirror of `RetiredSnapshot`, same "filesystem is the source of
 /// truth" shape as `snapshot::SnapshotMeta` but deliberately not shared
-/// with it as one type: a `Snapshot`'s metadata round-trips a live
-/// `Lease` to reclaim at startup; a retired checkpoint's doesn't reclaim
+/// with it as one type: a `Snapshot`'s metadata round-trips an
+/// `IpLease` to reclaim at startup; a retired checkpoint's doesn't reclaim
 /// anything until an explicit restore. Conflating the two would blur a
 /// real hot-vs-dormant distinction into one struct with a flag.
 #[derive(Serialize, Deserialize)]
@@ -97,7 +100,6 @@ struct RetiredSnapshotMeta {
     id: String,
     source_sandbox_id: String,
     rootfs_path: PathBuf,
-    tap_device: String,
     guest_ip: Ipv4Addr,
     gateway_ip: Ipv4Addr,
     guest_mac: String,
@@ -117,16 +119,15 @@ struct RetiredSnapshotMeta {
 }
 
 impl RetiredSnapshot {
-    /// Mirrors `Snapshot::persist`, minus anything `Lease`-shaped.
+    /// Mirrors `Snapshot::persist`. A `tap_device` key from an older daemon is ignored on read.
     pub fn persist(&self, dir: &Path) -> io::Result<()> {
         let meta = RetiredSnapshotMeta {
             id: self.id.clone(),
             source_sandbox_id: self.source_sandbox_id.clone(),
             rootfs_path: self.rootfs_path.clone(),
-            tap_device: self.network.tap_device.clone(),
-            guest_ip: self.network.guest_ip,
-            gateway_ip: self.network.gateway_ip,
-            guest_mac: self.network.guest_mac.clone(),
+            guest_ip: self.addr.guest_ip,
+            gateway_ip: self.addr.gateway_ip,
+            guest_mac: self.addr.guest_mac.clone(),
             host_octet: self.host_octet,
             attached_drives: self.attached_drives.clone(),
             image_id: self.image_id.clone(),
@@ -253,8 +254,7 @@ fn load_one(dir: &Path, id: &str) -> Option<RetiredSnapshot> {
         snapshot_path: state_file,
         mem_file_path: mem_file,
         rootfs_path: meta.rootfs_path,
-        network: NetworkConfig {
-            tap_device: meta.tap_device,
+        addr: GuestAddr {
             guest_ip: meta.guest_ip,
             gateway_ip: meta.gateway_ip,
             guest_mac: meta.guest_mac,
@@ -303,8 +303,7 @@ mod tests {
             snapshot_path: crate::snapshots::layout::state_path(dir),
             mem_file_path: crate::snapshots::layout::mem_path(dir),
             rootfs_path: PathBuf::from("/tmp/sandkiln-rootfs-1.ext4"),
-            network: NetworkConfig {
-                tap_device: "tapA".to_string(),
+            addr: GuestAddr {
                 guest_ip: "172.16.0.5".parse().unwrap(),
                 gateway_ip: "172.16.0.1".parse().unwrap(),
                 guest_mac: "AA:FC:00:00:05:05".to_string(),
@@ -342,7 +341,7 @@ mod tests {
         assert_eq!(loaded.id, "retired-1");
         assert_eq!(loaded.source_sandbox_id, "sandbox-1");
         assert_eq!(loaded.rootfs_path, PathBuf::from("/tmp/sandkiln-rootfs-1.ext4"));
-        assert_eq!(loaded.network.tap_device, "tapA");
+        assert_eq!(loaded.addr.guest_ip, "172.16.0.5".parse::<Ipv4Addr>().unwrap());
         assert_eq!(loaded.host_octet, 5);
         assert_eq!(loaded.attached_drives, vec![AttachedDrive { drive_id: "d1".to_string(), read_only: true }]);
         assert_eq!(loaded.image_id, Some("base-image".to_string()));
@@ -362,6 +361,26 @@ mod tests {
                 read_only: false,
             }]
         );
+    }
+
+    /// A checkpoint persisted by an older daemon names the tap it was frozen
+    /// with. That name is meaningless now (a restore leases any free tap) and
+    /// must neither block loading nor survive into the record.
+    #[test]
+    fn load_one_ignores_the_tap_device_key_an_older_daemon_wrote() {
+        let t = TempDir::new("legacy-tap-key");
+        fs::write(crate::snapshots::layout::state_path(&t.path), b"state").unwrap();
+        fs::write(crate::snapshots::layout::mem_path(&t.path), b"mem").unwrap();
+        let mut meta: serde_json::Value = {
+            sample_checkpoint("retired-legacy", &t.path).persist(&t.path).unwrap();
+            serde_json::from_slice(&fs::read(crate::snapshots::layout::meta_path(&t.path)).unwrap()).unwrap()
+        };
+        assert!(meta.get("tap_device").is_none(), "new metadata must not record a tap");
+        meta["tap_device"] = serde_json::json!("sktap99");
+        fs::write(crate::snapshots::layout::meta_path(&t.path), serde_json::to_vec(&meta).unwrap()).unwrap();
+
+        let loaded = load_one(&t.path, "retired-legacy").expect("legacy metadata must still load");
+        assert_eq!(loaded.host_octet, 5);
     }
 
     #[test]

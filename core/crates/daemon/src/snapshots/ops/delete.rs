@@ -1,8 +1,8 @@
 //! Delete a held snapshot outright.
 //!
-//! Owns `delete_snapshot_by_id`: releases the snapshot's lease and egress
-//! chain and removes its rootfs copy and state/memory files, refused while a
-//! fork is alive.
+//! Owns `delete_snapshot_by_id`: releases the snapshot's IP and removes its
+//! rootfs copy and state/memory files, refused while a fork is alive. A held
+//! snapshot has no tap or egress chain to tear down (both go when it is taken).
 
 use super::check_no_live_fork;
 use crate::http::error::AppError;
@@ -24,9 +24,7 @@ pub(crate) async fn delete_snapshot_by_id(state: Arc<AppState>, id: String) -> R
     spawn_blocking_in_current_span("delete task panicked", {
         let state = state.clone();
         move || {
-            // Same lease-release-tied teardown as `destroy_sandbox_by_id`.
-            sandkiln_vmm::egress::remove(snapshot.network.config.guest_ip, &snapshot.network.config.tap_device, state.network.uplink());
-            let _ = state.network.release(snapshot.network);
+            state.network.release_ip(snapshot.network);
             let _ = std::fs::remove_file(&snapshot.rootfs_path);
             // `snapshot.snapshot_path`'s own parent, not a hardcoded hot
             // dir — an archived snapshot lives under `Config::archive_dir`

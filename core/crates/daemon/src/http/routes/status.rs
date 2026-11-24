@@ -32,10 +32,23 @@ pub struct Counts {
     pub pool_warm_ready: usize,
 }
 
+/// Tap devices: needed only while a guest runs, so `in_use` is the number of
+/// running networked sandboxes (forks included) — held snapshots are not in it.
 #[derive(Serialize)]
 pub struct TapPool {
-    pub size: u32,
+    pub size: usize,
     pub free: usize,
+    pub in_use: usize,
+}
+
+/// Guest IPs in the sandbox /24: held by every running sandbox *and* every
+/// held snapshot (the address is frozen into its memory image), so this is the
+/// pool that bounds how many snapshots can exist.
+#[derive(Serialize)]
+pub struct IpPool {
+    pub size: usize,
+    pub free: usize,
+    pub held_by_snapshots: usize,
 }
 
 #[derive(Serialize)]
@@ -52,6 +65,7 @@ pub struct Status {
     pub jailer_enabled: bool,
     pub counts: Counts,
     pub tap_pool: TapPool,
+    pub ip_pool: IpPool,
     pub sandboxes_created_total: u64,
     pub rootfs_clones: RootfsClones,
     pub disk: Vec<DiskUsage>,
@@ -75,11 +89,33 @@ pub fn disk_usage(path: &Path) -> Option<DiskUsage> {
     })
 }
 
+/// Free capacity below which a pool is "nearly exhausted": a tenth of it, at
+/// least one slot.
+fn is_low(free: usize, size: usize) -> bool {
+    size > 0 && free > 0 && free <= (size / 10).max(1)
+}
+
 /// Conditions an operator should act on, as plain sentences.
-pub fn warnings(tap_free: usize, tap_size: u32, disks: &[DiskUsage], clones: &RootfsClones, auth_enabled: bool) -> Vec<String> {
+pub fn warnings(taps: &TapPool, ips: &IpPool, disks: &[DiskUsage], clones: &RootfsClones, auth_enabled: bool) -> Vec<String> {
     let mut out = Vec::new();
-    if tap_size > 0 && tap_free == 0 {
-        out.push("no free tap devices: new networked sandboxes will fail until one is stopped".to_string());
+    if taps.size > 0 && taps.free == 0 {
+        out.push(
+            "no free tap devices: every tap is in use by a running sandbox, so creating or resuming one fails (503) until a running sandbox stops"
+                .to_string(),
+        );
+    } else if is_low(taps.free, taps.size) {
+        out.push(format!("tap pool nearly exhausted: {} of {} free (one is needed per running sandbox)", taps.free, taps.size));
+    }
+    if ips.free == 0 {
+        out.push(format!(
+            "no free sandbox IPs: all {} are held, {} of them by snapshots; delete snapshots you no longer need",
+            ips.size, ips.held_by_snapshots
+        ));
+    } else if is_low(ips.free, ips.size) {
+        out.push(format!(
+            "sandbox IPs running low: {} of {} free, {} held by snapshots (each snapshot keeps its IP); delete snapshots you no longer need",
+            ips.free, ips.size, ips.held_by_snapshots
+        ));
     }
     for d in disks {
         if d.free_bytes < LOW_DISK_BYTES {
@@ -113,7 +149,14 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<Status> {
         pools,
         pool_warm_ready,
     };
-    let tap_free = state.network.free_tap_devices().len();
+    let tap_size = state.network.tap_pool_size();
+    let tap_free = state.network.free_tap_count();
+    let tap_pool = TapPool { size: tap_size, free: tap_free, in_use: tap_size.saturating_sub(tap_free) };
+    let ip_pool = IpPool {
+        size: state.network.ip_pool_size(),
+        free: state.network.free_ip_count(),
+        held_by_snapshots: counts.held_snapshots,
+    };
     let (reflink, copy) = state.metrics.rootfs_clone_counts();
     let clones = RootfsClones { reflink, copy };
     let mut disk: Vec<DiskUsage> = Vec::new();
@@ -125,14 +168,15 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<Status> {
         }
     }
     let auth_enabled = state.config.auth_token.is_some();
-    let warnings = warnings(tap_free, state.config.tap_pool_size, &disk, &clones, auth_enabled);
+    let warnings = warnings(&tap_pool, &ip_pool, &disk, &clones, auth_enabled);
     Json(Status {
         version: env!("CARGO_PKG_VERSION"),
         uptime_secs: state.started_at.elapsed().as_secs(),
         auth_enabled,
         jailer_enabled: state.config.jailer.is_some(),
         counts,
-        tap_pool: TapPool { size: state.config.tap_pool_size, free: tap_free },
+        tap_pool,
+        ip_pool,
         sandboxes_created_total: state.metrics.sandboxes_created(),
         rootfs_clones: clones,
         disk,
@@ -149,30 +193,77 @@ mod tests {
     }
     const NO_CLONES: RootfsClones = RootfsClones { reflink: 0, copy: 0 };
 
+    fn taps(size: usize, free: usize) -> TapPool {
+        TapPool { size, free, in_use: size - free }
+    }
+
+    fn ips(free: usize, held_by_snapshots: usize) -> IpPool {
+        IpPool { size: 253, free, held_by_snapshots }
+    }
+
+    fn healthy() -> (TapPool, IpPool) {
+        (taps(8, 3), ips(200, 10))
+    }
+
     #[test]
     fn healthy_host_has_no_warnings() {
-        assert!(warnings(3, 8, &[disk(50)], &RootfsClones { reflink: 4, copy: 0 }, true).is_empty());
+        let (t, i) = healthy();
+        assert!(warnings(&t, &i, &[disk(50)], &RootfsClones { reflink: 4, copy: 0 }, true).is_empty());
     }
 
     #[test]
     fn exhausted_tap_pool_is_flagged_but_an_unconfigured_one_is_not() {
-        assert_eq!(warnings(0, 8, &[], &NO_CLONES, true).len(), 1);
-        assert!(warnings(0, 0, &[], &NO_CLONES, true).is_empty());
+        let (_, i) = healthy();
+        let w = warnings(&taps(8, 0), &i, &[], &NO_CLONES, true);
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("running sandbox"), "{w:?}");
+        assert!(warnings(&taps(0, 0), &i, &[], &NO_CLONES, true).is_empty());
+    }
+
+    #[test]
+    fn a_nearly_full_tap_pool_warns_before_it_is_empty() {
+        let (_, i) = healthy();
+        let w = warnings(&taps(32, 4), &i, &[], &NO_CLONES, true);
+        assert!(w.is_empty(), "4 of 32 free is not yet low: {w:?}");
+        let w = warnings(&taps(32, 3), &i, &[], &NO_CLONES, true);
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("nearly exhausted"), "{w:?}");
+    }
+
+    #[test]
+    fn low_and_empty_ip_pools_say_how_many_snapshots_hold_them() {
+        let (t, _) = healthy();
+        let low = warnings(&t, &ips(25, 200), &[], &NO_CLONES, true);
+        assert_eq!(low.len(), 1);
+        assert!(low[0].contains("200 held by snapshots"), "{low:?}");
+        let none = warnings(&t, &ips(0, 253), &[], &NO_CLONES, true);
+        assert_eq!(none.len(), 1);
+        assert!(none[0].contains("no free sandbox IPs"), "{none:?}");
+        assert!(warnings(&t, &ips(26, 100), &[], &NO_CLONES, true).is_empty());
+    }
+
+    /// The scenario this pool split exists for: many snapshots, plenty of taps.
+    #[test]
+    fn many_held_snapshots_alone_do_not_warn_about_taps() {
+        let w = warnings(&taps(32, 32), &ips(253 - 100, 100), &[], &NO_CLONES, true);
+        assert!(w.is_empty(), "{w:?}");
     }
 
     #[test]
     fn low_disk_is_flagged_per_volume() {
-        let w = warnings(1, 1, &[disk(50), disk(2)], &NO_CLONES, true);
+        let (t, i) = healthy();
+        let w = warnings(&t, &i, &[disk(50), disk(2)], &NO_CLONES, true);
         assert_eq!(w.len(), 1);
         assert!(w[0].contains("2048 MiB"), "{w:?}");
     }
 
     #[test]
     fn copy_only_cloning_and_open_auth_are_flagged() {
-        let w = warnings(1, 1, &[], &RootfsClones { reflink: 0, copy: 3 }, false);
+        let (t, i) = healthy();
+        let w = warnings(&t, &i, &[], &RootfsClones { reflink: 0, copy: 3 }, false);
         assert_eq!(w.len(), 2);
         // Mixed methods (a one-off fallback) is not a configuration problem.
-        assert!(warnings(1, 1, &[], &RootfsClones { reflink: 5, copy: 1 }, true).is_empty());
+        assert!(warnings(&t, &i, &[], &RootfsClones { reflink: 5, copy: 1 }, true).is_empty());
     }
 
     #[test]

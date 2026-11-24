@@ -30,8 +30,13 @@ pub enum AppError {
 }
 
 impl From<std::io::Error> for AppError {
+    /// A drained tap or IP pool is temporary (a stopped sandbox gives its tap
+    /// back), so it is `503` for the caller to retry, not an internal error.
     fn from(e: std::io::Error) -> Self {
-        AppError::Internal(e)
+        match sandkiln_vmm::network::PoolExhausted::of(&e) {
+            Some(_) => AppError::ServiceUnavailable(e.to_string()),
+            None => AppError::Internal(e),
+        }
     }
 }
 
@@ -140,6 +145,17 @@ mod tests {
         let (status, message) = status_and_message(AppError::Internal(io_err).into_response()).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(message, "disk on fire");
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_tap_pool_converts_to_503_not_500() {
+        let exhausted = sandkiln_vmm::network::NetworkManager::new("br", "10.0.0.1".parse().unwrap(), "up", std::iter::empty())
+            .lease_tap()
+            .err()
+            .unwrap();
+        let (status, message) = status_and_message(AppError::from(exhausted).into_response()).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(message.contains("no free tap devices"), "{message}");
     }
 
     #[tokio::test]

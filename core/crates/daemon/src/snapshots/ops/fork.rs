@@ -8,7 +8,7 @@
 use super::check_no_live_fork;
 use super::resume::resume_vm;
 use crate::http::error::AppError;
-use crate::sandbox::Sandbox;
+use crate::sandbox::{ForkNetwork, Sandbox};
 use crate::state::AppState;
 use crate::tracing_util::spawn_blocking_in_current_span;
 use std::sync::Arc;
@@ -17,8 +17,8 @@ use uuid::Uuid;
 
 /// Boots a new sandbox from a snapshot *without* consuming it — record
 /// and files untouched, so it can be forked/resumed again later. The
-/// forked sandbox doesn't own the snapshot's rootfs/lease (both stay
-/// with the `Snapshot`); `stop_sandbox_by_id` must never touch either.
+/// forked sandbox doesn't own the snapshot's IP (stays with the `Snapshot`) and
+/// has its own rootfs clone and tap; `stop_sandbox_by_id` returns the tap.
 ///
 /// 409 while an earlier fork is still alive (see `Snapshot::forked_into`).
 /// The new id is reserved up front, before the slow resume call, so a
@@ -60,8 +60,8 @@ pub(crate) async fn fork_snapshot_by_id(state: Arc<AppState>, snapshot_id: Strin
     }
     let mut rootfs_guard = crate::storage::OwnedFile::new(new_rootfs_path.clone());
 
-    let vm = match resume_vm(&state, snapshot_path, mem_file_path, Some(new_rootfs_path.clone())).await {
-        Ok(vm) => vm,
+    let (vm, tap) = match resume_vm(&state, snapshot_path, mem_file_path, Some(new_rootfs_path.clone())).await {
+        Ok(resumed) => resumed,
         Err(e) => {
             release_fork(&state);
             return Err(AppError::from(e));
@@ -74,10 +74,14 @@ pub(crate) async fn fork_snapshot_by_id(state: Arc<AppState>, snapshot_id: Strin
         // Can't have been removed: delete/resume both refuse while
         // `forked_into` is set, and it's set to `new_id` for this call.
         let snapshot = snapshots.get(&snapshot_id).expect("reserved by this call above");
+        let guest_ip = snapshot.network.addr.guest_ip;
+        let tap_device = tap.device().to_string();
         let sandbox = Sandbox {
             id: new_id.clone(),
             vm,
             network: None,
+            // The snapshot keeps the IP; the fork owns only the tap it is plugged into.
+            fork_network: Some(ForkNetwork { tap, guest_ip }),
             rootfs_path: new_rootfs_path,
             attached_drives: snapshot.attached_drives.clone(),
             image_id: snapshot.image_id.clone(),
@@ -95,10 +99,9 @@ pub(crate) async fn fork_snapshot_by_id(state: Arc<AppState>, snapshot_id: Strin
             pty_session_count: Default::default(),
             // Not a pool claim either — same as resume's construction above.
             source_pool_id: None,
-            // Not owned here either (`network: None` convention) — the
-            // iptables chain is tied to the lease, which the *snapshot*
-            // still owns for a fork. `Snapshot::egress` is the copy
-            // actually (re-)applied just below.
+            // Not recorded here (a fork is never snapshotted again);
+            // `Snapshot::egress` is the copy applied to the fork's tap just
+            // below, and `destroy_sandbox_by_id` removes the chain with the tap.
             egress: None,
             // No external resource to double-own here, unlike egress —
             // `env` is plain data, copied like resume does.
@@ -112,7 +115,7 @@ pub(crate) async fn fork_snapshot_by_id(state: Arc<AppState>, snapshot_id: Strin
             mounts: snapshot.mounts.clone(),
             log_sessions: Default::default(),
         };
-        (sandbox, snapshot.egress.clone(), snapshot.network.config.guest_ip, snapshot.network.config.tap_device.clone())
+        (sandbox, snapshot.egress.clone(), guest_ip, tap_device)
     };
     state.sandboxes.lock().unwrap().insert(new_id.clone(), sandbox);
 

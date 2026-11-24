@@ -211,7 +211,7 @@ async fn create_sandbox_cold(
                     }
                     let lease_err = match lease {
                         Ok(lease) => {
-                            let _ = state.network.release(lease);
+                            state.network.release(lease);
                             None
                         }
                         Err(e) => Some(e),
@@ -231,7 +231,7 @@ async fn create_sandbox_cold(
                 Some(pool) => match pool.lease() {
                     Ok(id) => Some(id),
                     Err(e) => {
-                        let _ = state.network.release(lease);
+                        state.network.release(lease);
                         return Err(e);
                     }
                 },
@@ -273,7 +273,9 @@ async fn create_sandbox_cold(
                         state.metrics.record_create_phase_ms(CreatePhase::EgressApply, ms(egress_started.elapsed()));
                         if let Err(e) = egress_result {
                             let _ = vm.stop();
-                            let _ = state.network.release(lease);
+                            // `apply` can fail after installing the chain.
+                            sandkiln_vmm::egress::remove(lease.config.guest_ip, &lease.config.tap_device, state.network.uplink());
+                            state.network.release(lease);
                             if let (Some(id), Some(pool)) = (jail_id, &state.jailer_ids) {
                                 pool.release(id);
                             }
@@ -284,7 +286,7 @@ async fn create_sandbox_cold(
                     Ok((vm, lease, jail_id))
                 }
                 Err(e) => {
-                    let _ = state.network.release(lease);
+                    state.network.release(lease);
                     if let (Some(id), Some(pool)) = (jail_id, &state.jailer_ids) {
                         pool.release(id);
                     }
@@ -309,6 +311,7 @@ async fn create_sandbox_cold(
         id: id.clone(),
         vm,
         network: Some(network),
+        fork_network: None,
         rootfs_path,
         attached_drives,
         image_id: request.image_id,

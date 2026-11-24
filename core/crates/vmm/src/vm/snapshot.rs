@@ -29,6 +29,14 @@ pub struct ResumeConfig {
     /// `Bad message` errors). The file must be a copy of the snapshot's disk
     /// as it was when the snapshot was taken.
     pub rootfs_override: Option<PathBuf>,
+    /// Plug the restored guest's network interface (`eth0`) into this tap
+    /// device instead of the one named in the snapshot (Firecracker's
+    /// `network_overrides` on snapshot load). The guest's IP and MAC are inside
+    /// the memory image and do not change; only the host-side port does. Every
+    /// resume passes one: the snapshot's own tap went back to the pool when it
+    /// was taken and may now belong to another sandbox. `None` keeps the saved
+    /// name, only correct for a snapshot with no network interface.
+    pub tap_override: Option<String>,
 }
 
 impl Vm {
@@ -89,14 +97,13 @@ impl Vm {
     /// device state. `resume_vm: true` starts it as part of the same
     /// call, no separate `InstanceStart`.
     ///
-    /// The rootfs file and tap device are referenced by host path/name,
-    /// not by value, inside the snapshot — moving either silently breaks
-    /// a resume rather than erroring (see the Persistence model doc).
-    /// `ResumeConfig` deliberately has no `network` field: the daemon
-    /// holds the original `Lease` across a snapshot and hands that exact
-    /// one back. The vsock socket path is the one exception — host-side
-    /// plumbing the guest never sees, safely reassigned fresh via
-    /// Firecracker's `vsock_override`, same as `boot()`.
+    /// The rootfs file is referenced by host path, not by value, inside the
+    /// snapshot — moving it silently breaks a resume rather than erroring
+    /// (see the Persistence model doc). The tap device is the opposite: its
+    /// name is host plumbing, repointed with `tap_override`, as the vsock
+    /// socket path is with `vsock_override` (same as `boot()`). The guest's
+    /// IP and MAC, by contrast, are frozen in the image and are the daemon's
+    /// to keep (`network::IpLease`).
     pub fn resume(config: &ResumeConfig) -> io::Result<Self> {
         let started = Instant::now();
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -130,6 +137,7 @@ impl Vm {
                     "vsock_override": {
                         "uds_path": path_str(&vsock_socket),
                     },
+                    "network_overrides": network_overrides(config.tap_override.as_deref()),
                 }),
             )?;
             if let Some(rootfs) = &config.rootfs_override {
@@ -170,6 +178,15 @@ impl Vm {
     }
 }
 
+/// The `network_overrides` array for `PUT /snapshot/load`: the guest's one
+/// interface (`eth0`, the id `boot.rs` configures) repointed at `tap`.
+fn network_overrides(tap: Option<&str>) -> serde_json::Value {
+    match tap {
+        Some(tap) => json!([{ "iface_id": "eth0", "host_dev_name": tap }]),
+        None => json!([]),
+    }
+}
+
 fn patch_checked(api: &mut ApiClient, path: &str, body: &serde_json::Value) -> io::Result<()> {
     let response = api.patch(path, &body.to_string())?;
     if !(200..300).contains(&response.status) {
@@ -179,4 +196,19 @@ fn patch_checked(api: &mut ApiClient, path: &str, body: &serde_json::Value) -> i
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tap_override_repoints_the_one_guest_interface() {
+        assert_eq!(network_overrides(Some("sktap7")), json!([{ "iface_id": "eth0", "host_dev_name": "sktap7" }]));
+    }
+
+    #[test]
+    fn no_tap_override_sends_an_empty_list() {
+        assert_eq!(network_overrides(None), json!([]));
+    }
 }

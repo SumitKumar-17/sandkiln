@@ -1,8 +1,16 @@
-//! Per-sandbox networking: every VM gets a tap device leased from a
+//! Per-sandbox networking: every running VM gets a tap device leased from a
 //! pre-created pool, attached to a shared bridge, with a static IP. One
 //! bridge means the NAT/DNS setup (`scripts/dev-tools/setup-tap-network.sh`,
 //! `scripts/host-setup/start-dns-proxy.sh`) targets one interface and one
 //! gateway IP, no per-VM wildcarding needed.
+//!
+//! A network identity has two halves with different lifetimes, so it is two
+//! leases. The **IP** (address, MAC, host octet) is frozen into a guest's
+//! memory image and must follow a snapshot; an [`IpLease`] is what a held
+//! snapshot owns. The **tap** is only a host-side port the VM is plugged into
+//! while it runs; a [`TapLease`] is taken at boot or resume and returned at
+//! snapshot or stop, and a restored VM can be pointed at any free one
+//! (`ResumeConfig::tap_override`). A running VM's [`Lease`] is the pair.
 //!
 //! The pool exists because creating a *new* tap device is a `TUNSETIFF`
 //! ioctl that doesn't work under ambient `CAP_NET_ADMIN` in practice, only
@@ -19,6 +27,108 @@ use std::time::Instant;
 
 use crate::vm::NetworkConfig;
 
+/// Host octets 2..=254 are leasable (1 is the gateway, 0 and 255 are reserved).
+const HOST_OCTET_COUNT: usize = 253;
+
+/// Which shared pool ran dry. Carried inside the `io::Error` so a caller can
+/// tell "retry later" from a real failure (`PoolExhausted::in`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolExhausted {
+    Taps,
+    Ips,
+}
+
+impl std::fmt::Display for PoolExhausted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PoolExhausted::Taps => write!(f, "no free tap devices left in the pool (every tap is in use by a running sandbox)"),
+            PoolExhausted::Ips => write!(f, "no free IPs left in the sandbox subnet"),
+        }
+    }
+}
+
+impl std::error::Error for PoolExhausted {}
+
+impl PoolExhausted {
+    /// The pool an error says is exhausted, if it is a pool-exhaustion error.
+    pub fn of(error: &io::Error) -> Option<PoolExhausted> {
+        error.get_ref()?.downcast_ref::<PoolExhausted>().copied()
+    }
+
+    fn into_error(self) -> io::Error {
+        io::Error::other(self)
+    }
+}
+
+/// The guest-visible, frozen half of a network identity. Baked into the guest
+/// by boot-time kernel args, so it survives every snapshot and resume.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuestAddr {
+    pub guest_ip: Ipv4Addr,
+    pub gateway_ip: Ipv4Addr,
+    pub guest_mac: String,
+}
+
+impl GuestAddr {
+    /// The boot/resume configuration for this address plugged into `tap_device`.
+    pub fn with_tap(&self, tap_device: &str) -> NetworkConfig {
+        NetworkConfig {
+            tap_device: tap_device.to_string(),
+            guest_ip: self.guest_ip,
+            gateway_ip: self.gateway_ip,
+            guest_mac: self.guest_mac.clone(),
+        }
+    }
+}
+
+/// Ownership of one guest IP/MAC/host-octet, with no tap. What a held
+/// snapshot owns: it costs nothing but an address from the /24.
+pub struct IpLease {
+    pub addr: GuestAddr,
+    host_octet: u8,
+}
+
+impl IpLease {
+    /// For persisting an identity (e.g. a `Snapshot` written to disk).
+    pub fn host_octet(&self) -> u8 {
+        self.host_octet
+    }
+
+    /// Joins the address to a tap for a VM that is about to run.
+    pub fn with_tap(self, tap: TapLease) -> Lease {
+        let config = self.addr.with_tap(tap.device());
+        Lease { config, host_octet: self.host_octet }
+    }
+}
+
+/// Ownership of one pooled tap device, attached to the bridge. Return it with
+/// `NetworkManager::release_tap`; dropping it leaks the tap for the daemon's
+/// lifetime.
+pub struct TapLease {
+    device: String,
+}
+
+impl TapLease {
+    pub fn device(&self) -> &str {
+        &self.device
+    }
+}
+
+/// A running VM's whole network identity: an IP and the tap it is plugged
+/// into. Split with `NetworkManager::detach` when the VM stops but the guest
+/// (a snapshot) lives on.
+pub struct Lease {
+    pub config: NetworkConfig,
+    host_octet: u8,
+}
+
+impl Lease {
+    /// For persisting a lease's full identity.
+    pub fn host_octet(&self) -> u8 {
+        self.host_octet
+    }
+}
+
 pub struct NetworkManager {
     bridge_name: String,
     gateway_ip: Ipv4Addr,
@@ -26,20 +136,7 @@ pub struct NetworkManager {
     uplink: String,
     free_hosts: Mutex<VecDeque<u8>>,
     free_taps: Mutex<VecDeque<String>>,
-}
-
-pub struct Lease {
-    pub config: NetworkConfig,
-    host_octet: u8,
-}
-
-impl Lease {
-    /// For persisting a lease's full identity (e.g. a `Snapshot` written
-    /// to disk) — stays private otherwise; only `lease()`/`reserve()`
-    /// construct a `Lease`.
-    pub fn host_octet(&self) -> u8 {
-        self.host_octet
-    }
+    tap_pool_size: usize,
 }
 
 impl NetworkManager {
@@ -52,13 +149,15 @@ impl NetworkManager {
         uplink: impl Into<String>,
         tap_pool: impl IntoIterator<Item = String>,
     ) -> Self {
+        let taps: VecDeque<String> = tap_pool.into_iter().collect();
         Self {
             bridge_name: bridge_name.into(),
             gateway_ip,
             prefix_len: 24,
             uplink: uplink.into(),
             free_hosts: Mutex::new((2..=254u8).collect()),
-            free_taps: Mutex::new(tap_pool.into_iter().collect()),
+            tap_pool_size: taps.len(),
+            free_taps: Mutex::new(taps),
         }
     }
 
@@ -106,70 +205,118 @@ impl NetworkManager {
         Ok(())
     }
 
-    /// Leases a tap device and an IP for one VM. The returned `Lease`
-    /// must be released via `release()` once the VM stops, or both are
-    /// leaked for the daemon's lifetime.
+    /// Leases an IP and a tap device for one freshly booted VM. The returned
+    /// `Lease` must be released via `release()` (VM destroyed) or split with
+    /// `detach()` (VM snapshotted), or both are leaked for the daemon's lifetime.
     pub fn lease(&self) -> io::Result<Lease> {
         let host_octet = {
             let mut free = self.free_hosts.lock().unwrap();
-            free.pop_front().ok_or_else(|| io::Error::other("no free IPs left in the sandbox subnet"))?
+            free.pop_front().ok_or_else(|| PoolExhausted::Ips.into_error())?
         };
-        let tap_device = {
-            let mut free = self.free_taps.lock().unwrap();
-            match free.pop_front() {
-                Some(tap) => tap,
-                None => {
-                    self.free_hosts.lock().unwrap().push_back(host_octet);
-                    return Err(io::Error::other("no free tap devices left in the pool"));
-                }
+        match self.lease_tap() {
+            Ok(tap) => Ok(IpLease { addr: self.addr_for(host_octet), host_octet }.with_tap(tap)),
+            Err(e) => {
+                self.free_hosts.lock().unwrap().push_back(host_octet);
+                Err(e)
             }
-        };
+        }
+    }
 
-        if let Err(e) = self.attach_tap(&tap_device) {
-            self.free_hosts.lock().unwrap().push_back(host_octet);
-            self.free_taps.lock().unwrap().push_back(tap_device);
+    /// Leases and attaches one tap, with no IP. For a VM that already has its
+    /// address: a restored snapshot (`IpLease::with_tap`) or a fork.
+    pub fn lease_tap(&self) -> io::Result<TapLease> {
+        let device = {
+            let mut free = self.free_taps.lock().unwrap();
+            free.pop_front().ok_or_else(|| PoolExhausted::Taps.into_error())?
+        };
+        if let Err(e) = self.attach_tap(&device) {
+            self.free_taps.lock().unwrap().push_back(device);
             return Err(e);
         }
-
-        let guest_ip = octets_with_last(self.gateway_ip, host_octet);
-        let guest_mac = format!("AA:FC:00:00:{:02X}:{:02X}", host_octet, host_octet);
-
-        Ok(Lease { config: NetworkConfig { tap_device, guest_ip, gateway_ip: self.gateway_ip, guest_mac }, host_octet })
+        Ok(TapLease { device })
     }
 
-    pub fn release(&self, lease: Lease) -> io::Result<()> {
-        let _ = run("ip", &["link", "set", &lease.config.tap_device, "nomaster"]);
-        let _ = run("ip", &["link", "set", &lease.config.tap_device, "down"]);
-        self.free_hosts.lock().unwrap().push_back(lease.host_octet);
-        self.free_taps.lock().unwrap().push_back(lease.config.tap_device);
-        Ok(())
+    /// Detaches the tap from the bridge and returns it to the pool.
+    pub fn release_tap(&self, tap: TapLease) {
+        let _ = run("ip", &["link", "set", &tap.device, "nomaster"]);
+        let _ = run("ip", &["link", "set", &tap.device, "down"]);
+        self.free_taps.lock().unwrap().push_back(tap.device);
     }
 
-    /// Reconstructs a `Lease` for a tap/host-octet already held by
-    /// something this fresh `NetworkManager` has no record of handing
-    /// out — a `Snapshot` reconciled from disk at startup, holding a tap
-    /// frozen into its saved memory image. Without this, a later live
-    /// `lease()` could hand the same tap to a second sandbox. Removes both
-    /// from the free pools; logs a warning rather than panicking if either
-    /// was already absent (pool/config drift, not fatal to startup).
-    pub fn reserve(&self, config: NetworkConfig, host_octet: u8) -> Lease {
-        let tap_was_free = remove_first(&self.free_taps, |t| t == &config.tap_device);
-        let host_was_free = remove_first(&self.free_hosts, |h| *h == host_octet);
-        if !tap_was_free {
-            tracing::warn!(
-                tap_device = %config.tap_device,
-                "reserved tap device was not present in the free pool (already reserved, \
-                 leased, or outside the configured tap pool) — proceeding anyway"
-            );
-        }
-        if !host_was_free {
+    /// Returns an IP to the pool.
+    pub fn release_ip(&self, ip: IpLease) {
+        self.free_hosts.lock().unwrap().push_back(ip.host_octet);
+    }
+
+    /// Releases both halves: the VM is gone and nothing will resume it.
+    pub fn release(&self, lease: Lease) {
+        let (ip, tap) = self.split(lease);
+        self.release_tap(tap);
+        self.release_ip(ip);
+    }
+
+    /// The VM has stopped but its guest identity lives on in a snapshot: the
+    /// tap goes back to the pool, the IP stays owned. The caller must already
+    /// have stopped the VM (a tap with an open Firecracker fd is not free).
+    pub fn detach(&self, lease: Lease) -> IpLease {
+        let (ip, tap) = self.split(lease);
+        self.release_tap(tap);
+        ip
+    }
+
+    fn split(&self, lease: Lease) -> (IpLease, TapLease) {
+        let addr = GuestAddr { guest_ip: lease.config.guest_ip, gateway_ip: lease.config.gateway_ip, guest_mac: lease.config.guest_mac };
+        (IpLease { addr, host_octet: lease.host_octet }, TapLease { device: lease.config.tap_device })
+    }
+
+    /// Reconstructs the `IpLease` of an identity already held by something
+    /// this fresh `NetworkManager` has no record of handing out — a held
+    /// snapshot reconciled from disk at startup. Removes the octet from the
+    /// free pool; logs a warning rather than panicking if it was already
+    /// absent (pool/config drift, not fatal to startup). No tap is involved:
+    /// a snapshot's saved tap name is meaningless until it is resumed.
+    pub fn reserve_ip(&self, addr: GuestAddr, host_octet: u8) -> IpLease {
+        if !remove_first(&self.free_hosts, |h| *h == host_octet) {
             tracing::warn!(
                 host_octet,
                 "reserved host octet was not present in the free pool (already reserved, \
                  leased, or outside the configured host range) — proceeding anyway"
             );
         }
-        Lease { config, host_octet }
+        IpLease { addr, host_octet }
+    }
+
+    /// Claims an identity that must still be free, atomically with the pool:
+    /// `None` means someone else holds it. For a retired checkpoint's restore,
+    /// which can race a live sandbox, another restore of the same lineage, or
+    /// a fresh create being handed the same octet. Two checkpoints of one
+    /// lineage share an IP, so exactly one of two concurrent restores wins.
+    pub fn try_reserve_ip(&self, addr: GuestAddr, host_octet: u8) -> Option<IpLease> {
+        remove_first(&self.free_hosts, |h| *h == host_octet).then_some(IpLease { addr, host_octet })
+    }
+
+    fn addr_for(&self, host_octet: u8) -> GuestAddr {
+        GuestAddr {
+            guest_ip: octets_with_last(self.gateway_ip, host_octet),
+            gateway_ip: self.gateway_ip,
+            guest_mac: format!("AA:FC:00:00:{:02X}:{:02X}", host_octet, host_octet),
+        }
+    }
+
+    pub fn tap_pool_size(&self) -> usize {
+        self.tap_pool_size
+    }
+
+    pub fn free_tap_count(&self) -> usize {
+        self.free_taps.lock().unwrap().len()
+    }
+
+    pub fn ip_pool_size(&self) -> usize {
+        HOST_OCTET_COUNT
+    }
+
+    pub fn free_ip_count(&self) -> usize {
+        self.free_hosts.lock().unwrap().len()
     }
 
     /// Snapshot of currently-free tap devices — lets cross-crate callers
@@ -314,58 +461,130 @@ mod tests {
         assert_eq!(mgr.free_hosts.lock().unwrap().len(), 253, "no tap was available, so no IP should be consumed either");
     }
 
-    fn test_config(tap: &str) -> NetworkConfig {
-        NetworkConfig {
-            tap_device: tap.to_string(),
-            guest_ip: "10.0.0.5".parse().unwrap(),
+    fn addr(host: u8) -> GuestAddr {
+        GuestAddr {
+            guest_ip: format!("10.0.0.{host}").parse().unwrap(),
             gateway_ip: "10.0.0.1".parse().unwrap(),
-            guest_mac: "AA:FC:00:00:05:05".to_string(),
+            guest_mac: format!("AA:FC:00:00:{host:02X}:{host:02X}"),
         }
     }
 
-    /// Core of the tap-double-lease fix: a reserved tap must leave the pool.
-    #[test]
-    fn reserve_removes_tap_and_host_octet_from_the_free_pools() {
-        let mgr = NetworkManager::new(
-            "test-br0",
-            "10.0.0.1".parse().unwrap(),
-            "eth-test",
-            ["tapA".to_string(), "tapB".to_string()],
-        );
+    fn manager(taps: &[&str]) -> NetworkManager {
+        NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", taps.iter().map(|t| t.to_string()))
+    }
 
-        let lease = mgr.reserve(test_config("tapA"), 5);
-        assert_eq!(lease.config.tap_device, "tapA");
+    /// Stands in for a tap that `lease_tap` would have attached: tests cannot
+    /// run `ip`, so a `TapLease` is built directly.
+    fn fake_tap(name: &str) -> TapLease {
+        TapLease { device: name.to_string() }
+    }
+
+    #[test]
+    fn pool_sizes_report_the_configured_totals_and_the_free_counts() {
+        let mgr = manager(&["tapA", "tapB"]);
+        assert_eq!((mgr.tap_pool_size(), mgr.free_tap_count()), (2, 2));
+        assert_eq!((mgr.ip_pool_size(), mgr.free_ip_count()), (253, 253));
+    }
+
+    /// Core of the exhaustion fix: a reserved IP must leave the pool and use no tap.
+    #[test]
+    fn reserve_ip_removes_only_the_host_octet_and_never_a_tap() {
+        let mgr = manager(&["tapA", "tapB"]);
+        let ip = mgr.reserve_ip(addr(5), 5);
+        assert_eq!(ip.host_octet(), 5);
+        assert!(!mgr.free_hosts.lock().unwrap().contains(&5), "reserved host octet must leave the free pool");
+        assert_eq!(mgr.free_tap_count(), 2, "holding an IP must not consume a tap");
+    }
+
+    #[test]
+    fn reserve_ip_of_an_already_absent_octet_does_not_panic_or_touch_unrelated_entries() {
+        let mgr = manager(&["tapB"]);
+        let _ip = mgr.reserve_ip(addr(5), 255); // outside 2..=254
+        assert_eq!(mgr.free_ip_count(), 253);
+        assert_eq!(mgr.free_tap_count(), 1);
+    }
+
+    #[test]
+    fn try_reserve_ip_gives_exactly_one_of_two_claimants_the_identity() {
+        let mgr = manager(&[]);
+        let first = mgr.try_reserve_ip(addr(7), 7);
+        assert!(first.is_some());
+        assert!(mgr.try_reserve_ip(addr(7), 7).is_none(), "a second claim of the same octet must lose");
+        mgr.release_ip(first.unwrap());
+        assert!(mgr.try_reserve_ip(addr(7), 7).is_some(), "releasing must make it claimable again");
+    }
+
+    #[test]
+    fn try_reserve_ip_refuses_an_octet_already_leased_to_a_running_vm() {
+        let mgr = manager(&[]);
+        // Drain the front octet the way lease() would hand it out.
+        let taken = mgr.free_hosts.lock().unwrap().pop_front().unwrap();
+        assert!(mgr.try_reserve_ip(addr(taken), taken).is_none());
+    }
+
+    #[test]
+    fn many_ip_leases_hold_no_taps_and_resume_takes_one_tap_each() {
+        // 40 snapshots on a 2-tap pool: their IPs coexist, their taps do not exist.
+        let mgr = manager(&["tapA", "tapB"]);
+        let held: Vec<IpLease> = (2..42u8).map(|h| mgr.reserve_ip(addr(h), h)).collect();
+        assert_eq!(held.len(), 40);
+        assert_eq!(mgr.free_tap_count(), 2, "forty held identities, zero taps consumed");
+        assert_eq!(mgr.free_ip_count(), 253 - 40);
+    }
+
+    #[test]
+    fn with_tap_builds_the_boot_config_from_the_frozen_address() {
+        let lease = mgr_ip(5).with_tap(fake_tap("tapZ"));
+        assert_eq!(lease.config.tap_device, "tapZ");
+        assert_eq!(lease.config.guest_ip, "10.0.0.5".parse::<Ipv4Addr>().unwrap());
+        assert_eq!(lease.config.guest_mac, "AA:FC:00:00:05:05");
         assert_eq!(lease.host_octet(), 5);
-
-        let free_taps = mgr.free_taps.lock().unwrap();
-        assert!(!free_taps.contains(&"tapA".to_string()), "reserved tap must leave the free pool");
-        assert!(free_taps.contains(&"tapB".to_string()), "unrelated tap must stay in the free pool");
-        drop(free_taps);
-        assert!(
-            !mgr.free_hosts.lock().unwrap().contains(&5),
-            "reserved host octet must leave the free pool"
-        );
     }
 
-    /// Reserving something already outside the pool must warn, not panic.
-    #[test]
-    fn reserve_of_an_already_absent_tap_does_not_panic_or_touch_unrelated_entries() {
-        let mgr = NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", ["tapB".to_string()]);
-
-        // 255 is outside the 2..=254 host-octet range.
-        let lease = mgr.reserve(test_config("tap-not-in-pool"), 255);
-        assert_eq!(lease.config.tap_device, "tap-not-in-pool");
-        assert_eq!(mgr.free_taps.lock().unwrap().len(), 1, "tapB must be untouched");
-        assert_eq!(mgr.free_hosts.lock().unwrap().len(), 253, "no host octet should have been removed");
+    fn mgr_ip(host: u8) -> IpLease {
+        IpLease { addr: addr(host), host_octet: host }
     }
 
-    /// The actual resource-ownership guarantee: a reserved tap stays unleasable.
+    /// The address must come back unchanged through a stop/resume cycle, on a
+    /// different tap if that is what is free.
     #[test]
-    fn a_reserved_tap_cannot_then_be_leased_to_a_different_caller() {
-        let mgr = NetworkManager::new("test-br0", "10.0.0.1".parse().unwrap(), "eth-test", ["only-tap".to_string()]);
-        let _held = mgr.reserve(test_config("only-tap"), 2);
+    fn detach_returns_the_tap_but_keeps_the_ip_and_a_resume_can_use_another_tap() {
+        let mgr = manager(&[]); // the fake lease below stands in for the pool's only tap
+        let lease = mgr.reserve_ip(addr(9), 9).with_tap(fake_tap("tapA"));
+        let ip = mgr.detach(lease);
+        assert_eq!(mgr.free_tap_devices(), vec!["tapA".to_string()], "the tap is back in the pool");
+        assert!(!mgr.free_hosts.lock().unwrap().contains(&9), "the IP stays owned: detach must not return it to the pool");
+        assert_eq!(ip.addr, addr(9), "guest IP and MAC are frozen");
+        let resumed = ip.with_tap(fake_tap("tapOther"));
+        assert_eq!(resumed.config.tap_device, "tapOther");
+        assert_eq!(resumed.config.guest_ip, addr(9).guest_ip);
+    }
 
-        let result = mgr.lease();
-        assert!(result.is_err(), "the only tap device is already reserved, lease() must fail rather than double-hand it out");
+    #[test]
+    fn release_returns_both_halves() {
+        let mgr = manager(&[]);
+        let octet = mgr.free_hosts.lock().unwrap().pop_front().unwrap();
+        mgr.release(mgr_ip(octet).with_tap(fake_tap("tapA")));
+        assert_eq!(mgr.free_tap_devices(), vec!["tapA".to_string()]);
+        assert!(mgr.free_hosts.lock().unwrap().contains(&octet));
+    }
+
+    #[test]
+    fn exhaustion_errors_are_distinguishable_from_other_failures() {
+        let mgr = manager(&[]);
+        let err = mgr.lease_tap().err().unwrap();
+        assert_eq!(PoolExhausted::of(&err), Some(PoolExhausted::Taps));
+        assert!(err.to_string().contains("no free tap devices"));
+        assert_eq!(PoolExhausted::of(&io::Error::other("something else")), None);
+        assert_eq!(PoolExhausted::of(&io::Error::from(io::ErrorKind::NotFound)), None);
+    }
+
+    #[test]
+    fn an_exhausted_ip_pool_is_reported_as_such_and_takes_no_tap() {
+        let mgr = manager(&["tapA"]);
+        mgr.free_hosts.lock().unwrap().clear();
+        let err = mgr.lease().err().unwrap();
+        assert_eq!(PoolExhausted::of(&err), Some(PoolExhausted::Ips));
+        assert_eq!(mgr.free_tap_count(), 1);
     }
 }

@@ -70,8 +70,8 @@ async fn proxy(
         *sandbox.last_activity.lock().unwrap() = Instant::now();
 
         // A sandbox forked from a snapshot (`source_snapshot_id.is_some()`)
-        // doesn't own a `Lease` of its own — the snapshot still holds it
-        // (see `routes::snapshot`'s module doc comment) — but the VM it
+        // doesn't own a `Lease` of its own — the snapshot still holds the
+        // IP (see `routes::snapshot`'s module doc comment) — but the VM it
         // booted still has a real, working network interface: the guest's
         // IP/MAC were baked into the snapshotted memory image at the
         // *original* boot and are unaffected by which `Sandbox` record the
@@ -91,7 +91,7 @@ async fn proxy(
                         "sandbox {id} was forked from snapshot {source_id}, which no longer exists — this is a bug"
                     )))
                 })?;
-                snapshot.network.config.guest_ip
+                snapshot.network.addr.guest_ip
             }
         }
     };
