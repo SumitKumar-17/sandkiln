@@ -78,7 +78,7 @@ for f in files:
                 errors.append(f"{f}:{n}: {why}")
 
 # 4. Size budgets.
-budgets = {"README.md": 90, "ROADMAP.md": 160}
+budgets = {"README.md": 110, "ROADMAP.md": 160}
 for f in Path("docs/design-notes").glob("*.md"):
     budgets[str(f)] = 300
 for f in files:

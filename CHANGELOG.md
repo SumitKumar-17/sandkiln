@@ -365,6 +365,13 @@ entry below and earlier), this just ships it to PyPI via
 flow. No code change; versioned separately from the JS/TS SDK/CLI table
 below from here on, since the two don't need to move in lockstep.
 
+## [0.14.1] — 2026-11-24
+
+JS SDK `sandkiln` and CLI `sandkiln-cli`. **Security fix for `downloadDir` / `kiln sandbox download-dir`.**
+
+### Fixed
+- A hostile guest could make `downloadDir` leave the destination: the symlink check was lexical, so a chain such as `s -> ..` then `t -> s/..` passed it and resolved outside, and a listing that named one path twice (a link, then a file of the same name) could write through the link. Symlink targets are now resolved component by component through the real filesystem and refused if any step leaves the destination; links are created last; duplicate names in one listing are refused; files are written with `O_NOFOLLOW`; an existing symlink in the destination is never descended or written through. Upgrade if you use `downloadDir` on sandboxes that run untrusted code. `uploadDir` is not affected.
+
 ## [0.14.0] — 2026-11-24
 
 JS SDK `sandkiln` and CLI `sandkiln-cli`. Needs a daemon with the per-request exec timeout and the tap/IP split for the matching behavior; older daemons ignore `timeout_secs`.
