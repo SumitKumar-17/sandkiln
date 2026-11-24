@@ -239,8 +239,8 @@ says the problem, the change and how it was verified. Identity is always
 a `Co-Authored-By` trailer.
 
 History: on 2026-11-24 `main` was squashed from 478 commits into milestone
-commits (identical tree). The original history is the `archive/full-history`
-branch and every release tag still points into it; do not delete either.
+commits (identical tree). The release tags still point at the original
+commits, which keeps that history reachable; do not delete or move the tags.
 
 ## 18. Final review
 
