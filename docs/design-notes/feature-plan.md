@@ -68,6 +68,8 @@ Shipped in Python 0.6.0: `pty()`, `exec_stream()`/`attach_logs()`/`list_exec_str
 
 ## Later
 
+A ranked security, isolation and operations backlog with sources is in [research-security-operations.md](research-security-operations.md).
+
 Multi-node scheduling, snapshot encryption at rest, per-caller auth scoping, OCI image conversion, GPU sandboxes. Reasons and constraints are in [ideas-not-started.md](ideas-not-started.md).
 
 ## How work is run
