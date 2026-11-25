@@ -40,6 +40,7 @@ changes, edit it in one place.
 | [latency-floor.md](design-notes/latency-floor.md) | Lowest achievable start latency, stage-by-stage gap analysis, ranked levers, goals |
 | [feature-plan.md](design-notes/feature-plan.md) | Ordered feature plan: goals, approach and verification per item |
 | [ideas-not-started.md](design-notes/ideas-not-started.md) | Future directions and non-goals |
+| [research-features.md](design-notes/research-features.md) | Researched, ranked feature candidates with evidence, design sketches, top 5 and what not to build |
 
 ## Where each former roadmap section went
 

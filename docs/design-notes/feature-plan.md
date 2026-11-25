@@ -70,6 +70,8 @@ Shipped in Python 0.6.0: `pty()`, `exec_stream()`/`attach_logs()`/`list_exec_str
 
 Multi-node scheduling, snapshot encryption at rest, per-caller auth scoping, OCI image conversion, GPU sandboxes. Reasons and constraints are in [ideas-not-started.md](ideas-not-started.md).
 
+Researched ranking of new feature candidates (process control, parallel fork, domain egress, credential injection, code interpreter first): [research-features.md](research-features.md).
+
 ## How work is run
 
 Items are taken in order unless a bug blocks one. Each change follows the
