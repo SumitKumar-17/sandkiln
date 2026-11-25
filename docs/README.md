@@ -40,6 +40,7 @@ changes, edit it in one place.
 | [latency-floor.md](design-notes/latency-floor.md) | Lowest achievable start latency, stage-by-stage gap analysis, ranked levers, goals |
 | [research-security-operations.md](design-notes/research-security-operations.md) | Research: guest-escape threat model, network, auth, secrets, supply chain, audit and operations gaps, ranked, with the top five to do next |
 | [research-security-operations-detail.md](design-notes/research-security-operations-detail.md) | Research continued: secrets, encryption at rest, supply chain, audit log, operations and multi-node |
+| [research-performance.md](design-notes/research-performance.md) | Performance and density research: sourced techniques, ranked by gain per effort, top 5, rejected ideas, density measurement plan |
 | [feature-plan.md](design-notes/feature-plan.md) | Ordered feature plan: goals, approach and verification per item |
 | [ideas-not-started.md](design-notes/ideas-not-started.md) | Future directions and non-goals |
 | [research-features.md](design-notes/research-features.md) | Researched, ranked feature candidates with evidence, design sketches, top 5 and what not to build |

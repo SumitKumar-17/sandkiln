@@ -10,6 +10,8 @@ Each item names how it is verified. Nothing is "done" until it has been run
 against a real daemon and microVM and, where it moves a number, measured with
 the [benchmark suite](../../examples/benchmark-suite/README.md).
 
+Performance and density candidates, ranked by gain per effort with how to measure each: [research-performance.md](research-performance.md).
+
 ## Now (in flight)
 
 | Item | Goal | State |
